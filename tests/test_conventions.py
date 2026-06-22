@@ -24,7 +24,18 @@ def test_example_agent_ids_follow_object_name_rule() -> None:
         require_object_name(agent["id"], "agent.id")
 
 
+def test_library_research_is_required_design_gate() -> None:
+    text = (Path(__file__).resolve().parents[1] / "docs" / "library_research.md").read_text(encoding="utf-8")
+
+    assert "Required For New Designs" in text
+    assert "FastAPI" in text
+    assert "React-admin" in text
+    assert "i18next" in text
+    assert "Skipped:" in text
+
+
 if __name__ == "__main__":
     test_two_word_snake_case_rule()
     test_example_agent_ids_follow_object_name_rule()
+    test_library_research_is_required_design_gate()
     print("ok")

@@ -36,3 +36,17 @@ No interface or factory until a second real implementation exists.
 ## CDD
 
 Context lives under `conductor/`. Update it when scope, dependencies, workflow, or domain terms change.
+
+## Ponytail Design Gate
+
+Before adding or designing a subsystem, research existing libraries first and record the decision in `docs/library_research.md`.
+
+Required fields:
+
+- problem area
+- library considered
+- decision
+- evidence source
+- skipped custom implementation
+
+Do not add a new dependency when the standard library or an already selected library covers the need.

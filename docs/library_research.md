@@ -23,3 +23,7 @@ No new dependency is added until it carries real product weight:
 - Do not add provider SDKs until raw OpenAI-compatible HTTP is insufficient.
 
 Skipped: custom admin framework, custom i18n engine, custom migration engine.
+
+## Required For New Designs
+
+Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
