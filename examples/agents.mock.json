@@ -1,0 +1,25 @@
+{
+  "agents": [
+    {
+      "id": "general_agent",
+      "model": "mock-generalist",
+      "base_url": "mock://generalist",
+      "tags": ["reasoning", "writing", "planning"],
+      "priority": 1
+    },
+    {
+      "id": "builder_agent",
+      "model": "mock-builder",
+      "base_url": "mock://builder",
+      "tags": ["coding", "debugging", "implementation"],
+      "priority": 2
+    },
+    {
+      "id": "reviewer_agent",
+      "model": "mock-reviewer",
+      "base_url": "mock://reviewer",
+      "tags": ["verification", "security", "review"],
+      "priority": 3
+    }
+  ]
+}

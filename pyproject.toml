@@ -1,0 +1,22 @@
+[project]
+name = "contextual-orchestrator"
+version = "0.1.0"
+description = "Paper-grounded model orchestration lab with an enterprise admin console."
+readme = "README.md"
+requires-python = ">=3.10"
+dependencies = []
+
+[project.optional-dependencies]
+api = [
+  "fastapi>=0.128.0",
+  "uvicorn>=0.38.0",
+]
+db = [
+  "SQLAlchemy>=2.0",
+  "alembic>=1.17",
+  "psycopg[binary]>=3.2",
+]
+
+[tool.contextual_orchestrator]
+object_name_pattern = "two_or_more_words_snake_case"
+
