@@ -1,5 +1,8 @@
 # Contextual Orchestrator
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ContextualWisdomLab/contextual-orchestrator)
+[![Security](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/workflows/security.yml/badge.svg)](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/workflows/security.yml)
+
 Stdlib Python lab for a single API that routes, delegates, verifies, and synthesizes work across a configurable pool of OpenAI-compatible model agents.
 
 This is not a Sakana AI product or a reproduction of their trained models. It is a small implementation of the public architecture pattern: expose one model-like interface while keeping the agent pool, routing, workflow, and verification logic behind it.
@@ -81,4 +84,5 @@ python tests/test_paper_contracts.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
+python tests/test_repository_security_metadata.py
 ```
