@@ -42,3 +42,14 @@ The deliberate simplification is the policy. The paper systems learn routing and
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 
+## Product Planning Interpretation
+
+The product is not a Fugu clone. It is a control-plane prototype for the same public shape: one compatible API with hidden orchestration. The enterprise value comes from exposing the hidden operating evidence:
+
+- pool health and provider exclusion for Fugu-style configurability;
+- latency-quality policy for the Fugu versus Fugu-Ultra tradeoff;
+- thinker, worker, verifier, and synthesizer roles for TRINITY-style trace review;
+- natural-language subtasks and access lists for Conductor-style auditability;
+- replayable evaluation runs before any learned coordinator replaces the deterministic policy.
+
+See [product_planning.md](product_planning.md) for the product reboot.

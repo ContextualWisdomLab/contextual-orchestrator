@@ -69,6 +69,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 ## Design Artifacts
 
 - [Library research](docs/library_research.md)
+- [Product planning](docs/product_planning.md)
 - [Screen design](docs/screen_design.md)
 - [User stories](docs/user_stories.md)
 - [REST API design](docs/rest_api_design.md)
@@ -85,4 +86,5 @@ python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
 python tests/test_repository_security_metadata.py
+python tests/test_product_planning_contract.py
 ```
