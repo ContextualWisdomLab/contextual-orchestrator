@@ -1,12 +1,14 @@
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections import deque
+from dataclasses import dataclass, replace
 import json
 import os
 import re
 import time
-import urllib.request
+import uuid
 from typing import Any
+import urllib.request
 
 from .conventions import require_object_name
 
@@ -23,6 +25,8 @@ class ModelAgent:
     tags: tuple[str, ...] = ()
     priority: int = 0
     disabled: bool = False
+    provider_name: str = ""
+    provider_exclusions: tuple[str, ...] = ()
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -38,6 +42,8 @@ class ModelAgent:
             tags=tuple(value.get("tags", ())),
             priority=int(value.get("priority", 0)),
             disabled=bool(value.get("disabled", False)),
+            provider_name=value.get("provider_name", ""),
+            provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
         )
 
 
@@ -48,6 +54,8 @@ class WorkflowStep:
     agent_id: str
     subtask: str
     access: tuple[int, ...] = ()
+    latency_ms: float | None = None
+    output: str | None = None
 
     def as_dict(self) -> dict[str, Any]:
         return {
@@ -56,6 +64,26 @@ class WorkflowStep:
             "agent_id": self.agent_id,
             "subtask": self.subtask,
             "access": list(self.access),
+            "latency_ms": self.latency_ms,
+            "output": self.output,
+        }
+
+
+@dataclass(frozen=True)
+class OrchestrationPolicy:
+    route_p95_seconds: float = 2.5
+    conduct_hint_threshold: int = 2
+    verifier_required: bool = True
+    verifier_positive_terms: tuple[str, ...] = ("verified", "accepted", "confirmed", "pass", "good", "ok")
+    verifier_negative_terms: tuple[str, ...] = ("reject", "disagree", "conflict", "unsafe", "fails", "error", "risky")
+
+    def as_dict(self) -> dict[str, Any]:
+        return {
+            "route_p95_seconds": self.route_p95_seconds,
+            "conduct_hint_threshold": self.conduct_hint_threshold,
+            "verifier_required": self.verifier_required,
+            "workflow_steps": ["thinker", "worker", "verifier", "synthesizer"],
+            "supported_locales": ["en", "ko"],
         }
 
 
@@ -143,6 +171,11 @@ class TaskOrchestrator:
         if not self.agents:
             raise ValueError("at least one enabled agent is required")
         self.client = client or ModelClient()
+        self.policy = OrchestrationPolicy()
+        self._workflow_runs: dict[str, dict[str, Any]] = {}
+        self._evaluation_runs: dict[str, dict[str, Any]] = {}
+        self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
+        self._run_order: deque[str] = deque(maxlen=128)
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         text = self._latest_user_text(messages)
@@ -150,14 +183,145 @@ class TaskOrchestrator:
             return self.route_once(messages)
         return self.conduct(messages)
 
+    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+        result = self.complete(messages, mode=mode)
+        prompt = self._latest_user_text(messages)
+        record = {
+            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+            "created_at": int(time.time()),
+            "mode": result["mode"],
+            "policy_mode": mode,
+            "prompt_text": prompt,
+            "answer": result["answer"],
+            "trace": result["trace"],
+            "policy_snapshot": self.policy.as_dict(),
+            "verification": result.get("verification"),
+        }
+        self._workflow_runs[record["workflow_run_id"]] = record
+        self._run_order.appendleft(record["workflow_run_id"])
+        self._append_audit_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": record["workflow_run_id"],
+                "mode": record["mode"],
+                "agent_count": len(record["trace"]),
+            },
+        )
+        return record
+
+    def run_evaluation(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
+        if not prompts:
+            raise ValueError("evaluation requires at least one prompt")
+        workflow_run_ids: list[str] = []
+        results: list[dict[str, Any]] = []
+        for prompt in prompts:
+            record = self.run([{"role": "user", "content": prompt}], mode=mode)
+            workflow_run_ids.append(record["workflow_run_id"])
+            results.append({
+                "workflow_run_id": record["workflow_run_id"],
+                "answer": record["answer"],
+            })
+
+        evaluation_run_id = f"eval_{uuid.uuid4().hex}"
+        evaluation = {
+            "evaluation_run_id": evaluation_run_id,
+            "created_at": int(time.time()),
+            "mode": mode,
+            "prompt_count": len(prompts),
+            "workflow_run_ids": workflow_run_ids,
+            "results": results,
+            "success_count": len([r for r in results if r["answer"]]),
+        }
+        self._evaluation_runs[evaluation_run_id] = evaluation
+        self._append_audit_event(
+            "evaluation_run_created",
+            {
+                "evaluation_run_id": evaluation_run_id,
+                "workflow_run_count": len(workflow_run_ids),
+                "success_count": evaluation["success_count"],
+            },
+        )
+        return evaluation
+
+    def get_workflow_run(self, workflow_run_id: str) -> dict[str, Any]:
+        if workflow_run_id not in self._workflow_runs:
+            raise KeyError(workflow_run_id)
+        return self._workflow_runs[workflow_run_id]
+
+    def get_access_report(self, workflow_run_id: str) -> dict[str, Any]:
+        run = self.get_workflow_run(workflow_run_id)
+        access_report = []
+        for step in run["trace"]:
+            access_report.append({
+                "step_id": step["id"],
+                "role": step["role"],
+                "agent_id": step["agent_id"],
+                "access": step["access"],
+                "accessed_outputs": [
+                    run["trace"][index]["output"] for index in step["access"] if index < len(run["trace"])
+                ],
+            })
+        return {
+            "workflow_run_id": workflow_run_id,
+            "policy_snapshot": run["policy_snapshot"],
+            "steps": access_report,
+            "verifier": run.get("verification"),
+        }
+
+    def patch_agent(self, agent_pool_id: str, worker_agent_id: str, patch: dict[str, Any]) -> dict[str, Any]:
+        if not patch:
+            raise ValueError("patch request body must contain updates")
+        if agent_pool_id != "default":
+            raise KeyError(agent_pool_id)
+        current = self._agent(worker_agent_id)
+        patched = current
+        if "status" in patch:
+            status = str(patch["status"]).lower()
+            if status in {"active", "enabled"}:
+                patched = replace(patched, disabled=False)
+            elif status in {"disabled", "excluded", "inactive", "quarantine"}:
+                patched = replace(patched, disabled=True)
+            else:
+                raise ValueError("status must be active, enabled, disabled, excluded, inactive, or quarantine")
+        if "priority" in patch:
+            patched = replace(patched, priority=int(patch["priority"]))
+        if "tags" in patch:
+            patched = replace(patched, tags=tuple(patch["tags"]))
+        if "provider_exclusions" in patch:
+            patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
+
+        self.agents = [patched if agent.id == worker_agent_id else agent for agent in self.agents]
+        self._append_audit_event(
+            "agent_patched",
+            {
+                "agent_pool_id": agent_pool_id,
+                "worker_agent_id": worker_agent_id,
+                "updated_fields": sorted(patch.keys()),
+            },
+        )
+        return self._agent_to_admin_payload(patched)
+
     def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
+        start = time.perf_counter()
         answer = self.client.chat(agent, messages)
+        latency_ms = (time.perf_counter() - start) * 1000
         return {
             "mode": "route",
             "answer": answer,
-            "trace": [{"role": "worker", "agent_id": agent.id, "access": []}],
+            "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+            "trace": [
+                {
+                    "id": 0,
+                    "role": "worker",
+                    "agent_id": agent.id,
+                    "subtask": "Direct route",
+                    "access": [],
+                    "latency_ms": round(latency_ms, 2),
+                    "output": answer,
+                }
+            ],
         }
 
     def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
@@ -183,12 +347,25 @@ class TaskOrchestrator:
                     "content": f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}",
                 },
             ]
+            start = time.perf_counter()
             outputs[step.id] = self.client.chat(agent, step_messages)
+            elapsed = (time.perf_counter() - start) * 1000
             row = step.as_dict()
+            row["latency_ms"] = round(elapsed, 2)
             row["output"] = outputs[step.id]
             trace.append(row)
 
-        return {"mode": "conduct", "answer": outputs[steps[-1].id], "trace": trace}
+        verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
+        answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
+        if not verification["accepted"] and self.policy.verifier_required:
+            answer = outputs[steps[1].id]
+
+        return {
+            "mode": "conduct",
+            "answer": answer,
+            "trace": trace,
+            "verification": verification,
+        }
 
     def _plan(self, task: str) -> list[WorkflowStep]:
         thinker = self._select_agent(task, "thinker").id
@@ -206,6 +383,8 @@ class TaskOrchestrator:
         lowered = text.lower()
 
         def score(agent: ModelAgent) -> tuple[int, int, str]:
+            if role in agent.provider_exclusions:
+                return (-10_000, len(agent.tags), agent.id)
             role_score = sum(3 for tag in agent.tags if tag in self.ROLE_TAGS.get(role, ()))
             domain_score = 0
             for tag, hints in self.DOMAIN_HINTS.items():
@@ -213,7 +392,10 @@ class TaskOrchestrator:
                     domain_score += 2
             return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
-        return max(self.agents, key=score)
+        selected = max(self.agents, key=score)
+        if selected.disabled:
+            raise RuntimeError(f"no enabled agent available for role={role}")
+        return selected
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.agents:
@@ -224,29 +406,108 @@ class TaskOrchestrator:
     def _needs_workflow(self, text: str) -> bool:
         lowered = text.lower()
         hits = sum(1 for hint in self.COMPLEX_HINTS if hint in lowered)
-        return hits >= 2 or len(text) > 700
+        return hits >= self.policy.conduct_hint_threshold or len(text) > 700
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")
 
-    def admin_state(self) -> dict[str, Any]:
+    def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
+        lowered = verifier_output.lower()
+        if any(term in lowered for term in self.policy.verifier_negative_terms):
+            return {
+                "accepted": False,
+                "reason": "verifier output flagged disagreement or risk",
+                "verifier_output": verifier_output,
+            }
+        if any(term in lowered for term in self.policy.verifier_positive_terms):
+            return {
+                "accepted": True,
+                "reason": "verifier output accepted the synthesized result",
+                "verifier_output": verifier_output,
+            }
+        if thinker_output and worker_output:
+            return {
+                "accepted": True,
+                "reason": "fallback acceptance from available planner and worker output",
+                "verifier_output": verifier_output,
+            }
         return {
-            "agents": [
-                {
-                    "id": agent.id,
-                    "model": agent.model,
-                    "base_url": agent.base_url,
-                    "tags": list(agent.tags),
-                    "priority": agent.priority,
-                }
-                for agent in self.agents
-            ],
+            "accepted": False,
+            "reason": "fallback verifier disagreement with missing upstream outputs",
+            "verifier_output": verifier_output,
+        }
+
+    def _append_audit_event(self, event_type: str, detail: dict[str, Any]) -> None:
+        self._audit_events.append({
+            "created_at": int(time.time()),
+            "event_type": event_type,
+            "event_detail": detail,
+        })
+
+    def _infer_provider_name(self, base_url: str) -> str:
+        if base_url.startswith("mock://"):
+            return f"mock-{base_url.removeprefix('mock://')}"
+        if "://" in base_url:
+            return base_url.split("//", 1)[-1].split("/", 1)[0]
+        return base_url
+
+    def _agent_to_admin_payload(self, agent: ModelAgent) -> dict[str, Any]:
+        return {
+            "id": agent.id,
+            "model": agent.model,
+            "base_url": agent.base_url,
+            "provider_name": agent.provider_name or self._infer_provider_name(agent.base_url),
+            "priority": agent.priority,
+            "tags": list(agent.tags),
+            "status": "disabled" if agent.disabled else "active",
+            "provider_exclusions": list(agent.provider_exclusions),
+        }
+
+    def list_agents(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
+        if page_number < 1 or page_size < 1:
+            raise ValueError("page_number/page_size must be >= 1")
+        start = (page_number - 1) * page_size
+        end = start + page_size
+        return [self._agent_to_admin_payload(agent) for agent in self.agents[start:end]]
+
+    def list_recent_runs(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
+        if page_number < 1 or page_size < 1:
+            raise ValueError("page_number/page_size must be >= 1")
+        start = (page_number - 1) * page_size
+        end = start + page_size
+        run_ids = list(self._run_order)[start:end]
+        return [self._workflow_runs[run_id] for run_id in run_ids]
+
+    def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
+        if page_number < 1 or page_size < 1:
+            raise ValueError("page_number/page_size must be >= 1")
+        events = list(self._audit_events)
+        start = (page_number - 1) * page_size
+        end = start + page_size
+        total = len(events)
+        left = max(0, total - end)
+        right = max(0, total - start)
+        return list(reversed(events[left:right]))
+
+    def admin_state(self) -> dict[str, Any]:
+        agent_page_size = max(1, len(self.agents))
+        return {
+            "agents": self.list_agents(page_size=agent_page_size),
             "policy": {
+                **self.policy.as_dict(),
                 "roles": list(self.ROLE_TAGS),
                 "complex_hints": list(self.COMPLEX_HINTS),
-                "workflow_steps": ["thinker", "worker", "verifier", "synthesizer"],
-                "supported_locales": ["en", "ko"],
             },
+            "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
+            "recent_audit_events": self.list_recent_audit_events(),
+        }
+
+    def _shorten_run(self, run: dict[str, Any]) -> dict[str, Any]:
+        return {
+            "workflow_run_id": run["workflow_run_id"],
+            "mode": run["mode"],
+            "policy_mode": run["policy_mode"],
+            "created_at": run["created_at"],
         }
 
 
@@ -264,5 +525,10 @@ def chat_completion_response(result: dict[str, Any], model: str = "contextual-or
             }
         ],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        "orchestration": {"mode": result["mode"], "trace": result["trace"]},
+        "orchestration": {
+            "workflow_run_id": result.get("workflow_run_id"),
+            "mode": result["mode"],
+            "trace": result["trace"],
+            "verification": result.get("verification"),
+        },
     }
