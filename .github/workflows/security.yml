@@ -62,9 +62,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          if ! enabled="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.security_and_analysis.dependency_graph.enabled // false' 2>/dev/null)"; then
-            enabled="false"
-          fi
+          enabled="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.security_and_analysis.dependency_graph.enabled // false' || echo false)"
           enabled="$(printf '%s' "${enabled}" | tr -d '\r' | tr -d '[:space:]')"
           echo "enabled=${enabled}" >> "${GITHUB_OUTPUT}"
 
