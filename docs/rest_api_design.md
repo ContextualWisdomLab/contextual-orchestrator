@@ -42,3 +42,4 @@ These product surfaces are now implemented in this prototype:
 ## Production Library Target
 
 FastAPI should replace the current stdlib HTTP adapter when the API needs authentication, richer OpenAPI schema generation, dependency injection, and typed request/response models.
+\r\n<!-- rerun-review -->
