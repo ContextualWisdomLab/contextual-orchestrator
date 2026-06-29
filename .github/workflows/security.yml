@@ -62,7 +62,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
-          enabled="$(python -c '
+          enabled="$(python - <<'PY'
 import json
 import os
 import urllib.error
@@ -70,14 +70,16 @@ import urllib.request
 
 
 request = urllib.request.Request(
-    f"https://api.github.com/repos/{os.environ["GITHUB_REPOSITORY"]}"
+    f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}"
 )
-request.add_header("Authorization", f"Bearer {os.environ["GH_TOKEN"]}")
+request.add_header("Authorization", f"Bearer {os.environ['GH_TOKEN']}")
 request.add_header("Accept", "application/vnd.github+json")
 
 try:
     with urllib.request.urlopen(request, timeout=20) as response:
         payload = json.loads(response.read().decode("utf-8"))
+except urllib.error.HTTPError:
+    payload = {}
 except Exception:
     payload = {}
 
@@ -86,9 +88,9 @@ print(
         payload.get("security_and_analysis", {})
         .get("dependency_graph", {})
         .get("enabled", False)
-    )
-    .lower()
-    .strip()
+    ).lower().strip()
+)
+PY
 )"
           enabled="$(printf '%s' "${enabled}" | tr -d '\r' | tr -d '[:space:]')"
           echo "enabled=${enabled}" >> "${GITHUB_OUTPUT}"
