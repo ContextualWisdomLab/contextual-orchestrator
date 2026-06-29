@@ -49,6 +49,7 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # Keep dependency review intentionally resilient when repository settings disable dependency graph.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
