@@ -80,9 +80,10 @@ except urllib.error.HTTPError:
 except Exception:
     body = {}
 
-print(str(body.get("security_and_analysis", {}).get("dependency_graph", {}).get("enabled", False)).lower())
+print(str(body.get("security_and_analysis", {}).get("dependency_graph", {}).get("enabled", False)).lower().strip())
 PY
 )"
+          enabled="$(printf '%s' "${enabled}" | tr -d '\r' | tr -d '[:space:]')"
           echo "enabled=${enabled}" >> "${GITHUB_OUTPUT}"
 
       - name: Review dependency changes
