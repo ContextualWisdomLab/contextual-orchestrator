@@ -1,3 +1,5 @@
+"""OpenAPI contract for governance, workflow, evaluation, and locale APIs."""
+
 from __future__ import annotations
 
 
@@ -16,6 +18,43 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Agent pool collection"}},
             }
         },
+        "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}": {
+            "patch": {
+                "operationId": "patch_worker_agent",
+                "summary": "Patch one worker agent in a pool",
+                "parameters": [
+                    {
+                        "name": "agent_pool_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                    {
+                        "name": "worker_agent_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                ],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {
+                                    "status": {"type": "string"},
+                                    "priority": {"type": "integer"},
+                                    "tags": {"type": "array", "items": {"type": "string"}},
+                                    "provider_exclusions": {"type": "array", "items": {"type": "string"}},
+                                },
+                            },
+                        },
+                    },
+                },
+                "responses": {"200": {"description": "Worker agent updated"}},
+            }
+        },
         "/api/v1/orchestration_policies/default_policy": {
             "get": {
                 "operationId": "get_default_policy",
@@ -24,6 +63,11 @@ OPENAPI_SPEC = {
             }
         },
         "/api/v1/workflow_runs": {
+            "get": {
+                "operationId": "list_workflow_runs",
+                "summary": "List recent workflow runs",
+                "responses": {"200": {"description": "Workflow runs"}},
+            },
             "post": {
                 "operationId": "create_workflow_run",
                 "summary": "Run routing or conducted orchestration",
@@ -38,11 +82,78 @@ OPENAPI_SPEC = {
                                     "prompt_text": {"type": "string"},
                                     "run_mode": {"type": "string", "enum": ["auto", "route", "conduct"]},
                                 },
-                            }
+                            },
                         }
                     },
                 },
                 "responses": {"201": {"description": "Workflow run created"}},
+            },
+        },
+        "/api/v1/workflow_runs/{workflow_run_id}": {
+            "get": {
+                "operationId": "get_workflow_run",
+                "summary": "Get a workflow run and its traces",
+                "parameters": [
+                    {
+                        "name": "workflow_run_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {"200": {"description": "Workflow run"}},
+            }
+        },
+        "/api/v1/access_reports/{workflow_run_id}": {
+            "get": {
+                "operationId": "get_access_report",
+                "summary": "Get access report for a workflow run",
+                "parameters": [
+                    {
+                        "name": "workflow_run_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {"200": {"description": "Access report"}},
+            }
+        },
+        "/api/v1/evaluation_runs": {
+            "post": {
+                "operationId": "create_evaluation_run",
+                "summary": "Replay prompts for evaluation",
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["prompts"],
+                                "properties": {
+                                    "prompts": {"type": "array", "items": {"type": "string"}},
+                                    "run_mode": {"type": "string", "enum": ["auto", "route", "conduct"]},
+                                },
+                            },
+                        },
+                    },
+                },
+                "responses": {"201": {"description": "Evaluation run created"}},
+            }
+        },
+        "/api/v1/evaluation_runs/{evaluation_run_id}": {
+            "get": {
+                "operationId": "get_evaluation_run",
+                "summary": "Read evaluation run outputs",
+                "parameters": [
+                    {
+                        "name": "evaluation_run_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    },
+                ],
+                "responses": {"200": {"description": "Evaluation run"}},
             }
         },
         "/api/v1/locale_bundles/{locale_code}": {
@@ -55,11 +166,10 @@ OPENAPI_SPEC = {
                         "in": "path",
                         "required": True,
                         "schema": {"type": "string", "enum": ["en", "ko"]},
-                    }
+                    },
                 ],
                 "responses": {"200": {"description": "Locale bundle"}, "404": {"description": "Locale not found"}},
             }
         },
     },
 }
-

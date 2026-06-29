@@ -20,3 +20,12 @@ db = [
 [tool.contextual_orchestrator]
 object_name_pattern = "two_or_more_words_snake_case"
 
+[tool.interrogate]
+exclude = ["tests"]
+fail-under = 80
+ignore-init-method = true
+ignore-magic = true
+ignore-nested-functions = true
+ignore-private = true
+ignore-property-decorators = true
+ignore-semiprivate = true

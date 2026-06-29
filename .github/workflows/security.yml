@@ -49,13 +49,25 @@ jobs:
     permissions:
       contents: read
       pull-requests: read
+    # Keep dependency review intentionally resilient when repository settings disable dependency graph.
     steps:
       - name: Checkout repository
         uses: actions/checkout@v7
         with:
           persist-credentials: false
 
+      - name: Detect dependency graph support
+        id: dependency_graph_support
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          enabled="$(gh api "repos/${GITHUB_REPOSITORY}" --jq '.security_and_analysis.dependency_graph.enabled // false' || echo false)"
+          enabled="$(printf '%s' "${enabled}" | tr -d '\r' | tr -d '[:space:]')"
+          echo "enabled=${enabled}" >> "${GITHUB_OUTPUT}"
+
       - name: Review dependency changes
+        if: ${{ steps.dependency_graph_support.outputs.enabled == 'true' }}
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
