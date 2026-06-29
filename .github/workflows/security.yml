@@ -96,7 +96,7 @@ PY
           echo "enabled=${enabled}" >> "${GITHUB_OUTPUT}"
 
       - name: Review dependency changes
-        if: steps.dependency_graph_support.outputs.enabled == 'true'
+        if: ${{ steps.dependency_graph_support.outputs.enabled == 'true' }}
         uses: actions/dependency-review-action@v5
         with:
           fail-on-severity: high
