@@ -17,6 +17,7 @@ python -m contextual_orchestrator "Summarize why model orchestration helps long 
 Run the OpenAI-compatible subset:
 
 ```bash
+export CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
 python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000
 ```
 
@@ -28,9 +29,17 @@ http://127.0.0.1:8000/admin
 
 ```bash
 curl -s http://127.0.0.1:8000/v1/chat/completions \
+  -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"model":"contextual-orchestrator","messages":[{"role":"user","content":"Analyze this code review task and verify the answer."}]}' | jq .
 ```
+
+HTTP serving is hardened for local lab use:
+
+- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
+- Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
+- JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
+- Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
 
 Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints and environment-backed API keys:
 
@@ -48,13 +57,15 @@ Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints 
 }
 ```
 
+Non-mock providers must use `https://` URLs and an explicit `api_key_env`. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
+
 ## Architecture
 
 One public interface:
 
 - `/v1/chat/completions` accepts normal chat messages.
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
-- Every response includes an orchestration trace so the caller can audit which agents were used.
+- Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
 
 One fused orchestration loop:
@@ -80,11 +91,14 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 ## Check
 
 ```bash
+python -m pip install --require-hashes -r requirements.lock
+python -m pip install --no-deps -e .
 python tests/test_self_check.py
 python tests/test_paper_contracts.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
+python tests/test_security_hardening.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 ```
