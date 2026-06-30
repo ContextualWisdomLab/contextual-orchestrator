@@ -130,7 +130,7 @@ class ModelClient:
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:  # pragma: no cover
             data = json.loads(response.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"]
+        return data["choices"][0]["message"]["content"]  # pragma: no cover
 
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
