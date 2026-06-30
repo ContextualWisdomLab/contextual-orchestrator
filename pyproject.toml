@@ -20,6 +20,16 @@ db = [
 [tool.contextual_orchestrator]
 object_name_pattern = "two_or_more_words_snake_case"
 
+[tool.setuptools.packages.find]
+include = ["contextual_orchestrator*"]
+
+[tool.coverage.run]
+source = ["contextual_orchestrator"]
+omit = ["contextual_orchestrator/__main__.py", "contextual_orchestrator/server.py"]
+
+[tool.coverage.report]
+show_missing = true
+
 [tool.interrogate]
 exclude = ["tests"]
 fail-under = 80

@@ -10,11 +10,18 @@ OPENAPI_SPEC = {
         "version": "0.1.0",
         "description": "Resource-oriented API for agent pools, workflow runs, policies, and locale bundles.",
     },
+    "components": {
+        "securitySchemes": {
+            "admin_bearer_auth": {"type": "http", "scheme": "bearer"},
+            "inference_bearer_auth": {"type": "http", "scheme": "bearer"},
+        }
+    },
     "paths": {
         "/api/v1/agent_pools": {
             "get": {
                 "operationId": "list_agent_pools",
                 "summary": "List configured model agents",
+                "security": [{"admin_bearer_auth": []}],
                 "responses": {"200": {"description": "Agent pool collection"}},
             }
         },
@@ -22,6 +29,7 @@ OPENAPI_SPEC = {
             "patch": {
                 "operationId": "patch_worker_agent",
                 "summary": "Patch one worker agent in a pool",
+                "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {
                         "name": "agent_pool_id",
@@ -59,6 +67,7 @@ OPENAPI_SPEC = {
             "get": {
                 "operationId": "get_default_policy",
                 "summary": "Get the active orchestration policy",
+                "security": [{"admin_bearer_auth": []}],
                 "responses": {"200": {"description": "Active policy"}},
             }
         },
@@ -66,11 +75,13 @@ OPENAPI_SPEC = {
             "get": {
                 "operationId": "list_workflow_runs",
                 "summary": "List recent workflow runs",
+                "security": [{"admin_bearer_auth": []}],
                 "responses": {"200": {"description": "Workflow runs"}},
             },
             "post": {
                 "operationId": "create_workflow_run",
                 "summary": "Run routing or conducted orchestration",
+                "security": [{"inference_bearer_auth": []}],
                 "requestBody": {
                     "required": True,
                     "content": {
@@ -93,6 +104,7 @@ OPENAPI_SPEC = {
             "get": {
                 "operationId": "get_workflow_run",
                 "summary": "Get a workflow run and its traces",
+                "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {
                         "name": "workflow_run_id",
@@ -108,6 +120,7 @@ OPENAPI_SPEC = {
             "get": {
                 "operationId": "get_access_report",
                 "summary": "Get access report for a workflow run",
+                "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {
                         "name": "workflow_run_id",
@@ -123,6 +136,7 @@ OPENAPI_SPEC = {
             "post": {
                 "operationId": "create_evaluation_run",
                 "summary": "Replay prompts for evaluation",
+                "security": [{"inference_bearer_auth": []}],
                 "requestBody": {
                     "required": True,
                     "content": {
@@ -145,6 +159,7 @@ OPENAPI_SPEC = {
             "get": {
                 "operationId": "get_evaluation_run",
                 "summary": "Read evaluation run outputs",
+                "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {
                         "name": "evaluation_run_id",
@@ -160,6 +175,7 @@ OPENAPI_SPEC = {
             "get": {
                 "operationId": "get_locale_bundle",
                 "summary": "Get admin UI translations",
+                "security": [{"admin_bearer_auth": []}],
                 "parameters": [
                     {
                         "name": "locale_code",

@@ -4,18 +4,27 @@ from __future__ import annotations
 
 from collections import deque
 from dataclasses import dataclass, replace
+import ipaddress
 import json
 import os
 import re
+import socket
 import time
 import uuid
 from typing import Any
+from urllib.parse import urlparse
 import urllib.request
 
 from .conventions import require_object_name
 
 
 ChatMessage = dict[str, str]
+
+SECRET_PATTERNS = (
+    re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
+    re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
+    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
+)
 
 
 @dataclass(frozen=True)
@@ -101,36 +110,72 @@ class OrchestrationPolicy:
 class ModelClient:
     """Small chat-completions client with deterministic mock support."""
 
-    def __init__(self, timeout: int = 90) -> None:
+    def __init__(self, timeout: int = 90, max_output_tokens: int = 2048, max_retries: int = 1) -> None:
         self.timeout = timeout
+        self.max_output_tokens = max_output_tokens
+        self.max_retries = max_retries
 
     def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint."""
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
-        api_key = os.environ.get(agent.api_key_env or "OPENAI_API_KEY")  # pragma: no cover
+        self._validate_provider(agent)  # pragma: no cover
+        api_key = os.environ.get(agent.api_key_env)  # pragma: no cover
         if not api_key:  # pragma: no cover
-            raise RuntimeError(f"{agent.id} requires ${agent.api_key_env or 'OPENAI_API_KEY'}")
+            raise RuntimeError(f"{agent.id} requires ${agent.api_key_env}")
 
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
             "temperature": temperature,
             "stream": False,
+            "max_tokens": self.max_output_tokens,
         }
-        request = urllib.request.Request(  # pragma: no cover
-            f"{agent.base_url.rstrip('/')}/chat/completions",
-            data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-            },
-            method="POST",
-        )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:  # pragma: no cover
-            data = json.loads(response.read().decode("utf-8"))
-        return data["choices"][0]["message"]["content"]  # pragma: no cover
+        last_error: Exception | None = None  # pragma: no cover
+        for _ in range(self.max_retries + 1):  # pragma: no cover
+            try:
+                request = urllib.request.Request(
+                    f"{agent.base_url.rstrip('/')}/chat/completions",
+                    data=json.dumps(payload).encode("utf-8"),
+                    headers={
+                        "authorization": f"Bearer {api_key}",
+                        "content-type": "application/json",
+                    },
+                    method="POST",
+                )
+                with urllib.request.urlopen(request, timeout=self.timeout) as response:
+                    data = json.loads(response.read().decode("utf-8"))
+                return data["choices"][0]["message"]["content"]
+            except Exception as exc:
+                last_error = exc
+        raise RuntimeError(f"provider {agent.id} request failed") from last_error  # pragma: no cover
+
+    def _validate_provider(self, agent: ModelAgent) -> None:
+        """Reject unsafe remote model endpoints before any egress happens."""
+        if not agent.api_key_env:
+            raise RuntimeError(f"{agent.id} requires explicit api_key_env")
+        parsed = urlparse(agent.base_url)
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise RuntimeError(f"{agent.id} base_url must use https")
+        allowed_hosts = {
+            host.strip().lower()
+            for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")
+            if host.strip()
+        }
+        hostname = parsed.hostname.lower()
+        if allowed_hosts and hostname not in allowed_hosts:
+            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
+        for address in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM):
+            ip_address = ipaddress.ip_address(address[4][0])
+            if (
+                ip_address.is_private
+                or ip_address.is_loopback
+                or ip_address.is_link_local
+                or ip_address.is_multicast
+                or ip_address.is_reserved
+            ):
+                raise RuntimeError(f"{agent.id} provider resolves to non-public address")
 
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
@@ -544,8 +589,43 @@ class TaskOrchestrator:
         }
 
 
-def chat_completion_response(result: dict[str, Any], model: str = "contextual-orchestrator") -> dict[str, Any]:  # pragma: no cover
+def redact_text(text: str) -> str:
+    """Mask common secret and personal-data shapes from traces."""
+    redacted = text
+    for pattern in SECRET_PATTERNS:
+        if pattern.pattern.lower().startswith("(?i)(api"):
+            redacted = pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted)
+        elif pattern.pattern.lower().startswith("(?i)(bearer"):
+            redacted = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
+        else:
+            redacted = pattern.sub("[REDACTED]", redacted)
+    return redacted
+
+
+def redact_value(value: Any) -> Any:
+    """Recursively redact string values while preserving response shape."""
+    if isinstance(value, str):
+        return redact_text(value)
+    if isinstance(value, list):
+        return [redact_value(item) for item in value]
+    if isinstance(value, dict):
+        return {key: redact_value(item) for key, item in value.items()}
+    return value
+
+
+def chat_completion_response(
+    result: dict[str, Any],
+    model: str = "contextual-orchestrator",
+    include_trace: bool = False,
+) -> dict[str, Any]:  # pragma: no cover
     """Wrap orchestration output in an OpenAI-compatible chat completion response."""
+    orchestration = {
+        "workflow_run_id": result.get("workflow_run_id"),
+        "mode": result["mode"],
+        "verification": result.get("verification"),
+    }
+    if include_trace:
+        orchestration["trace"] = redact_value(result["trace"])
     return {
         "id": f"chatcmpl-{int(time.time() * 1000)}",
         "object": "chat.completion",
@@ -559,10 +639,5 @@ def chat_completion_response(result: dict[str, Any], model: str = "contextual-or
             }
         ],
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
-        "orchestration": {
-            "workflow_run_id": result.get("workflow_run_id"),
-            "mode": result["mode"],
-            "trace": result["trace"],
-            "verification": result.get("verification"),
-        },
+        "orchestration": {key: value for key, value in orchestration.items() if value is not None},
     }
