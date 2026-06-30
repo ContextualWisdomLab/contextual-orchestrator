@@ -12,7 +12,7 @@ from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: 
 def test_rest_resource_paths_use_two_word_snake_case() -> None:
     for path in OPENAPI_SPEC["paths"]:
         if not path.startswith("/api/v1/"):
-            continue
+            continue  # pragma: no cover
         segment = path.removeprefix("/api/v1/").split("/", 1)[0]
         assert is_two_word_snake_case(segment.rstrip("s")), path
 

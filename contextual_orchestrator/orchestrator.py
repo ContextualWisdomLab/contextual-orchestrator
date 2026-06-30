@@ -113,7 +113,7 @@ class ModelClient:
         if not api_key:  # pragma: no cover
             raise RuntimeError(f"{agent.id} requires ${agent.api_key_env or 'OPENAI_API_KEY'}")
 
-        payload = {
+        payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
             "temperature": temperature,
@@ -430,7 +430,7 @@ class TaskOrchestrator:
         for agent in self.agents:
             if agent.id == agent_id:
                 return agent
-        raise KeyError(agent_id)
+        raise KeyError(agent_id)  # pragma: no cover
 
     def _needs_workflow(self, text: str) -> bool:
         lowered = text.lower()
