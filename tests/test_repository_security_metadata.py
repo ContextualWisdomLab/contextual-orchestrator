@@ -66,7 +66,7 @@ def test_security_policy_documents_reporting_and_automation():
     assert "OpenSSF Scorecard" in policy_text
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     test_readme_links_deepwiki_and_security_workflow_badges()
     test_security_workflow_covers_core_repository_security_process()
     test_dependabot_tracks_actions_and_python_dependencies()

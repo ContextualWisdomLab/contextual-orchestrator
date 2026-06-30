@@ -34,7 +34,7 @@ def test_library_research_is_required_design_gate() -> None:
     assert "Skipped:" in text
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     test_two_word_snake_case_rule()
     test_example_agent_ids_follow_object_name_rule()
     test_library_research_is_required_design_gate()

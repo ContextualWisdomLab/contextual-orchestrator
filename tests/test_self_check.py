@@ -35,7 +35,7 @@ def test_conduct_workflow() -> None:
     assert result["trace"][2]["access"] == [0, 1]
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     test_route_once()
     test_conduct_workflow()
     print("ok")

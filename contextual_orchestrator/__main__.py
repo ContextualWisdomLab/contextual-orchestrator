@@ -1,3 +1,5 @@
+"""Command-line entrypoint for routing prompts or serving the orchestration API."""
+
 from __future__ import annotations
 
 import argparse
@@ -8,6 +10,7 @@ from .server import serve
 
 
 def main() -> None:
+    """Parse CLI options and run either prompt completion or the HTTP server."""
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")

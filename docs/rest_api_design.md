@@ -18,12 +18,19 @@
 | `GET` | `/api/v1/agent_pools` | List model agents |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
+| `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
+| `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
+| `GET` | `/api/v1/workflow_runs/{workflow_run_id}` | Inspect one run and trace |
+| `GET` | `/api/v1/access_reports/{workflow_run_id}` | Inspect access-list evidence |
+| `PATCH` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Update status/priority/tags/provider exclusions |
+| `POST` | `/api/v1/evaluation_runs` | Replay prompts and return a reproducible evaluation run |
+| `GET` | `/api/v1/evaluation_runs/{evaluation_run_id}` | Review replay output |
 | `GET` | `/api/v1/locale_bundles/{locale_code}` | Read i18n bundle |
 | `GET` | `/admin` | Management console |
 
-## Product Planning Additions
+## Product Planning Additions (Implemented)
 
-These endpoints are planned product surfaces, not part of the stdlib lab yet:
+These product surfaces are now implemented in this prototype:
 
 | Method | Path | Purpose | Paper Basis |
 |---|---|---|---|
