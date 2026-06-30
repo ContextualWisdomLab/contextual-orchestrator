@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -38,6 +39,15 @@ def test_security_workflow_covers_core_repository_security_process():
         "github/codeql-action/init@v4",
         "github/codeql-action/analyze@v4",
         "actions/dependency-review-action@v5",
+        "python_supply_chain:",
+        "actions/setup-python@v6",
+        "python -m pip install --require-hashes -r requirements.lock",
+        "python -m pip install --no-deps -e .",
+        "pip-audit",
+        "python -m pip_audit -r requirements.lock",
+        "cyclonedx-bom",
+        "cyclonedx-py environment",
+        "actions/upload-artifact@v5",
         "aquasecurity/trivy-action@v0.36.0",
         "github/codeql-action/upload-sarif@v4",
         "ossf/scorecard-action@v2.4.3",
@@ -46,6 +56,10 @@ def test_security_workflow_covers_core_repository_security_process():
 
     for expected_token in expected_tokens:
         assert expected_token in workflow_text
+
+    uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
+    assert uses_lines
+    assert all(re.search(r"@[0-9a-f]{40}(?:\s+#|$)", line) for line in uses_lines)
 
 
 def test_dependabot_tracks_actions_and_python_dependencies():
@@ -62,13 +76,43 @@ def test_security_policy_documents_reporting_and_automation():
     assert "GitHub private vulnerability reporting" in policy_text
     assert "CodeQL" in policy_text
     assert "dependency review" in policy_text
+    assert "pip-audit" in policy_text
+    assert "requirements.lock" in policy_text
+    assert "CycloneDX SBOM" in policy_text
     assert "Trivy filesystem scanning" in policy_text
     assert "OpenSSF Scorecard" in policy_text
+    assert "pinned to reviewed commit SHAs" in policy_text
 
 
-if __name__ == "__main__":
+def test_database_design_avoids_plaintext_prompt_output_storage():
+    database_text = read_text("docs/database_design.sql")
+
+    assert "prompt_ciphertext bytea not null" in database_text
+    assert "answer_ciphertext bytea not null" in database_text
+    assert "output_ciphertext bytea not null" in database_text
+    assert "retention_expires_at timestamptz not null" in database_text
+    assert "purge_expired_orchestration_data" in database_text
+    assert "workflow_run_safe_view" in database_text
+    assert "prompt_text text not null" not in database_text
+    assert "answer_text text not null" not in database_text
+    assert "output_text text not null" not in database_text
+
+
+def test_python_lockfile_uses_hash_pinning():
+    lock_text = read_text("requirements.lock")
+
+    assert "pip-compile" in lock_text
+    assert "--hash=sha256:" in lock_text
+    assert "fastapi==" in lock_text
+    assert "uvicorn==" in lock_text
+    assert "sqlalchemy==" in lock_text
+
+
+if __name__ == "__main__":  # pragma: no cover
     test_readme_links_deepwiki_and_security_workflow_badges()
     test_security_workflow_covers_core_repository_security_process()
     test_dependabot_tracks_actions_and_python_dependencies()
     test_security_policy_documents_reporting_and_automation()
+    test_database_design_avoids_plaintext_prompt_output_storage()
+    test_python_lockfile_uses_hash_pinning()
     print("ok")

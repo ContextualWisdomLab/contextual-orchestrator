@@ -1,3 +1,5 @@
+"""Embedded admin console assets and locale bundles for the orchestrator."""
+
 ADMIN_TRANSLATIONS = {
     "en": {
         "brand_name": "Contextual Orchestrator",

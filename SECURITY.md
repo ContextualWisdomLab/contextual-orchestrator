@@ -14,4 +14,4 @@ If private reporting is unavailable, open a public issue that contains only a re
 
 ## Automated Checks
 
-The `Security` GitHub Actions workflow runs CodeQL, dependency review, Trivy filesystem scanning, and OpenSSF Scorecard checks on the configured branch, pull request, schedule, and manual triggers.
+The `Security` GitHub Actions workflow runs CodeQL, dependency review, pip-audit against the hash-pinned `requirements.lock`, CycloneDX SBOM generation, Trivy filesystem scanning, and OpenSSF Scorecard checks on the configured branch, pull request, schedule, and manual triggers. Third-party GitHub Actions in the workflow are pinned to reviewed commit SHAs with the source tag kept in comments for maintenance.

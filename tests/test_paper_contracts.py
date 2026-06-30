@@ -60,7 +60,7 @@ def test_conductor_contract_uses_access_lists_to_control_context() -> None:
     assert "Step 1: builder_agent:2" in verifier_prompt
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     test_fugu_contract_fuses_fast_route_and_deep_workflow()
     test_trinity_contract_has_explicit_thinker_worker_verifier_roles()
     test_conductor_contract_uses_access_lists_to_control_context()
