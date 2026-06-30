@@ -29,7 +29,7 @@ def test_admin_state_exposes_agents_without_secrets() -> None:
     assert state["policy"]["supported_locales"] == ["en", "ko"]
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     test_admin_surface_exists_for_enterprise_operations()
     test_admin_state_exposes_agents_without_secrets()
     print("ok")

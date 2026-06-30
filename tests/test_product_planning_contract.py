@@ -59,7 +59,7 @@ def test_rest_api_design_marks_planned_product_surfaces():
         assert expected_text in api_text
 
 
-if __name__ == "__main__":
+if __name__ == "__main__":  # pragma: no cover
     test_product_planning_is_paper_grounded()
     test_screen_design_maps_papers_to_enterprise_surfaces()
     test_user_stories_keep_source_basis_and_backlog_boundaries()

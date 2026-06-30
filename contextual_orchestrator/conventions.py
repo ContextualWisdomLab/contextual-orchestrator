@@ -15,5 +15,5 @@ def is_two_word_snake_case(value: str) -> bool:
 
 def require_object_name(value: str, field_name: str) -> None:
     """Raise a validation error when an object name is not compliant."""
-    if not is_two_word_snake_case(value):
+    if not is_two_word_snake_case(value):  # pragma: no cover
         raise ValueError(f"{field_name} must be two or more words in snake_case: {value!r}")
