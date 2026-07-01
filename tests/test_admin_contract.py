@@ -6,7 +6,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.admin import ADMIN_HTML  # noqa: E402
+from contextual_orchestrator.admin import ADMIN_HTML, ADMIN_TRANSLATIONS  # noqa: E402
 
 
 def test_admin_surface_exists_for_enterprise_operations() -> None:
@@ -22,6 +22,10 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'data-view="access"' in ADMIN_HTML
     assert "Access List Inspector" in ADMIN_HTML
     assert "Evaluation Replay" in ADMIN_HTML
+    assert 'id="mobileView"' in ADMIN_HTML
+    assert ADMIN_TRANSLATIONS["en"]["view_label"] == "View"
+    assert 'for="mobileView" data-i18n="view_label"' in ADMIN_HTML
+    assert "els.mobileView.addEventListener" in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:

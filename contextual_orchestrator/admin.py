@@ -16,6 +16,7 @@ ADMIN_TRANSLATIONS = {
         "environment_label": "Environment",
         "region_label": "Region",
         "language_label": "Language",
+        "view_label": "View",
         "healthy_status": "Healthy",
         "active_status": "Active",
         "agent_pool_title": "Agent Pool",
@@ -100,6 +101,7 @@ ADMIN_TRANSLATIONS = {
         "environment_label": "환경",
         "region_label": "리전",
         "language_label": "언어",
+        "view_label": "화면",
         "healthy_status": "정상",
         "active_status": "활성",
         "agent_pool_title": "에이전트 풀",
@@ -274,6 +276,16 @@ ADMIN_HTML = r"""<!doctype html>
       font-weight: 650;
     }
     .language-switch { margin-left: 6px; }
+    .mobile-nav {
+      display: none;
+      padding: 10px 12px;
+      background: var(--surface);
+      border-bottom: 1px solid var(--line);
+      gap: 8px;
+      align-items: center;
+    }
+    .mobile-nav label { color: var(--muted); white-space: nowrap; }
+    .mobile-nav select { width: 100%; }
     .grid {
       display: grid;
       grid-template-columns: minmax(640px, 1.25fr) minmax(330px, .75fr);
@@ -459,6 +471,7 @@ ADMIN_HTML = r"""<!doctype html>
     @media (max-width: 980px) {
       .app { grid-template-columns: 1fr; }
       .sidebar { display: none; }
+      .mobile-nav { display: flex; }
       .grid { grid-template-columns: minmax(0, 1fr); max-width: 100vw; overflow: hidden; }
       .detail-grid { grid-template-columns: minmax(0, 1fr); }
       .panel { max-width: calc(100vw - 24px); overflow-x: auto; }
@@ -502,6 +515,19 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field language-switch"><span data-i18n="language_label">Language</span><select id="language"><option value="en">English</option><option value="ko">한국어</option></select></div>
         <div class="health">● <span data-i18n="healthy_status">Healthy</span></div>
       </header>
+      <div class="mobile-nav">
+        <label for="mobileView" data-i18n="view_label">View</label>
+        <select id="mobileView" aria-label="Admin view">
+          <option value="overview" data-i18n="nav_overview">Overview</option>
+          <option value="evaluations" data-i18n="nav_evaluations">Evaluations</option>
+          <option value="datasets" data-i18n="nav_datasets">Datasets</option>
+          <option value="access" data-i18n="nav_access_control">Access Control</option>
+          <option value="integrations" data-i18n="nav_integrations">Integrations</option>
+          <option value="observability" data-i18n="nav_observability">Observability</option>
+          <option value="audit" data-i18n="nav_audit">Audit</option>
+          <option value="settings" data-i18n="nav_settings">Settings</option>
+        </select>
+      </div>
       <section class="grid view" data-view="overview">
         <section class="panel">
           <div class="panel-header">
@@ -659,6 +685,7 @@ Summarize this research thread and verify claims.</textarea>
       kpis: document.querySelector("#kpis"),
       runRows: document.querySelector("#runRows"),
       auditRows: document.querySelector("#auditRows"),
+      mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
     let state = {agents: [], last: null};
@@ -769,6 +796,7 @@ Summarize this research thread and verify claims.</textarea>
         item.removeAttribute("aria-current");
       });
       (activeItem || document.querySelector(`.nav-item[data-view="${name}"]`))?.setAttribute("aria-current", "page");
+      els.mobileView.value = name;
       renderSecondaryViews();
     }
     function applyI18n(lang) {
@@ -820,6 +848,7 @@ Summarize this research thread and verify claims.</textarea>
     els.run.addEventListener("click", simulate);
     els.runEvaluation.addEventListener("click", runEvaluation);
     els.language.addEventListener("change", () => applyI18n(els.language.value));
+    els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
     document.querySelector("#copyJson").addEventListener("click", () => {
       renderTraceTab("json");
       navigator.clipboard?.writeText(els.traceJson.textContent);
