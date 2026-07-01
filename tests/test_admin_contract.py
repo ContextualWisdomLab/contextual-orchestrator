@@ -51,6 +51,8 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'id="registerAgent"' in ADMIN_HTML
     assert "registerAgent: document.querySelector" in ADMIN_HTML
     assert 'els.registerAgent.addEventListener("click", () => showView("integrations"))' in ADMIN_HTML
+    assert ADMIN_TRANSLATIONS["en"]["no_agents_configured"] == "No agents are configured yet."
+    assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_agents_configured">${t("no_agents_configured")}</td></tr>`' in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:

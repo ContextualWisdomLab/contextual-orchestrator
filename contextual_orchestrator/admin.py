@@ -24,6 +24,7 @@ ADMIN_TRANSLATIONS = {
         "search_agents": "Search agents",
         "all_statuses": "All statuses",
         "no_agents_match": "No agents match the current filters.",
+        "no_agents_configured": "No agents are configured yet.",
         "orchestration_policy": "Orchestration Policy",
         "simulation_title": "Simulation",
         "run_trace": "Run Trace",
@@ -110,6 +111,7 @@ ADMIN_TRANSLATIONS = {
         "search_agents": "에이전트 검색",
         "all_statuses": "전체 상태",
         "no_agents_match": "현재 필터와 일치하는 에이전트가 없습니다.",
+        "no_agents_configured": "아직 구성된 에이전트가 없습니다.",
         "orchestration_policy": "오케스트레이션 정책",
         "simulation_title": "시뮬레이션",
         "run_trace": "트레이스 실행",
@@ -779,7 +781,7 @@ Summarize this research thread and verify claims.</textarea>
     function renderIntegrations() {
       els.integrationRows.innerHTML = state.agents.map(agent => `
         <tr><td>${escapeHtml(agent.provider_name || agent.id)}</td><td>${escapeHtml(agent.base_url)}</td><td>${(agent.provider_exclusions || []).map(escapeHtml).join(", ") || "Allowed"}</td></tr>
-      `).join("");
+      `).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_agents_configured">${t("no_agents_configured")}</td></tr>`;
     }
     function renderObservability() {
       const runs = state.recent_workflow_runs || [];
