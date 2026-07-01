@@ -48,6 +48,9 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'id="agentSettings" aria-label="Agent settings"' in ADMIN_HTML
     assert "agentSettings: document.querySelector" in ADMIN_HTML
     assert 'els.agentSettings.addEventListener("click", () => showView("settings"))' in ADMIN_HTML
+    assert 'id="registerAgent"' in ADMIN_HTML
+    assert "registerAgent: document.querySelector" in ADMIN_HTML
+    assert 'els.registerAgent.addEventListener("click", () => showView("integrations"))' in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:

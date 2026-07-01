@@ -536,7 +536,7 @@ ADMIN_HTML = r"""<!doctype html>
         <section class="panel" id="agent-pool" tabindex="-1">
           <div class="panel-header">
             <h1><span data-i18n="agent_pool_title">Agent Pool</span> <span id="agentCount" class="chip"></span></h1>
-            <div class="actions"><button class="btn primary">+ <span data-i18n="register_agent">Register Agent</span></button><button class="btn" id="agentSettings" aria-label="Agent settings">⚙</button></div>
+            <div class="actions"><button class="btn primary" id="registerAgent">+ <span data-i18n="register_agent">Register Agent</span></button><button class="btn" id="agentSettings" aria-label="Agent settings">⚙</button></div>
           </div>
           <div class="toolbar">
             <input id="agentSearch" type="search" placeholder="Search agents" data-i18n-placeholder="search_agents">
@@ -692,6 +692,7 @@ Summarize this research thread and verify claims.</textarea>
       auditRows: document.querySelector("#auditRows"),
       viewAudit: document.querySelector("#viewAudit"),
       agentSettings: document.querySelector("#agentSettings"),
+      registerAgent: document.querySelector("#registerAgent"),
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
@@ -873,6 +874,7 @@ Summarize this research thread and verify claims.</textarea>
     els.runEvaluation.addEventListener("click", runEvaluation);
     els.viewAudit.addEventListener("click", () => showView("audit"));
     els.agentSettings.addEventListener("click", () => showView("settings"));
+    els.registerAgent.addEventListener("click", () => showView("integrations"));
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
     document.querySelector("#copyJson").addEventListener("click", () => {
