@@ -26,6 +26,14 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert ADMIN_TRANSLATIONS["en"]["view_label"] == "View"
     assert 'for="mobileView" data-i18n="view_label"' in ADMIN_HTML
     assert "els.mobileView.addEventListener" in ADMIN_HTML
+    assert 'data-section="agent-pool"' in ADMIN_HTML
+    assert 'data-section="orchestration-policy"' in ADMIN_HTML
+    assert 'id="agent-pool" tabindex="-1"' in ADMIN_HTML
+    assert 'id="orchestration-policy" tabindex="-1"' in ADMIN_HTML
+    assert "scrollIntoView" in ADMIN_HTML
+    assert "preventScroll: true" in ADMIN_HTML
+    assert "prefers-reduced-motion: reduce" in ADMIN_HTML
+    assert 'behavior: reducedMotion ? "auto" : "smooth"' in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:

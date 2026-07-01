@@ -307,7 +307,9 @@ ADMIN_HTML = r"""<!doctype html>
       box-shadow: var(--shadow);
       min-width: 0;
       align-self: start;
+      scroll-margin-top: 68px;
     }
+    .panel:focus { outline: 2px solid rgba(43, 108, 176, .45); outline-offset: 2px; }
     .panel-header {
       min-height: 48px;
       padding: 12px 14px;
@@ -496,8 +498,8 @@ ADMIN_HTML = r"""<!doctype html>
       <div class="brand"><span class="mark"></span><span data-i18n="brand_name">Contextual Orchestrator</span></div>
       <nav aria-label="Admin navigation">
         <button class="nav-item" data-view="overview" aria-current="page"><span>⌂</span><span data-i18n="nav_overview">Overview</span></button>
-        <button class="nav-item" data-view="overview"><span>▦</span><span data-i18n="nav_agent_pool">Agent Pool</span></button>
-        <button class="nav-item" data-view="overview"><span>⌁</span><span data-i18n="nav_orchestration">Orchestration</span></button>
+        <button class="nav-item" data-view="overview" data-section="agent-pool"><span>▦</span><span data-i18n="nav_agent_pool">Agent Pool</span></button>
+        <button class="nav-item" data-view="overview" data-section="orchestration-policy"><span>⌁</span><span data-i18n="nav_orchestration">Orchestration</span></button>
         <button class="nav-item" data-view="evaluations"><span>◫</span><span data-i18n="nav_evaluations">Evaluations</span></button>
         <button class="nav-item" data-view="datasets"><span>▣</span><span data-i18n="nav_datasets">Datasets</span></button>
         <button class="nav-item" data-view="access"><span>□</span><span data-i18n="nav_access_control">Access Control</span></button>
@@ -529,7 +531,7 @@ ADMIN_HTML = r"""<!doctype html>
         </select>
       </div>
       <section class="grid view" data-view="overview">
-        <section class="panel">
+        <section class="panel" id="agent-pool" tabindex="-1">
           <div class="panel-header">
             <h1><span data-i18n="agent_pool_title">Agent Pool</span> <span id="agentCount" class="chip"></span></h1>
             <div class="actions"><button class="btn primary">+ <span data-i18n="register_agent">Register Agent</span></button><button class="btn" aria-label="Agent settings">⚙</button></div>
@@ -545,7 +547,7 @@ ADMIN_HTML = r"""<!doctype html>
             <tbody id="agents"></tbody>
           </table>
         </section>
-        <section class="panel">
+        <section class="panel" id="orchestration-policy" tabindex="-1">
           <div class="panel-header">
             <h2 data-i18n="orchestration_policy">Orchestration Policy</h2>
             <span class="chip green" data-i18n="active_status">Active</span>
@@ -790,7 +792,7 @@ Summarize this research thread and verify claims.</textarea>
       renderAudit();
       renderAccess(state.last?.trace || []);
     }
-    function showView(name, activeItem) {
+    function showView(name, activeItem, sectionId) {
       document.querySelectorAll(".view").forEach(view => view.hidden = view.dataset.view !== name);
       document.querySelectorAll(".nav-item").forEach(item => {
         item.removeAttribute("aria-current");
@@ -798,6 +800,14 @@ Summarize this research thread and verify claims.</textarea>
       (activeItem || document.querySelector(`.nav-item[data-view="${name}"]`))?.setAttribute("aria-current", "page");
       els.mobileView.value = name;
       renderSecondaryViews();
+      if (sectionId) {
+        requestAnimationFrame(() => {
+          const target = document.getElementById(sectionId);
+          const reducedMotion = window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+          target?.scrollIntoView({block: "start", behavior: reducedMotion ? "auto" : "smooth"});
+          target?.focus({preventScroll: true});
+        });
+      }
     }
     function applyI18n(lang) {
       const dict = translations[lang] || translations.en;
@@ -858,7 +868,7 @@ Summarize this research thread and verify claims.</textarea>
       tab.classList.add("active");
       renderTraceTab(tab.dataset.tab);
     }));
-    document.querySelectorAll(".nav-item").forEach(item => item.addEventListener("click", () => showView(item.dataset.view || "overview", item)));
+    document.querySelectorAll(".nav-item").forEach(item => item.addEventListener("click", () => showView(item.dataset.view || "overview", item, item.dataset.section)));
     const initialLang = new URLSearchParams(location.search).get("lang") || localStorage.getItem("admin_lang") || "en";
     els.language.value = translations[initialLang] ? initialLang : "en";
     applyI18n(els.language.value);
