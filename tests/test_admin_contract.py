@@ -45,6 +45,9 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert 'id="viewAudit" data-i18n="view_all"' in ADMIN_HTML
     assert "viewAudit: document.querySelector" in ADMIN_HTML
     assert 'els.viewAudit.addEventListener("click", () => showView("audit"))' in ADMIN_HTML
+    assert 'id="agentSettings" aria-label="Agent settings"' in ADMIN_HTML
+    assert "agentSettings: document.querySelector" in ADMIN_HTML
+    assert 'els.agentSettings.addEventListener("click", () => showView("settings"))' in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:
