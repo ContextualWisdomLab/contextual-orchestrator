@@ -58,17 +58,15 @@ diagrams, analytics model, and implementation path.
 
 ## Product Design Image Directions
 
-Generated image files:
+Three Product Design image directions were generated during the execution run:
 
-- Evidence Console:
-  `/Users/seonghobae/.codex/generated_images/019f1ffa-f314-7181-9432-ee9b0e993131/ig_0711874b766cb6ca016a45a25dfc7081918dd584595c7abdb2.png`
-- Policy Studio:
-  `/Users/seonghobae/.codex/generated_images/019f1ffa-f314-7181-9432-ee9b0e993131/ig_0711874b766cb6ca016a45a2e990f08191a8f12d24a1fd7793.png`
-- Audit Timeline:
-  `/Users/seonghobae/.codex/generated_images/019f1ffa-f314-7181-9432-ee9b0e993131/ig_0711874b766cb6ca016a45a33671908191bbb489f4dc158c1c.png`
+- Evidence Console
+- Policy Studio
+- Audit Timeline
 
-These images are comparison material. The editable Figma frames use Evidence
-Console as the canonical direction.
+The image files are local execution artifacts and are not committed to this
+repository. The editable Figma frames use Evidence Console as the canonical
+direction, so the durable review source is the Figma design file above.
 
 ## Code Connect Exclusion
 
