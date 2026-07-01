@@ -23,6 +23,7 @@ ADMIN_TRANSLATIONS = {
         "register_agent": "Register Agent",
         "search_agents": "Search agents",
         "all_statuses": "All statuses",
+        "no_agents_match": "No agents match the current filters.",
         "orchestration_policy": "Orchestration Policy",
         "simulation_title": "Simulation",
         "run_trace": "Run Trace",
@@ -108,6 +109,7 @@ ADMIN_TRANSLATIONS = {
         "register_agent": "에이전트 등록",
         "search_agents": "에이전트 검색",
         "all_statuses": "전체 상태",
+        "no_agents_match": "현재 필터와 일치하는 에이전트가 없습니다.",
         "orchestration_policy": "오케스트레이션 정책",
         "simulation_title": "시뮬레이션",
         "run_trace": "트레이스 실행",
@@ -538,7 +540,7 @@ ADMIN_HTML = r"""<!doctype html>
           </div>
           <div class="toolbar">
             <input id="agentSearch" type="search" placeholder="Search agents" data-i18n-placeholder="search_agents">
-            <select id="statusFilter"><option data-i18n="all_statuses">All statuses</option><option>Healthy</option><option>Degraded</option></select>
+            <select id="statusFilter"><option value="all" data-i18n="all_statuses">All statuses</option><option value="healthy" data-i18n="status_healthy">Healthy</option><option value="degraded" data-i18n="status_degraded">Degraded</option></select>
           </div>
           <table>
             <thead>
@@ -668,6 +670,7 @@ Summarize this research thread and verify claims.</textarea>
       agents: document.querySelector("#agents"),
       agentCount: document.querySelector("#agentCount"),
       agentSearch: document.querySelector("#agentSearch"),
+      statusFilter: document.querySelector("#statusFilter"),
       hintCount: document.querySelector("#hintCount"),
       prompt: document.querySelector("#prompt"),
       mode: document.querySelector("#mode"),
@@ -710,19 +713,27 @@ Summarize this research thread and verify claims.</textarea>
     function tags(tags) {
       return tags.map(tag => `<span class="chip">${escapeHtml(tag)}</span>`).join("");
     }
+    function agentStatus(index) {
+      return index === 1
+        ? {key: "degraded", chip: "amber", dot: "warn", label: t("status_degraded")}
+        : {key: "healthy", chip: "green", dot: "", label: t("status_healthy")};
+    }
     function renderAgents() {
       const q = els.agentSearch.value.toLowerCase();
-      const rows = state.agents.filter(agent => agent.id.toLowerCase().includes(q) || agent.model.toLowerCase().includes(q));
+      const selectedStatus = els.statusFilter.value;
+      const rows = state.agents
+        .map((agent, index) => ({agent, index, status: agentStatus(index)}))
+        .filter(({agent, status}) => (agent.id.toLowerCase().includes(q) || agent.model.toLowerCase().includes(q)) && (selectedStatus === "all" || status.key === selectedStatus));
       els.agentCount.textContent = `${rows.length} agents`;
-      els.agents.innerHTML = rows.map((agent, index) => `
+      els.agents.innerHTML = rows.map(({agent, index, status}) => `
         <tr>
-          <td><span class="dot ${index === 1 ? "warn" : ""}"></span><strong>${escapeHtml(agent.id)}</strong><br><small>${escapeHtml(agent.base_url)}</small></td>
+          <td><span class="dot ${status.dot}"></span><strong>${escapeHtml(agent.id)}</strong><br><small>${escapeHtml(agent.base_url)}</small></td>
           <td>${escapeHtml(agent.model)}</td>
           <td>${tags(agent.tags)}</td>
-          <td><span class="chip ${index === 1 ? "amber" : "green"}">${index === 1 ? t("status_degraded") : t("status_healthy")}</span></td>
+          <td><span class="chip ${status.chip}">${status.label}</span></td>
           <td><div>${72 - index * 8}%</div><div class="bar"><span style="width:${72 - index * 8}%"></span></div></td>
           <td>${(99.2 - index * .4).toFixed(1)}%</td>
-        </tr>`).join("");
+        </tr>`).join("") || `<tr><td colspan="6" class="empty" data-i18n="no_agents_match">${t("no_agents_match")}</td></tr>`;
     }
     function renderTrace(result) {
       els.traceMode.textContent = result.mode;
@@ -855,6 +866,7 @@ Summarize this research thread and verify claims.</textarea>
       els.evaluationRows.insertAdjacentHTML("afterbegin", `<tr><td>${escapeHtml(result.evaluation_run_id)}</td><td>${escapeHtml(result.mode)}</td><td>${escapeHtml(result.prompt_count)}</td><td>${escapeHtml(result.success_count)}</td></tr>`);
     }
     els.agentSearch.addEventListener("input", renderAgents);
+    els.statusFilter.addEventListener("change", renderAgents);
     els.run.addEventListener("click", simulate);
     els.runEvaluation.addEventListener("click", runEvaluation);
     els.language.addEventListener("change", () => applyI18n(els.language.value));
