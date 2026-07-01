@@ -42,6 +42,9 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "function agentStatus(index)" in ADMIN_HTML
     assert "no_agents_match" in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == "No agents match the current filters."
+    assert 'id="viewAudit" data-i18n="view_all"' in ADMIN_HTML
+    assert "viewAudit: document.querySelector" in ADMIN_HTML
+    assert 'els.viewAudit.addEventListener("click", () => showView("audit"))' in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:
