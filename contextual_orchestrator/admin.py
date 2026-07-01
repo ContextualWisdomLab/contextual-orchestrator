@@ -600,7 +600,7 @@ ADMIN_HTML = r"""<!doctype html>
             </table>
           </section>
           <section class="panel">
-            <div class="panel-header"><h2 data-i18n="recent_errors">Recent Errors</h2><button class="btn" data-i18n="view_all">View all</button></div>
+            <div class="panel-header"><h2 data-i18n="recent_errors">Recent Errors</h2><button class="btn" id="viewAudit" data-i18n="view_all">View all</button></div>
             <div class="audit-list">
               <div class="event"><span class="status-icon warn">!</span><div><b data-i18n="route_degradation">Route degradation</b><br><small data-i18n="worker_latency">worker exceeded latency threshold</small></div><small>2m</small></div>
               <div class="event"><span class="status-icon">!</span><div><b data-i18n="verifier_disagreement">Verifier disagreement</b><br><small data-i18n="confidence_low">confidence below policy threshold</small></div><small>11m</small></div>
@@ -690,6 +690,7 @@ Summarize this research thread and verify claims.</textarea>
       kpis: document.querySelector("#kpis"),
       runRows: document.querySelector("#runRows"),
       auditRows: document.querySelector("#auditRows"),
+      viewAudit: document.querySelector("#viewAudit"),
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
@@ -869,6 +870,7 @@ Summarize this research thread and verify claims.</textarea>
     els.statusFilter.addEventListener("change", renderAgents);
     els.run.addEventListener("click", simulate);
     els.runEvaluation.addEventListener("click", runEvaluation);
+    els.viewAudit.addEventListener("click", () => showView("audit"));
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
     document.querySelector("#copyJson").addEventListener("click", () => {
