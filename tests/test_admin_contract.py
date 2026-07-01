@@ -34,6 +34,14 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "preventScroll: true" in ADMIN_HTML
     assert "prefers-reduced-motion: reduce" in ADMIN_HTML
     assert 'behavior: reducedMotion ? "auto" : "smooth"' in ADMIN_HTML
+    assert 'id="statusFilter"' in ADMIN_HTML
+    assert 'option value="healthy" data-i18n="status_healthy"' in ADMIN_HTML
+    assert 'option value="degraded" data-i18n="status_degraded"' in ADMIN_HTML
+    assert "statusFilter: document.querySelector" in ADMIN_HTML
+    assert 'els.statusFilter.addEventListener("change", renderAgents)' in ADMIN_HTML
+    assert "function agentStatus(index)" in ADMIN_HTML
+    assert "no_agents_match" in ADMIN_HTML
+    assert ADMIN_TRANSLATIONS["en"]["no_agents_match"] == "No agents match the current filters."
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:
