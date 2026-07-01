@@ -16,6 +16,12 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "/admin/simulate" in ADMIN_HTML
     assert "ADMIN_TRANSLATIONS" not in ADMIN_HTML
     assert "source_basis_text" in ADMIN_HTML
+    assert "include_orchestration_trace: true" in ADMIN_HTML
+    assert 'data-view="evaluations"' in ADMIN_HTML
+    assert 'data-view="datasets"' in ADMIN_HTML
+    assert 'data-view="access"' in ADMIN_HTML
+    assert "Access List Inspector" in ADMIN_HTML
+    assert "Evaluation Replay" in ADMIN_HTML
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:
