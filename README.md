@@ -87,6 +87,11 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Code conventions](docs/code_conventions.md)
 - [Database conventions](docs/database_conventions.md)
 - [i18n design](docs/i18n_design.md)
+- [Plugin-driven design brief](docs/plugin_driven_design_brief.md)
+- [Plugin visual directions](docs/plugin_visual_directions.md)
+- [Analytics spec](docs/analytics_spec.md)
+- [Figma artifacts](docs/figma_artifacts.md)
+- [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
 
 ## Check
 
