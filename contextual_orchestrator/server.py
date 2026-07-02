@@ -98,6 +98,23 @@ class SecurityConfig:
         """Release a run slot acquired by acquire_run_slot."""
         self._run_semaphore.release()
 
+    def readiness_profile(self) -> dict[str, Any]:
+        """Return a secret-free security profile for sales-readiness evidence."""
+        if self.admin_token and self.inference_token:
+            auth_mode = "split_token"
+        elif self.auth_token:
+            auth_mode = "single_token"
+        else:
+            auth_mode = "loopback_no_auth"
+        return {
+            "auth_mode": auth_mode,
+            "allow_public_bind": self.allow_public_bind,
+            "expose_trace_by_default": self.expose_trace_by_default,
+            "rate_limit_requests": self.rate_limit_requests,
+            "rate_limit_window_seconds": self.rate_limit_window_seconds,
+            "max_concurrent_runs": self.max_concurrent_runs,
+        }
+
 
 def _error_payload(error_code: str, error_message: str, error_detail: dict[str, Any] | None = None) -> dict[str, Any]:
     detail = error_detail or {}
@@ -197,6 +214,159 @@ def build_server(
                 if path == "/api/v1/orchestration_policies/default_policy":
                     self._send(orchestrator.admin_state()["policy"])
                     return
+                if path == "/api/v1/analytics_snapshots/latest":
+                    self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
+                    return
+                if path == "/api/v1/sales_readiness/latest":
+                    self._send(orchestrator.sales_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_readiness/latest":
+                    self._send(orchestrator.commercial_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/buyer_evidence_manifests/latest":
+                    self._send(orchestrator.buyer_evidence_manifest_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/buyer_handoff_bundles/latest":
+                    self._send(orchestrator.buyer_handoff_bundle_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/saleability_decisions/latest":
+                    self._send(orchestrator.saleability_decision_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_evidence_exports/latest":
+                    self._send(orchestrator.commercial_evidence_export_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_acceptance_checks/latest":
+                    self._send(orchestrator.commercial_acceptance_check_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_release_candidates/latest":
+                    self._send(orchestrator.commercial_release_candidate_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_gap_registers/latest":
+                    self._send(orchestrator.commercial_gap_register_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_procurement_readiness/latest":
+                    self._send(orchestrator.commercial_procurement_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_contract_readiness/latest":
+                    self._send(orchestrator.commercial_contract_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_onboarding_readiness/latest":
+                    self._send(orchestrator.commercial_onboarding_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_operations_readiness/latest":
+                    self._send(orchestrator.commercial_operations_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_security_attestations/latest":
+                    self._send(orchestrator.commercial_security_attestation_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_value_readiness/latest":
+                    self._send(orchestrator.commercial_value_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_close_readiness/latest":
+                    self._send(orchestrator.commercial_close_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_go_to_market_readiness/latest":
+                    self._send(orchestrator.commercial_go_to_market_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_launch_readiness/latest":
+                    self._send(orchestrator.commercial_launch_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_completion_scorecards/latest":
+                    self._send(orchestrator.commercial_completion_scorecard_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_buyer_acceptance_workflows/latest":
+                    self._send(orchestrator.commercial_buyer_acceptance_workflow_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_demo_scenarios/latest":
+                    self._send(orchestrator.commercial_demo_scenario_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_proposal_packets/latest":
+                    self._send(orchestrator.commercial_proposal_packet_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_purchase_approval_packets/latest":
+                    self._send(orchestrator.commercial_purchase_approval_packet_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_due_diligence_rooms/latest":
+                    self._send(orchestrator.commercial_due_diligence_room_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
+                if path == "/api/v1/commercial_investment_committee_memos/latest":
+                    self._send(orchestrator.commercial_investment_committee_memo_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
                     self._send(_response_payload({
@@ -217,6 +387,15 @@ def build_server(
                 if path.startswith("/api/v1/access_reports/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
+                        orchestrator.record_analytics_event(
+                            "access_report_viewed",
+                            {
+                                "endpoint_path": "/api/v1/access_reports/{workflow_run_id}",
+                                "workflow_run_id": workflow_run_id,
+                                "actor_scope": "admin",
+                                "status_code": 200,
+                            },
+                        )
                         self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.expose_trace_by_default))
                         return
                     except KeyError:
@@ -254,6 +433,15 @@ def build_server(
                     if not bundle:
                         self._send_error(404, "locale_not_found", f"locale {locale_code} not found")
                         return
+                    orchestrator.record_analytics_event(
+                        "locale_bundle_loaded",
+                        {
+                            "endpoint_path": "/api/v1/locale_bundles/{locale_code}",
+                            "locale_code": locale_code,
+                            "actor_scope": "admin",
+                            "status_code": 200,
+                        },
+                    )
                     self._send({"locale_code": locale_code, "messages": bundle})
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -299,7 +487,19 @@ def build_server(
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    started_at = time.perf_counter()
                     result = self._run(lambda: orchestrator.run(messages, mode=mode, workflow_run_id=f"run_{uuid.uuid4().hex}"))
+                    orchestrator.record_analytics_event(
+                        "chat_completion_requested",
+                        {
+                            "endpoint_path": "/v1/chat/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "run_mode": result["mode"],
+                            "workflow_run_id": result["workflow_run_id"],
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
                     self._send(chat_completion_response(result, model=str(body.get("model", "contextual-orchestrator")), include_trace=include_trace))
                     return
                 if path == "/admin/simulate":

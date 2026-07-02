@@ -15,6 +15,7 @@ See [product planning](product_planning.md) for the source-backed product thesis
 | Workflow Run Trace | TRINITY: multi-turn coordinator with Thinker, Worker, Verifier roles. Conductor: workflow steps. | Operators need to audit why the system delegated and which role each agent played. |
 | Access List Inspector | Conductor: each step includes an access list of previous step outputs. Fugu-Ultra: intra-workflow isolation with shared memory across turns. | Operators need proof that workers only saw allowed prior context. |
 | Evaluation Replay | TRINITY and Fugu optimize routing decisions against measured task outcomes. | Product owners need a way to replay prompts before replacing heuristic routing with learned coordination. |
+| Observability readiness | Fugu API adoption metrics, TRINITY verification traces, and Conductor access-list guardrails. | Operators need one pass/warn/fail view that says whether the local runtime is ready for a sellable enterprise pilot without claiming production certification. |
 | Audit & Compliance | Fugu report: pools can exclude providers or respect privacy/compliance constraints without retraining. | Enterprise users need policy evidence and recent exceptions next to runtime behavior. |
 | i18n language selector | User requirement. | Global admin teams need English and Korean UI from the first version. |
 
@@ -25,6 +26,7 @@ See [product planning](product_planning.md) for the source-backed product thesis
 3. Compliance reviewer opens a workflow run and checks access-list exposure and exclusions.
 4. AI product owner replays a prompt to compare fast route and deep workflow behavior before policy rollout.
 5. Support engineer simulates a prompt and copies the trace JSON for incident review.
+6. Operator opens Observability and checks sales readiness criteria, evidence, and remediation before customer-facing pilot review.
 
 ## Design Tokens
 

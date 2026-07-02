@@ -24,6 +24,35 @@ No new dependency is added until it carries real product weight:
 
 Skipped: custom admin framework, custom i18n engine, custom migration engine.
 
+## Commercial Packaging Decision
+
+For the KRW 2,000,000,000 commercial-readiness plan, keep Contextual
+Orchestrator as one repository and one deployable product. Do not split the
+orchestration core into a separate library, Git submodule, or package yet.
+
+Reason:
+
+- The buyer value is the integrated system: compatible API, admin evidence
+  surface, workflow trace, access-list reports, analytics snapshot, sales
+  readiness, and commercial readiness.
+- A separate library would create release, versioning, and support overhead
+  before there is an external SDK consumer or independent orchestration-core
+  release cadence.
+- A Git submodule would make due-diligence review harder because buyers need a
+  single evidence packet, not a multi-repo dependency chain.
+
+Extraction triggers:
+
+- A second product or external customer needs the orchestration engine without
+  the admin control plane.
+- The orchestration core needs a separately versioned API and compatibility
+  matrix.
+- Security review requires a reusable, locked core package with independent
+  provenance.
+
+Until those triggers exist, Ponytail recommends strengthening the current
+single-repo product instead of splitting it.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

@@ -46,6 +46,9 @@ Enterprise teams want the benefit of collective model intelligence without makin
 | Workflow run trace | TRINITY and Conductor both make role/step behavior central to coordination quality. |
 | Access list inspector | Conductor access lists are the concrete mechanism for context visibility and auditability. |
 | Evaluation replay | TRINITY and Fugu both optimize against measured task outcomes; product teams need replay before learned routing exists. |
+| Analytics snapshot | Pilot readiness needs source-backed local KPIs for API adoption, trace completeness, policy-safe routing, provider exclusions, and locale readiness before production telemetry exists. |
+| Sales readiness gate | Enterprise evaluation needs a concrete pass/warn/fail checklist for API compatibility, admin evidence, trace evidence, replay, security posture, analytics truthfulness, locale parity, and provider egress safety without overstating production certification. |
+| Commercial readiness gate | High-value buyer review needs a KRW 2,000,000,000 due-diligence checklist that rolls up product, security, operations, audit, documentation, support, and value-case evidence without claiming a valuation guarantee. |
 | Locale bundle editor | i18n support is an explicit product requirement and should be reviewable as data. |
 
 ## Deliberate Non-goals For This Repository
@@ -60,3 +63,6 @@ Enterprise teams want the benefit of collective model intelligence without makin
 - Product planning, screen design, user stories, and API design all cite paper-backed requirements.
 - The management console prioritizes traceability and policy control over decorative SaaS chrome.
 - Every new product surface maps to one of: single API adoption, pool management, policy control, trace audit, access-list evidence, evaluation replay, or i18n.
+- Local runtime analytics are clearly labeled as process-local evidence and not production telemetry.
+- Sales readiness is reported as local enterprise-pilot evidence with pass/warn/fail remediation, not as a production compliance certificate.
+- Commercial readiness is reported as high-value buyer due-diligence evidence with a KRW 2,000,000,000 target value caveat, not as a sale guarantee.

@@ -67,6 +67,31 @@ One public interface:
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
+- `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
+- `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
+- `/api/v1/buyer_evidence_manifests/latest` exposes the buyer evidence manifest as a runtime review index across endpoints, repository artifacts, Figma artifacts, verification evidence, and production or buyer-specific caveats.
+- `/api/v1/buyer_handoff_bundles/latest` exposes the buyer handoff bundle across runtime reports, repository packet, Figma artifacts, verification commands, packaging decision, and explicit production or buyer-specific follow-ups.
+- `/api/v1/saleability_decisions/latest` exposes the final KRW 2,000,000,000 saleability decision gate with concrete blockers, warning conditions, and review-process non-blocker policy.
+- `/api/v1/commercial_evidence_exports/latest` exposes the portable commercial evidence export across saleability, runtime reports, buyer documents, Figma artifacts, verification commands, review-process policy, packaging decision, and external evidence gaps.
+- `/api/v1/commercial_acceptance_checks/latest` exposes the buyer acceptance check across evidence export, runtime endpoint chain, buyer packet, admin surface, verification, Figma, review-process policy, packaging decision, and external evidence gaps.
+- `/api/v1/commercial_buyer_acceptance_workflows/latest` exposes the buyer acceptance workflow across owner-scoped runbook steps, Go/Warning/No-Go rules, runtime evidence, Figma artifacts, analytics truthfulness, review-process policy, and packaging decision.
+- `/api/v1/commercial_release_candidates/latest` exposes the local commercial release-candidate manifest across acceptance, runtime endpoints, repository distribution packet, security metadata, admin surface, verification, Figma, review-process policy, packaging decision, and external release gaps.
+- `/api/v1/commercial_gap_registers/latest` exposes the commercial gap register that turns release-candidate external gaps into owner, source, required-input, and status rows for buyer due diligence.
+- `/api/v1/commercial_procurement_readiness/latest` exposes the commercial procurement readiness gate across license, rights, security metadata, distribution packet, admin evidence, production support/SLO input, buyer legal/ROI/procurement input, review-process policy, and packaging decision.
+- `/api/v1/commercial_contract_readiness/latest` exposes the commercial contract readiness gate across support/SLO terms, security/privacy terms, audit/export obligations, license/commercial rights, buyer order-form inputs, review-process policy, and packaging decision.
+- `/api/v1/commercial_onboarding_readiness/latest` exposes the commercial onboarding readiness gate that turns production support/SLO and buyer-specific input warnings into paid-onboarding owners, actions, and exit criteria.
+- `/api/v1/commercial_operations_readiness/latest` exposes the commercial operations readiness gate that turns production telemetry, incident/rollback, backup/recovery, and SLO evidence gaps into operations handoff owners, actions, and exit criteria.
+- `/api/v1/commercial_security_attestations/latest` exposes the commercial security attestation gate that separates repo-local security evidence from external attestation, hosted scan, and buyer privacy/DPA gaps.
+- `/api/v1/commercial_value_readiness/latest` exposes the commercial value readiness gate that separates repo-local measured value evidence from buyer-specific ROI, reference proof, budget-owner, and payback-input gaps.
+- `/api/v1/commercial_close_readiness/latest` exposes the commercial close readiness gate that separates repo-local sellable product evidence from buyer signatures, DPA/security acceptance, budget/PO, and go-live authorization gaps.
+- `/api/v1/commercial_go_to_market_readiness/latest` exposes the commercial go-to-market readiness index that ties close, value, security, evidence export, buyer handoff, saleability, admin evidence, analytics truthfulness, Figma artifacts, review-process policy, and packaging decision into one buyer/stakeholder review packet.
+- `/api/v1/commercial_launch_readiness/latest` exposes the commercial launch readiness gate that packages GTM, runtime, acceptance, operator, admin, analytics, Figma, review-process, and packaging evidence while keeping buyer environment, production telemetry, and signature inputs as explicit warnings.
+- `/api/v1/commercial_completion_scorecards/latest` exposes the runtime commercial completion scorecard for the KRW 2,000,000,000 program-completion standard across Product Design, Figma, Superpowers, Ponytail, Data Analytics, runtime, verification, review-policy, packaging, and external follow-up evidence.
+- `/api/v1/commercial_demo_scenarios/latest` exposes the KRW 2,000,000,000 commercial demo scenarios packet across compatible API smoke, workflow trace, access-list evidence, evaluation replay, admin readiness, metric truthfulness, Figma review, buyer acceptance, review-process policy, and packaging decision.
+- `/api/v1/commercial_proposal_packets/latest` exposes the KRW 2,000,000,000 commercial proposal packet across completion, demo, acceptance, value, security, contract, onboarding, operations, analytics truthfulness, Figma review, review-process policy, packaging decision, and buyer-specific follow-ups.
+- `/api/v1/commercial_purchase_approval_packets/latest` exposes the KRW 2,000,000,000 commercial purchase approval packet across proposal, close, procurement, contract, value, security, onboarding, operations, analytics truthfulness, Figma review, review-process policy, packaging decision, and buyer signature/budget authority follow-ups.
+- `/api/v1/commercial_due_diligence_rooms/latest` exposes the KRW 2,000,000,000 commercial due diligence room across purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma review, review-process policy, packaging decision, and buyer/external missing artifacts.
+- `/api/v1/commercial_investment_committee_memos/latest` exposes the KRW 2,000,000,000 commercial investment committee memo across due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma review, review-process policy, packaging decision, and buyer/external approval conditions.
 
 One fused orchestration loop:
 
@@ -87,6 +112,38 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Code conventions](docs/code_conventions.md)
 - [Database conventions](docs/database_conventions.md)
 - [i18n design](docs/i18n_design.md)
+- [Plugin-driven design brief](docs/plugin_driven_design_brief.md)
+- [Plugin visual directions](docs/plugin_visual_directions.md)
+- [Analytics spec](docs/analytics_spec.md)
+- [Commercial readiness standard](docs/commercial_readiness.md)
+- [Commercial buyer diligence packet](docs/commercial_buyer_diligence_packet.md)
+- [Commercial buyer acceptance runbook](docs/commercial_buyer_acceptance_runbook.md)
+- [Commercial buyer evidence manifest](docs/commercial_buyer_evidence_manifest.md)
+- [Commercial buyer handoff bundle](docs/commercial_buyer_handoff_bundle.md)
+- [Commercial saleability decision](docs/commercial_saleability_decision.md)
+- [Commercial evidence export](docs/commercial_evidence_export.md)
+- [Commercial acceptance check](docs/commercial_acceptance_check.md)
+- [Commercial release candidate](docs/commercial_release_candidate.md)
+- [Commercial gap register](docs/commercial_gap_register.md)
+- [Commercial procurement readiness](docs/commercial_procurement_readiness.md)
+- [Commercial contract readiness](docs/commercial_contract_readiness.md)
+- [Commercial onboarding readiness](docs/commercial_onboarding_readiness.md)
+- [Commercial operations readiness](docs/commercial_operations_readiness.md)
+- [Commercial security attestation](docs/commercial_security_attestation.md)
+- [Commercial value readiness](docs/commercial_value_readiness.md)
+- [Commercial close readiness](docs/commercial_close_readiness.md)
+- [Commercial go-to-market readiness](docs/commercial_go_to_market_readiness.md)
+- [Commercial launch readiness](docs/commercial_launch_readiness.md)
+- [Commercial completion scorecard](docs/commercial_completion_scorecard.md)
+- [Commercial demo scenarios](docs/commercial_demo_scenarios.md)
+- [Commercial proposal packet](docs/commercial_proposal_packet.md)
+- [Commercial purchase approval packet](docs/commercial_purchase_approval_packet.md)
+- [Commercial due diligence room](docs/commercial_due_diligence_room.md)
+- [Commercial investment committee memo](docs/commercial_investment_committee_memo.md)
+- [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
+- [Figma artifacts](docs/figma_artifacts.md)
+- [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
+- [Commercial plugin readiness plan](docs/superpowers/plans/2026-07-02-commercial-plugin-readiness.md)
 
 ## Check
 
@@ -101,4 +158,30 @@ python tests/test_api_contract.py
 python tests/test_security_hardening.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
+python tests/test_plugin_driven_artifacts.py
+python tests/test_analytics_runtime.py
+python tests/test_sales_readiness.py
+python tests/test_buyer_evidence_manifest.py
+python tests/test_buyer_handoff_bundle.py
+python tests/test_saleability_decision.py
+python tests/test_commercial_evidence_export.py
+python tests/test_commercial_acceptance_check.py
+python tests/test_commercial_buyer_acceptance_workflow.py
+python tests/test_commercial_release_candidate.py
+python tests/test_commercial_gap_register.py
+python tests/test_commercial_procurement_readiness.py
+python tests/test_commercial_contract_readiness.py
+python tests/test_commercial_onboarding_readiness.py
+python tests/test_commercial_operations_readiness.py
+python tests/test_commercial_security_attestation.py
+python tests/test_commercial_value_readiness.py
+python tests/test_commercial_close_readiness.py
+python tests/test_commercial_go_to_market_readiness.py
+python tests/test_commercial_launch_readiness.py
+python tests/test_commercial_completion_scorecard.py
+python tests/test_commercial_demo_scenarios.py
+python tests/test_commercial_proposal_packet.py
+python tests/test_commercial_purchase_approval_packet.py
+python tests/test_commercial_due_diligence_room.py
+python tests/test_commercial_investment_committee_memo.py
 ```
