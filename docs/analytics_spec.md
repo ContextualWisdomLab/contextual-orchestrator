@@ -22,6 +22,13 @@ and provider configuration into explicit pass/warn/fail criteria for enterprise
 pilot review. It is a readiness gate for a sellable pilot, not a production
 compliance certificate or proof of real customer usage.
 
+The prototype also exposes `/api/v1/commercial_readiness/latest`. That endpoint
+rolls product, security, operations, audit, documentation, support,
+localization, and value-case evidence into a KRW 2,000,000,000 buyer
+due-diligence gate. It is measured only as local due-diligence evidence and is
+not a valuation guarantee, purchase commitment, or production compliance
+certificate.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -46,6 +53,27 @@ Primary owners:
 
 The local runtime snapshot reports these KPIs as `compatible_api_adoption`,
 `trace_complete_workflow_rate`, and `policy_safe_routing_rate`.
+
+## Commercial Due-Diligence KPIs
+
+These metrics support the KRW 2,000,000,000 commercial-readiness review. The
+`evidence_type` column is mandatory so measured local evidence is never mixed
+with proposed production targets.
+
+| KPI | Definition | Evidence type | Source expectation |
+|---|---|---|---|
+| `commercial_readiness_pass_rate` | Share of `commercial_readiness_report()` criteria with `status=pass`. | measured_local | `/api/v1/commercial_readiness/latest` response. |
+| `buyer_evidence_completeness` | Share of required buyer due-diligence documents present in the repository. | measured_local | commercial readiness documentation profile. |
+| `security_control_pass_rate` | Share of security posture checks passing across auth, bind, trace, rate limit, concurrency, and provider egress controls. | measured_local | `SecurityConfig.readiness_profile()` plus provider configuration. |
+| `trace_audit_completeness` | Share of conducted runs with role, agent, subtask, access list, verifier, and synthesis evidence. | measured_local | workflow run trace records. |
+| `support_operability_score` | Availability of SLO, support ownership, incident runbook, backup, and escalation evidence. | proposed_until_production | production operations documents and ticketing records. |
+| `roi_evidence_status` | Buyer-specific value case tying API compatibility, audit evidence, replay, and operating cost reduction to the KRW 2,000,000,000 target. | proposed_until_buyer_specific | customer discovery, procurement, and ROI model. |
+
+Current GitHub/CI maturity evidence is a measured local or repository signal:
+CodeQL, Dependency review, Python supply chain, Trivy, coverage-evidence,
+scan-pr-queue, and Strix passing are readiness evidence. OpenCode or reviewer
+delay is review latency, not product failure, unless it reports a concrete
+security, contract, or functional defect.
 
 ## Drivers
 
@@ -118,6 +146,8 @@ Default sections:
 6. Sales readiness: criteria status, evidence, and remediation for API
    compatibility, admin evidence, trace evidence, replay, security posture,
    analytics truthfulness, locale readiness, and provider egress safety.
+7. Commercial readiness: KRW 2,000,000,000 due-diligence gate, buyer evidence
+   completeness, support gaps, and value-case caveats.
 
 ## Data Quality Checks
 

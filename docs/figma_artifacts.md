@@ -41,9 +41,15 @@ Diagrams created:
 - `Route Versus Conduct Flow`
 - `Workflow Trace And Access Lists Clean`
 - `API And Control Plane Relationship`
+- `KRW 2B Commercial Readiness Flow`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
+
+The KRW 2B commercial readiness flow maps enterprise buyer review to product
+capability evidence, security and access control, operations and support
+readiness, measured analytics evidence, proposed production KPIs, and the
+`commercial_readiness_report` decision.
 
 ## Stakeholder Deck
 
@@ -55,6 +61,17 @@ Slides preview widget in this run.
 Purpose: concise stakeholder review of product thesis, plugin workstreams,
 three visual directions, canonical Evidence Console selection, architecture
 diagrams, analytics model, and implementation path.
+
+Commercial-readiness deck:
+
+- Name: `Contextual Orchestrator KRW 2B Commercial Readiness Plan`
+- Delivery: generated as a Figma Slides deck through the Figma deck tool after
+  resolving the Figma plan key `team::1408252278989737675`.
+- Purpose: explain the KRW 2,000,000,000 buyer due-diligence standard, plugin
+  workstreams, evidence model, packaging decision, and execution plan.
+- Caveat: the deck frames KRW 2,000,000,000 as due-diligence readiness, not a
+  valuation guarantee, purchase commitment, or production compliance
+  certificate.
 
 ## Product Design Image Directions
 

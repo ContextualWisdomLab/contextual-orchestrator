@@ -8,6 +8,22 @@ must not split the product into separate Fugu, TRINITY, or Conductor surfaces.
 It should turn the existing docs and stdlib admin console into shareable design,
 diagram, analytics, and implementation artifacts.
 
+## KRW 2,000,000,000 Commercial Completion Standard
+
+The commercial completion standard is buyer due-diligence readiness for a KRW
+2,000,000,000 enterprise review. It is not a valuation guarantee, purchase
+commitment, or production compliance certificate.
+
+Plugin-driven work should make these proofs visible:
+
+| Plugin axis | What it can do | Required output |
+|---|---|---|
+| Product Design | Convert the sale target into buyer personas, review workflows, screen priorities, and QA criteria. | Commercial readiness screen priority, buyer evidence packet, design QA checklist. |
+| Figma | Turn the current admin console direction into editable screens, FigJam diagrams, and a stakeholder deck. | Commercial readiness frames, KRW 2B flow diagram, stakeholder deck. |
+| Superpowers | Convert the plan into TDD-ready implementation steps with explicit checks. | Dated execution plan under `docs/superpowers/plans/`. |
+| Ponytail | Keep the artifact set small and prevent premature framework or library splits. | Packaging decision that keeps the current repo unified unless extraction triggers appear. |
+| Data Analytics | Separate measured evidence from proposed KPIs and attach GitHub/CI maturity signals. | Commercial KPI model, source caveats, maturity evidence map. |
+
 ## Confirmed Design Brief
 
 Product surface: the enterprise admin console for a single OpenAI-compatible
@@ -57,6 +73,7 @@ The current product spine is already explicit:
 | Access report | Which prior outputs were visible to each workflow step? | `docs/rest_api_design.md`, `/api/v1/access_reports/{workflow_run_id}` |
 | Evaluation replay | What happens if prompts are replayed before a policy rollout? | `/api/v1/evaluation_runs` |
 | Locale review | Can English and Korean operator copy be reviewed as a resource? | `docs/i18n_design.md`, `/api/v1/locale_bundles/{locale_code}` |
+| Commercial readiness | Can a buyer review a KRW 2,000,000,000 readiness gate without confusing it for a valuation guarantee? | `/api/v1/commercial_readiness/latest`, `docs/commercial_readiness.md` |
 
 ## Canonical Direction
 
@@ -83,3 +100,9 @@ comparison material, but the canonical implementation should remain:
 - Figma artifacts are editable frames and diagrams, not screenshot-only output.
 - Code Connect is not used for discovery, metadata, or generation.
 - English and Korean remain in scope for the operator experience.
+- The KRW 2,000,000,000 target is always framed as due-diligence readiness, not
+  guaranteed revenue or valuation.
+- Reviewer or review-bot delay is not a product blocker; only security,
+  contract/API mismatch, or reproducible product defects block readiness.
+- Review process is not a blocker unless it reports a concrete security,
+  contract, or product defect.

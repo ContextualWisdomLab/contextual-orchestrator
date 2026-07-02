@@ -46,6 +46,8 @@ compliance certificate.
   customer data-processing agreements must be produced during paid onboarding.
 - Reviewer delay is not a blocker. The blocking conditions are security test
   failure, contract/API mismatch, or a reproducible product defect.
+- Review process is not a blocker unless it reports a concrete security,
+  contract, or product defect.
 
 ## Implementation Hook
 

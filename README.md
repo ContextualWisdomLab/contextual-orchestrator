@@ -95,6 +95,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Commercial readiness standard](docs/commercial_readiness.md)
 - [Figma artifacts](docs/figma_artifacts.md)
 - [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
+- [Commercial plugin readiness plan](docs/superpowers/plans/2026-07-02-commercial-plugin-readiness.md)
 
 ## Check
 
