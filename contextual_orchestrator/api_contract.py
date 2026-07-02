@@ -199,6 +199,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial value readiness"}},
             }
         },
+        "/api/v1/commercial_close_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_close_readiness",
+                "summary": "Get commercial close readiness for buyer signature and go-live review",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial close readiness"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

@@ -163,6 +163,13 @@ customer proof, procurement budget owner, implementation payback assumptions,
 review-process policy, and packaging decision into
 `/api/v1/commercial_value_readiness/latest`.
 
+The commercial close readiness workflow `KRW 2B Commercial Close Readiness`
+maps value readiness, security attestation, contract readiness, onboarding
+readiness, operations readiness, evidence export, signed order form/MSA, DPA
+and security acceptance, budget approval/PO, go-live authorization,
+review-process policy, and single-product packaging decision into
+`/api/v1/commercial_close_readiness/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`

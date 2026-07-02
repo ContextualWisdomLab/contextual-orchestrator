@@ -82,6 +82,7 @@ One public interface:
 - `/api/v1/commercial_operations_readiness/latest` exposes the commercial operations readiness gate that turns production telemetry, incident/rollback, backup/recovery, and SLO evidence gaps into operations handoff owners, actions, and exit criteria.
 - `/api/v1/commercial_security_attestations/latest` exposes the commercial security attestation gate that separates repo-local security evidence from external attestation, hosted scan, and buyer privacy/DPA gaps.
 - `/api/v1/commercial_value_readiness/latest` exposes the commercial value readiness gate that separates repo-local measured value evidence from buyer-specific ROI, reference proof, budget-owner, and payback-input gaps.
+- `/api/v1/commercial_close_readiness/latest` exposes the commercial close readiness gate that separates repo-local sellable product evidence from buyer signatures, DPA/security acceptance, budget/PO, and go-live authorization gaps.
 
 One fused orchestration loop:
 
@@ -121,6 +122,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Commercial operations readiness](docs/commercial_operations_readiness.md)
 - [Commercial security attestation](docs/commercial_security_attestation.md)
 - [Commercial value readiness](docs/commercial_value_readiness.md)
+- [Commercial close readiness](docs/commercial_close_readiness.md)
 - [Commercial completion scorecard](docs/commercial_completion_scorecard.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
@@ -156,4 +158,5 @@ python tests/test_commercial_onboarding_readiness.py
 python tests/test_commercial_operations_readiness.py
 python tests/test_commercial_security_attestation.py
 python tests/test_commercial_value_readiness.py
+python tests/test_commercial_close_readiness.py
 ```

@@ -3454,6 +3454,289 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_close_readiness_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the final buyer-close gate over commercial readiness evidence."""
+        value = self.commercial_value_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        security = self.commercial_security_attestation_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        contract = self.commercial_contract_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        onboarding = self.commercial_onboarding_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        operations = self.commercial_operations_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        export = self.commercial_evidence_export_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        concrete_blockers = [
+            *value["concrete_blockers"],
+            *security["concrete_blockers"],
+            *contract["concrete_blockers"],
+            *onboarding["concrete_blockers"],
+            *operations["concrete_blockers"],
+            *export["concrete_blockers"],
+        ]
+        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        close_items = [
+            {
+                "item_name": "sellable_product_packet",
+                "label": "Sellable product packet",
+                "owner": "Deal owner",
+                "sources": [
+                    "/api/v1/commercial_value_readiness/latest",
+                    "/api/v1/commercial_security_attestations/latest",
+                    "/api/v1/commercial_evidence_exports/latest",
+                    "docs/commercial_value_readiness.md",
+                    "docs/commercial_security_attestation.md",
+                    "docs/commercial_evidence_export.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if value["value_status"] != "commercial_value_blocked"
+                and security["security_attestation_status"] != "commercial_security_attestation_blocked"
+                and export["export_status"] != "commercial_export_blocked"
+                and has_file("docs/commercial_value_readiness.md")
+                and has_file("docs/commercial_security_attestation.md")
+                and has_file("docs/commercial_evidence_export.md")
+                else "blocked",
+                "evidence": (
+                    f"value_status={value['value_status']}; "
+                    f"security_attestation_status={security['security_attestation_status']}; "
+                    f"commercial_export_status={export['export_status']}"
+                ),
+                "action": "Attach the repo-local product, security, value, and evidence export packet to buyer close review.",
+                "exit_criteria": "Buyer can inspect the sellable packet without treating it as a purchase commitment or valuation guarantee.",
+            },
+            {
+                "item_name": "contract_close_packet",
+                "label": "Contract close packet",
+                "owner": "Legal and procurement owner",
+                "sources": [
+                    "/api/v1/commercial_contract_readiness/latest",
+                    "docs/commercial_contract_readiness.md",
+                    "docs/commercial_procurement_readiness.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if contract["contract_status"] != "commercial_contract_blocked"
+                and has_file("docs/commercial_contract_readiness.md")
+                else "blocked",
+                "evidence": f"contract_status={contract['contract_status']}",
+                "action": "Use contract readiness as the local legal/procurement packet and track final signatures separately.",
+                "exit_criteria": "Buyer legal/procurement sees local contract evidence and the remaining signature inputs.",
+            },
+            {
+                "item_name": "onboarding_operations_packet",
+                "label": "Onboarding and operations packet",
+                "owner": "Customer success and platform owner",
+                "sources": [
+                    "/api/v1/commercial_onboarding_readiness/latest",
+                    "/api/v1/commercial_operations_readiness/latest",
+                    "docs/commercial_onboarding_readiness.md",
+                    "docs/commercial_operations_readiness.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if onboarding["onboarding_status"] != "commercial_onboarding_blocked"
+                and operations["operations_status"] != "commercial_operations_blocked"
+                and has_file("docs/commercial_onboarding_readiness.md")
+                and has_file("docs/commercial_operations_readiness.md")
+                else "blocked",
+                "evidence": (
+                    f"onboarding_status={onboarding['onboarding_status']}; "
+                    f"operations_status={operations['operations_status']}"
+                ),
+                "action": "Attach onboarding and operations readiness as the go-live support packet.",
+                "exit_criteria": "Buyer can identify implementation, support, operations, and acceptance owners.",
+            },
+            {
+                "item_name": "buyer_evidence_export_packet",
+                "label": "Buyer evidence export packet",
+                "owner": "Evidence owner",
+                "sources": [
+                    "/api/v1/commercial_evidence_exports/latest",
+                    "docs/commercial_evidence_export.md",
+                    "docs/figma_artifacts.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if export["export_status"] != "commercial_export_blocked"
+                and has_file("docs/commercial_evidence_export.md")
+                and has_file("docs/figma_artifacts.md")
+                else "blocked",
+                "evidence": f"commercial_export_status={export['export_status']}",
+                "action": "Use the portable export packet as the buyer data-room index.",
+                "exit_criteria": "Buyer can trace close evidence to runtime endpoints, docs, and Figma/FigJam artifacts.",
+            },
+            {
+                "item_name": "signed_order_form_msa",
+                "label": "Signed order form or MSA",
+                "owner": "Buyer sponsor, procurement owner, and deal owner",
+                "sources": ["buyer order form", "MSA", "signature packet"],
+                "evidence_type": "buyer_signature_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_signature_required",
+                "evidence": "Signed order form, MSA, commercial terms, and authority confirmation are buyer-side close inputs.",
+                "action": "Collect final signed order form or MSA, or attach an explicit buyer waiver.",
+                "exit_criteria": "Buyer and seller signature authority accept the order form or MSA.",
+            },
+            {
+                "item_name": "dpa_security_acceptance",
+                "label": "DPA and security acceptance",
+                "owner": "Buyer security, privacy, and legal owner",
+                "sources": ["buyer DPA", "security review acceptance", "privacy questionnaire"],
+                "evidence_type": "buyer_signature_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_signature_required",
+                "evidence": "DPA, security acceptance, privacy questionnaire, and attestation waivers are buyer-specific close inputs.",
+                "action": "Collect DPA/security acceptance or documented waiver from buyer security and legal reviewers.",
+                "exit_criteria": "Buyer signs or waives DPA/security acceptance requirements.",
+            },
+            {
+                "item_name": "budget_approval_purchase_order",
+                "label": "Budget approval and purchase order",
+                "owner": "Buyer finance and procurement owner",
+                "sources": ["budget approval", "purchase order", "finance approval"],
+                "evidence_type": "buyer_signature_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_signature_required",
+                "evidence": "Budget approval, purchase order, and finance authority are external buyer procurement evidence.",
+                "action": "Collect buyer budget approval and PO or attach approved alternative payment authority.",
+                "exit_criteria": "Buyer procurement confirms budget authority and payment path for KRW 2B.",
+            },
+            {
+                "item_name": "go_live_authorization",
+                "label": "Go-live authorization",
+                "owner": "Buyer business sponsor and implementation owner",
+                "sources": ["go-live approval", "implementation authorization", "acceptance signoff"],
+                "evidence_type": "buyer_signature_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_signature_required",
+                "evidence": "Go-live authorization and implementation acceptance require named buyer approval.",
+                "action": "Collect go-live authorization or mark production activation out of scope for the signed deal.",
+                "exit_criteria": "Buyer authorizes go-live, paid onboarding, or a scoped post-signature implementation plan.",
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_close_readiness.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready",
+                "evidence": "Review process delay is not a close blocker unless a concrete product, security, API-contract, or document failure is produced.",
+                "action": "Keep commercial close work moving while queued review processes are pending.",
+                "exit_criteria": "Only concrete failures block close readiness.",
+            },
+            {
+                "item_name": "packaging_decision",
+                "label": "Packaging decision",
+                "owner": "Procurement and security reviewer",
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if value["library_split_decision"]["decision"] == "keep_single_product"
+                else "warning",
+                "evidence": value["library_split_decision"]["reason"],
+                "action": "Keep one deployable enterprise control-plane product until extraction triggers are real.",
+                "exit_criteria": "Do not create a separate library, Git submodule, or extracted package for this close gate.",
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in close_items)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        buyer_signature_gap_count = sum(
+            1 for item in close_items if item.get("source_gap_status") == "buyer_signature_required"
+        )
+        if blocked_count:
+            close_status = "commercial_close_blocked"
+        elif warning_count:
+            close_status = "commercial_close_ready_with_warnings"
+        else:
+            close_status = "commercial_close_ready"
+
+        return {
+            "close_status": close_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_close_readiness",
+            "source_note": (
+                "Commercial close readiness separates repo-local sellable product evidence from buyer "
+                "signature, legal, procurement, security acceptance, and go-live authorization inputs; "
+                "it is not a valuation guarantee, purchase commitment, signed order, legal opinion, "
+                "or production compliance certificate."
+            ),
+            "close_summary": {
+                "item_count": len(close_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "buyer_signature_gap_count": buyer_signature_gap_count,
+                "review_process_is_blocker": value["review_process_policy"]["is_blocker"],
+            },
+            "close_items": close_items,
+            "concrete_blockers": concrete_blockers,
+            "close_status_rules": [
+                {
+                    "close_status": "commercial_close_ready",
+                    "rule": "sellable product packet, contract packet, onboarding/operations packet, evidence export, signatures, DPA/security acceptance, budget/PO, go-live authorization, review policy, and packaging evidence are ready",
+                },
+                {
+                    "close_status": "commercial_close_ready_with_warnings",
+                    "rule": "repo-local close packet is ready while buyer signatures, DPA/security acceptance, budget/PO, or go-live authorization remain explicit warnings",
+                },
+                {
+                    "close_status": "commercial_close_blocked",
+                    "rule": "missing local close evidence, concrete product defect, API contract failure, document mismatch, security failure, or Code Connect usage blocks close readiness",
+                },
+            ],
+            "review_process_policy": value["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_value_status": value["value_status"],
+                "commercial_security_attestation_status": security["security_attestation_status"],
+                "commercial_contract_status": contract["contract_status"],
+                "commercial_onboarding_status": onboarding["onboarding_status"],
+                "commercial_operations_status": operations["operations_status"],
+                "commercial_export_status": export["export_status"],
+                **value["related_runtime_reports"],
+            },
+            "library_split_decision": value["library_split_decision"],
+            "plugin_traceability": value["plugin_traceability"],
+            "close_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_close_readiness/latest",
+                "documentation": "docs/commercial_close_readiness.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

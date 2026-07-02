@@ -66,6 +66,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "support_operability_score",
         "roi_evidence_status",
         "commercial_value_readiness_gap_count",
+        "commercial_close_signature_gap_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -123,7 +124,9 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Contract Readiness",
         "KRW 2B Commercial Onboarding Readiness",
         "KRW 2B Commercial Operations Readiness",
+        "KRW 2B Commercial Value Readiness",
         "team::1408252278989737675",
+        "KRW 2B Commercial Close Readiness",
         "Figma Code Connect was not used",
     ]:
         assert expected_text in artifacts
@@ -660,6 +663,40 @@ def test_commercial_value_readiness_defines_value_gate() -> None:
         assert expected_text in plan
 
 
+def test_commercial_close_readiness_defines_close_gate() -> None:
+    close = read_text("docs/commercial_close_readiness.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-close-readiness.md")
+
+    for expected_text in [
+        "Commercial Close Readiness",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Close Readiness Inputs",
+        "Runtime Shape",
+        "Close Status Rules",
+        "KRW 2B Commercial Close Readiness",
+        "/api/v1/commercial_close_readiness/latest",
+        "/api/v1/commercial_value_readiness/latest",
+        "/api/v1/commercial_contract_readiness/latest",
+        "/api/v1/commercial_onboarding_readiness/latest",
+        "local_commercial_close_readiness",
+        "close_items",
+        "commercial_close_ready_with_warnings",
+    ]:
+        assert expected_text in close
+
+    for expected_text in [
+        "Commercial Close Readiness Implementation Plan",
+        "get_latest_commercial_close_readiness",
+        "No new repo dependencies",
+        "python tests/test_commercial_close_readiness.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -684,4 +721,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_operations_readiness_defines_operations_gate()
     test_commercial_security_attestation_defines_security_gate()
     test_commercial_value_readiness_defines_value_gate()
+    test_commercial_close_readiness_defines_close_gate()
     print("ok")
