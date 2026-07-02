@@ -93,6 +93,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Plugin visual directions](docs/plugin_visual_directions.md)
 - [Analytics spec](docs/analytics_spec.md)
 - [Commercial readiness standard](docs/commercial_readiness.md)
+- [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
 - [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
 - [Commercial plugin readiness plan](docs/superpowers/plans/2026-07-02-commercial-plugin-readiness.md)

@@ -42,6 +42,7 @@ Diagrams created:
 - `Workflow Trace And Access Lists Clean`
 - `API And Control Plane Relationship`
 - `KRW 2B Commercial Readiness Flow`
+- `Library Split Decision For KRW 2B Sale`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -50,6 +51,10 @@ The KRW 2B commercial readiness flow maps enterprise buyer review to product
 capability evidence, security and access control, operations and support
 readiness, measured analytics evidence, proposed production KPIs, and the
 `commercial_readiness_report` decision.
+
+The library split decision tree records the Ponytail packaging decision: keep a
+single repository now, and only extract a library or submodule when there is a
+second product, independent release cadence, or security provenance trigger.
 
 ## Stakeholder Deck
 

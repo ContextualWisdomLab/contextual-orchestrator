@@ -105,6 +105,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
         "Workflow Trace And Access Lists Clean",
         "KRW 2B Commercial Readiness Flow",
+        "Library Split Decision For KRW 2B Sale",
         "Contextual Orchestrator Plugin-Driven Product Plan",
         "Contextual Orchestrator KRW 2B Commercial Readiness Plan",
         "team::1408252278989737675",
@@ -127,10 +128,32 @@ def test_ponytail_packaging_decision_keeps_commercial_product_unified() -> None:
         assert expected_text in research
 
 
+def test_commercial_plugin_operating_model_defines_plugin_execution_scope() -> None:
+    model = read_text("docs/commercial_plugin_operating_model.md")
+
+    for expected_text in [
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Product Design Plan",
+        "Figma Plan",
+        "Ponytail Packaging Decision",
+        "Data Analytics Plan",
+        "Superpowers Execution Loop",
+        "Do not create a separate library, Git submodule, or extracted package",
+        "Library Split Decision For KRW 2B Sale",
+        "commercial_readiness_pass_rate",
+        "proposed until production",
+        "proposed until buyer-specific",
+    ]:
+        assert expected_text in model
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
     test_analytics_spec_separates_metric_design_from_real_measurement()
     test_superpowers_plan_records_no_code_connect_constraint()
     test_figma_artifacts_are_recorded_without_code_connect()
+    test_ponytail_packaging_decision_keeps_commercial_product_unified()
+    test_commercial_plugin_operating_model_defines_plugin_execution_scope()
     print("ok")
