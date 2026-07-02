@@ -68,6 +68,7 @@ One public interface:
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
+- `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
 
 One fused orchestration loop:
 
@@ -91,6 +92,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Plugin-driven design brief](docs/plugin_driven_design_brief.md)
 - [Plugin visual directions](docs/plugin_visual_directions.md)
 - [Analytics spec](docs/analytics_spec.md)
+- [Commercial readiness standard](docs/commercial_readiness.md)
 - [Figma artifacts](docs/figma_artifacts.md)
 - [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
 

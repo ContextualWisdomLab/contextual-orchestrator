@@ -87,6 +87,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Sales-readiness report"}},
             }
         },
+        "/api/v1/commercial_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_readiness",
+                "summary": "Get high-value commercial due-diligence criteria and evidence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial-readiness report"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

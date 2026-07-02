@@ -7,6 +7,7 @@ from dataclasses import dataclass, replace
 import ipaddress
 import json
 import os
+from pathlib import Path
 import re
 import socket
 import time
@@ -25,6 +26,8 @@ SECRET_PATTERNS = (
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
 )
+
+DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
 
 
 @dataclass(frozen=True)
@@ -790,6 +793,135 @@ class TaskOrchestrator:
             "criteria": criteria,
         }
 
+    def commercial_readiness_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a diligence-oriented readiness gate for high-value enterprise sales."""
+        sales_readiness = self.sales_readiness_report(
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        sales_rows = self._criteria_by_name(sales_readiness["criteria"])
+        analytics_guardrails = self._metrics_by_name(analytics["guardrails"])
+        documentation = self._commercial_documentation_profile()
+        security_profile = security_profile or {}
+        policy_safe_metric = self._metrics_by_name(analytics["kpis"])["policy_safe_routing_rate"]
+        provider_metric = analytics_guardrails["provider_exclusion_miss_rate"]
+        locale_metric = analytics_guardrails["locale_key_parity"]
+
+        criteria = [
+            self._criterion(
+                "product_capability_evidence",
+                "Product capability evidence",
+                "pass" if sales_readiness["readiness_status"] == "sales_ready" else "warn",
+                (
+                    f"sales_readiness={sales_readiness['readiness_status']}; "
+                    f"{sales_readiness['readiness_summary']['pass']} sales criteria passing"
+                ),
+                "Resolve all sales-readiness warnings before presenting the product for a high-value diligence review.",
+            ),
+            self._criterion(
+                "security_and_access_control",
+                "Security and access control",
+                "pass"
+                if sales_rows["security_posture"]["status"] == "pass"
+                and sales_rows["provider_egress_safety"]["status"] == "pass"
+                else "fail",
+                (
+                    f"{sales_rows['security_posture']['evidence']}; "
+                    f"{sales_rows['provider_egress_safety']['evidence']}"
+                ),
+                "Keep split admin/inference tokens, private bind defaults, hidden traces, and safe provider egress.",
+            ),
+            self._criterion(
+                "operational_resilience",
+                "Operational resilience",
+                "pass"
+                if int(security_profile.get("rate_limit_requests") or 0) > 0
+                and int(security_profile.get("max_concurrent_runs") or 0) > 0
+                and policy_safe_metric.get("value_percent") == 100.0
+                else "warn",
+                (
+                    f"rate_limit_requests={security_profile.get('rate_limit_requests')}; "
+                    f"max_concurrent_runs={security_profile.get('max_concurrent_runs')}; "
+                    f"policy_safe_routing_rate={policy_safe_metric.get('value_percent')}%"
+                ),
+                "Publish production SLOs, backup policy, and incident runbooks before a production sale.",
+            ),
+            self._criterion(
+                "audit_and_compliance_evidence",
+                "Audit and compliance evidence",
+                "pass"
+                if sales_rows["trace_evidence"]["status"] == "pass"
+                and provider_metric.get("value") == 0
+                else "warn",
+                (
+                    f"{sales_rows['trace_evidence']['evidence']}; "
+                    f"provider_exclusion_misses={provider_metric.get('value')}"
+                ),
+                "Capture customer-specific access reports and compliance exceptions during paid pilot onboarding.",
+            ),
+            self._criterion(
+                "buyer_due_diligence_packet",
+                "Buyer due-diligence packet",
+                "pass" if not documentation["missing_documents"] else "warn",
+                (
+                    f"{documentation['present_count']}/{documentation['required_count']} required documents present; "
+                    f"missing={', '.join(documentation['missing_documents']) or 'none'}"
+                ),
+                "Complete README, security, API, analytics, product, and commercial readiness documents.",
+            ),
+            self._criterion(
+                "support_and_localization",
+                "Support and localization",
+                "pass" if locale_metric.get("value_percent") == 100.0 and documentation["has_security_policy"] else "warn",
+                (
+                    f"locale_key_parity={locale_metric.get('value_percent')}%; "
+                    f"security_policy={documentation['has_security_policy']}"
+                ),
+                "Keep Korean and English operator copy aligned and publish support ownership for customer operations.",
+            ),
+            self._criterion(
+                "commercial_value_case",
+                "Commercial value case",
+                "pass" if target_contract_value_krw >= DEFAULT_COMMERCIAL_TARGET_VALUE_KRW else "warn",
+                (
+                    f"target_contract_value_krw={target_contract_value_krw:,}; "
+                    "value case uses compatibility API, evidence control plane, replay, and audit controls"
+                ),
+                "Anchor high-value sales review at KRW 2,000,000,000 or higher with buyer-specific ROI evidence.",
+            ),
+        ]
+        summary = self._criteria_summary(criteria)
+        commercial_summary = {"pass": summary["pass"], "warn": summary["warn"], "fail": summary["fail"]}
+        if commercial_summary["fail"]:
+            commercial_status = "not_commercial_ready"
+        elif commercial_summary["warn"]:
+            commercial_status = "commercial_ready_with_warnings"
+        else:
+            commercial_status = "commercial_ready"
+
+        return {
+            "commercial_status": commercial_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_due_diligence_snapshot",
+            "source_note": (
+                "Commercial readiness is based on process-local runtime, repository documentation, "
+                "security configuration, and analytics evidence; it is not a valuation guarantee, "
+                "purchase commitment, or production compliance certificate."
+            ),
+            "summary": commercial_summary,
+            "commercial_summary": commercial_summary,
+            "criteria": criteria,
+            "documentation": documentation,
+            "sales_readiness": sales_readiness,
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
@@ -956,6 +1088,36 @@ class TaskOrchestrator:
             )
             remediation = "Keep provider allow-list enforcement enabled for non-mock providers."
         return self._criterion("provider_egress_safety", "Provider egress safety", status, evidence, remediation)
+
+    def _criteria_by_name(self, criteria: list[dict[str, str]]) -> dict[str, dict[str, str]]:
+        return {row["criterion_name"]: row for row in criteria}
+
+    def _metrics_by_name(self, metrics: list[dict[str, Any]]) -> dict[str, dict[str, Any]]:
+        return {row["metric_name"]: row for row in metrics}
+
+    def _commercial_documentation_profile(self) -> dict[str, Any]:
+        root = Path(__file__).resolve().parents[1]
+        required_documents = [
+            "README.md",
+            "SECURITY.md",
+            "docs/product_planning.md",
+            "docs/rest_api_design.md",
+            "docs/analytics_spec.md",
+            "docs/commercial_readiness.md",
+        ]
+        missing_documents = [
+            document_path
+            for document_path in required_documents
+            if not (root / document_path).is_file()
+        ]
+        return {
+            "required_documents": required_documents,
+            "missing_documents": missing_documents,
+            "present_count": len(required_documents) - len(missing_documents),
+            "required_count": len(required_documents),
+            "has_security_policy": (root / "SECURITY.md").is_file(),
+            "source": "repository documentation files",
+        }
 
     def _criteria_summary(self, criteria: list[dict[str, str]]) -> dict[str, int]:
         counts = Counter(row["status"] for row in criteria)

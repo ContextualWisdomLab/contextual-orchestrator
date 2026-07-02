@@ -51,9 +51,15 @@ ADMIN_TRANSLATIONS = {
         "readiness_remediation_label": "Remediation",
         "sales_readiness": "sales_readiness",
         "sales_readiness_title": "Sales Readiness",
+        "commercial_readiness": "commercial_readiness",
+        "commercial_readiness_title": "Commercial Readiness",
+        "commercial_contract_value": "Target contract value",
         "sales_ready": "Sales ready",
         "pilot_ready_with_warnings": "Pilot ready with warnings",
         "not_ready": "Not ready",
+        "commercial_ready": "Commercial ready",
+        "commercial_ready_with_warnings": "Commercial ready with warnings",
+        "not_commercial_ready": "Not commercially ready",
         "readiness_pass": "Pass",
         "readiness_warn": "Warn",
         "readiness_fail": "Fail",
@@ -64,6 +70,13 @@ ADMIN_TRANSLATIONS = {
         "analytics_truthfulness": "Analytics truthfulness",
         "locale_readiness": "Locale readiness",
         "provider_egress_safety": "Provider egress safety",
+        "product_capability_evidence": "Product capability evidence",
+        "security_and_access_control": "Security and access control",
+        "operational_resilience": "Operational resilience",
+        "audit_and_compliance_evidence": "Audit and compliance evidence",
+        "buyer_due_diligence_packet": "Buyer due-diligence packet",
+        "support_and_localization": "Support and localization",
+        "commercial_value_case": "Commercial value case",
         "evaluation_replay": "Evaluation Replay",
         "run_evaluation": "Run Evaluation",
         "dataset_name": "Dataset",
@@ -165,9 +178,15 @@ ADMIN_TRANSLATIONS = {
         "readiness_remediation_label": "보완 조치",
         "sales_readiness": "sales_readiness",
         "sales_readiness_title": "판매 준비도",
+        "commercial_readiness": "commercial_readiness",
+        "commercial_readiness_title": "상용 준비도",
+        "commercial_contract_value": "목표 계약 금액",
         "sales_ready": "판매 준비 완료",
         "pilot_ready_with_warnings": "주의 조건부 파일럿 가능",
         "not_ready": "준비 미완료",
+        "commercial_ready": "상용 준비 완료",
+        "commercial_ready_with_warnings": "주의 조건부 상용 가능",
+        "not_commercial_ready": "상용 준비 미완료",
         "readiness_pass": "통과",
         "readiness_warn": "주의",
         "readiness_fail": "실패",
@@ -178,6 +197,13 @@ ADMIN_TRANSLATIONS = {
         "analytics_truthfulness": "분석 지표 진실성",
         "locale_readiness": "로케일 준비도",
         "provider_egress_safety": "공급자 송신 안전성",
+        "product_capability_evidence": "제품 역량 근거",
+        "security_and_access_control": "보안 및 접근 제어",
+        "operational_resilience": "운영 회복력",
+        "audit_and_compliance_evidence": "감사 및 컴플라이언스 근거",
+        "buyer_due_diligence_packet": "구매자 실사 패킷",
+        "support_and_localization": "지원 및 로컬라이제이션",
+        "commercial_value_case": "상용 가치 근거",
         "evaluation_replay": "평가 리플레이",
         "run_evaluation": "평가 실행",
         "dataset_name": "데이터셋",
@@ -724,7 +750,7 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="observability_title">Observability</h1><span class="chip green">Live</span></div>
           <div class="kpis" id="kpis"></div>
-          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest"></div>
+          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest"></div>
           <table><thead><tr><th>Workflow</th><th>Mode</th><th>Policy</th><th>Created</th></tr></thead><tbody id="runRows"></tbody></table>
         </section>
       </section>
@@ -884,29 +910,42 @@ Summarize this research thread and verify claims.</textarea>
     }
     function renderReadiness() {
       const readiness = state.readiness || {};
+      const commercial = state.commercialReadiness || {};
       const status = readiness.readiness_status || "not_ready";
       const statusClass = status === "sales_ready" ? "green" : status === "pilot_ready_with_warnings" ? "amber" : "red";
       const criteria = readiness.criteria || [];
       const readinessSummary = readiness.readiness_summary || readiness.summary || {};
+      const commercialStatus = commercial.commercial_status || "not_commercial_ready";
+      const commercialStatusClass = commercialStatus === "commercial_ready" ? "green" : commercialStatus === "commercial_ready_with_warnings" ? "amber" : "red";
+      const commercialCriteria = commercial.criteria || [];
+      const commercialSummary = commercial.commercial_summary || commercial.summary || {};
       els.salesReadiness.innerHTML = `
         <div class="metric">
           <span data-i18n="sales_readiness_title">${t("sales_readiness_title")}</span>
           <strong><span class="chip ${statusClass}">${escapeHtml(t(status))}</span></strong>
         </div>
+        <div class="metric">
+          <span data-i18n="commercial_readiness_title">${t("commercial_readiness_title")}</span>
+          <strong><span class="chip ${commercialStatusClass}">${escapeHtml(t(commercialStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_contract_value">${t("commercial_contract_value")}</span>
+          <strong>${escapeHtml(commercial.target_contract_value_display || "KRW 2,000,000,000")}</strong>
+        </div>
         <div class="metric source">
           <span data-i18n="readiness_source">${t("readiness_source")}</span>
-          <strong>${escapeHtml(readiness.source_note || "No source note")}</strong>
+          <strong>${escapeHtml(commercial.source_note || readiness.source_note || "No source note")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
-          <strong>${escapeHtml(readiness.measurement_status || "unknown")}</strong>
+          <strong>${escapeHtml(commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
-          <strong>pass: ${readinessSummary.pass || 0} | warn: ${readinessSummary.warn || 0} | fail: ${readinessSummary.fail || 0}</strong>
+          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0}</strong>
         </div>
         <div class="readiness-grid">
-          ${criteria.slice(0, 8).map(row => {
+          ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
             const chip = row.status === "pass" ? "green" : row.status === "warn" ? "amber" : "red";
             return `<div class="readiness-row">
               <span class="chip ${chip}">${escapeHtml(t(`readiness_${row.status}`))}</span>
@@ -981,6 +1020,8 @@ Summarize this research thread and verify claims.</textarea>
     async function refreshReadiness() {
       const readinessRes = await fetch("/api/v1/sales_readiness/latest");
       state.readiness = await readinessRes.json();
+      const commercialRes = await fetch("/api/v1/commercial_readiness/latest");
+      state.commercialReadiness = await commercialRes.json();
     }
     async function simulate() {
       const res = await fetch("/admin/simulate", {
