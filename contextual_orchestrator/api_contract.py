@@ -103,6 +103,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Buyer evidence manifest"}},
             }
         },
+        "/api/v1/buyer_handoff_bundles/latest": {
+            "get": {
+                "operationId": "get_latest_buyer_handoff_bundle",
+                "summary": "Get buyer handoff bundle for commercial due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Buyer handoff bundle"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

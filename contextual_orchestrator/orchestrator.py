@@ -1130,6 +1130,199 @@ class TaskOrchestrator:
             },
         }
 
+    def buyer_handoff_bundle_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a buyer handoff bundle that packages sale-readiness evidence."""
+        manifest = self.buyer_evidence_manifest_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        manifest_summary = manifest["summary"]["by_completion_state"]
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        runtime_state = "blocked" if manifest_summary.get("blocked", 0) else "ready"
+        included_artifacts = [
+            self._buyer_evidence_item(
+                "runtime_reports",
+                "Runtime reports",
+                "Deal owner",
+                [
+                    "/api/v1/sales_readiness/latest",
+                    "/api/v1/commercial_readiness/latest",
+                    "/api/v1/buyer_evidence_manifests/latest",
+                    "/api/v1/analytics_snapshots/latest",
+                ],
+                "measured_local",
+                runtime_state,
+                (
+                    f"buyer_manifest_status={manifest['manifest_status']}; "
+                    f"commercial_status={manifest['related_runtime_reports']['commercial_status']}"
+                ),
+                "Resolve runtime report blockers before buyer handoff.",
+            ),
+            self._buyer_evidence_item(
+                "repository_packet",
+                "Repository packet",
+                "Procurement reviewer",
+                [
+                    "README.md",
+                    "docs/commercial_buyer_diligence_packet.md",
+                    "docs/commercial_buyer_acceptance_runbook.md",
+                    "docs/commercial_buyer_evidence_manifest.md",
+                    "docs/commercial_buyer_handoff_bundle.md",
+                ],
+                "repository_artifact",
+                "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "README.md",
+                        "docs/commercial_buyer_diligence_packet.md",
+                        "docs/commercial_buyer_acceptance_runbook.md",
+                        "docs/commercial_buyer_evidence_manifest.md",
+                        "docs/commercial_buyer_handoff_bundle.md",
+                    )
+                )
+                else "blocked",
+                "Buyer-facing diligence, acceptance, manifest, and handoff documents are present.",
+                "Restore missing buyer packet documents before procurement review.",
+            ),
+            self._buyer_evidence_item(
+                "figma_stakeholder_artifacts",
+                "Figma stakeholder artifacts",
+                "Stakeholder reviewer",
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
+                "figma_artifact",
+                "ready" if has_file("docs/figma_artifacts.md") else "blocked",
+                "Editable Figma, FigJam, and Slides artifacts are recorded without Code Connect.",
+                "Record editable stakeholder artifacts before buyer handoff.",
+            ),
+            self._buyer_evidence_item(
+                "verification_commands",
+                "Verification commands",
+                "Technical reviewer",
+                [
+                    "tests/test_buyer_handoff_bundle.py",
+                    "tests/test_buyer_evidence_manifest.py",
+                    "tests/test_plugin_driven_artifacts.py",
+                    "tests/test_api_contract.py",
+                    "pytest -q",
+                ],
+                "measured_local",
+                "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "tests/test_buyer_handoff_bundle.py",
+                        "tests/test_buyer_evidence_manifest.py",
+                        "tests/test_plugin_driven_artifacts.py",
+                        "tests/test_api_contract.py",
+                    )
+                )
+                else "blocked",
+                "Focused contract tests and full pytest verification are named for buyer review.",
+                "Restore focused tests before technical buyer handoff.",
+            ),
+            self._buyer_evidence_item(
+                "packaging_decision",
+                "Packaging decision",
+                "Procurement and security reviewer",
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "repository_artifact",
+                "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
+                "Single repository and one deployable product remain the current decision.",
+                "Only extract a library after a second product, independent release cadence, or provenance trigger exists.",
+            ),
+        ]
+        follow_up_items = [
+            self._buyer_evidence_item(
+                "production_handoff_readiness",
+                "Production handoff readiness",
+                "Customer operations reviewer",
+                ["production SLO", "incident drill", "support rota", "deployment history"],
+                "proposed_until_production",
+                "warning",
+                "Production SLO, incident, deployment, and support evidence require a live customer environment.",
+                "Collect production telemetry and support evidence during paid onboarding.",
+            ),
+            self._buyer_evidence_item(
+                "buyer_specific_commercial_close",
+                "Buyer-specific commercial close",
+                "Economic buyer and legal reviewer",
+                ["ROI model", "legal questionnaire", "data-processing terms", "support plan"],
+                "proposed_until_buyer_specific",
+                "warning",
+                "ROI, legal, procurement, and deployment commitments require a named buyer.",
+                "Collect buyer-specific inputs during account diligence.",
+            ),
+        ]
+        all_items = included_artifacts + follow_up_items
+        summary = self._buyer_manifest_summary(all_items)
+        if summary["by_completion_state"].get("blocked", 0):
+            bundle_status = "buyer_handoff_blocked"
+        elif summary["by_completion_state"].get("warning", 0):
+            bundle_status = "buyer_handoff_ready_with_warnings"
+        else:
+            bundle_status = "buyer_handoff_ready"
+
+        return {
+            "bundle_status": bundle_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_buyer_handoff_bundle",
+            "source_note": (
+                "Buyer handoff bundle packages local runtime reports, repository documents, "
+                "Figma artifact records, verification commands, and explicit production or "
+                "buyer-specific caveats; it is not a valuation guarantee, purchase commitment, "
+                "or production compliance certificate."
+            ),
+            "summary": summary,
+            "included_artifacts": included_artifacts,
+            "follow_up_items": follow_up_items,
+            "acceptance_gates": [
+                {
+                    "gate_name": "go",
+                    "rule": "no blocked included artifacts and concrete security checks have no failure",
+                },
+                {
+                    "gate_name": "warning",
+                    "rule": "production or buyer-specific evidence remains proposed and explicitly caveated",
+                },
+                {
+                    "gate_name": "blocked",
+                    "rule": "security failure, API contract regression, document mismatch, product defect, or Code Connect usage",
+                },
+            ],
+            "related_runtime_reports": {
+                "buyer_manifest_status": manifest["manifest_status"],
+                **manifest["related_runtime_reports"],
+            },
+            "library_split_decision": {
+                "decision": "keep_single_product",
+                "reason": "No second product, independent release cadence, or security provenance trigger exists.",
+                "allowed_future_triggers": [
+                    "second product requires core only",
+                    "independent release cadence is needed",
+                    "buyer security provenance requires package extraction",
+                ],
+            },
+            "plugin_traceability": {
+                "figma": "editable stakeholder artifacts and FigJam workflow",
+                "product_design": "buyer handoff surface and admin evidence workflow",
+                "superpowers": "implementation plan and verification checklist",
+                "ponytail": "single-product packaging and no new dependency",
+                "data_analytics": "measured versus proposed evidence separation",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

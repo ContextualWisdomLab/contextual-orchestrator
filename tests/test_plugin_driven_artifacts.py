@@ -241,6 +241,33 @@ def test_commercial_buyer_evidence_manifest_indexes_sale_evidence() -> None:
         assert expected_text in manifest
 
 
+def test_commercial_buyer_handoff_bundle_packages_sale_evidence() -> None:
+    bundle = read_text("docs/commercial_buyer_handoff_bundle.md")
+
+    for expected_text in [
+        "Commercial Buyer Handoff Bundle",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Handoff Contents",
+        "Runtime Shape",
+        "Acceptance Rules",
+        "KRW 2B Buyer Handoff Bundle Workflow",
+        "/api/v1/buyer_handoff_bundles/latest",
+        "/api/v1/buyer_evidence_manifests/latest",
+        "/api/v1/commercial_readiness/latest",
+        "/api/v1/analytics_snapshots/latest",
+        "local_buyer_handoff_bundle",
+        "measured_local",
+        "repository_artifact",
+        "figma_artifact",
+        "proposed_until_production",
+        "proposed_until_buyer_specific",
+    ]:
+        assert expected_text in bundle
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -253,4 +280,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_buyer_diligence_packet_defines_deal_room_evidence()
     test_commercial_buyer_acceptance_runbook_defines_go_no_go_workflow()
     test_commercial_buyer_evidence_manifest_indexes_sale_evidence()
+    test_commercial_buyer_handoff_bundle_packages_sale_evidence()
     print("ok")

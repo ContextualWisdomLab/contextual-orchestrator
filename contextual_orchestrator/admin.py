@@ -54,6 +54,7 @@ ADMIN_TRANSLATIONS = {
         "commercial_readiness": "commercial_readiness",
         "commercial_readiness_title": "Commercial Readiness",
         "buyer_evidence_manifest_title": "Buyer Evidence Manifest",
+        "buyer_handoff_bundle_title": "Buyer Handoff Bundle",
         "commercial_contract_value": "Target contract value",
         "sales_ready": "Sales ready",
         "pilot_ready_with_warnings": "Pilot ready with warnings",
@@ -64,6 +65,9 @@ ADMIN_TRANSLATIONS = {
         "buyer_review_ready": "Buyer review ready",
         "buyer_review_ready_with_warnings": "Buyer review ready with warnings",
         "buyer_review_blocked": "Buyer review blocked",
+        "buyer_handoff_ready": "Buyer handoff ready",
+        "buyer_handoff_ready_with_warnings": "Buyer handoff ready with warnings",
+        "buyer_handoff_blocked": "Buyer handoff blocked",
         "readiness_pass": "Pass",
         "readiness_warn": "Warn",
         "readiness_fail": "Fail",
@@ -185,6 +189,7 @@ ADMIN_TRANSLATIONS = {
         "commercial_readiness": "commercial_readiness",
         "commercial_readiness_title": "상용 준비도",
         "buyer_evidence_manifest_title": "구매자 증거 매니페스트",
+        "buyer_handoff_bundle_title": "구매자 인수인계 번들",
         "commercial_contract_value": "목표 계약 금액",
         "sales_ready": "판매 준비 완료",
         "pilot_ready_with_warnings": "주의 조건부 파일럿 가능",
@@ -195,6 +200,9 @@ ADMIN_TRANSLATIONS = {
         "buyer_review_ready": "구매자 검토 준비 완료",
         "buyer_review_ready_with_warnings": "주의 조건부 구매자 검토 가능",
         "buyer_review_blocked": "구매자 검토 차단",
+        "buyer_handoff_ready": "구매자 인수인계 준비 완료",
+        "buyer_handoff_ready_with_warnings": "주의 조건부 구매자 인수인계 가능",
+        "buyer_handoff_blocked": "구매자 인수인계 차단",
         "readiness_pass": "통과",
         "readiness_warn": "주의",
         "readiness_fail": "실패",
@@ -758,7 +766,7 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="observability_title">Observability</h1><span class="chip green">Live</span></div>
           <div class="kpis" id="kpis"></div>
-          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest"></div>
+          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest" data-handoff-bundle-source="/api/v1/buyer_handoff_bundles/latest"></div>
           <table><thead><tr><th>Workflow</th><th>Mode</th><th>Policy</th><th>Created</th></tr></thead><tbody id="runRows"></tbody></table>
         </section>
       </section>
@@ -813,7 +821,7 @@ Summarize this research thread and verify claims.</textarea>
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
-    let state = {agents: [], last: null, analytics: null, readiness: null};
+    let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null};
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
@@ -920,6 +928,7 @@ Summarize this research thread and verify claims.</textarea>
       const readiness = state.readiness || {};
       const commercial = state.commercialReadiness || {};
       const buyerManifest = state.buyerEvidenceManifest || {};
+      const handoffBundle = state.buyerHandoffBundle || {};
       const status = readiness.readiness_status || "not_ready";
       const statusClass = status === "sales_ready" ? "green" : status === "pilot_ready_with_warnings" ? "amber" : "red";
       const criteria = readiness.criteria || [];
@@ -931,6 +940,9 @@ Summarize this research thread and verify claims.</textarea>
       const manifestStatus = buyerManifest.manifest_status || "buyer_review_blocked";
       const manifestStatusClass = manifestStatus === "buyer_review_ready" ? "green" : manifestStatus === "buyer_review_ready_with_warnings" ? "amber" : "red";
       const manifestSummary = buyerManifest.summary?.by_completion_state || {};
+      const handoffStatus = handoffBundle.bundle_status || "buyer_handoff_blocked";
+      const handoffStatusClass = handoffStatus === "buyer_handoff_ready" ? "green" : handoffStatus === "buyer_handoff_ready_with_warnings" ? "amber" : "red";
+      const handoffSummary = handoffBundle.summary?.by_completion_state || {};
       els.salesReadiness.innerHTML = `
         <div class="metric">
           <span data-i18n="sales_readiness_title">${t("sales_readiness_title")}</span>
@@ -948,17 +960,21 @@ Summarize this research thread and verify claims.</textarea>
           <span data-i18n="buyer_evidence_manifest_title">${t("buyer_evidence_manifest_title")}</span>
           <strong><span class="chip ${manifestStatusClass}">${escapeHtml(t(manifestStatus))}</span></strong>
         </div>
+        <div class="metric">
+          <span data-i18n="buyer_handoff_bundle_title">${t("buyer_handoff_bundle_title")}</span>
+          <strong><span class="chip ${handoffStatusClass}">${escapeHtml(t(handoffStatus))}</span></strong>
+        </div>
         <div class="metric source">
           <span data-i18n="readiness_source">${t("readiness_source")}</span>
-          <strong>${escapeHtml(buyerManifest.source_note || commercial.source_note || readiness.source_note || "No source note")}</strong>
+          <strong>${escapeHtml(handoffBundle.source_note || buyerManifest.source_note || commercial.source_note || readiness.source_note || "No source note")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
-          <strong>${escapeHtml(buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
+          <strong>${escapeHtml(handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
-          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0}</strong>
+          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0} | handoff ${handoffSummary.ready || 0}/${handoffSummary.warning || 0}/${handoffSummary.blocked || 0}</strong>
         </div>
         <div class="readiness-grid">
           ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
@@ -1040,6 +1056,8 @@ Summarize this research thread and verify claims.</textarea>
       state.commercialReadiness = await commercialRes.json();
       const buyerManifestRes = await fetch("/api/v1/buyer_evidence_manifests/latest");
       state.buyerEvidenceManifest = await buyerManifestRes.json();
+      const handoffBundleRes = await fetch("/api/v1/buyer_handoff_bundles/latest");
+      state.buyerHandoffBundle = await handoffBundleRes.json();
     }
     async function simulate() {
       const res = await fetch("/admin/simulate", {

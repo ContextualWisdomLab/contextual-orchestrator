@@ -4,6 +4,8 @@ This manifest is the single review index for a KRW 2,000,000,000 buyer diligence
 
 Runtime endpoint: `/api/v1/buyer_evidence_manifests/latest`.
 
+Handoff endpoint: `/api/v1/buyer_handoff_bundles/latest`.
+
 The target is buyer due-diligence readiness. It is not a valuation guarantee,
 purchase commitment, revenue claim, or production compliance certificate.
 
@@ -45,6 +47,7 @@ control plane.
 | Buyer diligence packet | Procurement reviewer | `docs/commercial_buyer_diligence_packet.md` | `repository_artifact` | Ready when buyer questions map to evidence paths and caveats. |
 | Buyer acceptance runbook | Procurement reviewer | `docs/commercial_buyer_acceptance_runbook.md` | `repository_artifact` | Ready when go, warning, and no-go rules are explicit. |
 | Packaging decision | Procurement and security reviewer | `docs/library_research.md`, `docs/commercial_plugin_operating_model.md` | `repository_artifact` | Ready because single repo and one deployable product remain the current decision. |
+| Buyer handoff bundle | Deal owner | `/api/v1/buyer_handoff_bundles/latest`, `docs/commercial_buyer_handoff_bundle.md` | `measured_local` | Ready when runtime reports, repository packet, Figma artifacts, verification commands, packaging decision, and follow-ups are packaged for buyer review. |
 | Production SLO and support proof | Customer operations reviewer | production telemetry, incident drill records, support ownership | `proposed_until_production` | Warning until a production deployment exists. |
 | Buyer-specific ROI and legal proof | Economic buyer and procurement | ROI model, legal questionnaire, data-processing terms, support plan | `proposed_until_buyer_specific` | Warning until a named buyer supplies inputs. |
 
@@ -59,6 +62,8 @@ Ready:
 - `docs/figma_artifacts.md` records `KRW 2B Buyer Evidence Manifest Workflow`;
 - `/api/v1/buyer_evidence_manifests/latest` returns
   `local_buyer_evidence_manifest`;
+- `/api/v1/buyer_handoff_bundles/latest` returns
+  `local_buyer_handoff_bundle`;
 - production and buyer-specific gaps are labeled as warnings, not measured
   evidence.
 
