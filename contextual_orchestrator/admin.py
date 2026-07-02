@@ -45,6 +45,21 @@ ADMIN_TRANSLATIONS = {
         "agent_health_coverage": "Agent health coverage",
         "provider_exclusion_miss_rate": "Provider exclusion miss rate",
         "locale_key_parity": "Locale key parity",
+        "sales_readiness": "sales_readiness",
+        "sales_readiness_title": "Sales Readiness",
+        "sales_ready": "Sales ready",
+        "pilot_ready_with_warnings": "Pilot ready with warnings",
+        "not_ready": "Not ready",
+        "readiness_pass": "Pass",
+        "readiness_warn": "Warn",
+        "readiness_fail": "Fail",
+        "api_compatibility": "OpenAI-compatible API",
+        "admin_evidence": "Operator evidence surface",
+        "trace_evidence": "Workflow trace evidence",
+        "security_posture": "Security posture",
+        "analytics_truthfulness": "Analytics truthfulness",
+        "locale_readiness": "Locale readiness",
+        "provider_egress_safety": "Provider egress safety",
         "evaluation_replay": "Evaluation Replay",
         "run_evaluation": "Run Evaluation",
         "dataset_name": "Dataset",
@@ -140,6 +155,21 @@ ADMIN_TRANSLATIONS = {
         "agent_health_coverage": "에이전트 상태 커버리지",
         "provider_exclusion_miss_rate": "공급자 제외 누락률",
         "locale_key_parity": "로케일 키 일치율",
+        "sales_readiness": "sales_readiness",
+        "sales_readiness_title": "판매 준비도",
+        "sales_ready": "판매 준비 완료",
+        "pilot_ready_with_warnings": "주의 조건부 파일럿 가능",
+        "not_ready": "준비 미완료",
+        "readiness_pass": "통과",
+        "readiness_warn": "주의",
+        "readiness_fail": "실패",
+        "api_compatibility": "OpenAI 호환 API",
+        "admin_evidence": "운영자 근거 화면",
+        "trace_evidence": "워크플로 트레이스 근거",
+        "security_posture": "보안 자세",
+        "analytics_truthfulness": "분석 지표 진실성",
+        "locale_readiness": "로케일 준비도",
+        "provider_egress_safety": "공급자 송신 안전성",
         "evaluation_replay": "평가 리플레이",
         "run_evaluation": "평가 실행",
         "dataset_name": "데이터셋",
@@ -380,6 +410,7 @@ ADMIN_HTML = r"""<!doctype html>
     }
     .chip.green { background: #e7f6ec; color: var(--green); }
     .chip.amber { background: var(--amber-soft); color: var(--amber); }
+    .chip.red { background: #ffe8e5; color: var(--red); }
     .bar { width: 90px; height: 4px; border-radius: 999px; background: #d9eeeb; overflow: hidden; margin-top: 5px; }
     .bar span { display: block; height: 100%; background: var(--teal); }
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -465,6 +496,29 @@ ADMIN_HTML = r"""<!doctype html>
       background: #fbfcfc;
     }
     .kpi strong { display: block; font-size: 22px; margin-top: 5px; }
+    .readiness {
+      border-top: 1px solid var(--line);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .readiness-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .readiness-row {
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      background: #fbfcfc;
+      padding: 10px;
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .readiness-row strong,
+    .readiness-row small { overflow-wrap: anywhere; }
+    .readiness-row small { color: var(--muted); }
     .audit { display: grid; gap: 12px; }
     .audit { align-self: start; align-content: start; }
     .audit-list { padding: 10px 14px 14px; display: grid; gap: 10px; }
@@ -499,6 +553,7 @@ ADMIN_HTML = r"""<!doctype html>
       .panel { max-width: calc(100vw - 24px); overflow-x: auto; }
       .wide { grid-column: auto; }
       .kpis { grid-template-columns: 1fr; }
+      .readiness-grid { grid-template-columns: 1fr; }
       table { min-width: 560px; }
       .workflow { grid-column: auto; }
       .steps { grid-template-columns: 1fr; }
@@ -661,6 +716,7 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="observability_title">Observability</h1><span class="chip green">Live</span></div>
           <div class="kpis" id="kpis"></div>
+          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest"></div>
           <table><thead><tr><th>Workflow</th><th>Mode</th><th>Policy</th><th>Created</th></tr></thead><tbody id="runRows"></tbody></table>
         </section>
       </section>
@@ -706,6 +762,7 @@ Summarize this research thread and verify claims.</textarea>
       datasetRows: document.querySelector("#datasetRows"),
       integrationRows: document.querySelector("#integrationRows"),
       kpis: document.querySelector("#kpis"),
+      salesReadiness: document.querySelector("#salesReadiness"),
       runRows: document.querySelector("#runRows"),
       auditRows: document.querySelector("#auditRows"),
       viewAudit: document.querySelector("#viewAudit"),
@@ -714,7 +771,7 @@ Summarize this research thread and verify claims.</textarea>
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
-    let state = {agents: [], last: null, analytics: null};
+    let state = {agents: [], last: null, analytics: null, readiness: null};
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
@@ -815,6 +872,28 @@ Summarize this research thread and verify claims.</textarea>
       els.runRows.innerHTML = runs.map(run => `
         <tr><td>${escapeHtml(run.workflow_run_id)}</td><td>${escapeHtml(run.mode)}</td><td>${escapeHtml(run.policy_mode)}</td><td>${escapeHtml(run.created_at)}</td></tr>
       `).join("") || `<tr><td colspan="4">${t("no_trace")}</td></tr>`;
+      renderReadiness();
+    }
+    function renderReadiness() {
+      const readiness = state.readiness || {};
+      const status = readiness.readiness_status || "not_ready";
+      const statusClass = status === "sales_ready" ? "green" : status === "pilot_ready_with_warnings" ? "amber" : "red";
+      const criteria = readiness.criteria || [];
+      els.salesReadiness.innerHTML = `
+        <div class="metric">
+          <span data-i18n="sales_readiness_title">${t("sales_readiness_title")}</span>
+          <strong><span class="chip ${statusClass}">${escapeHtml(t(status))}</span></strong>
+        </div>
+        <div class="readiness-grid">
+          ${criteria.slice(0, 8).map(row => {
+            const chip = row.status === "pass" ? "green" : row.status === "warn" ? "amber" : "red";
+            return `<div class="readiness-row">
+              <span class="chip ${chip}">${escapeHtml(t(`readiness_${row.status}`))}</span>
+              <strong>${escapeHtml(t(row.criterion_name) || row.label)}</strong>
+              <small>${escapeHtml(row.evidence)}</small>
+            </div>`;
+          }).join("")}
+        </div>`;
     }
     function renderAudit() {
       const events = state.recent_audit_events || [];
@@ -867,6 +946,7 @@ Summarize this research thread and verify claims.</textarea>
       const res = await fetch("/admin/state");
       state = await res.json();
       await refreshAnalytics();
+      await refreshReadiness();
       els.hintCount.textContent = state.policy.complex_hints.length;
       renderAgents();
       renderSecondaryViews();
@@ -875,6 +955,10 @@ Summarize this research thread and verify claims.</textarea>
     async function refreshAnalytics() {
       const analyticsRes = await fetch("/api/v1/analytics_snapshots/latest");
       state.analytics = await analyticsRes.json();
+    }
+    async function refreshReadiness() {
+      const readinessRes = await fetch("/api/v1/sales_readiness/latest");
+      state.readiness = await readinessRes.json();
     }
     async function simulate() {
       const res = await fetch("/admin/simulate", {
@@ -885,6 +969,7 @@ Summarize this research thread and verify claims.</textarea>
       state.last = await res.json();
       state.recent_workflow_runs = [state.last, ...(state.recent_workflow_runs || [])].slice(0, 8);
       await refreshAnalytics();
+      await refreshReadiness();
       renderTrace(state.last);
       renderSecondaryViews();
     }
@@ -898,6 +983,7 @@ Summarize this research thread and verify claims.</textarea>
       const result = await res.json();
       els.evaluationRows.insertAdjacentHTML("afterbegin", `<tr><td>${escapeHtml(result.evaluation_run_id)}</td><td>${escapeHtml(result.mode)}</td><td>${escapeHtml(result.prompt_count)}</td><td>${escapeHtml(result.success_count)}</td></tr>`);
       await refreshAnalytics();
+      await refreshReadiness();
       renderSecondaryViews();
     }
     els.agentSearch.addEventListener("input", renderAgents);

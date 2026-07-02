@@ -67,6 +67,7 @@ One public interface:
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
+- `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
 
 One fused orchestration loop:
 
@@ -108,4 +109,5 @@ python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py
 python tests/test_analytics_runtime.py
+python tests/test_sales_readiness.py
 ```

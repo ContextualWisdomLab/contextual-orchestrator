@@ -98,6 +98,23 @@ class SecurityConfig:
         """Release a run slot acquired by acquire_run_slot."""
         self._run_semaphore.release()
 
+    def readiness_profile(self) -> dict[str, Any]:
+        """Return a secret-free security profile for sales-readiness evidence."""
+        if self.admin_token and self.inference_token:
+            auth_mode = "split_token"
+        elif self.auth_token:
+            auth_mode = "single_token"
+        else:
+            auth_mode = "loopback_no_auth"
+        return {
+            "auth_mode": auth_mode,
+            "allow_public_bind": self.allow_public_bind,
+            "expose_trace_by_default": self.expose_trace_by_default,
+            "rate_limit_requests": self.rate_limit_requests,
+            "rate_limit_window_seconds": self.rate_limit_window_seconds,
+            "max_concurrent_runs": self.max_concurrent_runs,
+        }
+
 
 def _error_payload(error_code: str, error_message: str, error_detail: dict[str, Any] | None = None) -> dict[str, Any]:
     detail = error_detail or {}
@@ -199,6 +216,12 @@ def build_server(
                     return
                 if path == "/api/v1/analytics_snapshots/latest":
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
+                    return
+                if path == "/api/v1/sales_readiness/latest":
+                    self._send(orchestrator.sales_readiness_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
                     return
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)

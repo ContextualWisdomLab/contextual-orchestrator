@@ -717,6 +717,77 @@ class TaskOrchestrator:
             ],
         }
 
+    def sales_readiness_report(
+        self,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a local, evidence-backed sales-readiness gate for enterprise pilots."""
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        admin_state = self.admin_state()
+        runs = list(self._workflow_runs.values())
+        conducted_runs = [run for run in runs if run["mode"] == "conduct"]
+        trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
+        event_counts = analytics["event_counts"]
+        criteria = [
+            self._criterion(
+                "api_compatibility",
+                "OpenAI-compatible API",
+                "pass" if event_counts.get("chat_completion_requested", 0) > 0 else "warn",
+                f"{event_counts.get('chat_completion_requested', 0)} compatible chat requests recorded",
+                "Run a /v1/chat/completions smoke test before an enterprise evaluation.",
+            ),
+            self._criterion(
+                "admin_evidence",
+                "Operator evidence surface",
+                "pass" if admin_state["agents"] and admin_state["policy"] else "fail",
+                f"{len(admin_state['agents'])} agents, {len(admin_state['recent_audit_events'])} audit events exposed",
+                "Expose agent pool, policy, and audit state before positioning the product as sellable.",
+            ),
+            self._criterion(
+                "trace_evidence",
+                "Workflow trace evidence",
+                "pass" if trace_complete_count > 0 else "warn",
+                f"{trace_complete_count} complete conducted traces across {len(conducted_runs)} conducted runs",
+                "Run a conduct-mode workflow so access-list and verifier evidence are visible.",
+            ),
+            self._criterion(
+                "evaluation_replay",
+                "Evaluation replay",
+                "pass" if event_counts.get("evaluation_run_created", 0) > 0 else "warn",
+                f"{event_counts.get('evaluation_run_created', 0)} evaluation replay runs recorded",
+                "Run at least one evaluation replay before customer-facing pilot review.",
+            ),
+            self._security_posture_criterion(security_profile or {}),
+            self._criterion(
+                "analytics_truthfulness",
+                "Analytics truthfulness",
+                "pass" if analytics["measurement_status"] == "local_runtime_snapshot" else "fail",
+                analytics["source_note"],
+                "Label metrics as proposed definitions unless backed by measured runtime telemetry.",
+            ),
+            self._locale_readiness_criterion(analytics),
+            self._provider_egress_criterion(),
+        ]
+        summary = self._criteria_summary(criteria)
+        if summary["fail"]:
+            readiness_status = "not_ready"
+        elif summary["warn"]:
+            readiness_status = "pilot_ready_with_warnings"
+        else:
+            readiness_status = "sales_ready"
+
+        return {
+            "readiness_status": readiness_status,
+            "measurement_status": "local_runtime_snapshot",
+            "source_note": (
+                "Sales readiness is based on this process-local runtime, configuration, and "
+                "documentation evidence; it is not a production compliance certificate."
+            ),
+            "summary": summary,
+            "criteria": criteria,
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
@@ -790,6 +861,107 @@ class TaskOrchestrator:
         if denominator == 0:
             return None
         return round((numerator / denominator) * 100, 2)
+
+    def _criterion(
+        self,
+        criterion_name: str,
+        label: str,
+        status: str,
+        evidence: str,
+        remediation: str,
+    ) -> dict[str, str]:
+        require_object_name(criterion_name, "sales_readiness.criterion_name")
+        if status not in {"pass", "warn", "fail"}:  # pragma: no cover
+            raise ValueError("sales readiness status must be pass, warn, or fail")
+        return {
+            "criterion_name": criterion_name,
+            "status": status,
+            "label": label,
+            "evidence": evidence,
+            "remediation": remediation,
+        }
+
+    def _security_posture_criterion(self, security_profile: dict[str, Any]) -> dict[str, str]:
+        auth_mode = security_profile.get("auth_mode", "loopback_no_auth")
+        issues: list[str] = []
+        warnings: list[str] = []
+        if auth_mode == "split_token":
+            pass
+        elif auth_mode == "single_token":
+            warnings.append("single bearer token shared by admin and inference scopes")
+        else:
+            issues.append("no bearer token configured outside loopback-only development")
+        if security_profile.get("allow_public_bind"):
+            issues.append("public bind is enabled")
+        if security_profile.get("expose_trace_by_default"):
+            issues.append("trace exposure is enabled by default")
+        if int(security_profile.get("rate_limit_requests") or 0) <= 0:
+            issues.append("request rate limiting is disabled")
+        if int(security_profile.get("max_concurrent_runs") or 0) <= 0:
+            issues.append("run concurrency limiting is disabled")
+
+        if issues:
+            status = "fail"
+            evidence = "; ".join(issues)
+            remediation = "Require bearer auth, private bind defaults, hidden traces, rate limits, and run limits."
+        elif warnings:
+            status = "warn"
+            evidence = "; ".join(warnings)
+            remediation = "For enterprise pilots, split admin and inference tokens before customer evaluation."
+        else:
+            status = "pass"
+            evidence = "split tokens, private bind default, hidden traces, rate limits, and run limits are configured"
+            remediation = "Keep these controls enabled for customer-facing pilots."
+
+        return self._criterion("security_posture", "Security posture", status, evidence, remediation)
+
+    def _locale_readiness_criterion(self, analytics: dict[str, Any]) -> dict[str, str]:
+        locale_metric = next(
+            metric for metric in analytics["guardrails"] if metric["metric_name"] == "locale_key_parity"
+        )
+        missing = locale_metric.get("missing_keys", [])
+        parity = locale_metric.get("value_percent")
+        if parity == 100.0:
+            status = "pass"
+            evidence = "English and Korean admin locale keys are aligned"
+            remediation = "Keep locale parity tests updated when adding operator copy."
+        else:
+            status = "warn" if missing else "fail"
+            evidence = f"{parity}% locale key parity; missing keys: {', '.join(missing) or 'locale bundles absent'}"
+            remediation = "Fill missing Korean and English operator labels before customer review."
+        return self._criterion("locale_readiness", "Locale readiness", status, evidence, remediation)
+
+    def _provider_egress_criterion(self) -> dict[str, str]:
+        unsafe = []
+        remote = []
+        for agent in self.agents:
+            if agent.base_url.startswith("mock://"):
+                continue
+            remote.append(agent.id)
+            parsed = urlparse(agent.base_url)
+            if parsed.scheme != "https" or not agent.api_key_env:
+                unsafe.append(agent.id)
+        if unsafe:
+            status = "fail"
+            evidence = f"unsafe provider egress config for agents: {', '.join(sorted(unsafe))}"
+            remediation = "Use https provider endpoints with explicit api_key_env before enabling remote egress."
+        else:
+            status = "pass"
+            evidence = (
+                "mock providers only"
+                if not remote
+                else f"{len(remote)} remote providers use https and explicit api_key_env"
+            )
+            remediation = "Keep provider allow-list enforcement enabled for non-mock providers."
+        return self._criterion("provider_egress_safety", "Provider egress safety", status, evidence, remediation)
+
+    def _criteria_summary(self, criteria: list[dict[str, str]]) -> dict[str, int]:
+        counts = Counter(row["status"] for row in criteria)
+        return {
+            "pass": counts.get("pass", 0),
+            "warn": counts.get("warn", 0),
+            "fail": counts.get("fail", 0),
+        }
 
 
 def redact_text(text: str) -> str:

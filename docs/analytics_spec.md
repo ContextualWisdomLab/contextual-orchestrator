@@ -16,6 +16,12 @@ from the current process, so it is source-backed for smoke tests and pilot
 readiness checks, but it is still not production telemetry or a warehouse-backed
 dashboard.
 
+The prototype also exposes `/api/v1/sales_readiness/latest`. That endpoint
+turns the local snapshot, admin state, HTTP security profile, locale bundles,
+and provider configuration into explicit pass/warn/fail criteria for enterprise
+pilot review. It is a readiness gate for a sellable pilot, not a production
+compliance certificate or proof of real customer usage.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -109,6 +115,9 @@ Default sections:
 4. Evaluation loop: replay usage, verifier revision rate, policy change
    coverage.
 5. Locale readiness: English/Korean key parity and missing-key list.
+6. Sales readiness: criteria status, evidence, and remediation for API
+   compatibility, admin evidence, trace evidence, replay, security posture,
+   analytics truthfulness, locale readiness, and provider egress safety.
 
 ## Data Quality Checks
 

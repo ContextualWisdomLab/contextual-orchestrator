@@ -47,6 +47,7 @@ Enterprise teams want the benefit of collective model intelligence without makin
 | Access list inspector | Conductor access lists are the concrete mechanism for context visibility and auditability. |
 | Evaluation replay | TRINITY and Fugu both optimize against measured task outcomes; product teams need replay before learned routing exists. |
 | Analytics snapshot | Pilot readiness needs source-backed local KPIs for API adoption, trace completeness, policy-safe routing, provider exclusions, and locale readiness before production telemetry exists. |
+| Sales readiness gate | Enterprise evaluation needs a concrete pass/warn/fail checklist for API compatibility, admin evidence, trace evidence, replay, security posture, analytics truthfulness, locale parity, and provider egress safety without overstating production certification. |
 | Locale bundle editor | i18n support is an explicit product requirement and should be reviewable as data. |
 
 ## Deliberate Non-goals For This Repository
@@ -62,3 +63,4 @@ Enterprise teams want the benefit of collective model intelligence without makin
 - The management console prioritizes traceability and policy control over decorative SaaS chrome.
 - Every new product surface maps to one of: single API adoption, pool management, policy control, trace audit, access-list evidence, evaluation replay, or i18n.
 - Local runtime analytics are clearly labeled as process-local evidence and not production telemetry.
+- Sales readiness is reported as local enterprise-pilot evidence with pass/warn/fail remediation, not as a production compliance certificate.

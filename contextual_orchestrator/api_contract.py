@@ -79,6 +79,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Analytics snapshot"}},
             }
         },
+        "/api/v1/sales_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_sales_readiness",
+                "summary": "Get local sales-readiness criteria and evidence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Sales-readiness report"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",
