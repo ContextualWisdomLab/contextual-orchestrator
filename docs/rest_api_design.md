@@ -44,6 +44,7 @@
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Read KRW 2,000,000,000 commercial due diligence room |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Read KRW 2,000,000,000 commercial investment committee memo |
 | `GET` | `/api/v1/commercial_saleability_gates/latest` | Read KRW 2,000,000,000 commercial saleability gate |
+| `GET` | `/api/v1/commercial_mutual_action_plans/latest` | Read KRW 2,000,000,000 commercial mutual action plan |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -92,6 +93,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
 | `GET` | `/api/v1/commercial_saleability_gates/latest` | Produce the final commercial saleability gate that wraps saleability decision, investment committee memo, due diligence, purchase approval, close/terms, metric provenance, Figma, review-process policy, packaging decision, buyer authority gaps, and production/external evidence warnings into one buyer close review artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer close and commercial go/no-go review. |
+| `GET` | `/api/v1/commercial_mutual_action_plans/latest` | Produce the buyer/seller mutual action plan that turns saleability, investment committee, close, legal, procurement, onboarding, operations, security, value, analytics, admin, Figma, review-process, and packaging evidence into executable owners, milestones, exit criteria, and warning conditions. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer/seller execution review. |
 
 ## Production Library Target
 

@@ -76,6 +76,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "commercial_purchase_approval_warning_count",
         "commercial_due_diligence_warning_count",
         "commercial_investment_committee_warning_count",
+        "commercial_mutual_action_plan_warning_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -143,6 +144,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Demo Scenarios",
         "KRW 2B Commercial Proposal Packet",
         "KRW 2B Commercial Purchase Approval Packet",
+        "KRW 2B Commercial Mutual Action Plan",
         "Figma Code Connect was not used",
     ]:
         assert expected_text in artifacts
@@ -621,6 +623,52 @@ def test_commercial_saleability_gate_defines_final_commercial_gate() -> None:
         "pytest -q",
     ]:
         assert expected_text in plan
+
+
+def test_commercial_mutual_action_plan_defines_buyer_seller_execution_plan() -> None:
+    plan_doc = read_text("docs/commercial_mutual_action_plan.md")
+    plan = read_text("docs/superpowers/plans/2026-07-03-commercial-mutual-action-plan.md")
+    rest_api = read_text("docs/rest_api_design.md")
+    readme = read_text("README.md")
+
+    for expected_text in [
+        "Commercial Mutual Action Plan",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Action Plan Inputs",
+        "Runtime Shape",
+        "Action Plan Status Rules",
+        "KRW 2B Commercial Mutual Action Plan",
+        "/api/v1/commercial_mutual_action_plans/latest",
+        "/api/v1/commercial_saleability_gates/latest",
+        "/api/v1/commercial_investment_committee_memos/latest",
+        "/api/v1/commercial_close_readiness/latest",
+        "/api/v1/commercial_onboarding_readiness/latest",
+        "/api/v1/commercial_operations_readiness/latest",
+        "/api/v1/analytics_snapshots/latest",
+        "local_commercial_mutual_action_plan",
+        "milestones",
+        "buyer_seller_owners",
+    ]:
+        assert expected_text in plan_doc
+
+    for expected_text in [
+        "Commercial Mutual Action Plan Implementation Plan",
+        "get_latest_commercial_mutual_action_plan",
+        "No new dependencies",
+        "python tests/test_commercial_mutual_action_plan.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+    for expected_text in [
+        "/api/v1/commercial_mutual_action_plans/latest",
+        "commercial mutual action plan",
+    ]:
+        assert expected_text in rest_api
+        assert expected_text in readme
 
 
 def test_commercial_evidence_export_defines_buyer_export_index() -> None:
@@ -1106,6 +1154,7 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_buyer_handoff_bundle_packages_sale_evidence()
     test_commercial_saleability_decision_defines_final_gate()
     test_commercial_saleability_gate_defines_final_commercial_gate()
+    test_commercial_mutual_action_plan_defines_buyer_seller_execution_plan()
     test_commercial_evidence_export_defines_buyer_export_index()
     test_commercial_acceptance_check_defines_buyer_acceptance_gate()
     test_commercial_release_candidate_defines_buyer_release_package()

@@ -93,6 +93,7 @@ One public interface:
 - `/api/v1/commercial_due_diligence_rooms/latest` exposes the KRW 2,000,000,000 commercial due diligence room across purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma review, review-process policy, packaging decision, and buyer/external missing artifacts.
 - `/api/v1/commercial_investment_committee_memos/latest` exposes the KRW 2,000,000,000 commercial investment committee memo across due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma review, review-process policy, packaging decision, and buyer/external approval conditions.
 - `/api/v1/commercial_saleability_gates/latest` exposes the KRW 2,000,000,000 commercial saleability gate across saleability decision, investment committee memo, due diligence, purchase approval, close/terms, metric provenance, Figma review, review-process policy, packaging decision, buyer authority gaps, and production/external evidence warnings.
+- `/api/v1/commercial_mutual_action_plans/latest` exposes the KRW 2,000,000,000 commercial mutual action plan that turns saleability, investment committee, close, legal, procurement, onboarding, operations, security, value, analytics, admin, Figma, review-policy, and packaging evidence into buyer/seller milestones, owners, exit criteria, and warning conditions.
 
 One fused orchestration loop:
 
@@ -142,6 +143,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Commercial due diligence room](docs/commercial_due_diligence_room.md)
 - [Commercial investment committee memo](docs/commercial_investment_committee_memo.md)
 - [Commercial saleability gate](docs/commercial_saleability_gate.md)
+- [Commercial mutual action plan](docs/commercial_mutual_action_plan.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
 - [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
@@ -187,4 +189,5 @@ python tests/test_commercial_purchase_approval_packet.py
 python tests/test_commercial_due_diligence_room.py
 python tests/test_commercial_investment_committee_memo.py
 python tests/test_commercial_saleability_gate.py
+python tests/test_commercial_mutual_action_plan.py
 ```

@@ -7018,6 +7018,361 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_mutual_action_plan_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the buyer/seller mutual action plan for the KRW 2B standard."""
+        saleability_gate = self.commercial_saleability_gate_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        related_reports = saleability_gate["related_runtime_reports"]
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        admin_state = self.admin_state()
+        investment_committee_status = related_reports["investment_committee_status"]
+        close_status = related_reports["commercial_close_status"]
+        onboarding_status = related_reports["commercial_onboarding_status"]
+        operations_status = related_reports["commercial_operations_status"]
+        contract_status = related_reports["commercial_contract_status"]
+        procurement_status = related_reports["commercial_procurement_status"]
+        value_status = related_reports["commercial_value_status"]
+        security_attestation_status = related_reports["commercial_security_attestation_status"]
+
+        def milestone(
+            milestone_name: str,
+            label: str,
+            buyer_owner: str,
+            seller_owner: str,
+            sources: list[str],
+            runtime_endpoints: list[str],
+            evidence_type: str,
+            completion_state: str,
+            evidence: str,
+            exit_criterion: str,
+            next_action: str,
+        ) -> dict[str, Any]:
+            require_object_name(milestone_name, "commercial_mutual_action_plan.milestone_name")
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial mutual action plan milestone state must be ready, warning, or blocked")
+            return {
+                "milestone_name": milestone_name,
+                "label": label,
+                "buyer_owner": buyer_owner,
+                "seller_owner": seller_owner,
+                "sources": sources,
+                "runtime_endpoints": runtime_endpoints,
+                "evidence_type": evidence_type,
+                "completion_state": completion_state,
+                "evidence": evidence,
+                "exit_criterion": exit_criterion,
+                "next_action": next_action,
+            }
+
+        concrete_blockers = list(
+            dict.fromkeys(
+                [
+                    str(item.get("item_name") or item.get("check_name") or item)
+                    if isinstance(item, dict)
+                    else str(item)
+                    for item in saleability_gate["concrete_blockers"]
+                ]
+            )
+        )
+        local_runtime_state = (
+            "blocked"
+            if saleability_gate["saleability_gate_status"] == "commercial_saleability_gate_blocked"
+            or investment_committee_status == "commercial_investment_committee_blocked"
+            or concrete_blockers
+            else "ready"
+        )
+        milestones = [
+            milestone(
+                "saleability_gate",
+                "Saleability gate",
+                "Economic buyer",
+                "Deal owner",
+                ["docs/commercial_saleability_gate.md", "/api/v1/commercial_saleability_gates/latest"],
+                ["/api/v1/commercial_saleability_gates/latest"],
+                "measured_local",
+                local_runtime_state,
+                f"saleability_gate_status={saleability_gate['saleability_gate_status']}",
+                "Commercial saleability gate is ready or ready with explicit buyer conditions.",
+                "Share the gate as the buyer close review cover artifact.",
+            ),
+            milestone(
+                "investment_committee_memo",
+                "Investment committee memo",
+                "Investment committee chair",
+                "Product owner",
+                [
+                    "docs/commercial_investment_committee_memo.md",
+                    "/api/v1/commercial_investment_committee_memos/latest",
+                ],
+                ["/api/v1/commercial_investment_committee_memos/latest"],
+                "measured_local",
+                "blocked"
+                if investment_committee_status == "commercial_investment_committee_blocked"
+                else "ready",
+                f"investment_committee_status={investment_committee_status}",
+                "Investment committee memo can be used for executive review.",
+                "Attach the committee memo to the mutual action plan.",
+            ),
+            milestone(
+                "buyer_close_packet",
+                "Buyer close packet",
+                "Buyer sponsor",
+                "Deal owner",
+                [
+                    "docs/commercial_close_readiness.md",
+                    "docs/commercial_value_readiness.md",
+                    "docs/commercial_security_attestation.md",
+                ],
+                [
+                    "/api/v1/commercial_close_readiness/latest",
+                    "/api/v1/commercial_value_readiness/latest",
+                    "/api/v1/commercial_security_attestations/latest",
+                ],
+                "measured_local",
+                "ready"
+                if close_status != "commercial_close_blocked"
+                and value_status != "commercial_value_blocked"
+                and security_attestation_status != "commercial_security_attestation_blocked"
+                else "blocked",
+                (
+                    f"commercial_close_status={close_status}; "
+                    f"commercial_value_status={value_status}; "
+                    f"commercial_security_attestation_status={security_attestation_status}"
+                ),
+                "Buyer receives close, value, and security evidence with external conditions labeled.",
+                "Send close packet and mark buyer-owned conditions separately.",
+            ),
+            milestone(
+                "legal_procurement_path",
+                "Legal and procurement path",
+                "Legal and procurement owners",
+                "Commercial owner",
+                ["docs/commercial_contract_readiness.md", "docs/commercial_procurement_readiness.md"],
+                [
+                    "/api/v1/commercial_contract_readiness/latest",
+                    "/api/v1/commercial_procurement_readiness/latest",
+                ],
+                "measured_local",
+                "ready"
+                if contract_status != "commercial_contract_blocked"
+                and procurement_status != "commercial_procurement_blocked"
+                else "blocked",
+                f"commercial_contract_status={contract_status}; commercial_procurement_status={procurement_status}",
+                "Contract and procurement review path is explicit before buyer signature.",
+                "Convert buyer legal comments into dated MAP actions.",
+            ),
+            milestone(
+                "implementation_onboarding",
+                "Implementation onboarding",
+                "Implementation owner",
+                "Implementation owner",
+                ["docs/commercial_onboarding_readiness.md", "/api/v1/commercial_onboarding_readiness/latest"],
+                ["/api/v1/commercial_onboarding_readiness/latest"],
+                "measured_local",
+                "ready" if onboarding_status != "commercial_onboarding_blocked" else "blocked",
+                f"commercial_onboarding_status={onboarding_status}",
+                "Buyer implementation can start once environment details are supplied.",
+                "Assign implementation dates after buyer environment selection.",
+            ),
+            milestone(
+                "operations_handoff",
+                "Operations handoff",
+                "Operations owner",
+                "Operations owner",
+                ["docs/commercial_operations_readiness.md", "/api/v1/commercial_operations_readiness/latest"],
+                ["/api/v1/commercial_operations_readiness/latest"],
+                "measured_local",
+                "ready" if operations_status != "commercial_operations_blocked" else "blocked",
+                f"commercial_operations_status={operations_status}",
+                "Support, operations, incident, and evidence owner handoff is visible.",
+                "Confirm SLO and escalation owner with the buyer.",
+            ),
+            milestone(
+                "buyer_authority_confirmation",
+                "Buyer authority confirmation",
+                "Buyer sponsor",
+                "Deal owner",
+                ["executive sponsor approval", "named signer", "budget owner", "purchase order"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Executive sponsor approval, named signer, budget owner, purchase order, and buyer go-live authorization require buyer evidence.",
+                "Buyer final authority is supplied or explicitly waived.",
+                "Collect buyer authority artifacts or a written waiver.",
+            ),
+            milestone(
+                "production_external_evidence",
+                "Production and external evidence",
+                "Security and production owners",
+                "Security owner",
+                ["production telemetry", "third-party security attestation", "hosted scan evidence", "support SLO acceptance"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Production telemetry, third-party attestation, hosted scan evidence, and support SLO acceptance are external inputs.",
+                "Production telemetry and third-party evidence plan is accepted.",
+                "Attach production telemetry and external attestation after environment selection.",
+            ),
+        ]
+        state_counts = Counter(item["completion_state"] for item in milestones)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            mutual_action_plan_status = "commercial_mutual_action_plan_blocked"
+            recommendation_status = "do_not_execute_until_blockers_cleared"
+        elif warning_count:
+            mutual_action_plan_status = "commercial_mutual_action_plan_ready_with_warnings"
+            recommendation_status = "execute_with_buyer_conditions"
+        else:
+            mutual_action_plan_status = "commercial_mutual_action_plan_ready"
+            recommendation_status = "execute"
+        required_runtime_endpoints = list(
+            dict.fromkeys(
+                ["/api/v1/commercial_mutual_action_plans/latest"]
+                + [
+                    endpoint
+                    for item in milestones
+                    for endpoint in item["runtime_endpoints"]
+                    if endpoint.startswith("/")
+                ]
+            )
+        )
+
+        return {
+            "mutual_action_plan_status": mutual_action_plan_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_mutual_action_plan",
+            "source_note": (
+                "Commercial mutual action plan packages measured local runtime, document, API, admin, "
+                "analytics, saleability, investment committee, security, legal, procurement, onboarding, "
+                "operations, Product Design, Figma, and review-policy evidence for KRW 2,000,000,000 buyer "
+                "and seller execution; it is not a valuation guarantee, purchase commitment, signed order, "
+                "legal opinion, production compliance certificate, third-party attestation, or revenue proof."
+            ),
+            "go_no_go_recommendation": {
+                "title": "KRW 2B commercial mutual action plan",
+                "recommendation_status": recommendation_status,
+                "recommendation": (
+                    "Execute the mutual action plan with buyer authority, production telemetry, and third-party "
+                    "evidence tracked as dated buyer/seller conditions."
+                    if recommendation_status == "execute_with_buyer_conditions"
+                    else "Do not execute until concrete blockers are cleared."
+                    if recommendation_status == "do_not_execute_until_blockers_cleared"
+                    else "Execute the mutual action plan with no open conditions."
+                ),
+            },
+            "plan_summary": {
+                "milestone_count": len(milestones),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "endpoint_count": len(required_runtime_endpoints),
+                "review_process_is_blocker": saleability_gate["review_process_policy"]["is_blocker"],
+                "code_connect_used": False,
+            },
+            "milestones": milestones,
+            "required_runtime_endpoints": required_runtime_endpoints,
+            "buyer_seller_owners": {
+                "buyer": [
+                    "Buyer sponsor",
+                    "Economic buyer",
+                    "Procurement owner",
+                    "Legal owner",
+                    "Security owner",
+                    "Implementation owner",
+                ],
+                "seller": [
+                    "Deal owner",
+                    "Product owner",
+                    "Security owner",
+                    "Implementation owner",
+                    "Operations owner",
+                ],
+            },
+            "exit_criteria": [
+                "No concrete product, API, security, runtime, or document blocker remains.",
+                "Buyer final authority is supplied or explicitly waived.",
+                "Production telemetry and third-party evidence plan is accepted.",
+            ],
+            "buyer_authority_gaps": [
+                "executive sponsor approval",
+                "named signer",
+                "budget owner",
+                "purchase order",
+                "buyer go-live authorization",
+            ],
+            "production_external_evidence_gaps": [
+                "production telemetry",
+                "third-party security attestation",
+                "hosted scan evidence",
+                "support SLO acceptance",
+            ],
+            "metric_provenance": {
+                "measured_local_sources": [
+                    "/api/v1/commercial_saleability_gates/latest",
+                    "/api/v1/commercial_investment_committee_memos/latest",
+                    "/api/v1/analytics_snapshots/latest",
+                ],
+                "proposed_sources": [
+                    "buyer authority confirmation",
+                    "production telemetry",
+                    "third-party security attestation",
+                    "support SLO acceptance",
+                ],
+            },
+            "operator_next_actions": [
+                "Send the mutual action plan to buyer and seller owners.",
+                "Assign dates and evidence owners to the buyer authority milestones.",
+                "Attach production telemetry and third-party evidence after environment selection.",
+            ],
+            "concrete_blockers": concrete_blockers,
+            "action_plan_status_rules": [
+                {
+                    "mutual_action_plan_status": "commercial_mutual_action_plan_ready",
+                    "rule": "all milestones are ready and no buyer authority, production, or third-party evidence remains open",
+                },
+                {
+                    "mutual_action_plan_status": "commercial_mutual_action_plan_ready_with_warnings",
+                    "rule": "measured local saleability, committee, close, legal, procurement, onboarding, operations, security, and analytics evidence are ready while buyer authority or production/external evidence remains an explicit warning",
+                },
+                {
+                    "mutual_action_plan_status": "commercial_mutual_action_plan_blocked",
+                    "rule": "security failure, API contract regression, document mismatch, runtime defect, missing local saleability evidence, or Code Connect usage blocks MAP execution",
+                },
+            ],
+            "review_process_policy": saleability_gate["review_process_policy"],
+            "related_runtime_reports": {
+                "saleability_gate_status": saleability_gate["saleability_gate_status"],
+                "investment_committee_status": investment_committee_status,
+                "close_status": close_status,
+                "onboarding_status": onboarding_status,
+                "operations_status": operations_status,
+                "contract_status": contract_status,
+                "procurement_status": procurement_status,
+                "value_status": value_status,
+                "security_attestation_status": security_attestation_status,
+                "analytics_measurement_status": analytics["measurement_status"],
+                "admin_agent_count": len(admin_state["agents"]),
+            },
+            "library_split_decision": saleability_gate["library_split_decision"],
+            "plugin_traceability": saleability_gate["plugin_traceability"],
+            "plan_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_mutual_action_plans/latest",
+                "documentation": "docs/commercial_mutual_action_plan.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

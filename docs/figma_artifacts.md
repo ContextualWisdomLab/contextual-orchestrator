@@ -61,6 +61,7 @@ Diagrams created:
 - `KRW 2B Commercial Demo Scenarios`
 - `KRW 2B Commercial Proposal Packet`
 - `KRW 2B Commercial Purchase Approval Packet`
+- `KRW 2B Commercial Mutual Action Plan`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -248,6 +249,13 @@ provenance, Figma stakeholder review, review-process non-blocker policy,
 single-product packaging decision, buyer final authority, production telemetry,
 and external attestations into
 `/api/v1/commercial_saleability_gates/latest`.
+
+The commercial mutual action plan workflow
+`KRW 2B Commercial Mutual Action Plan` maps saleability gate, investment
+committee memo, close terms, legal and procurement path, onboarding, operations,
+metric provenance, review-process non-blocker policy, buyer authority gaps,
+production and external evidence gaps, and single-product packaging decision
+into `/api/v1/commercial_mutual_action_plans/latest`.
 
 ## Stakeholder Deck
 
