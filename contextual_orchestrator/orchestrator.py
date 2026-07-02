@@ -3737,6 +3737,316 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_go_to_market_readiness_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a buyer-facing GTM readiness index over commercial evidence."""
+        close = self.commercial_close_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        value = self.commercial_value_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        security = self.commercial_security_attestation_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        export = self.commercial_evidence_export_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        handoff = self.buyer_handoff_bundle_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        saleability = self.saleability_decision_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        concrete_blockers = [
+            *close["concrete_blockers"],
+            *value["concrete_blockers"],
+            *security["concrete_blockers"],
+            *export["concrete_blockers"],
+            *saleability["concrete_blockers"],
+        ]
+        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        gtm_items = [
+            {
+                "item_name": "commercial_close_packet",
+                "label": "Commercial close packet",
+                "owner": "Deal owner",
+                "sources": ["/api/v1/commercial_close_readiness/latest", "docs/commercial_close_readiness.md"],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if close["close_status"] != "commercial_close_blocked"
+                and has_file("docs/commercial_close_readiness.md")
+                else "blocked",
+                "evidence": f"close_status={close['close_status']}",
+                "action": "Use close readiness as the buyer-facing final readiness packet.",
+                "exit_criteria": "Buyer sees local close packet status and remaining buyer-side signature gaps.",
+            },
+            {
+                "item_name": "economic_value_packet",
+                "label": "Economic value packet",
+                "owner": "Deal owner and analytics owner",
+                "sources": [
+                    "/api/v1/commercial_value_readiness/latest",
+                    "/api/v1/analytics_snapshots/latest",
+                    "docs/commercial_value_readiness.md",
+                    "docs/analytics_spec.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if value["value_status"] != "commercial_value_blocked"
+                and has_file("docs/commercial_value_readiness.md")
+                and has_file("docs/analytics_spec.md")
+                else "blocked",
+                "evidence": (
+                    f"value_status={value['value_status']}; "
+                    f"kpi_count={len(analytics['kpis'])}; guardrail_count={len(analytics['guardrails'])}"
+                ),
+                "action": "Show value evidence with measured-local versus buyer-specific metric separation.",
+                "exit_criteria": "Buyer can inspect value claims without treating them as revenue proof or financial advice.",
+            },
+            {
+                "item_name": "security_trust_packet",
+                "label": "Security trust packet",
+                "owner": "Security owner",
+                "sources": [
+                    "/api/v1/commercial_security_attestations/latest",
+                    "docs/commercial_security_attestation.md",
+                    "SECURITY.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
+                and has_file("docs/commercial_security_attestation.md")
+                and has_file("SECURITY.md")
+                else "blocked",
+                "evidence": f"security_attestation_status={security['security_attestation_status']}",
+                "action": "Use security attestation as the buyer trust packet and keep external attestations separate.",
+                "exit_criteria": "Buyer can inspect local security controls and external attestation gaps.",
+            },
+            {
+                "item_name": "buyer_evidence_packet",
+                "label": "Buyer evidence packet",
+                "owner": "Evidence owner",
+                "sources": [
+                    "/api/v1/commercial_evidence_exports/latest",
+                    "/api/v1/buyer_handoff_bundles/latest",
+                    "docs/commercial_evidence_export.md",
+                    "docs/commercial_buyer_handoff_bundle.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if export["export_status"] != "commercial_export_blocked"
+                and handoff["bundle_status"] != "buyer_handoff_blocked"
+                and has_file("docs/commercial_evidence_export.md")
+                and has_file("docs/commercial_buyer_handoff_bundle.md")
+                else "blocked",
+                "evidence": f"commercial_export_status={export['export_status']}; buyer_handoff_status={handoff['bundle_status']}",
+                "action": "Attach evidence export and handoff bundle as the buyer data-room index.",
+                "exit_criteria": "Buyer can trace GTM claims to runtime endpoints, docs, tests, and Figma artifacts.",
+            },
+            {
+                "item_name": "saleability_decision_packet",
+                "label": "Saleability decision packet",
+                "owner": "Deal owner",
+                "sources": ["/api/v1/saleability_decisions/latest", "docs/commercial_saleability_decision.md"],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if saleability["saleability_status"] != "saleability_blocked"
+                and has_file("docs/commercial_saleability_decision.md")
+                else "blocked",
+                "evidence": f"saleability_status={saleability['saleability_status']}",
+                "action": "Use saleability decision as the GTM go/no-go baseline.",
+                "exit_criteria": "Buyer and stakeholder review can distinguish warnings from concrete blockers.",
+            },
+            {
+                "item_name": "admin_operator_evidence",
+                "label": "Admin operator evidence",
+                "owner": "Product design owner",
+                "sources": ["/admin", "contextual_orchestrator/admin.py", "docs/screen_design.md"],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if has_file("contextual_orchestrator/admin.py") and has_file("docs/screen_design.md")
+                else "blocked",
+                "evidence": "Admin surface exposes readiness status, source notes, measurement status, and warning/blocker summaries.",
+                "action": "Use the existing admin observability surface instead of creating a separate sales dashboard.",
+                "exit_criteria": "Operator can inspect GTM readiness from the current admin surface.",
+            },
+            {
+                "item_name": "analytics_truthfulness_packet",
+                "label": "Analytics truthfulness packet",
+                "owner": "Data analytics owner",
+                "sources": ["docs/analytics_spec.md", "/api/v1/analytics_snapshots/latest"],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready" if has_file("docs/analytics_spec.md") else "blocked",
+                "evidence": "Analytics spec separates measured local evidence from proposed production or buyer-specific inputs.",
+                "action": "Keep GTM metrics from claiming production revenue, signed buyer proof, or unmeasured telemetry.",
+                "exit_criteria": "Stakeholders can see which KPI fields are measured and which are proposed inputs.",
+            },
+            {
+                "item_name": "stakeholder_artifacts_packet",
+                "label": "Stakeholder artifacts packet",
+                "owner": "Figma and Product Design owner",
+                "sources": [
+                    "docs/figma_artifacts.md",
+                    "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                    "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                ],
+                "evidence_type": "figma_artifact",
+                "completion_state": "ready" if has_file("docs/figma_artifacts.md") else "blocked",
+                "evidence": "Editable Figma/FigJam stakeholder artifacts are recorded and Figma Code Connect is excluded.",
+                "action": "Use editable stakeholder artifacts for GTM review instead of screenshot-only evidence.",
+                "exit_criteria": "Stakeholders can open the design file and FigJam board for GTM review.",
+            },
+            {
+                "item_name": "buyer_signature_budget_follow_up",
+                "label": "Buyer signature and budget follow-up",
+                "owner": "Buyer sponsor, procurement owner, and deal owner",
+                "sources": ["buyer order form", "MSA", "DPA", "security acceptance", "purchase order", "go-live approval"],
+                "evidence_type": "buyer_input_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_signature_required",
+                "evidence": (
+                    f"buyer_signature_gap_count={close['close_summary']['buyer_signature_gap_count']}; "
+                    "signed order/MSA, DPA/security acceptance, budget/PO, and go-live authorization are buyer inputs."
+                ),
+                "action": "Collect buyer signatures, approvals, or waivers before representing the packet as closed-won.",
+                "exit_criteria": "Buyer accepts or waives all signature, budget, security acceptance, and go-live inputs.",
+            },
+            {
+                "item_name": "production_external_proof_follow_up",
+                "label": "Production and external proof follow-up",
+                "owner": "Security, operations, and deal owner",
+                "sources": ["hosted scan output", "third-party attestation", "reference proof", "production telemetry"],
+                "evidence_type": "external_or_production_input_required",
+                "completion_state": "warning",
+                "source_gap_status": "external_or_production_input_required",
+                "evidence": (
+                    f"security_warning_count={security['security_attestation_summary']['warning_count']}; "
+                    f"value_warning_count={value['value_summary']['warning_count']}; "
+                    f"export_warning_count={export['export_summary']['warning_count']}"
+                ),
+                "action": "Attach hosted scan, third-party attestation, reference proof, and production telemetry when available.",
+                "exit_criteria": "Buyer accepts external proof, production proof, or an explicit waiver.",
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": ["docs/commercial_go_to_market_readiness.md", "docs/commercial_saleability_decision.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready",
+                "evidence": "Review process delay is not a GTM blocker unless a concrete failure is produced.",
+                "action": "Continue GTM readiness work while queued reviews are pending.",
+                "exit_criteria": "Only concrete product, security, API contract, or document failures block GTM readiness.",
+            },
+            {
+                "item_name": "packaging_decision",
+                "label": "Packaging decision",
+                "owner": "Procurement and security reviewer",
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if close["library_split_decision"]["decision"] == "keep_single_product"
+                else "warning",
+                "evidence": close["library_split_decision"]["reason"],
+                "action": "Keep one deployable enterprise control-plane product until extraction triggers are real.",
+                "exit_criteria": "Do not create a separate library, Git submodule, or extracted package for this GTM gate.",
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in gtm_items)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        buyer_signature_gap_count = close["close_summary"]["buyer_signature_gap_count"]
+        external_or_production_gap_count = (
+            security["security_attestation_summary"]["external_attestation_gap_count"]
+            + value["value_summary"]["external_value_proof_gap_count"]
+            + export["export_summary"]["warning_count"]
+        )
+        if blocked_count:
+            gtm_status = "commercial_go_to_market_blocked"
+        elif warning_count:
+            gtm_status = "commercial_go_to_market_ready_with_warnings"
+        else:
+            gtm_status = "commercial_go_to_market_ready"
+
+        return {
+            "go_to_market_status": gtm_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_go_to_market_readiness",
+            "source_note": (
+                "Commercial go-to-market readiness indexes repo-local sellable product, evidence, "
+                "admin, analytics, and stakeholder artifacts separately from buyer signatures, "
+                "external proof, and production telemetry; it is not a valuation guarantee, purchase "
+                "commitment, signed order, legal opinion, production compliance certificate, or revenue proof."
+            ),
+            "go_to_market_summary": {
+                "item_count": len(gtm_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "buyer_signature_gap_count": buyer_signature_gap_count,
+                "external_or_production_gap_count": external_or_production_gap_count,
+                "review_process_is_blocker": close["review_process_policy"]["is_blocker"],
+            },
+            "go_to_market_items": gtm_items,
+            "concrete_blockers": concrete_blockers,
+            "go_to_market_status_rules": [
+                {
+                    "go_to_market_status": "commercial_go_to_market_ready",
+                    "rule": "close, value, security, evidence, saleability, admin, analytics, stakeholder artifacts, buyer inputs, external proof, review policy, and packaging evidence are ready",
+                },
+                {
+                    "go_to_market_status": "commercial_go_to_market_ready_with_warnings",
+                    "rule": "repo-local GTM packet is ready while buyer signatures, budget/PO, DPA/security acceptance, production telemetry, reference proof, hosted scan, or third-party attestation remain explicit warnings",
+                },
+                {
+                    "go_to_market_status": "commercial_go_to_market_blocked",
+                    "rule": "missing local GTM packet evidence, concrete product defect, API contract failure, document mismatch, security failure, or Code Connect usage blocks GTM readiness",
+                },
+            ],
+            "review_process_policy": close["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_close_status": close["close_status"],
+                "commercial_value_status": value["value_status"],
+                "commercial_security_attestation_status": security["security_attestation_status"],
+                "commercial_export_status": export["export_status"],
+                "buyer_handoff_status": handoff["bundle_status"],
+                "saleability_status": saleability["saleability_status"],
+                **close["related_runtime_reports"],
+            },
+            "library_split_decision": close["library_split_decision"],
+            "plugin_traceability": close["plugin_traceability"],
+            "go_to_market_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_go_to_market_readiness/latest",
+                "documentation": "docs/commercial_go_to_market_readiness.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

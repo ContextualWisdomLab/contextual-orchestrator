@@ -170,6 +170,14 @@ and security acceptance, budget approval/PO, go-live authorization,
 review-process policy, and single-product packaging decision into
 `/api/v1/commercial_close_readiness/latest`.
 
+The commercial go-to-market readiness workflow
+`KRW 2B Commercial Go To Market Readiness` maps commercial close readiness,
+value readiness, security attestation, evidence export, buyer handoff,
+saleability decision, admin evidence, analytics truthfulness, stakeholder
+artifacts, buyer signature and budget follow-up, production/external proof
+follow-up, review-process policy, and single-product packaging decision into
+`/api/v1/commercial_go_to_market_readiness/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`

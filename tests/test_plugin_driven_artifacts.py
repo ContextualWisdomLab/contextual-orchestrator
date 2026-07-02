@@ -67,6 +67,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "roi_evidence_status",
         "commercial_value_readiness_gap_count",
         "commercial_close_signature_gap_count",
+        "commercial_go_to_market_warning_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -127,6 +128,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Value Readiness",
         "team::1408252278989737675",
         "KRW 2B Commercial Close Readiness",
+        "KRW 2B Commercial Go To Market Readiness",
         "Figma Code Connect was not used",
     ]:
         assert expected_text in artifacts
@@ -697,6 +699,41 @@ def test_commercial_close_readiness_defines_close_gate() -> None:
         assert expected_text in plan
 
 
+def test_commercial_go_to_market_readiness_defines_gtm_gate() -> None:
+    gtm = read_text("docs/commercial_go_to_market_readiness.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-go-to-market-readiness.md")
+
+    for expected_text in [
+        "Commercial Go-To-Market Readiness",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Go-To-Market Inputs",
+        "Runtime Shape",
+        "Go-To-Market Status Rules",
+        "KRW 2B Commercial Go To Market Readiness",
+        "/api/v1/commercial_go_to_market_readiness/latest",
+        "/api/v1/commercial_close_readiness/latest",
+        "/api/v1/commercial_value_readiness/latest",
+        "/api/v1/commercial_security_attestations/latest",
+        "/api/v1/buyer_handoff_bundles/latest",
+        "local_commercial_go_to_market_readiness",
+        "go_to_market_items",
+        "commercial_go_to_market_ready_with_warnings",
+    ]:
+        assert expected_text in gtm
+
+    for expected_text in [
+        "Commercial Go-To-Market Readiness Implementation Plan",
+        "get_latest_commercial_go_to_market_readiness",
+        "No new repo dependencies",
+        "python tests/test_commercial_go_to_market_readiness.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -722,4 +759,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_security_attestation_defines_security_gate()
     test_commercial_value_readiness_defines_value_gate()
     test_commercial_close_readiness_defines_close_gate()
+    test_commercial_go_to_market_readiness_defines_gtm_gate()
     print("ok")

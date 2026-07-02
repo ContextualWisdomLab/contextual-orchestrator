@@ -207,6 +207,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial close readiness"}},
             }
         },
+        "/api/v1/commercial_go_to_market_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_go_to_market_readiness",
+                "summary": "Get commercial go-to-market readiness for buyer and stakeholder review",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial go-to-market readiness"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",
