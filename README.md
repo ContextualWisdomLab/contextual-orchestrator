@@ -71,6 +71,7 @@ One public interface:
 - `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
 - `/api/v1/buyer_evidence_manifests/latest` exposes the buyer evidence manifest as a runtime review index across endpoints, repository artifacts, Figma artifacts, verification evidence, and production or buyer-specific caveats.
 - `/api/v1/buyer_handoff_bundles/latest` exposes the buyer handoff bundle across runtime reports, repository packet, Figma artifacts, verification commands, packaging decision, and explicit production or buyer-specific follow-ups.
+- `/api/v1/saleability_decisions/latest` exposes the final KRW 2,000,000,000 saleability decision gate with concrete blockers, warning conditions, and review-process non-blocker policy.
 
 One fused orchestration loop:
 
@@ -99,6 +100,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Commercial buyer acceptance runbook](docs/commercial_buyer_acceptance_runbook.md)
 - [Commercial buyer evidence manifest](docs/commercial_buyer_evidence_manifest.md)
 - [Commercial buyer handoff bundle](docs/commercial_buyer_handoff_bundle.md)
+- [Commercial saleability decision](docs/commercial_saleability_decision.md)
 - [Commercial completion scorecard](docs/commercial_completion_scorecard.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
@@ -123,4 +125,5 @@ python tests/test_analytics_runtime.py
 python tests/test_sales_readiness.py
 python tests/test_buyer_evidence_manifest.py
 python tests/test_buyer_handoff_bundle.py
+python tests/test_saleability_decision.py
 ```

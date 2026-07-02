@@ -111,6 +111,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Buyer handoff bundle"}},
             }
         },
+        "/api/v1/saleability_decisions/latest": {
+            "get": {
+                "operationId": "get_latest_saleability_decision",
+                "summary": "Get KRW 2B saleability decision gate",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Saleability decision"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

@@ -22,6 +22,7 @@
 | `GET` | `/api/v1/commercial_readiness/latest` | Read KRW 2,000,000,000 commercial due-diligence readiness criteria and evidence |
 | `GET` | `/api/v1/buyer_evidence_manifests/latest` | Read buyer evidence manifest for commercial diligence review |
 | `GET` | `/api/v1/buyer_handoff_bundles/latest` | Read buyer handoff bundle for commercial diligence review |
+| `GET` | `/api/v1/saleability_decisions/latest` | Read KRW 2,000,000,000 saleability decision for commercial diligence review |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -48,6 +49,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_readiness/latest` | Produce a high-value buyer due-diligence readiness gate for the KRW 2,000,000,000 target without presenting it as a valuation guarantee. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; enterprise procurement review. |
 | `GET` | `/api/v1/buyer_evidence_manifests/latest` | Produce a buyer-facing evidence index across runtime reports, repository artifacts, Figma artifacts, verification commands, and caveats. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement evidence review. |
 | `GET` | `/api/v1/buyer_handoff_bundles/latest` | Produce the buyer handoff bundle that packages runtime reports, repository packet, Figma artifacts, verification commands, packaging decision, and explicit follow-ups. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement handoff review. |
+| `GET` | `/api/v1/saleability_decisions/latest` | Produce the final saleability decision gate that separates concrete blockers from warning follow-ups and review-process non-blockers. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence decision. |
 
 ## Production Library Target
 

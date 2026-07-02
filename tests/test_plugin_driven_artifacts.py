@@ -268,6 +268,31 @@ def test_commercial_buyer_handoff_bundle_packages_sale_evidence() -> None:
         assert expected_text in bundle
 
 
+def test_commercial_saleability_decision_defines_final_gate() -> None:
+    decision = read_text("docs/commercial_saleability_decision.md")
+
+    for expected_text in [
+        "Commercial Saleability Decision",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Decision Inputs",
+        "Runtime Shape",
+        "Decision Rules",
+        "KRW 2B Saleability Decision Gate",
+        "/api/v1/saleability_decisions/latest",
+        "/api/v1/buyer_handoff_bundles/latest",
+        "/api/v1/buyer_evidence_manifests/latest",
+        "/api/v1/commercial_readiness/latest",
+        "/api/v1/sales_readiness/latest",
+        "local_saleability_decision",
+        "concrete_blockers",
+        "warning_conditions",
+    ]:
+        assert expected_text in decision
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -281,4 +306,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_buyer_acceptance_runbook_defines_go_no_go_workflow()
     test_commercial_buyer_evidence_manifest_indexes_sale_evidence()
     test_commercial_buyer_handoff_bundle_packages_sale_evidence()
+    test_commercial_saleability_decision_defines_final_gate()
     print("ok")

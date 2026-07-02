@@ -1323,6 +1323,98 @@ class TaskOrchestrator:
             },
         }
 
+    def saleability_decision_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the buyer-facing saleability decision for high-value review."""
+        handoff = self.buyer_handoff_bundle_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        concrete_blockers = [
+            item
+            for item in handoff["included_artifacts"]
+            if item["completion_state"] == "blocked"
+        ]
+        warning_conditions = [
+            item
+            for item in handoff["follow_up_items"]
+            if item["completion_state"] == "warning"
+        ]
+        if concrete_blockers:
+            saleability_status = "saleability_blocked"
+            decision_label = "Blocked by concrete defect"
+        elif warning_conditions:
+            saleability_status = "saleability_ready_with_warnings"
+            decision_label = "Ready for buyer diligence with explicit warnings"
+        else:
+            saleability_status = "saleability_ready"
+            decision_label = "Ready for buyer diligence"
+
+        return {
+            "saleability_status": saleability_status,
+            "decision_label": decision_label,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_saleability_decision",
+            "source_note": (
+                "Saleability decision is a local buyer due-diligence gate based on runtime "
+                "reports, repository documents, Figma artifacts, verification commands, and "
+                "explicit caveats; it is not a valuation guarantee, purchase commitment, "
+                "or production compliance certificate."
+            ),
+            "decision_summary": {
+                "included_artifact_count": len(handoff["included_artifacts"]),
+                "blocked_count": len(concrete_blockers),
+                "warning_count": len(warning_conditions),
+                "review_process_is_blocker": False,
+            },
+            "decision_basis": [
+                {
+                    "basis_name": "buyer_handoff_bundle",
+                    "status": handoff["bundle_status"],
+                    "source": "/api/v1/buyer_handoff_bundles/latest",
+                },
+                {
+                    "basis_name": "buyer_evidence_manifest",
+                    "status": handoff["related_runtime_reports"]["buyer_manifest_status"],
+                    "source": "/api/v1/buyer_evidence_manifests/latest",
+                },
+                {
+                    "basis_name": "commercial_readiness",
+                    "status": handoff["related_runtime_reports"]["commercial_status"],
+                    "source": "/api/v1/commercial_readiness/latest",
+                },
+                {
+                    "basis_name": "sales_readiness",
+                    "status": handoff["related_runtime_reports"]["sales_readiness_status"],
+                    "source": "/api/v1/sales_readiness/latest",
+                },
+            ],
+            "concrete_blockers": concrete_blockers,
+            "warning_conditions": warning_conditions,
+            "review_process_policy": {
+                "is_blocker": False,
+                "non_blocker_examples": [
+                    "reviewer delay",
+                    "review bot delay",
+                    "queued model review",
+                    "pending check without concrete failure",
+                ],
+                "blocker_definition": "concrete security, API contract, document, or product defect",
+            },
+            "related_runtime_reports": {
+                "buyer_handoff_status": handoff["bundle_status"],
+                **handoff["related_runtime_reports"],
+            },
+            "library_split_decision": handoff["library_split_decision"],
+            "plugin_traceability": handoff["plugin_traceability"],
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
