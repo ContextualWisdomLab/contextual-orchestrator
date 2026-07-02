@@ -59,6 +59,7 @@ Diagrams created:
 - `KRW 2B Commercial Completion Runtime Scorecard`
 - `KRW 2B Buyer Acceptance Runtime Workflow`
 - `KRW 2B Commercial Demo Scenarios`
+- `KRW 2B Commercial Proposal Packet`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -209,6 +210,12 @@ workflow trace, access-list inspection, evaluation replay, admin readiness,
 metric truthfulness, Figma stakeholder review, buyer acceptance decision,
 review-process non-blocker policy, and single-product packaging decision into
 `/api/v1/commercial_demo_scenarios/latest`.
+
+The commercial proposal packet workflow `KRW 2B Commercial Proposal Packet`
+maps completion, demo, acceptance, value, security, contract, onboarding,
+operations, analytics truthfulness, Figma stakeholder review, review-process
+non-blocker policy, single-product packaging decision, and buyer-specific
+follow-ups into `/api/v1/commercial_proposal_packets/latest`.
 
 ## Stakeholder Deck
 

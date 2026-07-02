@@ -5164,6 +5164,359 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_proposal_packet_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return buyer proposal sections for the KRW 2B saleability standard."""
+        completion = self.commercial_completion_scorecard_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        demo = self.commercial_demo_scenario_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        buyer_workflow = self.commercial_buyer_acceptance_workflow_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        value = self.commercial_value_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        security = self.commercial_security_attestation_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        contract = self.commercial_contract_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        onboarding = self.commercial_onboarding_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        operations = self.commercial_operations_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        admin_state = self.admin_state()
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        def all_files(*paths: str) -> bool:
+            return all(has_file(path) for path in paths)
+
+        def section(
+            section_name: str,
+            label: str,
+            owner: str,
+            sources: list[str],
+            runtime_endpoints: list[str],
+            evidence_type: str,
+            completion_state: str,
+            evidence: str,
+            buyer_message: str,
+            next_action: str,
+        ) -> dict[str, Any]:
+            require_object_name(section_name, "commercial_proposal.section_name")
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial proposal section state must be ready, warning, or blocked")
+            return {
+                "section_name": section_name,
+                "label": label,
+                "owner": owner,
+                "sources": sources,
+                "runtime_endpoints": runtime_endpoints,
+                "evidence_type": evidence_type,
+                "completion_state": completion_state,
+                "evidence": evidence,
+                "buyer_message": buyer_message,
+                "next_action": next_action,
+            }
+
+        concrete_blockers = list(
+            dict.fromkeys(
+                completion["concrete_blockers"]
+                + demo["concrete_blockers"]
+                + buyer_workflow["concrete_blockers"]
+            )
+        )
+        local_runtime_state = (
+            "blocked"
+            if completion["completion_status"] == "commercial_completion_blocked"
+            or demo["demo_status"] == "commercial_demo_blocked"
+            or buyer_workflow["workflow_status"] == "buyer_acceptance_workflow_blocked"
+            or concrete_blockers
+            else "ready"
+        )
+        proposal_sections = [
+            section(
+                "executive_summary",
+                "Executive summary",
+                "Deal owner",
+                ["README.md", "docs/commercial_completion_scorecard.md", "/api/v1/commercial_completion_scorecards/latest"],
+                ["/api/v1/commercial_completion_scorecards/latest"],
+                "repository_and_runtime_artifact",
+                local_runtime_state if all_files("README.md", "docs/commercial_completion_scorecard.md") else "blocked",
+                f"commercial_completion_status={completion['completion_status']}",
+                "One enterprise orchestration control plane is ready for a KRW 2B buyer review with explicit caveats.",
+                "Use the completion scorecard as the proposal cover evidence.",
+            ),
+            section(
+                "product_scope",
+                "Product scope",
+                "Product owner",
+                ["docs/product_planning.md", "docs/commercial_plugin_operating_model.md", "docs/library_research.md"],
+                [],
+                "repository_artifact",
+                "ready"
+                if all_files("docs/product_planning.md", "docs/commercial_plugin_operating_model.md", "docs/library_research.md")
+                and completion["library_split_decision"]["decision"] == "keep_single_product"
+                else "blocked",
+                completion["library_split_decision"]["reason"],
+                "The offer is one compatible API plus one admin evidence surface, not a split product suite.",
+                "Keep proposal language centered on a single deployable control plane.",
+            ),
+            section(
+                "buyer_value_case",
+                "Buyer value case",
+                "Economic buyer",
+                ["docs/commercial_value_readiness.md", "docs/analytics_spec.md", "/api/v1/commercial_value_readiness/latest"],
+                ["/api/v1/commercial_value_readiness/latest", "/api/v1/analytics_snapshots/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if value["value_status"] != "commercial_value_blocked"
+                and has_file("docs/commercial_value_readiness.md")
+                and analytics["measurement_status"] == "local_runtime_snapshot"
+                else "blocked",
+                f"value_status={value['value_status']}; analytics_measurement_status={analytics['measurement_status']}",
+                "Measured local value evidence is separated from buyer-specific ROI inputs.",
+                "Attach buyer ROI assumptions only after buyer discovery validates them.",
+            ),
+            section(
+                "demo_and_acceptance_path",
+                "Demo and acceptance path",
+                "Product design owner",
+                [
+                    "docs/commercial_demo_scenarios.md",
+                    "docs/commercial_buyer_acceptance_runbook.md",
+                    "/api/v1/commercial_demo_scenarios/latest",
+                    "/api/v1/commercial_buyer_acceptance_workflows/latest",
+                ],
+                ["/api/v1/commercial_demo_scenarios/latest", "/api/v1/commercial_buyer_acceptance_workflows/latest"],
+                "repository_and_runtime_artifact",
+                local_runtime_state
+                if all_files("docs/commercial_demo_scenarios.md", "docs/commercial_buyer_acceptance_runbook.md")
+                else "blocked",
+                f"commercial_demo_status={demo['demo_status']}; buyer_acceptance_workflow_status={buyer_workflow['workflow_status']}",
+                "Buyer review can move from demo script to Go/Warning/No-Go acceptance without leaving the control plane.",
+                "Run the demo packet and record the acceptance decision.",
+            ),
+            section(
+                "technical_evidence",
+                "Technical evidence",
+                "Platform reviewer",
+                ["docs/rest_api_design.md", "docs/screen_design.md", "contextual_orchestrator/api_contract.py", "/admin"],
+                ["/v1/chat/completions", "/admin", "/api/v1/workflow_runs", "/api/v1/access_reports/{workflow_run_id}"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if all_files("docs/rest_api_design.md", "docs/screen_design.md", "contextual_orchestrator/api_contract.py")
+                and admin_state["agents"]
+                else "blocked",
+                f"agent_count={len(admin_state['agents'])}; recent_workflow_run_count={len(admin_state['recent_workflow_runs'])}",
+                "The buyer can verify API compatibility, trace evidence, and access-list evidence.",
+                "Include endpoint list and admin review screenshots or live walkthrough in the proposal.",
+            ),
+            section(
+                "security_and_compliance",
+                "Security and compliance",
+                "Security reviewer",
+                ["SECURITY.md", "docs/commercial_security_attestation.md", "/api/v1/commercial_security_attestations/latest"],
+                ["/api/v1/commercial_security_attestations/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
+                and all_files("SECURITY.md", "docs/commercial_security_attestation.md")
+                else "blocked",
+                f"security_attestation_status={security['security_attestation_status']}",
+                "Repo-local security evidence is present while external attestation and buyer DPA inputs stay explicit.",
+                "Do not claim third-party attestation until supplied.",
+            ),
+            section(
+                "implementation_and_operations",
+                "Implementation and operations",
+                "Operations owner",
+                [
+                    "docs/commercial_onboarding_readiness.md",
+                    "docs/commercial_operations_readiness.md",
+                    "/api/v1/commercial_onboarding_readiness/latest",
+                    "/api/v1/commercial_operations_readiness/latest",
+                ],
+                ["/api/v1/commercial_onboarding_readiness/latest", "/api/v1/commercial_operations_readiness/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if onboarding["onboarding_status"] != "commercial_onboarding_blocked"
+                and operations["operations_status"] != "commercial_operations_blocked"
+                and all_files("docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md")
+                else "blocked",
+                f"onboarding_status={onboarding['onboarding_status']}; operations_status={operations['operations_status']}",
+                "Implementation and operations evidence is proposal-ready with production environment follow-ups separated.",
+                "Convert buyer environment details into an onboarding checklist after selection.",
+            ),
+            section(
+                "proposal_review_packet",
+                "Proposal review packet",
+                "Stakeholder reviewer",
+                [
+                    "docs/commercial_proposal_packet.md",
+                    "docs/figma_artifacts.md",
+                    "docs/superpowers/plans/2026-07-02-commercial-proposal-packet-runtime.md",
+                ],
+                ["/api/v1/commercial_proposal_packets/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if all_files(
+                    "docs/commercial_proposal_packet.md",
+                    "docs/figma_artifacts.md",
+                    "docs/superpowers/plans/2026-07-02-commercial-proposal-packet-runtime.md",
+                )
+                else "blocked",
+                "Proposal docs, FigJam artifact record, and implementation plan are committed as repo artifacts.",
+                "Stakeholders can review the proposal packet as docs, runtime JSON, and FigJam flow.",
+                "Keep Figma Code Connect out of the proposal workflow.",
+            ),
+            section(
+                "commercial_terms_followups",
+                "Commercial terms follow-ups",
+                "Deal owner",
+                ["docs/commercial_contract_readiness.md", "buyer order form", "legal review", "pricing approval"],
+                ["/api/v1/commercial_contract_readiness/latest"],
+                "proposed_until_buyer_specific",
+                "warning",
+                f"contract_status={contract['contract_status']}",
+                "Order-form, legal, pricing approval, and signature inputs need named-buyer review.",
+                "Collect buyer-specific legal and commercial terms or record explicit waiver.",
+            ),
+            section(
+                "production_buyer_inputs",
+                "Production and buyer inputs",
+                "Buyer sponsor",
+                ["production telemetry", "buyer ROI model", "support plan", "security questionnaire"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Production telemetry, buyer ROI model, support plan, and security questionnaire are external inputs.",
+                "The proposal is locally ready while buyer-specific inputs remain caveated.",
+                "Collect external evidence during proposal negotiation or paid onboarding.",
+            ),
+        ]
+        state_counts = Counter(item["completion_state"] for item in proposal_sections)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            proposal_status = "commercial_proposal_blocked"
+        elif warning_count:
+            proposal_status = "commercial_proposal_ready_with_warnings"
+        else:
+            proposal_status = "commercial_proposal_ready"
+        required_runtime_endpoints = list(
+            dict.fromkeys(
+                endpoint
+                for item in proposal_sections
+                for endpoint in item["runtime_endpoints"]
+                if endpoint.startswith("/")
+            )
+        )
+
+        return {
+            "proposal_status": proposal_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_proposal_packet",
+            "source_note": (
+                "Commercial proposal packet packages repo-local completion, demo, acceptance, value, "
+                "security, contract, onboarding, operations, analytics, Figma, review-policy, and packaging "
+                "evidence for KRW 2,000,000,000 buyer proposal review; it is not a valuation guarantee, "
+                "purchase commitment, signed order, legal opinion, production compliance certificate, or revenue proof."
+            ),
+            "proposal_narrative": {
+                "title": "KRW 2B commercial buyer proposal packet",
+                "promise": (
+                    "Present one enterprise orchestration control plane with compatible API integration, "
+                    "operator evidence, buyer demo path, acceptance workflow, and truthful commercial caveats."
+                ),
+                "audience": [
+                    "Economic buyer",
+                    "Platform reviewer",
+                    "Security reviewer",
+                    "Operations owner",
+                    "Stakeholder reviewer",
+                    "Deal owner",
+                ],
+            },
+            "proposal_summary": {
+                "section_count": len(proposal_sections),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "endpoint_count": len(required_runtime_endpoints),
+                "review_process_is_blocker": completion["review_process_policy"]["is_blocker"],
+                "code_connect_used": False,
+            },
+            "proposal_sections": proposal_sections,
+            "required_runtime_endpoints": required_runtime_endpoints,
+            "concrete_blockers": concrete_blockers,
+            "proposal_status_rules": [
+                {
+                    "proposal_status": "commercial_proposal_ready",
+                    "rule": "all proposal sections are ready and no buyer-specific commercial or production inputs remain open",
+                },
+                {
+                    "proposal_status": "commercial_proposal_ready_with_warnings",
+                    "rule": "repo-local proposal evidence is ready while pricing, legal, ROI, production, support, or signature inputs remain explicit warnings",
+                },
+                {
+                    "proposal_status": "commercial_proposal_blocked",
+                    "rule": "security failure, API contract regression, document mismatch, runtime defect, missing local proposal evidence, or Code Connect usage blocks the proposal",
+                },
+            ],
+            "review_process_policy": completion["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_completion_status": completion["completion_status"],
+                "commercial_demo_status": demo["demo_status"],
+                "buyer_acceptance_workflow_status": buyer_workflow["workflow_status"],
+                "commercial_value_status": value["value_status"],
+                "commercial_security_attestation_status": security["security_attestation_status"],
+                "commercial_contract_status": contract["contract_status"],
+                "commercial_onboarding_status": onboarding["onboarding_status"],
+                "commercial_operations_status": operations["operations_status"],
+                "analytics_measurement_status": analytics["measurement_status"],
+            },
+            "library_split_decision": completion["library_split_decision"],
+            "plugin_traceability": completion["plugin_traceability"],
+            "proposal_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_proposal_packets/latest",
+                "documentation": "docs/commercial_proposal_packet.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

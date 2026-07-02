@@ -55,6 +55,13 @@ review-process policy, and packaging decision. Production telemetry, ROI, legal,
 security questionnaire, and support-plan inputs remain proposed or buyer-specific
 warnings until supplied.
 
+The prototype also exposes `/api/v1/commercial_proposal_packets/latest`. That
+endpoint packages the buyer proposal review artifact as local runtime evidence
+across completion, demo, acceptance, value, security, contract, onboarding,
+operations, analytics truthfulness, Figma stakeholder review, review-process
+policy, and packaging decision. Pricing, legal, ROI, production, support, and
+signature inputs remain proposed or buyer-specific warnings until supplied.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -102,6 +109,7 @@ with proposed production targets.
 | `commercial_completion_warning_count` | Count of warning rows in the runtime completion scorecard, with buyer and production follow-ups kept separate from measured local evidence. | proposed_until_buyer_specific | `/api/v1/commercial_completion_scorecards/latest` response. |
 | `buyer_acceptance_workflow_warning_count` | Count of warning steps in the buyer acceptance workflow, with production and buyer-specific follow-ups kept separate from measured local evidence. | proposed_until_buyer_specific | `/api/v1/commercial_buyer_acceptance_workflows/latest` response. |
 | `commercial_demo_warning_count` | Count of warning steps in the buyer demo scenario packet, with production, ROI, legal, security questionnaire, and support follow-ups kept separate from measured local demo evidence. | proposed_until_buyer_specific | `/api/v1/commercial_demo_scenarios/latest` response. |
+| `commercial_proposal_warning_count` | Count of warning sections in the buyer proposal packet, with pricing, legal, ROI, production, support, and signature inputs kept separate from measured local proposal evidence. | proposed_until_buyer_specific | `/api/v1/commercial_proposal_packets/latest` response. |
 
 Current GitHub/CI maturity evidence is a measured local or repository signal:
 CodeQL, Dependency review, Python supply chain, Trivy, coverage-evidence,
