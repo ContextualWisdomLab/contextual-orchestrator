@@ -29,6 +29,12 @@ due-diligence gate. It is measured only as local due-diligence evidence and is
 not a valuation guarantee, purchase commitment, or production compliance
 certificate.
 
+The prototype also exposes `/api/v1/commercial_launch_readiness/latest`. That
+endpoint packages the GTM packet, runtime path, acceptance tests, operator
+runbook, admin evidence, analytics truthfulness, Figma artifacts, review policy,
+and packaging decision while keeping buyer environment, production telemetry,
+and commercial signature inputs as explicit warnings.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -72,6 +78,7 @@ with proposed production targets.
 | `commercial_value_readiness_gap_count` | Count of buyer ROI input, reference proof, budget-owner, and implementation payback assumptions still needed for buyer economic review. | proposed_until_buyer_specific | `/api/v1/commercial_value_readiness/latest` response. |
 | `commercial_close_signature_gap_count` | Count of signed order/MSA, DPA/security acceptance, budget/PO, and go-live authorization inputs still needed for buyer close. | proposed_until_buyer_specific | `/api/v1/commercial_close_readiness/latest` response. |
 | `commercial_go_to_market_warning_count` | Count of buyer-signature and production/external-proof follow-up groups still open in the GTM packet. | proposed_until_buyer_specific | `/api/v1/commercial_go_to_market_readiness/latest` response. |
+| `commercial_launch_external_input_count` | Count of buyer-environment, production-telemetry, and commercial-signature input groups still needed for launch or paid trial execution. | proposed_until_buyer_specific | `/api/v1/commercial_launch_readiness/latest` response. |
 
 Current GitHub/CI maturity evidence is a measured local or repository signal:
 CodeQL, Dependency review, Python supply chain, Trivy, coverage-evidence,

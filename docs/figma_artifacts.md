@@ -55,6 +55,7 @@ Diagrams created:
 - `KRW 2B Commercial Release Candidate`
 - `KRW 2B Commercial Gap Register`
 - `KRW 2B Commercial Procurement Readiness`
+- `KRW 2B Commercial Launch Readiness`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -177,6 +178,14 @@ saleability decision, admin evidence, analytics truthfulness, stakeholder
 artifacts, buyer signature and budget follow-up, production/external proof
 follow-up, review-process policy, and single-product packaging decision into
 `/api/v1/commercial_go_to_market_readiness/latest`.
+
+The commercial launch readiness workflow `KRW 2B Commercial Launch Readiness`
+maps go-to-market readiness, operations readiness, onboarding readiness,
+acceptance check, analytics snapshot, admin evidence, review-process policy,
+and single-product packaging decision into
+`/api/v1/commercial_launch_readiness/latest`, while buyer environment,
+production telemetry, and commercial signature inputs remain warning inputs
+until supplied by the buyer or production deployment.
 
 ## Stakeholder Deck
 

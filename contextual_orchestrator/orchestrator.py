@@ -4047,6 +4047,313 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_launch_readiness_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the buyer launch/trial readiness gate over commercial evidence."""
+        gtm = self.commercial_go_to_market_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        operations = self.commercial_operations_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        onboarding = self.commercial_onboarding_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        acceptance = self.commercial_acceptance_check_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        admin_state = self.admin_state()
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        concrete_blockers = [
+            *gtm["concrete_blockers"],
+            *operations["concrete_blockers"],
+            *onboarding["concrete_blockers"],
+            *acceptance["concrete_blockers"],
+        ]
+        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        launch_items = [
+            {
+                "item_name": "go_to_market_packet",
+                "label": "Go-to-market packet",
+                "owner": "Deal owner",
+                "sources": [
+                    "/api/v1/commercial_go_to_market_readiness/latest",
+                    "docs/commercial_go_to_market_readiness.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if gtm["go_to_market_status"] != "commercial_go_to_market_blocked"
+                and has_file("docs/commercial_go_to_market_readiness.md")
+                else "blocked",
+                "evidence": f"go_to_market_status={gtm['go_to_market_status']}",
+                "action": "Use the GTM packet as the launch/trial entry evidence.",
+                "exit_criteria": "Buyer can inspect the launch packet without treating it as a signed deal or production proof.",
+            },
+            {
+                "item_name": "runtime_launch_path",
+                "label": "Runtime launch path",
+                "owner": "Platform operator",
+                "sources": [
+                    "README.md",
+                    "contextual_orchestrator/server.py",
+                    "contextual_orchestrator/api_contract.py",
+                    "docs/rest_api_design.md",
+                    "/v1/chat/completions",
+                    "/admin",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "README.md",
+                        "contextual_orchestrator/server.py",
+                        "contextual_orchestrator/api_contract.py",
+                        "docs/rest_api_design.md",
+                    )
+                )
+                else "blocked",
+                "evidence": "Stdlib server, OpenAI-compatible endpoint, admin console, and REST contract are present.",
+                "action": "Run the existing server and admin/API smoke tests for buyer trial setup.",
+                "exit_criteria": "Buyer can start the runtime, authenticate admin calls, and inspect launch readiness JSON.",
+            },
+            {
+                "item_name": "acceptance_test_packet",
+                "label": "Acceptance test packet",
+                "owner": "Technical reviewer",
+                "sources": [
+                    "/api/v1/commercial_acceptance_checks/latest",
+                    "tests/test_commercial_acceptance_check.py",
+                    "tests/test_commercial_go_to_market_readiness.py",
+                    "tests/test_commercial_launch_readiness.py",
+                    "pytest -q",
+                ],
+                "evidence_type": "measured_local",
+                "completion_state": "ready"
+                if acceptance["acceptance_status"] != "commercial_acceptance_blocked"
+                and all(
+                    has_file(path)
+                    for path in (
+                        "tests/test_commercial_acceptance_check.py",
+                        "tests/test_commercial_go_to_market_readiness.py",
+                        "tests/test_commercial_launch_readiness.py",
+                    )
+                )
+                else "blocked",
+                "evidence": f"acceptance_status={acceptance['acceptance_status']}",
+                "action": "Use focused acceptance and launch tests as the local verification packet.",
+                "exit_criteria": "Focused launch, GTM, acceptance, API, and artifact tests pass before buyer handoff.",
+            },
+            {
+                "item_name": "operator_runbook_packet",
+                "label": "Operator runbook packet",
+                "owner": "Customer success and platform owner",
+                "sources": [
+                    "/api/v1/commercial_operations_readiness/latest",
+                    "/api/v1/commercial_onboarding_readiness/latest",
+                    "docs/commercial_operations_readiness.md",
+                    "docs/commercial_onboarding_readiness.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if operations["operations_status"] != "commercial_operations_blocked"
+                and onboarding["onboarding_status"] != "commercial_onboarding_blocked"
+                and has_file("docs/commercial_operations_readiness.md")
+                and has_file("docs/commercial_onboarding_readiness.md")
+                else "blocked",
+                "evidence": (
+                    f"operations_status={operations['operations_status']}; "
+                    f"onboarding_status={onboarding['onboarding_status']}"
+                ),
+                "action": "Attach onboarding and operations readiness as the launch runbook.",
+                "exit_criteria": "Buyer sees implementation, support, telemetry, incident, backup, and acceptance owners.",
+            },
+            {
+                "item_name": "admin_observability_packet",
+                "label": "Admin observability packet",
+                "owner": "Product design owner",
+                "sources": ["/admin", "/admin/state", "contextual_orchestrator/admin.py", "docs/screen_design.md"],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if admin_state["agents"] and has_file("contextual_orchestrator/admin.py") and has_file("docs/screen_design.md")
+                else "blocked",
+                "evidence": (
+                    f"agent_count={len(admin_state['agents'])}; "
+                    "admin surface exposes launch, source, measurement, and warning summaries."
+                ),
+                "action": "Use the current admin observability surface rather than a separate sales dashboard.",
+                "exit_criteria": "Operator can review launch readiness from the existing admin console.",
+            },
+            {
+                "item_name": "buyer_environment_inputs",
+                "label": "Buyer environment inputs",
+                "owner": "Buyer implementation owner and platform operator",
+                "sources": ["buyer environment URL", "deployment topology", "admin token handoff", "data retention decision"],
+                "evidence_type": "buyer_environment_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_environment_required",
+                "evidence": "Buyer deployment URL, topology, credentials handoff, retention, and network policy are not repo-local evidence.",
+                "action": "Collect buyer environment details or attach explicit trial-scope waivers.",
+                "exit_criteria": "Buyer provides environment inputs or agrees the launch is limited to repo-local/demo execution.",
+            },
+            {
+                "item_name": "production_telemetry_inputs",
+                "label": "Production telemetry inputs",
+                "owner": "Operations and analytics owner",
+                "sources": [
+                    "/api/v1/commercial_operations_readiness/latest",
+                    "/api/v1/analytics_snapshots/latest",
+                    "production request logs",
+                    "incident drill record",
+                    "backup restore proof",
+                ],
+                "evidence_type": "proposed_until_production",
+                "completion_state": "warning",
+                "source_gap_status": "production_input_required",
+                "evidence": (
+                    f"operations_production_evidence_action_count="
+                    f"{operations['operations_summary']['production_evidence_action_count']}; "
+                    f"analytics_measurement_status={analytics['measurement_status']}"
+                ),
+                "action": "Capture production telemetry, SLO evidence, incident drill, and restore proof in the buyer environment.",
+                "exit_criteria": "First production telemetry snapshot and operations proof are attached or explicitly waived.",
+            },
+            {
+                "item_name": "commercial_signature_inputs",
+                "label": "Commercial signature inputs",
+                "owner": "Buyer sponsor, procurement owner, and deal owner",
+                "sources": ["signed order/MSA", "DPA/security acceptance", "purchase order", "go-live authorization"],
+                "evidence_type": "buyer_signature_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_signature_required",
+                "evidence": (
+                    f"buyer_signature_gap_count={gtm['go_to_market_summary']['buyer_signature_gap_count']}; "
+                    "signed order, DPA/security acceptance, budget/PO, and go-live authorization are buyer inputs."
+                ),
+                "action": "Collect signatures, approvals, or waivers before representing launch readiness as closed-won.",
+                "exit_criteria": "Buyer accepts all signature, DPA/security, budget, and go-live inputs.",
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": ["docs/commercial_launch_readiness.md", "docs/commercial_go_to_market_readiness.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready",
+                "evidence": "Review process delay is not a launch blocker unless a concrete failure is produced.",
+                "action": "Continue launch readiness work while queued review processes are pending.",
+                "exit_criteria": "Only concrete product, security, API contract, or document failures block launch readiness.",
+            },
+            {
+                "item_name": "packaging_decision",
+                "label": "Packaging decision",
+                "owner": "Procurement and security reviewer",
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if gtm["library_split_decision"]["decision"] == "keep_single_product"
+                else "warning",
+                "evidence": gtm["library_split_decision"]["reason"],
+                "action": "Keep one deployable enterprise control-plane product until extraction triggers are real.",
+                "exit_criteria": "Do not create a separate library, Git submodule, or extracted package for this launch gate.",
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in launch_items)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        buyer_environment_gap_count = sum(
+            1 for item in launch_items if item.get("source_gap_status") == "buyer_environment_required"
+        )
+        production_telemetry_gap_count = sum(
+            1 for item in launch_items if item.get("source_gap_status") == "production_input_required"
+        )
+        commercial_signature_gap_count = sum(
+            1 for item in launch_items if item.get("source_gap_status") == "buyer_signature_required"
+        )
+        external_input_group_count = (
+            buyer_environment_gap_count + production_telemetry_gap_count + commercial_signature_gap_count
+        )
+        if blocked_count:
+            launch_status = "commercial_launch_blocked"
+        elif warning_count:
+            launch_status = "commercial_launch_ready_with_warnings"
+        else:
+            launch_status = "commercial_launch_ready"
+
+        return {
+            "launch_status": launch_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_launch_readiness",
+            "source_note": (
+                "Commercial launch readiness packages repo-local GTM, runtime, acceptance, operator, admin, "
+                "analytics, Figma, review-process, and packaging evidence separately from buyer environment, "
+                "production telemetry, and commercial signature inputs; it is not a valuation guarantee, "
+                "purchase commitment, signed order, legal opinion, production compliance certificate, or revenue proof."
+            ),
+            "launch_summary": {
+                "item_count": len(launch_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "external_input_group_count": external_input_group_count,
+                "buyer_environment_gap_count": buyer_environment_gap_count,
+                "production_telemetry_gap_count": production_telemetry_gap_count,
+                "commercial_signature_gap_count": commercial_signature_gap_count,
+                "review_process_is_blocker": gtm["review_process_policy"]["is_blocker"],
+            },
+            "launch_items": launch_items,
+            "concrete_blockers": concrete_blockers,
+            "launch_status_rules": [
+                {
+                    "launch_status": "commercial_launch_ready",
+                    "rule": "GTM, runtime, acceptance, operator, admin, buyer environment, production telemetry, commercial signature, review policy, and packaging evidence are ready",
+                },
+                {
+                    "launch_status": "commercial_launch_ready_with_warnings",
+                    "rule": "repo-local launch packet is ready while buyer environment, production telemetry, or commercial signature inputs remain explicit warnings",
+                },
+                {
+                    "launch_status": "commercial_launch_blocked",
+                    "rule": "missing local launch packet evidence, concrete product defect, API contract failure, document mismatch, security failure, or Code Connect usage blocks launch readiness",
+                },
+            ],
+            "review_process_policy": gtm["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_go_to_market_status": gtm["go_to_market_status"],
+                "commercial_operations_status": operations["operations_status"],
+                "commercial_onboarding_status": onboarding["onboarding_status"],
+                "commercial_acceptance_status": acceptance["acceptance_status"],
+                "analytics_measurement_status": analytics["measurement_status"],
+                **gtm["related_runtime_reports"],
+            },
+            "library_split_decision": gtm["library_split_decision"],
+            "plugin_traceability": gtm["plugin_traceability"],
+            "launch_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_launch_readiness/latest",
+                "documentation": "docs/commercial_launch_readiness.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

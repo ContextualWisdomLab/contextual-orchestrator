@@ -68,6 +68,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "commercial_value_readiness_gap_count",
         "commercial_close_signature_gap_count",
         "commercial_go_to_market_warning_count",
+        "commercial_launch_external_input_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -129,6 +130,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "team::1408252278989737675",
         "KRW 2B Commercial Close Readiness",
         "KRW 2B Commercial Go To Market Readiness",
+        "KRW 2B Commercial Launch Readiness",
         "Figma Code Connect was not used",
     ]:
         assert expected_text in artifacts
@@ -734,6 +736,42 @@ def test_commercial_go_to_market_readiness_defines_gtm_gate() -> None:
         assert expected_text in plan
 
 
+def test_commercial_launch_readiness_defines_launch_gate() -> None:
+    launch = read_text("docs/commercial_launch_readiness.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-launch-readiness.md")
+
+    for expected_text in [
+        "Commercial Launch Readiness",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Launch Inputs",
+        "Runtime Shape",
+        "Launch Status Rules",
+        "KRW 2B Commercial Launch Readiness",
+        "/api/v1/commercial_launch_readiness/latest",
+        "/api/v1/commercial_go_to_market_readiness/latest",
+        "/api/v1/commercial_operations_readiness/latest",
+        "/api/v1/commercial_onboarding_readiness/latest",
+        "/api/v1/commercial_acceptance_checks/latest",
+        "local_commercial_launch_readiness",
+        "launch_items",
+        "commercial_launch_ready_with_warnings",
+        "commercial_launch_external_input_count",
+    ]:
+        assert expected_text in launch
+
+    for expected_text in [
+        "Commercial Launch Readiness Implementation Plan",
+        "get_latest_commercial_launch_readiness",
+        "No new repo dependencies",
+        "python tests/test_commercial_launch_readiness.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -760,4 +798,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_value_readiness_defines_value_gate()
     test_commercial_close_readiness_defines_close_gate()
     test_commercial_go_to_market_readiness_defines_gtm_gate()
+    test_commercial_launch_readiness_defines_launch_gate()
     print("ok")
