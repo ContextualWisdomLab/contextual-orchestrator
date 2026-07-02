@@ -263,6 +263,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial purchase approval packet"}},
             }
         },
+        "/api/v1/commercial_due_diligence_rooms/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_due_diligence_room",
+                "summary": "Get KRW 2B commercial due diligence room",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial due diligence room"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

@@ -74,6 +74,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "commercial_demo_warning_count",
         "commercial_proposal_warning_count",
         "commercial_purchase_approval_warning_count",
+        "commercial_due_diligence_warning_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -415,6 +416,50 @@ def test_commercial_purchase_approval_packet_defines_buyer_approval() -> None:
     for expected_text in [
         "/api/v1/commercial_purchase_approval_packets/latest",
         "commercial purchase approval packet",
+    ]:
+        assert expected_text in rest_api
+        assert expected_text in readme
+
+
+def test_commercial_due_diligence_room_defines_buyer_diligence_room() -> None:
+    diligence = read_text("docs/commercial_due_diligence_room.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-due-diligence-room-runtime.md")
+    rest_api = read_text("docs/rest_api_design.md")
+    readme = read_text("README.md")
+
+    for expected_text in [
+        "Commercial Due Diligence Room",
+        "Runtime endpoint: `/api/v1/commercial_due_diligence_rooms/latest`",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Diligence Sections",
+        "Runtime Shape",
+        "Due Diligence Status Rules",
+        "KRW 2B Commercial Due Diligence Room",
+        "/api/v1/commercial_purchase_approval_packets/latest",
+        "/api/v1/commercial_proposal_packets/latest",
+        "/api/v1/commercial_security_attestations/latest",
+        "local_commercial_due_diligence_room",
+        "commercial_due_diligence_ready_with_warnings",
+        "measured local evidence",
+        "proposed_until_buyer_specific",
+    ]:
+        assert expected_text in diligence
+
+    for expected_text in [
+        "Commercial Due Diligence Room Runtime Implementation Plan",
+        "get_latest_commercial_due_diligence_room",
+        "No new repo dependencies",
+        "python tests/test_commercial_due_diligence_room.py",
+        "pytest -q",
+        "Figma Code Connect must not be used",
+    ]:
+        assert expected_text in plan
+
+    for expected_text in [
+        "/api/v1/commercial_due_diligence_rooms/latest",
+        "commercial due diligence room",
     ]:
         assert expected_text in rest_api
         assert expected_text in readme
@@ -974,6 +1019,7 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_demo_scenarios_define_buyer_demo_packet()
     test_commercial_proposal_packet_defines_buyer_proposal()
     test_commercial_purchase_approval_packet_defines_buyer_approval()
+    test_commercial_due_diligence_room_defines_buyer_diligence_room()
     test_commercial_buyer_evidence_manifest_indexes_sale_evidence()
     test_commercial_buyer_handoff_bundle_packages_sale_evidence()
     test_commercial_saleability_decision_defines_final_gate()

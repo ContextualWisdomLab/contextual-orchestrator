@@ -225,6 +225,14 @@ Figma stakeholder review, review-process non-blocker policy, single-product
 packaging decision, buyer signature authority, and buyer budget/PO authority
 into `/api/v1/commercial_purchase_approval_packets/latest`.
 
+The commercial due diligence workflow
+`KRW 2B Commercial Due Diligence Room` maps purchase approval, runtime API
+evidence, admin trace/access evidence, security, commercial terms, value
+analytics, implementation readiness, Figma stakeholder review, review-process
+non-blocker policy, single-product packaging decision, buyer authority
+documents, production telemetry, and third-party attestations into
+`/api/v1/commercial_due_diligence_rooms/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`

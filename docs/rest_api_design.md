@@ -41,6 +41,7 @@
 | `GET` | `/api/v1/commercial_demo_scenarios/latest` | Read KRW 2,000,000,000 commercial demo scenarios |
 | `GET` | `/api/v1/commercial_proposal_packets/latest` | Read KRW 2,000,000,000 commercial proposal packet |
 | `GET` | `/api/v1/commercial_purchase_approval_packets/latest` | Read KRW 2,000,000,000 commercial purchase approval packet |
+| `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Read KRW 2,000,000,000 commercial due diligence room |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -86,6 +87,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_demo_scenarios/latest` | Produce the buyer demo packet that ties compatible API smoke, workflow trace, access-list evidence, evaluation replay, admin readiness, metric truthfulness, Figma review, buyer acceptance, review-process policy, and packaging decision into one runtime scenario list. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer demo and stakeholder review. |
 | `GET` | `/api/v1/commercial_proposal_packets/latest` | Produce the buyer proposal packet that ties completion, demo, acceptance, value, security, contract, onboarding, operations, analytics, Figma, review-process policy, packaging decision, and buyer-specific follow-ups into one runtime proposal review artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer proposal and commercial negotiation review. |
 | `GET` | `/api/v1/commercial_purchase_approval_packets/latest` | Produce the buyer purchase approval packet that ties proposal, close, procurement, contract, value, security, onboarding, operations, analytics, Figma, review-process policy, packaging decision, and buyer authority follow-ups into one runtime approval artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer finance, procurement, legal, security, and implementation approval. |
+| `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 
 ## Production Library Target
 

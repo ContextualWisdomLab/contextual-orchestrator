@@ -71,6 +71,14 @@ decision. Buyer signature authority, budget approval, purchase order, finance
 authority, and go-live authorization remain proposed or buyer-specific warnings
 until supplied.
 
+The prototype also exposes `/api/v1/commercial_due_diligence_rooms/latest`. That
+endpoint packages the buyer due diligence room as local runtime evidence across
+purchase approval, runtime API evidence, admin trace/access evidence, security,
+commercial terms, value analytics, implementation readiness, Figma stakeholder
+review, review-process policy, and packaging decision. Buyer authority
+documents, production telemetry, and third-party attestations remain proposed or
+buyer-specific warnings until supplied.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -120,6 +128,7 @@ with proposed production targets.
 | `commercial_demo_warning_count` | Count of warning steps in the buyer demo scenario packet, with production, ROI, legal, security questionnaire, and support follow-ups kept separate from measured local demo evidence. | proposed_until_buyer_specific | `/api/v1/commercial_demo_scenarios/latest` response. |
 | `commercial_proposal_warning_count` | Count of warning sections in the buyer proposal packet, with pricing, legal, ROI, production, support, and signature inputs kept separate from measured local proposal evidence. | proposed_until_buyer_specific | `/api/v1/commercial_proposal_packets/latest` response. |
 | `commercial_purchase_approval_warning_count` | Count of warning gates in the buyer purchase approval packet, with signature authority, budget approval, purchase order, finance authority, and go-live authorization kept separate from measured local approval evidence. | proposed_until_buyer_specific | `/api/v1/commercial_purchase_approval_packets/latest` response. |
+| `commercial_due_diligence_warning_count` | Count of warning sections in the buyer due diligence room, with buyer authority documents, production telemetry, hosted scan evidence, and third-party attestations kept separate from measured local diligence evidence. | proposed_until_buyer_specific | `/api/v1/commercial_due_diligence_rooms/latest` response. |
 
 Current GitHub/CI maturity evidence is a measured local or repository signal:
 CodeQL, Dependency review, Python supply chain, Trivy, coverage-evidence,

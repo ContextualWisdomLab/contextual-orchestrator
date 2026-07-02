@@ -5861,6 +5861,418 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_due_diligence_room_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return buyer due diligence room sections for the KRW 2B standard."""
+        purchase = self.commercial_purchase_approval_packet_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        proposal = self.commercial_proposal_packet_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        completion = self.commercial_completion_scorecard_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        demo = self.commercial_demo_scenario_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        buyer_workflow = self.commercial_buyer_acceptance_workflow_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        close = self.commercial_close_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        procurement = self.commercial_procurement_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        contract = self.commercial_contract_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        value = self.commercial_value_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        security = self.commercial_security_attestation_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        onboarding = self.commercial_onboarding_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        operations = self.commercial_operations_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        admin_state = self.admin_state()
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        def all_files(*paths: str) -> bool:
+            return all(has_file(path) for path in paths)
+
+        def section(
+            section_name: str,
+            label: str,
+            reviewer: str,
+            sources: list[str],
+            runtime_endpoints: list[str],
+            evidence_type: str,
+            completion_state: str,
+            evidence: str,
+            diligence_question: str,
+            next_action: str,
+        ) -> dict[str, Any]:
+            require_object_name(section_name, "commercial_due_diligence.section_name")
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial due diligence section state must be ready, warning, or blocked")
+            return {
+                "section_name": section_name,
+                "label": label,
+                "reviewer": reviewer,
+                "sources": sources,
+                "runtime_endpoints": runtime_endpoints,
+                "evidence_type": evidence_type,
+                "completion_state": completion_state,
+                "evidence": evidence,
+                "diligence_question": diligence_question,
+                "next_action": next_action,
+            }
+
+        concrete_blockers = list(
+            dict.fromkeys(
+                purchase["concrete_blockers"]
+                + proposal["concrete_blockers"]
+                + completion["concrete_blockers"]
+                + demo["concrete_blockers"]
+                + buyer_workflow["concrete_blockers"]
+            )
+        )
+        local_runtime_state = (
+            "blocked"
+            if purchase["purchase_approval_status"] == "commercial_purchase_approval_blocked"
+            or proposal["proposal_status"] == "commercial_proposal_blocked"
+            or completion["completion_status"] == "commercial_completion_blocked"
+            or demo["demo_status"] == "commercial_demo_blocked"
+            or buyer_workflow["workflow_status"] == "buyer_acceptance_workflow_blocked"
+            or concrete_blockers
+            else "ready"
+        )
+        diligence_sections = [
+            section(
+                "purchase_approval_packet",
+                "Purchase approval packet",
+                "Purchase committee",
+                ["docs/commercial_purchase_approval_packet.md", "/api/v1/commercial_purchase_approval_packets/latest"],
+                ["/api/v1/commercial_purchase_approval_packets/latest", "/api/v1/commercial_proposal_packets/latest"],
+                "repository_and_runtime_artifact",
+                local_runtime_state if has_file("docs/commercial_purchase_approval_packet.md") else "blocked",
+                f"commercial_purchase_approval_status={purchase['purchase_approval_status']}",
+                "Can the buyer review one approval packet before diligence sign-off?",
+                "Use the approval packet as the diligence room cover index.",
+            ),
+            section(
+                "runtime_api_evidence",
+                "Runtime API evidence",
+                "Platform reviewer",
+                [
+                    "docs/rest_api_design.md",
+                    "contextual_orchestrator/api_contract.py",
+                    "README.md",
+                    "/v1/chat/completions",
+                ],
+                [
+                    "/v1/chat/completions",
+                    "/api/v1/workflow_runs",
+                    "/api/v1/access_reports/{workflow_run_id}",
+                    "/api/v1/commercial_due_diligence_rooms/latest",
+                ],
+                "repository_and_runtime_artifact",
+                "ready"
+                if local_runtime_state == "ready"
+                and all_files("docs/rest_api_design.md", "contextual_orchestrator/api_contract.py", "README.md")
+                and admin_state["agents"]
+                else "blocked",
+                f"agent_count={len(admin_state['agents'])}; api_contract_present={has_file('contextual_orchestrator/api_contract.py')}",
+                "Can platform reviewers verify compatible API and evidence endpoints?",
+                "Keep API compatibility and evidence endpoints in the diligence index.",
+            ),
+            section(
+                "admin_trace_evidence",
+                "Admin trace evidence",
+                "Operator reviewer",
+                ["docs/screen_design.md", "/admin", "/admin/state", "workflow trace", "access report"],
+                ["/admin", "/admin/state", "/api/v1/workflow_runs", "/api/v1/access_reports/{workflow_run_id}"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if all_files("docs/screen_design.md", "contextual_orchestrator/admin.py")
+                and admin_state["agents"]
+                and admin_state["recent_workflow_runs"]
+                else "blocked",
+                f"recent_workflow_run_count={len(admin_state['recent_workflow_runs'])}",
+                "Can the operator show trace and access-list evidence in the admin console?",
+                "Run one conduct workflow before a live diligence walkthrough.",
+            ),
+            section(
+                "security_and_compliance",
+                "Security and compliance",
+                "Security reviewer",
+                ["SECURITY.md", "docs/commercial_security_attestation.md", "/api/v1/commercial_security_attestations/latest"],
+                ["/api/v1/commercial_security_attestations/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
+                and all_files("SECURITY.md", "docs/commercial_security_attestation.md")
+                else "blocked",
+                f"commercial_security_attestation_status={security['security_attestation_status']}",
+                "Can security separate repo-local controls from external attestation gaps?",
+                "Do not claim third-party certification until supplied.",
+            ),
+            section(
+                "commercial_terms",
+                "Commercial terms",
+                "Legal and procurement reviewers",
+                [
+                    "docs/commercial_contract_readiness.md",
+                    "docs/commercial_procurement_readiness.md",
+                    "docs/commercial_close_readiness.md",
+                ],
+                [
+                    "/api/v1/commercial_contract_readiness/latest",
+                    "/api/v1/commercial_procurement_readiness/latest",
+                    "/api/v1/commercial_close_readiness/latest",
+                ],
+                "repository_and_runtime_artifact",
+                "ready"
+                if contract["contract_status"] != "commercial_contract_blocked"
+                and procurement["procurement_status"] != "commercial_procurement_blocked"
+                and close["close_status"] != "commercial_close_blocked"
+                and all_files(
+                    "docs/commercial_contract_readiness.md",
+                    "docs/commercial_procurement_readiness.md",
+                    "docs/commercial_close_readiness.md",
+                )
+                else "blocked",
+                (
+                    f"commercial_contract_status={contract['contract_status']}; "
+                    f"commercial_procurement_status={procurement['procurement_status']}; "
+                    f"commercial_close_status={close['close_status']}"
+                ),
+                "Can legal and procurement review terms, rights, and close caveats together?",
+                "Attach buyer-specific order-form language outside the local runtime claim.",
+            ),
+            section(
+                "value_and_analytics",
+                "Value and analytics",
+                "Economic reviewer",
+                ["docs/commercial_value_readiness.md", "docs/analytics_spec.md", "/api/v1/analytics_snapshots/latest"],
+                ["/api/v1/commercial_value_readiness/latest", "/api/v1/analytics_snapshots/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if value["value_status"] != "commercial_value_blocked"
+                and analytics["measurement_status"] == "local_runtime_snapshot"
+                and all_files("docs/commercial_value_readiness.md", "docs/analytics_spec.md")
+                else "blocked",
+                f"commercial_value_status={value['value_status']}; analytics_measurement_status={analytics['measurement_status']}",
+                "Can finance tell measured local evidence apart from buyer ROI assumptions?",
+                "Keep proposed KPI targets separate from measured local runtime data.",
+            ),
+            section(
+                "implementation_readiness",
+                "Implementation readiness",
+                "Implementation and operations reviewers",
+                ["docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md"],
+                ["/api/v1/commercial_onboarding_readiness/latest", "/api/v1/commercial_operations_readiness/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if onboarding["onboarding_status"] != "commercial_onboarding_blocked"
+                and operations["operations_status"] != "commercial_operations_blocked"
+                and all_files("docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md")
+                else "blocked",
+                f"commercial_onboarding_status={onboarding['onboarding_status']}; commercial_operations_status={operations['operations_status']}",
+                "Can implementation owners see onboarding, operations, incident, and handoff evidence?",
+                "Convert buyer environment specifics into the paid onboarding plan.",
+            ),
+            section(
+                "figma_and_design_review",
+                "Figma and design review",
+                "Product design reviewer",
+                [
+                    "docs/commercial_due_diligence_room.md",
+                    "docs/figma_artifacts.md",
+                    "docs/superpowers/plans/2026-07-02-commercial-due-diligence-room-runtime.md",
+                ],
+                ["/api/v1/commercial_due_diligence_rooms/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if all_files(
+                    "docs/commercial_due_diligence_room.md",
+                    "docs/figma_artifacts.md",
+                    "docs/superpowers/plans/2026-07-02-commercial-due-diligence-room-runtime.md",
+                )
+                else "blocked",
+                "Due diligence doc, FigJam artifact record, and implementation plan are committed.",
+                "Can stakeholders inspect the diligence room as docs, runtime JSON, and FigJam?",
+                "Use FigJam only; do not use Figma Code Connect.",
+            ),
+            section(
+                "buyer_authority_documents",
+                "Buyer authority documents",
+                "Buyer sponsor",
+                ["named buyer signer", "budget owner and purchase order", "buyer DPA or privacy acceptance"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Named signer, budget owner, PO, and buyer privacy acceptance require buyer authority.",
+                "Does the buyer have authority artifacts ready for final diligence?",
+                "Collect signer, PO, DPA/privacy acceptance, or explicit waiver.",
+            ),
+            section(
+                "production_external_attestations",
+                "Production and external attestations",
+                "Production and security owners",
+                ["production telemetry", "third-party security attestation", "hosted scan evidence"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Production telemetry and third-party attestations are external evidence, not local repo measurements.",
+                "Can the buyer distinguish local readiness from production and third-party evidence?",
+                "Collect hosted telemetry and external attestation after environment selection.",
+            ),
+        ]
+        state_counts = Counter(item["completion_state"] for item in diligence_sections)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            due_diligence_status = "commercial_due_diligence_blocked"
+        elif warning_count:
+            due_diligence_status = "commercial_due_diligence_ready_with_warnings"
+        else:
+            due_diligence_status = "commercial_due_diligence_ready"
+        required_runtime_endpoints = list(
+            dict.fromkeys(
+                endpoint
+                for item in diligence_sections
+                for endpoint in item["runtime_endpoints"]
+                if endpoint.startswith("/")
+            )
+        )
+
+        return {
+            "due_diligence_status": due_diligence_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_due_diligence_room",
+            "source_note": (
+                "Commercial due diligence room packages repo-local purchase approval, proposal, runtime, "
+                "admin trace, security, contract, value, onboarding, operations, analytics, Figma, "
+                "review-policy, and packaging evidence for KRW 2,000,000,000 buyer diligence; it is "
+                "not a valuation guarantee, purchase commitment, signed order, legal opinion, production "
+                "compliance certificate, third-party attestation, or revenue proof."
+            ),
+            "diligence_narrative": {
+                "title": "KRW 2B commercial due diligence room",
+                "promise": (
+                    "Give finance, procurement, legal, security, product, and implementation reviewers "
+                    "one evidence room that separates measured local product evidence from buyer-specific "
+                    "and external production artifacts."
+                ),
+                "audience": [
+                    "Economic buyer",
+                    "Finance owner",
+                    "Procurement owner",
+                    "Legal owner",
+                    "Security owner",
+                    "Platform reviewer",
+                    "Implementation owner",
+                ],
+            },
+            "diligence_summary": {
+                "section_count": len(diligence_sections),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "endpoint_count": len(required_runtime_endpoints),
+                "review_process_is_blocker": purchase["review_process_policy"]["is_blocker"],
+                "code_connect_used": False,
+            },
+            "diligence_sections": diligence_sections,
+            "required_runtime_endpoints": required_runtime_endpoints,
+            "buyer_missing_artifacts": [
+                "named buyer signer",
+                "budget owner and purchase order",
+                "buyer DPA or privacy acceptance",
+                "production telemetry",
+                "third-party security attestation",
+            ],
+            "concrete_blockers": concrete_blockers,
+            "due_diligence_status_rules": [
+                {
+                    "due_diligence_status": "commercial_due_diligence_ready",
+                    "rule": "all diligence sections are ready and no buyer authority, production, or third-party evidence remains open",
+                },
+                {
+                    "due_diligence_status": "commercial_due_diligence_ready_with_warnings",
+                    "rule": "repo-local diligence room evidence is ready while buyer authority, production telemetry, or external attestations remain explicit warnings",
+                },
+                {
+                    "due_diligence_status": "commercial_due_diligence_blocked",
+                    "rule": "security failure, API contract regression, document mismatch, runtime defect, missing local diligence evidence, or Code Connect usage blocks buyer diligence",
+                },
+            ],
+            "review_process_policy": purchase["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_purchase_approval_status": purchase["purchase_approval_status"],
+                "commercial_proposal_status": proposal["proposal_status"],
+                "commercial_completion_status": completion["completion_status"],
+                "commercial_demo_status": demo["demo_status"],
+                "buyer_acceptance_workflow_status": buyer_workflow["workflow_status"],
+                "commercial_close_status": close["close_status"],
+                "commercial_procurement_status": procurement["procurement_status"],
+                "commercial_contract_status": contract["contract_status"],
+                "commercial_value_status": value["value_status"],
+                "commercial_security_attestation_status": security["security_attestation_status"],
+                "commercial_onboarding_status": onboarding["onboarding_status"],
+                "commercial_operations_status": operations["operations_status"],
+                "analytics_measurement_status": analytics["measurement_status"],
+            },
+            "library_split_decision": purchase["library_split_decision"],
+            "plugin_traceability": purchase["plugin_traceability"],
+            "due_diligence_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_due_diligence_rooms/latest",
+                "documentation": "docs/commercial_due_diligence_room.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
