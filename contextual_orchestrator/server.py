@@ -295,6 +295,12 @@ def build_server(
                         security_profile=security.readiness_profile(),
                     ))
                     return
+                if path == "/api/v1/commercial_security_attestations/latest":
+                    self._send(orchestrator.commercial_security_attestation_report(
+                        locale_bundles=ADMIN_TRANSLATIONS,
+                        security_profile=security.readiness_profile(),
+                    ))
+                    return
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
                     self._send(_response_payload({

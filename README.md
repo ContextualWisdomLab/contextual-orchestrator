@@ -80,6 +80,7 @@ One public interface:
 - `/api/v1/commercial_contract_readiness/latest` exposes the commercial contract readiness gate across support/SLO terms, security/privacy terms, audit/export obligations, license/commercial rights, buyer order-form inputs, review-process policy, and packaging decision.
 - `/api/v1/commercial_onboarding_readiness/latest` exposes the commercial onboarding readiness gate that turns production support/SLO and buyer-specific input warnings into paid-onboarding owners, actions, and exit criteria.
 - `/api/v1/commercial_operations_readiness/latest` exposes the commercial operations readiness gate that turns production telemetry, incident/rollback, backup/recovery, and SLO evidence gaps into operations handoff owners, actions, and exit criteria.
+- `/api/v1/commercial_security_attestations/latest` exposes the commercial security attestation gate that separates repo-local security evidence from external attestation, hosted scan, and buyer privacy/DPA gaps.
 
 One fused orchestration loop:
 

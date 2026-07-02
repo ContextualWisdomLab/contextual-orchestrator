@@ -183,6 +183,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial operations readiness"}},
             }
         },
+        "/api/v1/commercial_security_attestations/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_security_attestation",
+                "summary": "Get commercial security attestation for buyer security review",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial security attestation"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

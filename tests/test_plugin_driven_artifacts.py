@@ -61,6 +61,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "commercial_readiness_pass_rate",
         "buyer_evidence_completeness",
         "security_control_pass_rate",
+        "security_attestation_gap_count",
         "trace_audit_completeness",
         "support_operability_score",
         "roi_evidence_status",
@@ -592,6 +593,39 @@ def test_commercial_operations_readiness_defines_operations_gate() -> None:
         assert expected_text in plan
 
 
+def test_commercial_security_attestation_defines_security_gate() -> None:
+    attestation = read_text("docs/commercial_security_attestation.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-security-attestation.md")
+
+    for expected_text in [
+        "Commercial Security Attestation",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Security Attestation Inputs",
+        "Runtime Shape",
+        "Security Attestation Status Rules",
+        "KRW 2B Commercial Security Attestation",
+        "/api/v1/commercial_security_attestations/latest",
+        "/api/v1/commercial_operations_readiness/latest",
+        "/api/v1/commercial_evidence_exports/latest",
+        "local_commercial_security_attestation",
+        "security_attestation_items",
+        "commercial_security_attestation_ready_with_warnings",
+    ]:
+        assert expected_text in attestation
+
+    for expected_text in [
+        "Commercial Security Attestation Implementation Plan",
+        "get_latest_commercial_security_attestation",
+        "No new repo dependencies",
+        "python tests/test_commercial_security_attestation.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -614,4 +648,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_contract_readiness_defines_contract_gate()
     test_commercial_onboarding_readiness_defines_onboarding_gate()
     test_commercial_operations_readiness_defines_operations_gate()
+    test_commercial_security_attestation_defines_security_gate()
     print("ok")

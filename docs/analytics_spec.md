@@ -65,6 +65,7 @@ with proposed production targets.
 | `commercial_readiness_pass_rate` | Share of `commercial_readiness_report()` criteria with `status=pass`. | measured_local | `/api/v1/commercial_readiness/latest` response. |
 | `buyer_evidence_completeness` | Share of required buyer due-diligence documents present in the repository. | measured_local | commercial readiness documentation profile. |
 | `security_control_pass_rate` | Share of security posture checks passing across auth, bind, trace, rate limit, concurrency, and provider egress controls. | measured_local | `SecurityConfig.readiness_profile()` plus provider configuration. |
+| `security_attestation_gap_count` | Count of hosted scan, third-party attestation, and buyer privacy/DPA inputs still required for buyer security review. | proposed_until_buyer_specific | `/api/v1/commercial_security_attestations/latest` response. |
 | `trace_audit_completeness` | Share of conducted runs with role, agent, subtask, access list, verifier, and synthesis evidence. | measured_local | workflow run trace records. |
 | `support_operability_score` | Availability of SLO, support ownership, incident runbook, backup, and escalation evidence. | proposed_until_production | production operations documents and ticketing records. |
 | `roi_evidence_status` | Buyer-specific value case tying API compatibility, audit evidence, replay, and operating cost reduction to the KRW 2,000,000,000 target. | proposed_until_buyer_specific | customer discovery, procurement, and ROI model. |

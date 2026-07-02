@@ -148,6 +148,14 @@ incident and rollback plan, backup/recovery evidence, support/SLO ownership,
 security/legal handoff, review-process policy, and packaging decision into
 `/api/v1/commercial_operations_readiness/latest`.
 
+The commercial security attestation workflow
+`KRW 2B Commercial Security Attestation` maps operations readiness, security
+policy, dependency lock/package metadata, security workflow metadata, runtime
+access-control profile, audit/export evidence, vulnerability scan evidence,
+third-party attestation or penetration-test evidence, buyer privacy/DPA input,
+review-process policy, and packaging decision into
+`/api/v1/commercial_security_attestations/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`

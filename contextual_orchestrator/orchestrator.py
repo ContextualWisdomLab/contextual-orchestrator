@@ -2978,6 +2978,236 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_security_attestation_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a buyer security-review attestation gate over operations evidence."""
+        operations = self.commercial_operations_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        operations_by_name = {item["item_name"]: item for item in operations["operations_items"]}
+        runtime_profile = security_profile or {}
+        concrete_blockers = operations["concrete_blockers"]
+        security_attestation_items = [
+            {
+                "item_name": "security_policy",
+                "label": "Security policy",
+                "owner": "Security owner",
+                "sources": ["SECURITY.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready" if has_file("SECURITY.md") else "blocked",
+                "evidence": "Repository security disclosure and support policy is present.",
+                "action": "Attach SECURITY.md to the buyer security review packet.",
+                "exit_criteria": "Buyer can identify the vulnerability reporting path and supported scope.",
+            },
+            {
+                "item_name": "dependency_lock_package_metadata",
+                "label": "Dependency lock and package metadata",
+                "owner": "Release owner",
+                "sources": ["requirements.lock", "pyproject.toml"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if has_file("requirements.lock") and has_file("pyproject.toml")
+                else "blocked",
+                "evidence": "Pinned dependency lock and Python package metadata are present for supply-chain review.",
+                "action": "Use the pinned lockfile and package metadata as the buyer dependency baseline.",
+                "exit_criteria": "Buyer can inspect package metadata and reproduce the dependency installation path.",
+            },
+            {
+                "item_name": "security_workflow_metadata",
+                "label": "Security workflow metadata",
+                "owner": "Security owner",
+                "sources": [
+                    ".github/dependabot.yml",
+                    ".github/workflows/security.yml",
+                    ".github/workflows/scorecard-analysis.yml",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        ".github/dependabot.yml",
+                        ".github/workflows/security.yml",
+                        ".github/workflows/scorecard-analysis.yml",
+                    )
+                )
+                else "blocked",
+                "evidence": "Dependabot, CodeQL, dependency review, pip-audit, SBOM, Trivy, and Scorecard workflow metadata are defined.",
+                "action": "Attach workflow definitions and latest passing run evidence when the buyer review requests hosted CI proof.",
+                "exit_criteria": "Buyer can inspect the configured security workflow controls and their latest run status separately.",
+            },
+            {
+                "item_name": "runtime_access_control_profile",
+                "label": "Runtime access-control profile",
+                "owner": "Platform operator",
+                "sources": ["contextual_orchestrator/server.py", "/api/v1/commercial_operations_readiness/latest"],
+                "evidence_type": "runtime_configuration",
+                "completion_state": "ready",
+                "evidence": (
+                    f"Runtime profile uses auth_mode={runtime_profile.get('auth_mode', 'unknown')}, "
+                    f"allow_public_bind={runtime_profile.get('allow_public_bind', False)}, "
+                    f"expose_trace_by_default={runtime_profile.get('expose_trace_by_default', False)}, "
+                    f"rate_limit_requests={runtime_profile.get('rate_limit_requests', 'unknown')}, "
+                    f"max_concurrent_runs={runtime_profile.get('max_concurrent_runs', 'unknown')}."
+                ),
+                "action": "Use the secret-free runtime profile as buyer-visible access-control evidence.",
+                "exit_criteria": "Buyer can verify admin and inference scopes, public bind opt-in, trace exposure default, rate limit, and concurrency controls.",
+            },
+            {
+                "item_name": "audit_export_evidence",
+                "label": "Audit and evidence export",
+                "owner": "Evidence owner",
+                "sources": [
+                    "docs/commercial_evidence_export.md",
+                    "docs/commercial_operations_readiness.md",
+                    "/api/v1/commercial_evidence_exports/latest",
+                    "/api/v1/commercial_operations_readiness/latest",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if has_file("docs/commercial_evidence_export.md")
+                and has_file("docs/commercial_operations_readiness.md")
+                else "blocked",
+                "evidence": "Commercial evidence export and operations readiness documents are present for buyer audit review.",
+                "action": "Package runtime evidence export with operations readiness for the security review data room.",
+                "exit_criteria": "Buyer can trace security claims to runtime endpoints and Markdown artifacts.",
+            },
+            {
+                "item_name": "vulnerability_scan_evidence",
+                "label": "Vulnerability scan evidence",
+                "owner": "Security owner",
+                "sources": [".github/workflows/security.yml", ".github/workflows/scorecard-analysis.yml"],
+                "evidence_type": "external_attestation_required",
+                "completion_state": "warning",
+                "source_gap_status": "external_attestation_required",
+                "evidence": "Security scan workflow metadata exists, but the buyer packet still needs the latest hosted scan result or buyer-accepted equivalent.",
+                "action": "Attach latest CodeQL, pip-audit, Trivy, SBOM, and Scorecard results when CI completes or the buyer requests evidence.",
+                "exit_criteria": "Hosted scan outputs are attached, or the buyer explicitly accepts workflow definitions as sufficient for this stage.",
+            },
+            {
+                "item_name": "third_party_attestation_pen_test",
+                "label": "Third-party attestation or penetration test",
+                "owner": "Security owner",
+                "sources": ["buyer security review", "external assessor"],
+                "evidence_type": "external_attestation_required",
+                "completion_state": "warning",
+                "source_gap_status": "external_attestation_required",
+                "evidence": "Independent SOC 2, ISO 27001, penetration-test, or buyer security assessment evidence is outside the repo-local prototype.",
+                "action": "Provide the buyer-requested attestation, schedule an assessment, or document an explicit waiver.",
+                "exit_criteria": "Buyer accepts the third-party security evidence, scheduled assessment, or waiver.",
+            },
+            {
+                "item_name": "buyer_privacy_dpa_questionnaire",
+                "label": "Buyer privacy, DPA, and questionnaire input",
+                "owner": "Deal owner",
+                "sources": ["buyer DPA", "buyer privacy questionnaire", "buyer order form"],
+                "evidence_type": "buyer_input_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_input_required",
+                "evidence": "Privacy, DPA, subprocessors, data residency, and questionnaire answers depend on buyer-specific terms.",
+                "action": "Collect buyer privacy questionnaire, DPA requirements, subprocessors, and data residency constraints.",
+                "exit_criteria": "Buyer-specific privacy inputs are completed or explicitly waived in the deal packet.",
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": operations_by_name["review_process_policy"]["sources"],
+                "evidence_type": operations_by_name["review_process_policy"]["evidence_type"],
+                "completion_state": operations_by_name["review_process_policy"]["completion_state"],
+                "evidence": operations_by_name["review_process_policy"]["evidence"],
+                "action": operations_by_name["review_process_policy"]["action"],
+                "exit_criteria": operations_by_name["review_process_policy"]["exit_criteria"],
+            },
+            {
+                "item_name": "packaging_decision",
+                "label": "Packaging decision",
+                "owner": operations_by_name["packaging_decision"]["owner"],
+                "sources": operations_by_name["packaging_decision"]["sources"],
+                "evidence_type": operations_by_name["packaging_decision"]["evidence_type"],
+                "completion_state": operations_by_name["packaging_decision"]["completion_state"],
+                "evidence": operations_by_name["packaging_decision"]["evidence"],
+                "action": operations_by_name["packaging_decision"]["action"],
+                "exit_criteria": operations_by_name["packaging_decision"]["exit_criteria"],
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in security_attestation_items)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        external_attestation_gap_count = sum(
+            1 for item in security_attestation_items if item.get("source_gap_status") == "external_attestation_required"
+        )
+        buyer_privacy_gap_count = sum(
+            1 for item in security_attestation_items if item.get("source_gap_status") == "buyer_input_required"
+        )
+        if blocked_count:
+            security_attestation_status = "commercial_security_attestation_blocked"
+        elif warning_count:
+            security_attestation_status = "commercial_security_attestation_ready_with_warnings"
+        else:
+            security_attestation_status = "commercial_security_attestation_ready"
+
+        return {
+            "security_attestation_status": security_attestation_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_security_attestation",
+            "source_note": (
+                "Commercial security attestation separates repo-local security evidence from external "
+                "attestation, hosted scan, and buyer privacy inputs; it is not a valuation guarantee, "
+                "purchase commitment, production compliance certificate, or third-party security audit."
+            ),
+            "security_attestation_summary": {
+                "item_count": len(security_attestation_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "external_attestation_gap_count": external_attestation_gap_count,
+                "buyer_privacy_gap_count": buyer_privacy_gap_count,
+                "review_process_is_blocker": operations["review_process_policy"]["is_blocker"],
+            },
+            "security_attestation_items": security_attestation_items,
+            "concrete_blockers": concrete_blockers,
+            "security_attestation_status_rules": [
+                {
+                    "security_attestation_status": "commercial_security_attestation_ready",
+                    "rule": "security policy, dependency metadata, workflow metadata, access controls, audit export, external attestation, buyer privacy input, review policy, and packaging evidence are ready",
+                },
+                {
+                    "security_attestation_status": "commercial_security_attestation_ready_with_warnings",
+                    "rule": "repo-local security packet is ready while hosted scan evidence, third-party attestation, or buyer privacy input remains explicit warnings",
+                },
+                {
+                    "security_attestation_status": "commercial_security_attestation_blocked",
+                    "rule": "missing local security packet evidence, concrete product defect, API contract failure, document mismatch, security failure, or Code Connect usage blocks security attestation",
+                },
+            ],
+            "review_process_policy": operations["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_operations_status": operations["operations_status"],
+                **operations["related_runtime_reports"],
+            },
+            "library_split_decision": operations["library_split_decision"],
+            "plugin_traceability": operations["plugin_traceability"],
+            "security_attestation_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_security_attestations/latest",
+                "documentation": "docs/commercial_security_attestation.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
