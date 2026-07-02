@@ -41,6 +41,12 @@ evidence across Product Design, Figma, Superpowers, Ponytail, Data Analytics,
 runtime readiness, verification, review policy, packaging, and external
 follow-ups.
 
+The prototype also exposes
+`/api/v1/commercial_buyer_acceptance_workflows/latest`. That endpoint converts
+the buyer acceptance runbook into owner-scoped runtime workflow evidence while
+keeping production and buyer-specific follow-ups as warnings, not measured
+results.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -86,6 +92,7 @@ with proposed production targets.
 | `commercial_go_to_market_warning_count` | Count of buyer-signature and production/external-proof follow-up groups still open in the GTM packet. | proposed_until_buyer_specific | `/api/v1/commercial_go_to_market_readiness/latest` response. |
 | `commercial_launch_external_input_count` | Count of buyer-environment, production-telemetry, and commercial-signature input groups still needed for launch or paid trial execution. | proposed_until_buyer_specific | `/api/v1/commercial_launch_readiness/latest` response. |
 | `commercial_completion_warning_count` | Count of warning rows in the runtime completion scorecard, with buyer and production follow-ups kept separate from measured local evidence. | proposed_until_buyer_specific | `/api/v1/commercial_completion_scorecards/latest` response. |
+| `buyer_acceptance_workflow_warning_count` | Count of warning steps in the buyer acceptance workflow, with production and buyer-specific follow-ups kept separate from measured local evidence. | proposed_until_buyer_specific | `/api/v1/commercial_buyer_acceptance_workflows/latest` response. |
 
 Current GitHub/CI maturity evidence is a measured local or repository signal:
 CodeQL, Dependency review, Python supply chain, Trivy, coverage-evidence,

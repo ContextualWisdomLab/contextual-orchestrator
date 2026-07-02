@@ -74,6 +74,7 @@ One public interface:
 - `/api/v1/saleability_decisions/latest` exposes the final KRW 2,000,000,000 saleability decision gate with concrete blockers, warning conditions, and review-process non-blocker policy.
 - `/api/v1/commercial_evidence_exports/latest` exposes the portable commercial evidence export across saleability, runtime reports, buyer documents, Figma artifacts, verification commands, review-process policy, packaging decision, and external evidence gaps.
 - `/api/v1/commercial_acceptance_checks/latest` exposes the buyer acceptance check across evidence export, runtime endpoint chain, buyer packet, admin surface, verification, Figma, review-process policy, packaging decision, and external evidence gaps.
+- `/api/v1/commercial_buyer_acceptance_workflows/latest` exposes the buyer acceptance workflow across owner-scoped runbook steps, Go/Warning/No-Go rules, runtime evidence, Figma artifacts, analytics truthfulness, review-process policy, and packaging decision.
 - `/api/v1/commercial_release_candidates/latest` exposes the local commercial release-candidate manifest across acceptance, runtime endpoints, repository distribution packet, security metadata, admin surface, verification, Figma, review-process policy, packaging decision, and external release gaps.
 - `/api/v1/commercial_gap_registers/latest` exposes the commercial gap register that turns release-candidate external gaps into owner, source, required-input, and status rows for buyer due diligence.
 - `/api/v1/commercial_procurement_readiness/latest` exposes the commercial procurement readiness gate across license, rights, security metadata, distribution packet, admin evidence, production support/SLO input, buyer legal/ROI/procurement input, review-process policy, and packaging decision.
@@ -155,6 +156,7 @@ python tests/test_buyer_handoff_bundle.py
 python tests/test_saleability_decision.py
 python tests/test_commercial_evidence_export.py
 python tests/test_commercial_acceptance_check.py
+python tests/test_commercial_buyer_acceptance_workflow.py
 python tests/test_commercial_release_candidate.py
 python tests/test_commercial_gap_register.py
 python tests/test_commercial_procurement_readiness.py

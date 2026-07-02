@@ -70,6 +70,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "commercial_go_to_market_warning_count",
         "commercial_launch_external_input_count",
         "commercial_completion_warning_count",
+        "buyer_acceptance_workflow_warning_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -133,6 +134,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Go To Market Readiness",
         "KRW 2B Commercial Launch Readiness",
         "KRW 2B Commercial Completion Runtime Scorecard",
+        "KRW 2B Buyer Acceptance Runtime Workflow",
         "Figma Code Connect was not used",
     ]:
         assert expected_text in artifacts
@@ -243,14 +245,42 @@ def test_commercial_buyer_acceptance_runbook_defines_go_no_go_workflow() -> None
         "Review process is not a blocker",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Acceptance Workflow",
+        "Runtime Shape",
+        "Workflow Status Rules",
         "Go, Warning, No-Go Rules",
         "KRW 2B Buyer Acceptance Go No Go Workflow",
+        "KRW 2B Buyer Acceptance Runtime Workflow",
         "/api/v1/commercial_readiness/latest",
+        "/api/v1/commercial_buyer_acceptance_workflows/latest",
+        "local_buyer_acceptance_workflow",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
     ]:
         assert expected_text in runbook
+
+
+def test_commercial_buyer_acceptance_workflow_runtime_plan_is_recorded() -> None:
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-buyer-acceptance-workflow-runtime.md")
+    rest_api = read_text("docs/rest_api_design.md")
+    readme = read_text("README.md")
+
+    for expected_text in [
+        "Commercial Buyer Acceptance Workflow Runtime Implementation Plan",
+        "get_latest_commercial_buyer_acceptance_workflow",
+        "No new repo dependencies",
+        "python tests/test_commercial_buyer_acceptance_workflow.py",
+        "pytest -q",
+        "Figma Code Connect must not be used",
+    ]:
+        assert expected_text in plan
+
+    for expected_text in [
+        "/api/v1/commercial_buyer_acceptance_workflows/latest",
+        "buyer acceptance workflow",
+    ]:
+        assert expected_text in rest_api
+        assert expected_text in readme
 
 
 def test_commercial_buyer_evidence_manifest_indexes_sale_evidence() -> None:
@@ -803,6 +833,7 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_completion_scorecard_defines_ready_warning_blocker_rules()
     test_commercial_buyer_diligence_packet_defines_deal_room_evidence()
     test_commercial_buyer_acceptance_runbook_defines_go_no_go_workflow()
+    test_commercial_buyer_acceptance_workflow_runtime_plan_is_recorded()
     test_commercial_buyer_evidence_manifest_indexes_sale_evidence()
     test_commercial_buyer_handoff_bundle_packages_sale_evidence()
     test_commercial_saleability_decision_defines_final_gate()

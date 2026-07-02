@@ -57,6 +57,7 @@ Diagrams created:
 - `KRW 2B Commercial Procurement Readiness`
 - `KRW 2B Commercial Launch Readiness`
 - `KRW 2B Commercial Completion Runtime Scorecard`
+- `KRW 2B Buyer Acceptance Runtime Workflow`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -193,6 +194,13 @@ The commercial completion runtime workflow
 Superpowers, Ponytail, Data Analytics, runtime endpoint chain, verification
 packet, review-process policy, single-product packaging, and production/buyer
 follow-ups into `/api/v1/commercial_completion_scorecards/latest`.
+
+The buyer acceptance runtime workflow
+`KRW 2B Buyer Acceptance Runtime Workflow` maps runbook owners, runtime
+evidence, Figma artifacts, analytics truthfulness, security posture,
+review-process policy, single-product packaging, production follow-ups, and
+buyer-specific inputs into
+`/api/v1/commercial_buyer_acceptance_workflows/latest`.
 
 ## Stakeholder Deck
 

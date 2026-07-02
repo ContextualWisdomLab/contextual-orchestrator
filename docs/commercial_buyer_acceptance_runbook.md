@@ -2,6 +2,8 @@
 
 This runbook defines the buyer-facing go/no-go workflow for a KRW 2,000,000,000 commercial review of Contextual Orchestrator. It turns the existing readiness endpoints, documentation, Figma artifacts, and buyer diligence packet into an acceptance sequence.
 
+Runtime endpoint: `/api/v1/commercial_buyer_acceptance_workflows/latest`.
+
 The target is buyer due-diligence readiness. It is not a valuation guarantee,
 purchase commitment, revenue claim, or production compliance certificate.
 
@@ -60,6 +62,38 @@ No-Go:
   surface, trace/access-list evidence, readiness endpoint, or commercial
   caveat model;
 - Figma Code Connect usage.
+
+## Runtime Shape
+
+`commercial_buyer_acceptance_workflow_report()` exposes the runbook as runtime
+JSON with `measurement_status=local_buyer_acceptance_workflow`.
+
+The endpoint returns:
+
+- `workflow_status`: `buyer_acceptance_workflow_ready`,
+  `buyer_acceptance_workflow_ready_with_warnings`, or
+  `buyer_acceptance_workflow_blocked`;
+- `workflow_summary`: owner step, ready, warning, blocked, production follow-up,
+  buyer-specific follow-up, review-process, and Code Connect counts;
+- `acceptance_steps`: owner-scoped Product Design, Figma, Superpowers,
+  Ponytail, Data Analytics, runtime, security, packaging, production, and
+  buyer-specific acceptance steps;
+- `go_warning_no_go_rules`: runtime Go, Warning, and No-Go rules;
+- `related_runtime_reports`: commercial acceptance check, completion
+  scorecard, buyer handoff, and analytics status links;
+- `library_split_decision`: keep one repository and one deployable product;
+- `workflow_links`: Figma design file, FigJam board, runtime endpoint, and this
+  runbook.
+
+## Workflow Status Rules
+
+| Status | Rule |
+|---|---|
+| `buyer_acceptance_workflow_ready` | All acceptance owners have ready evidence and no external production or buyer-specific inputs remain open. |
+| `buyer_acceptance_workflow_ready_with_warnings` | Repo-local buyer acceptance evidence is ready while production or buyer-specific inputs remain explicit warnings. |
+| `buyer_acceptance_workflow_blocked` | Security failure, API contract regression, document mismatch, reproducible product defect, missing acceptance path, or Code Connect usage blocks acceptance. |
+
+FigJam artifact: `KRW 2B Buyer Acceptance Runtime Workflow`.
 
 ## Plugin Responsibilities
 

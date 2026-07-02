@@ -4626,6 +4626,256 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_buyer_acceptance_workflow_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return owner-scoped buyer acceptance workflow evidence."""
+        acceptance = self.commercial_acceptance_check_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        completion = self.commercial_completion_scorecard_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        handoff = self.buyer_handoff_bundle_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        def all_files(*paths: str) -> bool:
+            return all(has_file(path) for path in paths)
+
+        def step(
+            step_name: str,
+            label: str,
+            owner: str,
+            sources: list[str],
+            evidence_type: str,
+            completion_state: str,
+            evidence: str,
+            decision_rule: str,
+            next_action: str,
+        ) -> dict[str, Any]:
+            require_object_name(step_name, "buyer_acceptance_workflow.step_name")
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("buyer acceptance workflow state must be ready, warning, or blocked")
+            return {
+                "step_name": step_name,
+                "label": label,
+                "owner": owner,
+                "sources": sources,
+                "evidence_type": evidence_type,
+                "completion_state": completion_state,
+                "evidence": evidence,
+                "decision_rule": decision_rule,
+                "next_action": next_action,
+            }
+
+        concrete_blockers = list(dict.fromkeys(acceptance["concrete_blockers"] + completion["concrete_blockers"]))
+        acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
+        completion_blocked = completion["completion_status"] == "commercial_completion_blocked"
+        local_runtime_state = "blocked" if acceptance_blocked or completion_blocked or concrete_blockers else "ready"
+        workflow_steps = [
+            step(
+                "confirm_product_scope",
+                "Confirm product scope",
+                "Product owner",
+                ["README.md", "docs/product_planning.md", "docs/commercial_readiness.md"],
+                "repository_artifact",
+                "ready" if all_files("README.md", "docs/product_planning.md", "docs/commercial_readiness.md") else "blocked",
+                "Product remains one enterprise orchestration control plane.",
+                "Proceed when the buyer reviews one compatible API plus one admin evidence surface.",
+                "Restore product scope docs before buyer acceptance.",
+            ),
+            step(
+                "confirm_integration_surface",
+                "Confirm integration surface",
+                "Platform reviewer",
+                ["/v1/chat/completions", "docs/rest_api_design.md", "tests/test_api_contract.py"],
+                "repository_artifact",
+                "ready" if all_files("docs/rest_api_design.md", "tests/test_api_contract.py") else "blocked",
+                "OpenAI-compatible API and API contract tests are present.",
+                "Proceed when API compatibility evidence is present and tests pass.",
+                "Restore REST docs or API contract tests before buyer acceptance.",
+            ),
+            step(
+                "confirm_operator_evidence",
+                "Confirm operator evidence",
+                "Platform operator",
+                ["/admin", "/admin/state", "docs/screen_design.md", "contextual_orchestrator/admin.py"],
+                "repository_artifact",
+                "ready" if all_files("docs/screen_design.md", "contextual_orchestrator/admin.py") else "blocked",
+                "Admin console exposes operator evidence for pool, policy, trace, access, replay, analytics, and readiness.",
+                "Proceed when operator state and commercial readiness surfaces are visible.",
+                "Restore admin evidence docs or implementation before buyer acceptance.",
+            ),
+            step(
+                "confirm_readiness_endpoints",
+                "Confirm readiness endpoints",
+                "Product owner",
+                [
+                    "/api/v1/sales_readiness/latest",
+                    "/api/v1/commercial_readiness/latest",
+                    "/api/v1/commercial_acceptance_checks/latest",
+                    "/api/v1/commercial_completion_scorecards/latest",
+                ],
+                "measured_local",
+                local_runtime_state,
+                (
+                    f"commercial_acceptance_status={acceptance['acceptance_status']}; "
+                    f"commercial_completion_status={completion['completion_status']}"
+                ),
+                "Proceed when local runtime gates have no concrete blockers.",
+                "Resolve blocked readiness, acceptance, or completion gates before buyer acceptance.",
+            ),
+            step(
+                "confirm_security_posture",
+                "Confirm security posture",
+                "Security reviewer",
+                ["SECURITY.md", "tests/test_security_hardening.py", ".github/workflows/security.yml"],
+                "repository_artifact",
+                "ready" if all_files("SECURITY.md", "tests/test_security_hardening.py", ".github/workflows/security.yml") else "blocked",
+                "Security policy, hardening tests, and hosted security workflow metadata are present.",
+                "Proceed when concrete security failures are absent.",
+                "Fix concrete security failures; queued security checks alone are not blockers.",
+            ),
+            step(
+                "confirm_metric_honesty",
+                "Confirm metric honesty",
+                "Analytics reviewer",
+                ["/api/v1/analytics_snapshots/latest", "docs/analytics_spec.md"],
+                "measured_local",
+                "ready" if has_file("docs/analytics_spec.md") and analytics["measurement_status"] == "local_runtime_snapshot" else "blocked",
+                "Analytics spec and local snapshot separate measured local evidence from proposed production or buyer inputs.",
+                "Proceed when measured and proposed claims are not mixed.",
+                "Restore analytics source labels before buyer acceptance.",
+            ),
+            step(
+                "confirm_visual_review_path",
+                "Confirm visual review path",
+                "Stakeholder reviewer",
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
+                "figma_artifact",
+                "ready" if has_file("docs/figma_artifacts.md") else "blocked",
+                "Editable design, FigJam, and stakeholder artifacts are recorded without Code Connect.",
+                "Proceed when visual artifacts are available for stakeholder review.",
+                "Record Figma artifacts before buyer acceptance.",
+            ),
+            step(
+                "confirm_packaging_decision",
+                "Confirm packaging decision",
+                "Procurement reviewer",
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "repository_artifact",
+                "ready" if completion["library_split_decision"]["decision"] == "keep_single_product" else "warning",
+                completion["library_split_decision"]["reason"],
+                "Proceed with one repository and one deployable product.",
+                "Extract only after a second product, independent release cadence, or provenance trigger exists.",
+            ),
+            step(
+                "confirm_production_inputs",
+                "Confirm production inputs",
+                "Operations owner",
+                ["production telemetry", "support plan", "SLO evidence", "incident drill"],
+                "proposed_until_production",
+                "warning",
+                "Production telemetry, support, SLO, and incident evidence require a deployment or paid onboarding environment.",
+                "Proceed with warning when production inputs are explicitly caveated.",
+                "Collect production evidence during buyer onboarding or mark an explicit waiver.",
+            ),
+            step(
+                "confirm_buyer_specific_inputs",
+                "Confirm buyer-specific inputs",
+                "Buyer and account team",
+                ["ROI model", "security questionnaire", "legal review", "deployment target"],
+                "proposed_until_buyer_specific",
+                "warning",
+                "ROI, legal, procurement, and deployment inputs require a named buyer.",
+                "Proceed with warning when buyer-specific inputs are explicit follow-ups.",
+                "Collect buyer-specific inputs during account diligence.",
+            ),
+        ]
+        state_counts = Counter(item["completion_state"] for item in workflow_steps)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            workflow_status = "buyer_acceptance_workflow_blocked"
+        elif warning_count:
+            workflow_status = "buyer_acceptance_workflow_ready_with_warnings"
+        else:
+            workflow_status = "buyer_acceptance_workflow_ready"
+
+        return {
+            "workflow_status": workflow_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_buyer_acceptance_workflow",
+            "source_note": (
+                "Commercial buyer acceptance workflow maps runbook owners, runtime evidence, "
+                "Figma artifacts, analytics truthfulness, review-process policy, and packaging "
+                "decision into Go, Warning, and No-Go steps; it is not a valuation guarantee, "
+                "purchase commitment, signed order, legal opinion, production compliance certificate, "
+                "or revenue proof."
+            ),
+            "workflow_summary": {
+                "step_count": len(workflow_steps),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "production_follow_up_count": sum(
+                    1 for item in workflow_steps if item["evidence_type"] == "proposed_until_production"
+                ),
+                "buyer_specific_follow_up_count": sum(
+                    1 for item in workflow_steps if item["evidence_type"] == "proposed_until_buyer_specific"
+                ),
+                "review_process_is_blocker": acceptance["review_process_policy"]["is_blocker"],
+                "code_connect_used": False,
+            },
+            "acceptance_steps": workflow_steps,
+            "concrete_blockers": concrete_blockers,
+            "go_warning_no_go_rules": [
+                {
+                    "workflow_status": "buyer_acceptance_workflow_ready",
+                    "rule": "all acceptance owners have ready evidence and no external production or buyer-specific inputs remain open",
+                },
+                {
+                    "workflow_status": "buyer_acceptance_workflow_ready_with_warnings",
+                    "rule": "repo-local buyer acceptance evidence is ready while production or buyer-specific inputs remain explicit warnings",
+                },
+                {
+                    "workflow_status": "buyer_acceptance_workflow_blocked",
+                    "rule": "security failure, API contract regression, document mismatch, reproducible product defect, missing acceptance path, or Code Connect usage blocks acceptance",
+                },
+            ],
+            "review_process_policy": acceptance["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_acceptance_status": acceptance["acceptance_status"],
+                "commercial_completion_status": completion["completion_status"],
+                "buyer_handoff_status": handoff["bundle_status"],
+                "analytics_measurement_status": analytics["measurement_status"],
+            },
+            "library_split_decision": completion["library_split_decision"],
+            "plugin_traceability": completion["plugin_traceability"],
+            "workflow_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_buyer_acceptance_workflows/latest",
+                "documentation": "docs/commercial_buyer_acceptance_runbook.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

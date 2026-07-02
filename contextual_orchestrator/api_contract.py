@@ -231,6 +231,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial completion scorecard"}},
             }
         },
+        "/api/v1/commercial_buyer_acceptance_workflows/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_buyer_acceptance_workflow",
+                "summary": "Get KRW 2B commercial buyer acceptance workflow",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial buyer acceptance workflow"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",
