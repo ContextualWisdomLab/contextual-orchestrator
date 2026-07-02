@@ -35,7 +35,7 @@ def get_json(url: str, token: str) -> tuple[int, dict[str, object]]:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))

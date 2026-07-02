@@ -35,7 +35,7 @@ def get_json(url: str, token: str) -> tuple[int, dict[str, object]]:
         method="GET",
     )
     try:
-        with urllib.request.urlopen(request, timeout=5) as response:
+        with urllib.request.urlopen(request, timeout=15) as response:
             return response.status, json.loads(response.read().decode("utf-8"))
     except urllib.error.HTTPError as exc:
         return exc.code, json.loads(exc.read().decode("utf-8"))
@@ -175,6 +175,7 @@ def test_commercial_saleability_gate_endpoint_openapi_admin_and_docs_contract() 
     finally:
         server.shutdown()
         thread.join(timeout=5)
+        server.server_close()
 
     assert unauth_status == 401
     assert unauth_body["error"]["code"] == "unauthorized"

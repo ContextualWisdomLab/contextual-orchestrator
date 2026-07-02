@@ -6741,7 +6741,12 @@ class TaskOrchestrator:
                     else str(item)
                     for item in saleability["concrete_blockers"]
                 ]
-                + committee["concrete_blockers"]
+                + [
+                    str(item.get("item_name") or item.get("section_name") or item)
+                    if isinstance(item, dict)
+                    else str(item)
+                    for item in committee["concrete_blockers"]
+                ]
             )
         )
         local_runtime_state = (
@@ -6887,9 +6892,11 @@ class TaskOrchestrator:
             ),
         ]
         state_counts = Counter(item["completion_state"] for item in gate_checks)
-        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        blocked_count = state_counts.get("blocked", 0)
+        concrete_blocker_count = len(concrete_blockers)
+        blocking_issue_count = blocked_count + concrete_blocker_count
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
+        if blocking_issue_count:
             saleability_gate_status = "commercial_saleability_gate_blocked"
             recommendation_status = "no_go_until_blockers_cleared"
         elif warning_count:
@@ -6939,6 +6946,7 @@ class TaskOrchestrator:
                 "ready_count": state_counts.get("ready", 0),
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
+                "concrete_blocker_count": concrete_blocker_count,
                 "endpoint_count": len(required_runtime_endpoints),
                 "review_process_is_blocker": saleability["review_process_policy"]["is_blocker"],
                 "code_connect_used": False,
@@ -7223,9 +7231,11 @@ class TaskOrchestrator:
             ),
         ]
         state_counts = Counter(item["completion_state"] for item in milestones)
-        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        blocked_count = state_counts.get("blocked", 0)
+        concrete_blocker_count = len(concrete_blockers)
+        blocking_issue_count = blocked_count + concrete_blocker_count
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
+        if blocking_issue_count:
             mutual_action_plan_status = "commercial_mutual_action_plan_blocked"
             recommendation_status = "do_not_execute_until_blockers_cleared"
         elif warning_count:
@@ -7275,6 +7285,7 @@ class TaskOrchestrator:
                 "ready_count": state_counts.get("ready", 0),
                 "warning_count": warning_count,
                 "blocked_count": blocked_count,
+                "concrete_blocker_count": concrete_blocker_count,
                 "endpoint_count": len(required_runtime_endpoints),
                 "review_process_is_blocker": saleability_gate["review_process_policy"]["is_blocker"],
                 "code_connect_used": False,
