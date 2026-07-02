@@ -115,6 +115,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "Contextual Orchestrator KRW 2B Commercial Readiness Plan",
         "KRW 2B Commercial Evidence Export",
         "KRW 2B Commercial Acceptance Check",
+        "KRW 2B Commercial Release Candidate",
         "team::1408252278989737675",
         "Figma Code Connect was not used",
     ]:
@@ -370,6 +371,45 @@ def test_commercial_acceptance_check_defines_buyer_acceptance_gate() -> None:
         assert expected_text in plan
 
 
+def test_commercial_release_candidate_defines_buyer_release_package() -> None:
+    release = read_text("docs/commercial_release_candidate.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-release-candidate.md")
+
+    for expected_text in [
+        "Commercial Release Candidate",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Release Inputs",
+        "Runtime Shape",
+        "Release Status Rules",
+        "KRW 2B Commercial Release Candidate",
+        "/api/v1/commercial_release_candidates/latest",
+        "/api/v1/commercial_acceptance_checks/latest",
+        "/api/v1/commercial_evidence_exports/latest",
+        "/api/v1/saleability_decisions/latest",
+        "/api/v1/buyer_handoff_bundles/latest",
+        "/api/v1/buyer_evidence_manifests/latest",
+        "/api/v1/commercial_readiness/latest",
+        "/api/v1/sales_readiness/latest",
+        "/api/v1/analytics_snapshots/latest",
+        "local_commercial_release_candidate",
+        "release_artifacts",
+        "external_release_gaps",
+    ]:
+        assert expected_text in release
+
+    for expected_text in [
+        "Commercial Release Candidate Implementation Plan",
+        "get_latest_commercial_release_candidate",
+        "No new repo dependencies",
+        "python tests/test_commercial_release_candidate.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -386,4 +426,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_saleability_decision_defines_final_gate()
     test_commercial_evidence_export_defines_buyer_export_index()
     test_commercial_acceptance_check_defines_buyer_acceptance_gate()
+    test_commercial_release_candidate_defines_buyer_release_package()
     print("ok")

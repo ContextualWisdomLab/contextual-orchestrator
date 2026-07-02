@@ -52,6 +52,7 @@ Diagrams created:
 - `KRW 2B Saleability Decision Gate`
 - `KRW 2B Commercial Evidence Export`
 - `KRW 2B Commercial Acceptance Check`
+- `KRW 2B Commercial Release Candidate`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -110,6 +111,12 @@ runtime endpoint chain, buyer packet documents, admin operator surface,
 verification evidence, Figma stakeholder artifacts, review-process non-blocker
 policy, packaging decision, and external evidence gaps into
 `/api/v1/commercial_acceptance_checks/latest`.
+
+The commercial release candidate workflow maps the commercial acceptance check,
+runtime endpoint chain, repository distribution packet, security metadata,
+admin operator surface, verification tests, Figma stakeholder artifacts,
+review-process non-blocker policy, packaging decision, and external release
+gaps into `/api/v1/commercial_release_candidates/latest`.
 
 ## Stakeholder Deck
 

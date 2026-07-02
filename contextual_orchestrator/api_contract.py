@@ -135,6 +135,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial acceptance check"}},
             }
         },
+        "/api/v1/commercial_release_candidates/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_release_candidate",
+                "summary": "Get commercial release candidate package for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial release candidate"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",
