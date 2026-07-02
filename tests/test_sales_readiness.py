@@ -92,12 +92,16 @@ def test_sales_readiness_report_marks_enterprise_pilot_ready() -> None:
         },
     )
     rows = criteria_by_name(report)
+    readiness_summary = report["readiness_summary"]
 
     assert report["readiness_status"] == "sales_ready"
     assert report["measurement_status"] == "local_runtime_snapshot"
+    assert readiness_summary["pass"] + readiness_summary["warn"] + readiness_summary["fail"] == len(rows)
+    assert readiness_summary["pass"] > 0
+    assert readiness_summary["warn"] == 0
+    assert readiness_summary["fail"] == 0
+    assert readiness_summary == report["summary"]
     assert "not a production compliance certificate" in report["source_note"]
-    assert report["summary"]["fail"] == 0
-    assert report["summary"]["warn"] == 0
     assert {"api_compatibility", "admin_evidence", "trace_evidence", "evaluation_replay"}.issubset(rows)
     assert rows["security_posture"]["status"] == "pass"
     assert rows["analytics_truthfulness"]["status"] == "pass"
@@ -124,7 +128,8 @@ def test_sales_readiness_warns_for_single_token_local_deployment() -> None:
     rows = criteria_by_name(report)
 
     assert report["readiness_status"] == "pilot_ready_with_warnings"
-    assert report["summary"]["fail"] == 0
+    assert report["readiness_summary"]["fail"] == 0
+    assert report["readiness_summary"]["warn"] == 1
     assert rows["security_posture"]["status"] == "warn"
     assert "split admin and inference tokens" in rows["security_posture"]["remediation"]
 
@@ -149,6 +154,10 @@ def test_sales_readiness_endpoint_openapi_and_admin_surface() -> None:
     port = server.server_address[1]
 
     try:
+        unauth_status, unauth_body = get_json(
+            f"http://127.0.0.1:{port}/api/v1/sales_readiness/latest",
+            "inference_secret",
+        )
         chat_status, _ = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
             {"messages": [{"role": "user", "content": "Analyze, verify, and summarize readiness."}]},
@@ -164,8 +173,15 @@ def test_sales_readiness_endpoint_openapi_and_admin_surface() -> None:
 
     rows = criteria_by_name(readiness)
     assert chat_status == 200
+    assert unauth_status == 401
+    assert unauth_body["error"]["code"] == "unauthorized"
     assert readiness_status == 200
+    assert readiness["readiness_status"] in {"sales_ready", "pilot_ready_with_warnings", "not_ready"}
+    assert readiness["readiness_summary"] == readiness["summary"]
     assert readiness["measurement_status"] == "local_runtime_snapshot"
+    assert "source_note" in readiness
+    assert "criteria" in readiness
+    assert {"api_compatibility", "admin_evidence", "trace_evidence", "provider_egress_safety"}.issubset(rows)
     assert rows["security_posture"]["status"] == "pass"
     assert rows["api_compatibility"]["status"] == "pass"
 

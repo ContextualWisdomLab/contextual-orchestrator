@@ -45,6 +45,10 @@ ADMIN_TRANSLATIONS = {
         "agent_health_coverage": "Agent health coverage",
         "provider_exclusion_miss_rate": "Provider exclusion miss rate",
         "locale_key_parity": "Locale key parity",
+        "readiness_summary": "Readiness summary",
+        "readiness_source": "Readiness source",
+        "readiness_measurement_status": "Measurement status",
+        "readiness_remediation_label": "Remediation",
         "sales_readiness": "sales_readiness",
         "sales_readiness_title": "Sales Readiness",
         "sales_ready": "Sales ready",
@@ -155,6 +159,10 @@ ADMIN_TRANSLATIONS = {
         "agent_health_coverage": "에이전트 상태 커버리지",
         "provider_exclusion_miss_rate": "공급자 제외 누락률",
         "locale_key_parity": "로케일 키 일치율",
+        "readiness_summary": "판매 준비 지표",
+        "readiness_source": "근거",
+        "readiness_measurement_status": "측정 상태",
+        "readiness_remediation_label": "보완 조치",
         "sales_readiness": "sales_readiness",
         "sales_readiness_title": "판매 준비도",
         "sales_ready": "판매 준비 완료",
@@ -879,10 +887,23 @@ Summarize this research thread and verify claims.</textarea>
       const status = readiness.readiness_status || "not_ready";
       const statusClass = status === "sales_ready" ? "green" : status === "pilot_ready_with_warnings" ? "amber" : "red";
       const criteria = readiness.criteria || [];
+      const readinessSummary = readiness.readiness_summary || readiness.summary || {};
       els.salesReadiness.innerHTML = `
         <div class="metric">
           <span data-i18n="sales_readiness_title">${t("sales_readiness_title")}</span>
           <strong><span class="chip ${statusClass}">${escapeHtml(t(status))}</span></strong>
+        </div>
+        <div class="metric source">
+          <span data-i18n="readiness_source">${t("readiness_source")}</span>
+          <strong>${escapeHtml(readiness.source_note || "No source note")}</strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
+          <strong>${escapeHtml(readiness.measurement_status || "unknown")}</strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
+          <strong>pass: ${readinessSummary.pass || 0} | warn: ${readinessSummary.warn || 0} | fail: ${readinessSummary.fail || 0}</strong>
         </div>
         <div class="readiness-grid">
           ${criteria.slice(0, 8).map(row => {
@@ -891,6 +912,7 @@ Summarize this research thread and verify claims.</textarea>
               <span class="chip ${chip}">${escapeHtml(t(`readiness_${row.status}`))}</span>
               <strong>${escapeHtml(t(row.criterion_name) || row.label)}</strong>
               <small>${escapeHtml(row.evidence)}</small>
+              <small><b>${escapeHtml(t("readiness_remediation_label"))}:</b> ${escapeHtml(row.remediation || "")}</small>
             </div>`;
           }).join("")}
         </div>`;

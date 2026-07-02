@@ -770,6 +770,7 @@ class TaskOrchestrator:
             self._provider_egress_criterion(),
         ]
         summary = self._criteria_summary(criteria)
+        readiness_summary = {"pass": summary["pass"], "warn": summary["warn"], "fail": summary["fail"]}
         if summary["fail"]:
             readiness_status = "not_ready"
         elif summary["warn"]:
@@ -784,7 +785,8 @@ class TaskOrchestrator:
                 "Sales readiness is based on this process-local runtime, configuration, and "
                 "documentation evidence; it is not a production compliance certificate."
             ),
-            "summary": summary,
+            "summary": readiness_summary,
+            "readiness_summary": readiness_summary,
             "criteria": criteria,
         }
 
