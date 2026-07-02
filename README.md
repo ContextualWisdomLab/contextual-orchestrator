@@ -73,6 +73,7 @@ One public interface:
 - `/api/v1/buyer_handoff_bundles/latest` exposes the buyer handoff bundle across runtime reports, repository packet, Figma artifacts, verification commands, packaging decision, and explicit production or buyer-specific follow-ups.
 - `/api/v1/saleability_decisions/latest` exposes the final KRW 2,000,000,000 saleability decision gate with concrete blockers, warning conditions, and review-process non-blocker policy.
 - `/api/v1/commercial_evidence_exports/latest` exposes the portable commercial evidence export across saleability, runtime reports, buyer documents, Figma artifacts, verification commands, review-process policy, packaging decision, and external evidence gaps.
+- `/api/v1/commercial_acceptance_checks/latest` exposes the buyer acceptance check across evidence export, runtime endpoint chain, buyer packet, admin surface, verification, Figma, review-process policy, packaging decision, and external evidence gaps.
 
 One fused orchestration loop:
 
@@ -103,6 +104,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Commercial buyer handoff bundle](docs/commercial_buyer_handoff_bundle.md)
 - [Commercial saleability decision](docs/commercial_saleability_decision.md)
 - [Commercial evidence export](docs/commercial_evidence_export.md)
+- [Commercial acceptance check](docs/commercial_acceptance_check.md)
 - [Commercial completion scorecard](docs/commercial_completion_scorecard.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
@@ -129,4 +131,5 @@ python tests/test_buyer_evidence_manifest.py
 python tests/test_buyer_handoff_bundle.py
 python tests/test_saleability_decision.py
 python tests/test_commercial_evidence_export.py
+python tests/test_commercial_acceptance_check.py
 ```

@@ -51,6 +51,7 @@ Diagrams created:
 - `KRW 2B Buyer Handoff Bundle Workflow`
 - `KRW 2B Saleability Decision Gate`
 - `KRW 2B Commercial Evidence Export`
+- `KRW 2B Commercial Acceptance Check`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -103,6 +104,12 @@ runtime reports, buyer packet documents, Figma stakeholder artifacts,
 verification commands, review-process non-blocker policy, packaging decision,
 and required external evidence gaps into
 `/api/v1/commercial_evidence_exports/latest`.
+
+The commercial acceptance check workflow maps `/api/v1/commercial_evidence_exports/latest`,
+runtime endpoint chain, buyer packet documents, admin operator surface,
+verification evidence, Figma stakeholder artifacts, review-process non-blocker
+policy, packaging decision, and external evidence gaps into
+`/api/v1/commercial_acceptance_checks/latest`.
 
 ## Stakeholder Deck
 

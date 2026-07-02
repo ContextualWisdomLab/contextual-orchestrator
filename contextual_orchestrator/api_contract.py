@@ -127,6 +127,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial evidence export"}},
             }
         },
+        "/api/v1/commercial_acceptance_checks/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_acceptance_check",
+                "summary": "Get commercial acceptance check for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial acceptance check"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

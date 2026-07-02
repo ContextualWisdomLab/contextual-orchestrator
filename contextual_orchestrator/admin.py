@@ -57,6 +57,7 @@ ADMIN_TRANSLATIONS = {
         "buyer_handoff_bundle_title": "Buyer Handoff Bundle",
         "saleability_decision_title": "Saleability Decision",
         "commercial_evidence_export_title": "Commercial Evidence Export",
+        "commercial_acceptance_check_title": "Commercial Acceptance Check",
         "commercial_contract_value": "Target contract value",
         "sales_ready": "Sales ready",
         "pilot_ready_with_warnings": "Pilot ready with warnings",
@@ -76,6 +77,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_export_ready": "Commercial export ready",
         "commercial_export_ready_with_warnings": "Commercial export ready with warnings",
         "commercial_export_blocked": "Commercial export blocked",
+        "commercial_acceptance_ready": "Commercial acceptance ready",
+        "commercial_acceptance_ready_with_warnings": "Commercial acceptance ready with warnings",
+        "commercial_acceptance_blocked": "Commercial acceptance blocked",
         "readiness_pass": "Pass",
         "readiness_warn": "Warn",
         "readiness_fail": "Fail",
@@ -200,6 +204,7 @@ ADMIN_TRANSLATIONS = {
         "buyer_handoff_bundle_title": "구매자 인수인계 번들",
         "saleability_decision_title": "판매 가능성 판단",
         "commercial_evidence_export_title": "상용 증거 Export",
+        "commercial_acceptance_check_title": "상용 인수 검증",
         "commercial_contract_value": "목표 계약 금액",
         "sales_ready": "판매 준비 완료",
         "pilot_ready_with_warnings": "주의 조건부 파일럿 가능",
@@ -219,6 +224,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_export_ready": "상용 export 준비 완료",
         "commercial_export_ready_with_warnings": "주의 조건부 상용 export 가능",
         "commercial_export_blocked": "상용 export 차단",
+        "commercial_acceptance_ready": "상용 인수 준비 완료",
+        "commercial_acceptance_ready_with_warnings": "주의 조건부 상용 인수 가능",
+        "commercial_acceptance_blocked": "상용 인수 차단",
         "readiness_pass": "통과",
         "readiness_warn": "주의",
         "readiness_fail": "실패",
@@ -782,7 +790,7 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="observability_title">Observability</h1><span class="chip green">Live</span></div>
           <div class="kpis" id="kpis"></div>
-          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest" data-handoff-bundle-source="/api/v1/buyer_handoff_bundles/latest" data-saleability-source="/api/v1/saleability_decisions/latest" data-commercial-export-source="/api/v1/commercial_evidence_exports/latest"></div>
+          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest" data-handoff-bundle-source="/api/v1/buyer_handoff_bundles/latest" data-saleability-source="/api/v1/saleability_decisions/latest" data-commercial-export-source="/api/v1/commercial_evidence_exports/latest" data-commercial-acceptance-source="/api/v1/commercial_acceptance_checks/latest"></div>
           <table><thead><tr><th>Workflow</th><th>Mode</th><th>Policy</th><th>Created</th></tr></thead><tbody id="runRows"></tbody></table>
         </section>
       </section>
@@ -837,7 +845,7 @@ Summarize this research thread and verify claims.</textarea>
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
-    let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null};
+    let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null};
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
@@ -947,6 +955,7 @@ Summarize this research thread and verify claims.</textarea>
       const handoffBundle = state.buyerHandoffBundle || {};
       const saleability = state.saleabilityDecision || {};
       const commercialExport = state.commercialEvidenceExport || {};
+      const commercialAcceptance = state.commercialAcceptanceCheck || {};
       const status = readiness.readiness_status || "not_ready";
       const statusClass = status === "sales_ready" ? "green" : status === "pilot_ready_with_warnings" ? "amber" : "red";
       const criteria = readiness.criteria || [];
@@ -967,6 +976,9 @@ Summarize this research thread and verify claims.</textarea>
       const exportStatus = commercialExport.export_status || "commercial_export_blocked";
       const exportStatusClass = exportStatus === "commercial_export_ready" ? "green" : exportStatus === "commercial_export_ready_with_warnings" ? "amber" : "red";
       const exportSummary = commercialExport.export_summary || {};
+      const acceptanceStatus = commercialAcceptance.acceptance_status || "commercial_acceptance_blocked";
+      const acceptanceStatusClass = acceptanceStatus === "commercial_acceptance_ready" ? "green" : acceptanceStatus === "commercial_acceptance_ready_with_warnings" ? "amber" : "red";
+      const acceptanceSummary = commercialAcceptance.acceptance_summary || {};
       els.salesReadiness.innerHTML = `
         <div class="metric">
           <span data-i18n="sales_readiness_title">${t("sales_readiness_title")}</span>
@@ -996,17 +1008,21 @@ Summarize this research thread and verify claims.</textarea>
           <span data-i18n="commercial_evidence_export_title">${t("commercial_evidence_export_title")}</span>
           <strong><span class="chip ${exportStatusClass}">${escapeHtml(t(exportStatus))}</span></strong>
         </div>
+        <div class="metric">
+          <span data-i18n="commercial_acceptance_check_title">${t("commercial_acceptance_check_title")}</span>
+          <strong><span class="chip ${acceptanceStatusClass}">${escapeHtml(t(acceptanceStatus))}</span></strong>
+        </div>
         <div class="metric source">
           <span data-i18n="readiness_source">${t("readiness_source")}</span>
-          <strong>${escapeHtml(commercialExport.source_note || saleability.source_note || handoffBundle.source_note || buyerManifest.source_note || commercial.source_note || readiness.source_note || "No source note")}</strong>
+          <strong>${escapeHtml(commercialAcceptance.source_note || commercialExport.source_note || saleability.source_note || handoffBundle.source_note || buyerManifest.source_note || commercial.source_note || readiness.source_note || "No source note")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
-          <strong>${escapeHtml(commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
+          <strong>${escapeHtml(commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
-          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0} | handoff ${handoffSummary.ready || 0}/${handoffSummary.warning || 0}/${handoffSummary.blocked || 0} | saleability ${saleabilitySummary.blocked_count || 0}/${saleabilitySummary.warning_count || 0} | export ${exportSummary.blocked_count || 0}/${exportSummary.warning_count || 0}</strong>
+          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0} | handoff ${handoffSummary.ready || 0}/${handoffSummary.warning || 0}/${handoffSummary.blocked || 0} | saleability ${saleabilitySummary.blocked_count || 0}/${saleabilitySummary.warning_count || 0} | export ${exportSummary.blocked_count || 0}/${exportSummary.warning_count || 0} | acceptance ${acceptanceSummary.blocked_count || 0}/${acceptanceSummary.warning_count || 0}</strong>
         </div>
         <div class="readiness-grid">
           ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
@@ -1094,6 +1110,8 @@ Summarize this research thread and verify claims.</textarea>
       state.saleabilityDecision = await saleabilityRes.json();
       const commercialExportRes = await fetch("/api/v1/commercial_evidence_exports/latest");
       state.commercialEvidenceExport = await commercialExportRes.json();
+      const commercialAcceptanceRes = await fetch("/api/v1/commercial_acceptance_checks/latest");
+      state.commercialAcceptanceCheck = await commercialAcceptanceRes.json();
     }
     async function simulate() {
       const res = await fetch("/admin/simulate", {

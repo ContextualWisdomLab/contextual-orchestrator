@@ -1608,6 +1608,219 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_acceptance_check_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the buyer acceptance check over the commercial evidence export."""
+        evidence_export = self.commercial_evidence_export_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        concrete_blockers = evidence_export["concrete_blockers"]
+        export_blocked = evidence_export["export_status"] == "commercial_export_blocked"
+        runtime_state = "blocked" if export_blocked or concrete_blockers else "ready"
+        acceptance_items = [
+            self._buyer_evidence_item(
+                "runtime_endpoint_chain",
+                "Runtime endpoint chain",
+                "Technical reviewer",
+                [
+                    "/api/v1/analytics_snapshots/latest",
+                    "/api/v1/sales_readiness/latest",
+                    "/api/v1/commercial_readiness/latest",
+                    "/api/v1/buyer_evidence_manifests/latest",
+                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/saleability_decisions/latest",
+                    "/api/v1/commercial_evidence_exports/latest",
+                ],
+                "measured_local",
+                runtime_state,
+                f"commercial_export_status={evidence_export['export_status']}",
+                "Resolve blocked runtime report chain before buyer acceptance.",
+            ),
+            self._buyer_evidence_item(
+                "buyer_packet_documents",
+                "Buyer packet documents",
+                "Procurement reviewer",
+                [
+                    "docs/commercial_buyer_diligence_packet.md",
+                    "docs/commercial_buyer_acceptance_runbook.md",
+                    "docs/commercial_buyer_evidence_manifest.md",
+                    "docs/commercial_buyer_handoff_bundle.md",
+                    "docs/commercial_saleability_decision.md",
+                    "docs/commercial_evidence_export.md",
+                    "docs/commercial_acceptance_check.md",
+                ],
+                "repository_artifact",
+                "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "docs/commercial_buyer_diligence_packet.md",
+                        "docs/commercial_buyer_acceptance_runbook.md",
+                        "docs/commercial_buyer_evidence_manifest.md",
+                        "docs/commercial_buyer_handoff_bundle.md",
+                        "docs/commercial_saleability_decision.md",
+                        "docs/commercial_evidence_export.md",
+                        "docs/commercial_acceptance_check.md",
+                    )
+                )
+                else "blocked",
+                "Buyer packet documents cover diligence, acceptance, manifest, handoff, decision, export, and check.",
+                "Restore missing buyer packet documents before buyer acceptance.",
+            ),
+            self._buyer_evidence_item(
+                "admin_operator_surface",
+                "Admin operator surface",
+                "Platform operator",
+                ["/admin", "contextual_orchestrator/admin.py", "/api/v1/commercial_acceptance_checks/latest"],
+                "repository_artifact",
+                "ready" if has_file("contextual_orchestrator/admin.py") else "blocked",
+                "Admin observability surface exposes the commercial acceptance check status with bilingual labels.",
+                "Expose acceptance check status in admin observability before buyer acceptance.",
+            ),
+            self._buyer_evidence_item(
+                "verification_evidence",
+                "Verification evidence",
+                "Technical reviewer",
+                [
+                    "tests/test_commercial_acceptance_check.py",
+                    "tests/test_commercial_evidence_export.py",
+                    "tests/test_saleability_decision.py",
+                    "tests/test_plugin_driven_artifacts.py",
+                    "tests/test_api_contract.py",
+                    "pytest -q",
+                ],
+                "measured_local",
+                "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "tests/test_commercial_acceptance_check.py",
+                        "tests/test_commercial_evidence_export.py",
+                        "tests/test_saleability_decision.py",
+                        "tests/test_plugin_driven_artifacts.py",
+                        "tests/test_api_contract.py",
+                    )
+                )
+                else "blocked",
+                "Focused commercial acceptance, export, saleability, plugin artifact, and API contract tests are named.",
+                "Restore focused tests before buyer acceptance.",
+            ),
+            self._buyer_evidence_item(
+                "figma_stakeholder_artifacts",
+                "Figma stakeholder artifacts",
+                "Stakeholder reviewer",
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
+                "figma_artifact",
+                "ready" if has_file("docs/figma_artifacts.md") else "blocked",
+                "Editable stakeholder artifacts are recorded and Code Connect is excluded.",
+                "Record editable Figma artifacts before buyer acceptance.",
+            ),
+            self._buyer_evidence_item(
+                "review_process_policy",
+                "Review process policy",
+                "Deal owner",
+                ["docs/commercial_saleability_decision.md", "/api/v1/saleability_decisions/latest"],
+                "repository_artifact",
+                "ready",
+                "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers.",
+                "Block only on concrete security, API contract, document, or product defects.",
+            ),
+            self._buyer_evidence_item(
+                "packaging_decision",
+                "Packaging decision",
+                "Procurement and security reviewer",
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "repository_artifact",
+                "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
+                evidence_export["library_split_decision"]["reason"],
+                "Only extract a library after a second product, independent release cadence, or provenance trigger exists.",
+            ),
+        ]
+        follow_up_items = [
+            self._buyer_evidence_item(
+                item["evidence_name"],
+                item["label"],
+                item["reviewer"],
+                item["sources"],
+                item["evidence_type"],
+                "warning",
+                item["evidence"],
+                item["next_action"],
+            )
+            for item in evidence_export["required_external_evidence"]
+        ]
+        all_items = acceptance_items + follow_up_items
+        summary = self._buyer_manifest_summary(all_items)
+        blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
+        warning_count = summary["by_completion_state"]["warning"]
+        if blocked_count:
+            acceptance_status = "commercial_acceptance_blocked"
+        elif warning_count:
+            acceptance_status = "commercial_acceptance_ready_with_warnings"
+        else:
+            acceptance_status = "commercial_acceptance_ready"
+
+        return {
+            "acceptance_status": acceptance_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_acceptance_check",
+            "source_note": (
+                "Commercial acceptance check evaluates local commercial evidence export, admin visibility, "
+                "repository packet, Figma artifacts, verification commands, review-process policy, packaging "
+                "decision, and explicit production or buyer-specific gaps; it is not a valuation guarantee, "
+                "purchase commitment, or production compliance certificate."
+            ),
+            "acceptance_summary": {
+                "item_count": len(all_items),
+                "blocked_count": blocked_count,
+                "warning_count": warning_count,
+                "review_process_is_blocker": evidence_export["review_process_policy"]["is_blocker"],
+            },
+            "acceptance_items": acceptance_items,
+            "follow_up_items": follow_up_items,
+            "concrete_blockers": concrete_blockers,
+            "required_external_evidence": evidence_export["required_external_evidence"],
+            "acceptance_gates": [
+                {
+                    "gate_name": "go",
+                    "rule": "no blocked acceptance items and no required external evidence gaps",
+                },
+                {
+                    "gate_name": "warning",
+                    "rule": "only production or buyer-specific evidence remains explicitly caveated",
+                },
+                {
+                    "gate_name": "blocked",
+                    "rule": "security failure, API contract regression, document mismatch, product defect, or Code Connect usage",
+                },
+            ],
+            "review_process_policy": evidence_export["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_export_status": evidence_export["export_status"],
+                **evidence_export["related_runtime_reports"],
+            },
+            "library_split_decision": evidence_export["library_split_decision"],
+            "plugin_traceability": evidence_export["plugin_traceability"],
+            "acceptance_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_acceptance_checks/latest",
+                "documentation": "docs/commercial_acceptance_check.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
