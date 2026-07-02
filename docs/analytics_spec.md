@@ -62,6 +62,15 @@ operations, analytics truthfulness, Figma stakeholder review, review-process
 policy, and packaging decision. Pricing, legal, ROI, production, support, and
 signature inputs remain proposed or buyer-specific warnings until supplied.
 
+The prototype also exposes
+`/api/v1/commercial_purchase_approval_packets/latest`. That endpoint packages
+the buyer purchase approval artifact as local runtime evidence across proposal,
+close, procurement, contract, value, security, onboarding, operations, analytics
+truthfulness, Figma stakeholder review, review-process policy, and packaging
+decision. Buyer signature authority, budget approval, purchase order, finance
+authority, and go-live authorization remain proposed or buyer-specific warnings
+until supplied.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -110,6 +119,7 @@ with proposed production targets.
 | `buyer_acceptance_workflow_warning_count` | Count of warning steps in the buyer acceptance workflow, with production and buyer-specific follow-ups kept separate from measured local evidence. | proposed_until_buyer_specific | `/api/v1/commercial_buyer_acceptance_workflows/latest` response. |
 | `commercial_demo_warning_count` | Count of warning steps in the buyer demo scenario packet, with production, ROI, legal, security questionnaire, and support follow-ups kept separate from measured local demo evidence. | proposed_until_buyer_specific | `/api/v1/commercial_demo_scenarios/latest` response. |
 | `commercial_proposal_warning_count` | Count of warning sections in the buyer proposal packet, with pricing, legal, ROI, production, support, and signature inputs kept separate from measured local proposal evidence. | proposed_until_buyer_specific | `/api/v1/commercial_proposal_packets/latest` response. |
+| `commercial_purchase_approval_warning_count` | Count of warning gates in the buyer purchase approval packet, with signature authority, budget approval, purchase order, finance authority, and go-live authorization kept separate from measured local approval evidence. | proposed_until_buyer_specific | `/api/v1/commercial_purchase_approval_packets/latest` response. |
 
 Current GitHub/CI maturity evidence is a measured local or repository signal:
 CodeQL, Dependency review, Python supply chain, Trivy, coverage-evidence,

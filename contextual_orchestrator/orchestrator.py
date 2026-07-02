@@ -5517,6 +5517,350 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_purchase_approval_packet_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return buyer-side purchase approval gates for the KRW 2B standard."""
+        proposal = self.commercial_proposal_packet_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        close = self.commercial_close_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        procurement = self.commercial_procurement_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        contract = self.commercial_contract_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        value = self.commercial_value_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        security = self.commercial_security_attestation_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        onboarding = self.commercial_onboarding_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        operations = self.commercial_operations_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        admin_state = self.admin_state()
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        def all_files(*paths: str) -> bool:
+            return all(has_file(path) for path in paths)
+
+        def gate(
+            gate_name: str,
+            label: str,
+            owner: str,
+            sources: list[str],
+            runtime_endpoints: list[str],
+            evidence_type: str,
+            completion_state: str,
+            evidence: str,
+            approval_question: str,
+            next_action: str,
+        ) -> dict[str, Any]:
+            require_object_name(gate_name, "commercial_purchase_approval.gate_name")
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial purchase approval gate state must be ready, warning, or blocked")
+            return {
+                "gate_name": gate_name,
+                "label": label,
+                "owner": owner,
+                "sources": sources,
+                "runtime_endpoints": runtime_endpoints,
+                "evidence_type": evidence_type,
+                "completion_state": completion_state,
+                "evidence": evidence,
+                "approval_question": approval_question,
+                "next_action": next_action,
+            }
+
+        concrete_blockers = list(dict.fromkeys(proposal["concrete_blockers"] + close["concrete_blockers"]))
+        local_runtime_state = (
+            "blocked"
+            if proposal["proposal_status"] == "commercial_proposal_blocked"
+            or close["close_status"] == "commercial_close_blocked"
+            or concrete_blockers
+            else "ready"
+        )
+        approval_gates = [
+            gate(
+                "proposal_packet_ready",
+                "Proposal packet ready",
+                "Deal owner",
+                ["docs/commercial_proposal_packet.md", "/api/v1/commercial_proposal_packets/latest"],
+                ["/api/v1/commercial_proposal_packets/latest"],
+                "repository_and_runtime_artifact",
+                local_runtime_state if has_file("docs/commercial_proposal_packet.md") else "blocked",
+                f"commercial_proposal_status={proposal['proposal_status']}",
+                "Can the buyer review one coherent proposal packet?",
+                "Use the proposal packet as the approval cover artifact.",
+            ),
+            gate(
+                "procurement_path_ready",
+                "Procurement path ready",
+                "Procurement owner",
+                ["docs/commercial_procurement_readiness.md", "/api/v1/commercial_procurement_readiness/latest"],
+                ["/api/v1/commercial_procurement_readiness/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if procurement["procurement_status"] != "commercial_procurement_blocked"
+                and has_file("docs/commercial_procurement_readiness.md")
+                else "blocked",
+                f"commercial_procurement_status={procurement['procurement_status']}",
+                "Can procurement validate license, rights, distribution, admin, and caveat evidence?",
+                "Route the packet to procurement with buyer-specific inputs still marked as warnings.",
+            ),
+            gate(
+                "contract_legal_packet_ready",
+                "Contract and legal packet ready",
+                "Legal owner",
+                ["docs/commercial_contract_readiness.md", "/api/v1/commercial_contract_readiness/latest"],
+                ["/api/v1/commercial_contract_readiness/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if contract["contract_status"] != "commercial_contract_blocked"
+                and has_file("docs/commercial_contract_readiness.md")
+                else "blocked",
+                f"commercial_contract_status={contract['contract_status']}",
+                "Can legal review support, privacy, audit, license, and order-form obligations?",
+                "Collect final legal edits and buyer order-form fields outside the local runtime claim.",
+            ),
+            gate(
+                "financial_value_case_ready",
+                "Financial value case ready",
+                "Economic buyer",
+                ["docs/commercial_value_readiness.md", "docs/analytics_spec.md", "/api/v1/commercial_value_readiness/latest"],
+                ["/api/v1/commercial_value_readiness/latest", "/api/v1/analytics_snapshots/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if value["value_status"] != "commercial_value_blocked"
+                and all_files("docs/commercial_value_readiness.md", "docs/analytics_spec.md")
+                and analytics["measurement_status"] == "local_runtime_snapshot"
+                else "blocked",
+                f"commercial_value_status={value['value_status']}; analytics_measurement_status={analytics['measurement_status']}",
+                "Can finance separate measured local evidence from buyer ROI assumptions?",
+                "Attach buyer ROI and payback assumptions only after buyer discovery.",
+            ),
+            gate(
+                "security_acceptance_ready",
+                "Security acceptance ready",
+                "Security owner",
+                ["SECURITY.md", "docs/commercial_security_attestation.md", "/api/v1/commercial_security_attestations/latest"],
+                ["/api/v1/commercial_security_attestations/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
+                and all_files("SECURITY.md", "docs/commercial_security_attestation.md")
+                else "blocked",
+                f"commercial_security_attestation_status={security['security_attestation_status']}",
+                "Can security approve repo-local controls while external attestations remain caveated?",
+                "Collect buyer DPA, privacy, and third-party attestation evidence separately.",
+            ),
+            gate(
+                "implementation_readiness_ready",
+                "Implementation readiness ready",
+                "Implementation owner",
+                [
+                    "docs/commercial_onboarding_readiness.md",
+                    "docs/commercial_operations_readiness.md",
+                    "/api/v1/commercial_onboarding_readiness/latest",
+                    "/api/v1/commercial_operations_readiness/latest",
+                ],
+                ["/api/v1/commercial_onboarding_readiness/latest", "/api/v1/commercial_operations_readiness/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if onboarding["onboarding_status"] != "commercial_onboarding_blocked"
+                and operations["operations_status"] != "commercial_operations_blocked"
+                and all_files("docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md")
+                else "blocked",
+                f"commercial_onboarding_status={onboarding['onboarding_status']}; commercial_operations_status={operations['operations_status']}",
+                "Can implementation owners see onboarding and operations evidence before purchase approval?",
+                "Turn buyer environment details into the paid onboarding plan.",
+            ),
+            gate(
+                "close_readiness_ready",
+                "Close readiness ready",
+                "Deal owner",
+                ["docs/commercial_close_readiness.md", "/api/v1/commercial_close_readiness/latest"],
+                ["/api/v1/commercial_close_readiness/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if close["close_status"] != "commercial_close_blocked"
+                and has_file("docs/commercial_close_readiness.md")
+                else "blocked",
+                f"commercial_close_status={close['close_status']}",
+                "Can the buyer see final signature, budget, security, and go-live caveats before approval?",
+                "Use close readiness as the bridge between local product evidence and buyer approvals.",
+            ),
+            gate(
+                "approval_runtime_packet_ready",
+                "Approval runtime packet ready",
+                "Stakeholder reviewer",
+                [
+                    "docs/commercial_purchase_approval_packet.md",
+                    "docs/figma_artifacts.md",
+                    "docs/superpowers/plans/2026-07-02-commercial-purchase-approval-packet-runtime.md",
+                ],
+                ["/api/v1/commercial_purchase_approval_packets/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if all_files(
+                    "docs/commercial_purchase_approval_packet.md",
+                    "docs/figma_artifacts.md",
+                    "docs/superpowers/plans/2026-07-02-commercial-purchase-approval-packet-runtime.md",
+                )
+                and admin_state["agents"]
+                else "blocked",
+                "Purchase approval docs, FigJam artifact record, plan, and admin runtime are present.",
+                "Can stakeholders review the approval packet as docs, runtime JSON, and FigJam flow?",
+                "Keep Figma Code Connect out of the approval workflow.",
+            ),
+            gate(
+                "buyer_signature_authority",
+                "Buyer signature authority",
+                "Buyer sponsor and legal owner",
+                ["signed order form", "MSA", "DPA", "security acceptance"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Signed order form, MSA, DPA, and final security acceptance require buyer authority.",
+                "Does the buyer have an identified signer and legal approval path?",
+                "Collect named signer and final legal/security approvals.",
+            ),
+            gate(
+                "buyer_budget_po_authority",
+                "Buyer budget and PO authority",
+                "Finance and procurement owner",
+                ["budget approval", "purchase order", "finance authority", "go-live authorization"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Budget approval, purchase order, finance authority, and go-live authorization require buyer input.",
+                "Can finance issue the KRW 2B purchase order and approve go-live?",
+                "Collect budget owner, PO path, and go-live authorization or explicit waiver.",
+            ),
+        ]
+        state_counts = Counter(item["completion_state"] for item in approval_gates)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            purchase_approval_status = "commercial_purchase_approval_blocked"
+        elif warning_count:
+            purchase_approval_status = "commercial_purchase_approval_ready_with_warnings"
+        else:
+            purchase_approval_status = "commercial_purchase_approval_ready"
+        required_runtime_endpoints = list(
+            dict.fromkeys(
+                endpoint
+                for item in approval_gates
+                for endpoint in item["runtime_endpoints"]
+                if endpoint.startswith("/")
+            )
+        )
+
+        return {
+            "purchase_approval_status": purchase_approval_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_purchase_approval_packet",
+            "source_note": (
+                "Commercial purchase approval packet packages repo-local proposal, close, procurement, "
+                "contract, value, security, onboarding, operations, analytics, Figma, review-policy, and "
+                "packaging evidence for KRW 2,000,000,000 buyer purchase approval; it is not a valuation "
+                "guarantee, purchase commitment, signed order, legal opinion, production compliance "
+                "certificate, or revenue proof."
+            ),
+            "approval_narrative": {
+                "title": "KRW 2B buyer purchase approval packet",
+                "promise": (
+                    "Give finance, procurement, legal, security, and implementation owners one runtime "
+                    "approval packet that separates local product evidence from buyer-specific authority inputs."
+                ),
+                "audience": [
+                    "Economic buyer",
+                    "Finance owner",
+                    "Procurement owner",
+                    "Legal owner",
+                    "Security owner",
+                    "Implementation owner",
+                ],
+            },
+            "approval_summary": {
+                "gate_count": len(approval_gates),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "endpoint_count": len(required_runtime_endpoints),
+                "review_process_is_blocker": proposal["review_process_policy"]["is_blocker"],
+                "code_connect_used": False,
+            },
+            "approval_gates": approval_gates,
+            "required_runtime_endpoints": required_runtime_endpoints,
+            "concrete_blockers": concrete_blockers,
+            "purchase_approval_status_rules": [
+                {
+                    "purchase_approval_status": "commercial_purchase_approval_ready",
+                    "rule": "all approval gates are ready and no buyer signature, budget, PO, or go-live inputs remain open",
+                },
+                {
+                    "purchase_approval_status": "commercial_purchase_approval_ready_with_warnings",
+                    "rule": "repo-local purchase approval evidence is ready while buyer signature authority, budget, PO, or go-live authorization remain explicit warnings",
+                },
+                {
+                    "purchase_approval_status": "commercial_purchase_approval_blocked",
+                    "rule": "security failure, API contract regression, document mismatch, runtime defect, missing local approval evidence, or Code Connect usage blocks purchase approval",
+                },
+            ],
+            "review_process_policy": proposal["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_proposal_status": proposal["proposal_status"],
+                "commercial_close_status": close["close_status"],
+                "commercial_procurement_status": procurement["procurement_status"],
+                "commercial_contract_status": contract["contract_status"],
+                "commercial_value_status": value["value_status"],
+                "commercial_security_attestation_status": security["security_attestation_status"],
+                "commercial_onboarding_status": onboarding["onboarding_status"],
+                "commercial_operations_status": operations["operations_status"],
+                "analytics_measurement_status": analytics["measurement_status"],
+            },
+            "library_split_decision": proposal["library_split_decision"],
+            "plugin_traceability": proposal["plugin_traceability"],
+            "approval_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_purchase_approval_packets/latest",
+                "documentation": "docs/commercial_purchase_approval_packet.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

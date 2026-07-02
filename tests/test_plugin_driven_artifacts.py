@@ -73,6 +73,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "buyer_acceptance_workflow_warning_count",
         "commercial_demo_warning_count",
         "commercial_proposal_warning_count",
+        "commercial_purchase_approval_warning_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -139,6 +140,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Buyer Acceptance Runtime Workflow",
         "KRW 2B Commercial Demo Scenarios",
         "KRW 2B Commercial Proposal Packet",
+        "KRW 2B Commercial Purchase Approval Packet",
         "Figma Code Connect was not used",
     ]:
         assert expected_text in artifacts
@@ -369,6 +371,50 @@ def test_commercial_proposal_packet_defines_buyer_proposal() -> None:
     for expected_text in [
         "/api/v1/commercial_proposal_packets/latest",
         "commercial proposal packet",
+    ]:
+        assert expected_text in rest_api
+        assert expected_text in readme
+
+
+def test_commercial_purchase_approval_packet_defines_buyer_approval() -> None:
+    approval = read_text("docs/commercial_purchase_approval_packet.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-purchase-approval-packet-runtime.md")
+    rest_api = read_text("docs/rest_api_design.md")
+    readme = read_text("README.md")
+
+    for expected_text in [
+        "Commercial Purchase Approval Packet",
+        "Runtime endpoint: `/api/v1/commercial_purchase_approval_packets/latest`",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Approval Gates",
+        "Runtime Shape",
+        "Purchase Approval Status Rules",
+        "KRW 2B Commercial Purchase Approval Packet",
+        "/api/v1/commercial_proposal_packets/latest",
+        "/api/v1/commercial_close_readiness/latest",
+        "/api/v1/commercial_procurement_readiness/latest",
+        "local_commercial_purchase_approval_packet",
+        "commercial_purchase_approval_ready_with_warnings",
+        "measured local evidence",
+        "proposed_until_buyer_specific",
+    ]:
+        assert expected_text in approval
+
+    for expected_text in [
+        "Commercial Purchase Approval Packet Runtime Implementation Plan",
+        "get_latest_commercial_purchase_approval_packet",
+        "No new repo dependencies",
+        "python tests/test_commercial_purchase_approval_packet.py",
+        "pytest -q",
+        "Figma Code Connect must not be used",
+    ]:
+        assert expected_text in plan
+
+    for expected_text in [
+        "/api/v1/commercial_purchase_approval_packets/latest",
+        "commercial purchase approval packet",
     ]:
         assert expected_text in rest_api
         assert expected_text in readme
@@ -927,6 +973,7 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_buyer_acceptance_workflow_runtime_plan_is_recorded()
     test_commercial_demo_scenarios_define_buyer_demo_packet()
     test_commercial_proposal_packet_defines_buyer_proposal()
+    test_commercial_purchase_approval_packet_defines_buyer_approval()
     test_commercial_buyer_evidence_manifest_indexes_sale_evidence()
     test_commercial_buyer_handoff_bundle_packages_sale_evidence()
     test_commercial_saleability_decision_defines_final_gate()
