@@ -2082,6 +2082,103 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_gap_register_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return an owner/action register for commercial release-candidate gaps."""
+        release = self.commercial_release_candidate_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        concrete_blockers = release["concrete_blockers"]
+        release_blocked = release["release_status"] == "commercial_release_blocked"
+        gap_items = []
+        for item in release["external_release_gaps"]:
+            source_type = item["evidence_type"]
+            if source_type == "proposed_until_production":
+                gap_status = "production_input_required"
+                gap_type = "production_evidence_gap"
+                owner = "Operations and support owner"
+            else:
+                gap_status = "buyer_input_required"
+                gap_type = "buyer_specific_gap"
+                owner = "Buyer and deal owner"
+            gap_items.append({
+                "gap_name": item["item_name"],
+                "label": item["label"],
+                "gap_type": gap_type,
+                "gap_status": gap_status,
+                "owner": owner,
+                "reviewer": item["reviewer"],
+                "sources": item["sources"],
+                "source_evidence_type": source_type,
+                "current_evidence": item["evidence"],
+                "required_input": item["next_action"],
+                "is_blocker": False,
+            })
+
+        blocked_count = len(concrete_blockers) + (1 if release_blocked else 0)
+        if blocked_count:
+            gap_register_status = "commercial_gap_register_blocked"
+        elif gap_items:
+            gap_register_status = "commercial_gap_register_open"
+        else:
+            gap_register_status = "commercial_gap_register_clear"
+
+        production_gap_count = sum(1 for item in gap_items if item["gap_type"] == "production_evidence_gap")
+        buyer_specific_gap_count = sum(1 for item in gap_items if item["gap_type"] == "buyer_specific_gap")
+        return {
+            "gap_register_status": gap_register_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_gap_register",
+            "source_note": (
+                "Commercial gap register converts local release-candidate warning gaps into owner, action, "
+                "source, and required-input rows for buyer due diligence; it is not a valuation guarantee, "
+                "purchase commitment, or production compliance certificate."
+            ),
+            "gap_summary": {
+                "total_gap_count": len(gap_items),
+                "production_gap_count": production_gap_count,
+                "buyer_specific_gap_count": buyer_specific_gap_count,
+                "blocked_count": blocked_count,
+                "review_process_is_blocker": release["review_process_policy"]["is_blocker"],
+            },
+            "gap_items": gap_items,
+            "concrete_blockers": concrete_blockers,
+            "gap_status_rules": [
+                {
+                    "gap_status": "production_input_required",
+                    "rule": "production deployment, support, SLO, or operational evidence must be supplied before production claim",
+                },
+                {
+                    "gap_status": "buyer_input_required",
+                    "rule": "buyer-specific legal, procurement, ROI, or deployment context must be supplied before buyer-specific claim",
+                },
+                {
+                    "gap_status": "blocked",
+                    "rule": "concrete security, API contract, document, product defect, or Code Connect usage blocks commercial release",
+                },
+            ],
+            "review_process_policy": release["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_release_status": release["release_status"],
+                **release["related_runtime_reports"],
+            },
+            "library_split_decision": release["library_split_decision"],
+            "plugin_traceability": release["plugin_traceability"],
+            "gap_register_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_gap_registers/latest",
+                "documentation": "docs/commercial_gap_register.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

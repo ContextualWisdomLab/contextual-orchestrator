@@ -53,6 +53,7 @@ Diagrams created:
 - `KRW 2B Commercial Evidence Export`
 - `KRW 2B Commercial Acceptance Check`
 - `KRW 2B Commercial Release Candidate`
+- `KRW 2B Commercial Gap Register`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -117,6 +118,11 @@ runtime endpoint chain, repository distribution packet, security metadata,
 admin operator surface, verification tests, Figma stakeholder artifacts,
 review-process non-blocker policy, packaging decision, and external release
 gaps into `/api/v1/commercial_release_candidates/latest`.
+
+The commercial gap register workflow maps release-candidate external gaps into
+production input, buyer input, owner assignment, required input, concrete
+blocker handling, and clear/open/blocked register states exposed through
+`/api/v1/commercial_gap_registers/latest`.
 
 ## Stakeholder Deck
 

@@ -75,6 +75,7 @@ One public interface:
 - `/api/v1/commercial_evidence_exports/latest` exposes the portable commercial evidence export across saleability, runtime reports, buyer documents, Figma artifacts, verification commands, review-process policy, packaging decision, and external evidence gaps.
 - `/api/v1/commercial_acceptance_checks/latest` exposes the buyer acceptance check across evidence export, runtime endpoint chain, buyer packet, admin surface, verification, Figma, review-process policy, packaging decision, and external evidence gaps.
 - `/api/v1/commercial_release_candidates/latest` exposes the local commercial release-candidate manifest across acceptance, runtime endpoints, repository distribution packet, security metadata, admin surface, verification, Figma, review-process policy, packaging decision, and external release gaps.
+- `/api/v1/commercial_gap_registers/latest` exposes the commercial gap register that turns release-candidate external gaps into owner, source, required-input, and status rows for buyer due diligence.
 
 One fused orchestration loop:
 
@@ -107,6 +108,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Commercial evidence export](docs/commercial_evidence_export.md)
 - [Commercial acceptance check](docs/commercial_acceptance_check.md)
 - [Commercial release candidate](docs/commercial_release_candidate.md)
+- [Commercial gap register](docs/commercial_gap_register.md)
 - [Commercial completion scorecard](docs/commercial_completion_scorecard.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
@@ -135,4 +137,5 @@ python tests/test_saleability_decision.py
 python tests/test_commercial_evidence_export.py
 python tests/test_commercial_acceptance_check.py
 python tests/test_commercial_release_candidate.py
+python tests/test_commercial_gap_register.py
 ```

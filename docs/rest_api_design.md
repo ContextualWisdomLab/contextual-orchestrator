@@ -26,6 +26,7 @@
 | `GET` | `/api/v1/commercial_evidence_exports/latest` | Read portable commercial evidence export for buyer due diligence |
 | `GET` | `/api/v1/commercial_acceptance_checks/latest` | Read commercial acceptance check for buyer due diligence |
 | `GET` | `/api/v1/commercial_release_candidates/latest` | Read commercial release-candidate package for buyer due diligence |
+| `GET` | `/api/v1/commercial_gap_registers/latest` | Read commercial gap register for buyer due diligence |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -56,6 +57,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_evidence_exports/latest` | Produce the portable commercial evidence export that packages the saleability decision, runtime reports, buyer documents, Figma artifacts, verification commands, review-process policy, packaging decision, and required external evidence gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence export. |
 | `GET` | `/api/v1/commercial_acceptance_checks/latest` | Produce the buyer acceptance check that turns the commercial evidence export into ready, warning, or blocked acceptance status. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer acceptance review. |
 | `GET` | `/api/v1/commercial_release_candidates/latest` | Produce the commercial release-candidate manifest that packages acceptance status, runtime endpoints, repository distribution packet, security metadata, admin visibility, verification, Figma artifacts, review-process policy, packaging decision, and external release gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer release-candidate review. |
+| `GET` | `/api/v1/commercial_gap_registers/latest` | Produce the commercial gap register that converts release-candidate external gaps into owner, source, required-input, and status rows for buyer due diligence. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer gap closure review. |
 
 ## Production Library Target
 

@@ -116,6 +116,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Evidence Export",
         "KRW 2B Commercial Acceptance Check",
         "KRW 2B Commercial Release Candidate",
+        "KRW 2B Commercial Gap Register",
         "team::1408252278989737675",
         "Figma Code Connect was not used",
     ]:
@@ -410,6 +411,47 @@ def test_commercial_release_candidate_defines_buyer_release_package() -> None:
         assert expected_text in plan
 
 
+def test_commercial_gap_register_defines_external_gap_actions() -> None:
+    gap_register = read_text("docs/commercial_gap_register.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-gap-register.md")
+
+    for expected_text in [
+        "Commercial Gap Register",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Gap Inputs",
+        "Runtime Shape",
+        "Gap Status Rules",
+        "KRW 2B Commercial Gap Register",
+        "/api/v1/commercial_gap_registers/latest",
+        "/api/v1/commercial_release_candidates/latest",
+        "/api/v1/commercial_acceptance_checks/latest",
+        "/api/v1/commercial_evidence_exports/latest",
+        "/api/v1/saleability_decisions/latest",
+        "/api/v1/buyer_handoff_bundles/latest",
+        "/api/v1/buyer_evidence_manifests/latest",
+        "/api/v1/commercial_readiness/latest",
+        "/api/v1/sales_readiness/latest",
+        "/api/v1/analytics_snapshots/latest",
+        "local_commercial_gap_register",
+        "gap_items",
+        "production_input_required",
+        "buyer_input_required",
+    ]:
+        assert expected_text in gap_register
+
+    for expected_text in [
+        "Commercial Gap Register Implementation Plan",
+        "get_latest_commercial_gap_register",
+        "No new repo dependencies",
+        "python tests/test_commercial_gap_register.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -427,4 +469,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_evidence_export_defines_buyer_export_index()
     test_commercial_acceptance_check_defines_buyer_acceptance_gate()
     test_commercial_release_candidate_defines_buyer_release_package()
+    test_commercial_gap_register_defines_external_gap_actions()
     print("ok")
