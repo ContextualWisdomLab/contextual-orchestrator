@@ -239,6 +239,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial buyer acceptance workflow"}},
             }
         },
+        "/api/v1/commercial_demo_scenarios/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_demo_scenarios",
+                "summary": "Get KRW 2B commercial demo scenarios",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial demo scenarios"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

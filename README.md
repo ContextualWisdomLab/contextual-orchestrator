@@ -87,6 +87,7 @@ One public interface:
 - `/api/v1/commercial_go_to_market_readiness/latest` exposes the commercial go-to-market readiness index that ties close, value, security, evidence export, buyer handoff, saleability, admin evidence, analytics truthfulness, Figma artifacts, review-process policy, and packaging decision into one buyer/stakeholder review packet.
 - `/api/v1/commercial_launch_readiness/latest` exposes the commercial launch readiness gate that packages GTM, runtime, acceptance, operator, admin, analytics, Figma, review-process, and packaging evidence while keeping buyer environment, production telemetry, and signature inputs as explicit warnings.
 - `/api/v1/commercial_completion_scorecards/latest` exposes the runtime commercial completion scorecard for the KRW 2,000,000,000 program-completion standard across Product Design, Figma, Superpowers, Ponytail, Data Analytics, runtime, verification, review-policy, packaging, and external follow-up evidence.
+- `/api/v1/commercial_demo_scenarios/latest` exposes the KRW 2,000,000,000 commercial demo scenarios packet across compatible API smoke, workflow trace, access-list evidence, evaluation replay, admin readiness, metric truthfulness, Figma review, buyer acceptance, review-process policy, and packaging decision.
 
 One fused orchestration loop:
 
@@ -130,6 +131,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Commercial go-to-market readiness](docs/commercial_go_to_market_readiness.md)
 - [Commercial launch readiness](docs/commercial_launch_readiness.md)
 - [Commercial completion scorecard](docs/commercial_completion_scorecard.md)
+- [Commercial demo scenarios](docs/commercial_demo_scenarios.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
 - [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
@@ -169,4 +171,5 @@ python tests/test_commercial_close_readiness.py
 python tests/test_commercial_go_to_market_readiness.py
 python tests/test_commercial_launch_readiness.py
 python tests/test_commercial_completion_scorecard.py
+python tests/test_commercial_demo_scenarios.py
 ```

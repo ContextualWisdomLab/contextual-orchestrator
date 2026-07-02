@@ -47,6 +47,14 @@ the buyer acceptance runbook into owner-scoped runtime workflow evidence while
 keeping production and buyer-specific follow-ups as warnings, not measured
 results.
 
+The prototype also exposes `/api/v1/commercial_demo_scenarios/latest`. That
+endpoint packages the buyer demo script as local runtime evidence across
+compatible API smoke, workflow trace, access-list evidence, evaluation replay,
+admin readiness, metric truthfulness, Figma stakeholder review, buyer acceptance,
+review-process policy, and packaging decision. Production telemetry, ROI, legal,
+security questionnaire, and support-plan inputs remain proposed or buyer-specific
+warnings until supplied.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -93,6 +101,7 @@ with proposed production targets.
 | `commercial_launch_external_input_count` | Count of buyer-environment, production-telemetry, and commercial-signature input groups still needed for launch or paid trial execution. | proposed_until_buyer_specific | `/api/v1/commercial_launch_readiness/latest` response. |
 | `commercial_completion_warning_count` | Count of warning rows in the runtime completion scorecard, with buyer and production follow-ups kept separate from measured local evidence. | proposed_until_buyer_specific | `/api/v1/commercial_completion_scorecards/latest` response. |
 | `buyer_acceptance_workflow_warning_count` | Count of warning steps in the buyer acceptance workflow, with production and buyer-specific follow-ups kept separate from measured local evidence. | proposed_until_buyer_specific | `/api/v1/commercial_buyer_acceptance_workflows/latest` response. |
+| `commercial_demo_warning_count` | Count of warning steps in the buyer demo scenario packet, with production, ROI, legal, security questionnaire, and support follow-ups kept separate from measured local demo evidence. | proposed_until_buyer_specific | `/api/v1/commercial_demo_scenarios/latest` response. |
 
 Current GitHub/CI maturity evidence is a measured local or repository signal:
 CodeQL, Dependency review, Python supply chain, Trivy, coverage-evidence,

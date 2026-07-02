@@ -4876,6 +4876,294 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_demo_scenario_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return buyer-demo scenarios for the KRW 2B completion standard."""
+        completion = self.commercial_completion_scorecard_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        buyer_workflow = self.commercial_buyer_acceptance_workflow_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        admin_state = self.admin_state()
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        def all_files(*paths: str) -> bool:
+            return all(has_file(path) for path in paths)
+
+        def step(
+            step_name: str,
+            label: str,
+            persona: str,
+            sources: list[str],
+            runtime_endpoints: list[str],
+            evidence_type: str,
+            completion_state: str,
+            evidence: str,
+            demo_action: str,
+            expected_evidence: str,
+        ) -> dict[str, Any]:
+            require_object_name(step_name, "commercial_demo.step_name")
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial demo step state must be ready, warning, or blocked")
+            return {
+                "step_name": step_name,
+                "label": label,
+                "persona": persona,
+                "sources": sources,
+                "runtime_endpoints": runtime_endpoints,
+                "evidence_type": evidence_type,
+                "completion_state": completion_state,
+                "evidence": evidence,
+                "demo_action": demo_action,
+                "expected_evidence": expected_evidence,
+            }
+
+        concrete_blockers = list(
+            dict.fromkeys(completion["concrete_blockers"] + buyer_workflow["concrete_blockers"])
+        )
+        local_runtime_state = (
+            "blocked"
+            if completion["completion_status"] == "commercial_completion_blocked"
+            or buyer_workflow["workflow_status"] == "buyer_acceptance_workflow_blocked"
+            or concrete_blockers
+            else "ready"
+        )
+        event_counts = analytics.get("event_counts", {})
+        recent_runs = admin_state.get("recent_workflow_runs", [])
+        demo_steps = [
+            step(
+                "compatible_api_smoke",
+                "Compatible API smoke",
+                "Economic buyer",
+                ["README.md", "docs/rest_api_design.md", "/v1/chat/completions"],
+                ["/v1/chat/completions"],
+                "measured_local",
+                "ready"
+                if all_files("README.md", "docs/rest_api_design.md")
+                and event_counts.get("chat_completion_requested", 0) > 0
+                else "blocked",
+                f"successful_chat_completion_events={event_counts.get('chat_completion_requested', 0)}",
+                "Run the OpenAI-compatible chat completion call used by the buyer application.",
+                "The buyer sees a compatible response and the runtime records a local analytics event.",
+            ),
+            step(
+                "conducted_workflow_trace",
+                "Conducted workflow trace",
+                "Platform operator",
+                ["/admin", "/api/v1/workflow_runs", "docs/screen_design.md"],
+                ["/admin", "/api/v1/workflow_runs"],
+                "measured_local",
+                "ready" if recent_runs and has_file("docs/screen_design.md") else "blocked",
+                f"recent_workflow_run_count={len(recent_runs)}",
+                "Open the admin trace view for a conducted workflow run.",
+                "The operator can inspect mode, policy mode, selected agents, and run trace evidence.",
+            ),
+            step(
+                "access_list_inspection",
+                "Access-list inspection",
+                "Compliance reviewer",
+                ["docs/product_planning.md", "/api/v1/access_reports/{workflow_run_id}", "/admin"],
+                ["/api/v1/access_reports/{workflow_run_id}", "/admin"],
+                "repository_and_runtime_artifact",
+                "ready" if has_file("docs/product_planning.md") else "blocked",
+                "access reports are scoped to workflow_run_id and exposed through the admin surface",
+                "Open the access report for the conducted workflow run.",
+                "The reviewer sees why each agent had access to context, tools, and trace evidence.",
+            ),
+            step(
+                "evaluation_replay",
+                "Evaluation replay",
+                "Quality reviewer",
+                ["docs/screen_design.md", "/api/v1/evaluation_runs", "/admin"],
+                ["/api/v1/evaluation_runs", "/admin"],
+                "measured_local",
+                "ready" if event_counts.get("evaluation_run_created", 0) > 0 else "blocked",
+                f"evaluation_run_created_events={event_counts.get('evaluation_run_created', 0)}",
+                "Replay the buyer prompt through the evaluation endpoint.",
+                "The reviewer sees replay status and trace-backed verification evidence.",
+            ),
+            step(
+                "admin_readiness_console",
+                "Admin readiness console",
+                "Economic buyer",
+                [
+                    "/admin",
+                    "/api/v1/commercial_completion_scorecards/latest",
+                    "/api/v1/commercial_buyer_acceptance_workflows/latest",
+                    "/api/v1/commercial_demo_scenarios/latest",
+                ],
+                [
+                    "/admin",
+                    "/api/v1/commercial_completion_scorecards/latest",
+                    "/api/v1/commercial_buyer_acceptance_workflows/latest",
+                    "/api/v1/commercial_demo_scenarios/latest",
+                ],
+                "repository_and_runtime_artifact",
+                local_runtime_state,
+                (
+                    f"commercial_completion_status={completion['completion_status']}; "
+                    f"buyer_acceptance_workflow_status={buyer_workflow['workflow_status']}"
+                ),
+                "Show the readiness card chain in the admin console.",
+                "The buyer sees completion, buyer acceptance, and demo status without leaving one control plane.",
+            ),
+            step(
+                "metric_truthfulness",
+                "Metric truthfulness",
+                "Compliance reviewer",
+                ["docs/analytics_spec.md", "/api/v1/analytics_snapshots/latest"],
+                ["/api/v1/analytics_snapshots/latest"],
+                "measured_local",
+                "ready"
+                if has_file("docs/analytics_spec.md") and analytics["measurement_status"] == "local_runtime_snapshot"
+                else "blocked",
+                "measured local metrics remain separate from proposed production and buyer-specific metrics",
+                "Review the analytics spec and local analytics endpoint.",
+                "The reviewer can distinguish measured runtime data from proposed KPI definitions.",
+            ),
+            step(
+                "figma_stakeholder_review",
+                "Figma stakeholder review",
+                "Stakeholder reviewer",
+                [
+                    "docs/figma_artifacts.md",
+                    "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                    "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                ],
+                [],
+                "figma_artifact",
+                "ready" if has_file("docs/figma_artifacts.md") else "blocked",
+                "editable Figma and FigJam stakeholder artifacts are recorded without Code Connect",
+                "Walk through the design file and FigJam diagram packet.",
+                "Stakeholders review the product narrative, admin surface, and runtime flow as editable artifacts.",
+            ),
+            step(
+                "buyer_acceptance_decision",
+                "Buyer acceptance decision",
+                "Economic buyer",
+                [
+                    "docs/commercial_buyer_acceptance_runbook.md",
+                    "/api/v1/commercial_buyer_acceptance_workflows/latest",
+                ],
+                ["/api/v1/commercial_buyer_acceptance_workflows/latest"],
+                "repository_and_runtime_artifact",
+                local_runtime_state,
+                f"buyer_acceptance_workflow_status={buyer_workflow['workflow_status']}",
+                "Use the buyer acceptance workflow as the Go/Warning/No-Go decision record.",
+                "The buyer can sign off on repo-local evidence while external follow-ups stay explicit.",
+            ),
+            step(
+                "production_buyer_followups",
+                "Production and buyer follow-ups",
+                "Economic buyer",
+                ["production telemetry", "ROI model", "security questionnaire", "support plan"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Production telemetry, named-buyer ROI, security questionnaire, and support plan require buyer input.",
+                "Capture buyer-specific production, ROI, legal, and support inputs after the local demo.",
+                "External inputs are tracked as warnings, not hidden as measured product evidence.",
+            ),
+        ]
+        state_counts = Counter(item["completion_state"] for item in demo_steps)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            demo_status = "commercial_demo_blocked"
+        elif warning_count:
+            demo_status = "commercial_demo_ready_with_warnings"
+        else:
+            demo_status = "commercial_demo_ready"
+        required_runtime_endpoints = list(
+            dict.fromkeys(
+                endpoint
+                for item in demo_steps
+                for endpoint in item["runtime_endpoints"]
+                if endpoint.startswith("/")
+            )
+        )
+
+        return {
+            "demo_status": demo_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_demo_scenarios",
+            "source_note": (
+                "Commercial demo scenarios package repo-local runtime, admin, analytics, Figma, "
+                "buyer acceptance, review-policy, and packaging evidence for KRW 2,000,000,000 "
+                "saleability review; it is not a valuation guarantee, purchase commitment, "
+                "signed order, legal opinion, production compliance certificate, or revenue proof."
+            ),
+            "demo_narrative": {
+                "title": "KRW 2B commercial control-plane buyer demo",
+                "promise": (
+                    "Show one enterprise orchestration control plane with a compatible inference API, "
+                    "operator/admin evidence, trace and access visibility, evaluation replay, and truthful metrics."
+                ),
+                "audience": [
+                    "Economic buyer",
+                    "Platform operator",
+                    "Compliance reviewer",
+                    "Quality reviewer",
+                    "Stakeholder reviewer",
+                ],
+            },
+            "demo_summary": {
+                "step_count": len(demo_steps),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "persona_count": len({item["persona"] for item in demo_steps}),
+                "endpoint_count": len(required_runtime_endpoints),
+                "review_process_is_blocker": completion["review_process_policy"]["is_blocker"],
+                "code_connect_used": False,
+            },
+            "demo_steps": demo_steps,
+            "required_runtime_endpoints": required_runtime_endpoints,
+            "concrete_blockers": concrete_blockers,
+            "demo_status_rules": [
+                {
+                    "demo_status": "commercial_demo_ready",
+                    "rule": "all demo steps are ready and no production or buyer-specific follow-ups remain open",
+                },
+                {
+                    "demo_status": "commercial_demo_ready_with_warnings",
+                    "rule": "repo-local demo evidence is ready while production, ROI, legal, support, or buyer-specific inputs remain explicit warnings",
+                },
+                {
+                    "demo_status": "commercial_demo_blocked",
+                    "rule": "security failure, API contract regression, document mismatch, runtime defect, missing local demo evidence, or Code Connect usage blocks the demo",
+                },
+            ],
+            "review_process_policy": completion["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_completion_status": completion["completion_status"],
+                "buyer_acceptance_workflow_status": buyer_workflow["workflow_status"],
+                "analytics_measurement_status": analytics["measurement_status"],
+            },
+            "library_split_decision": completion["library_split_decision"],
+            "plugin_traceability": completion["plugin_traceability"],
+            "demo_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_demo_scenarios/latest",
+                "documentation": "docs/commercial_demo_scenarios.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
