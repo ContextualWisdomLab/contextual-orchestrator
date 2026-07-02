@@ -45,6 +45,7 @@ Diagrams created:
 - `Library Split Decision For KRW 2B Sale`
 - `KRW 2B Completion Scorecard`
 - `KRW 2B Buyer Deal Room Evidence Matrix`
+- `KRW 2B Buyer Acceptance Go No Go Workflow`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -66,6 +67,11 @@ The buyer deal-room evidence matrix maps buyer questions to product evidence,
 commercial evidence, governance evidence, and evidence type labels:
 `measured_local`, `repository_artifact`, `figma_artifact`,
 `proposed_until_production`, and `proposed_until_buyer_specific`.
+
+The buyer acceptance go/no-go workflow maps the evidence packet, acceptance
+checks, and decision states that determine whether a KRW 2,000,000,000 buyer
+review is ready, ready with caveats, buyer-specific follow-up, or blocked by a
+concrete defect.
 
 ## Stakeholder Deck
 

@@ -108,6 +108,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "Library Split Decision For KRW 2B Sale",
         "KRW 2B Completion Scorecard",
         "KRW 2B Buyer Deal Room Evidence Matrix",
+        "KRW 2B Buyer Acceptance Go No Go Workflow",
         "Contextual Orchestrator Plugin-Driven Product Plan",
         "Contextual Orchestrator KRW 2B Commercial Readiness Plan",
         "team::1408252278989737675",
@@ -193,6 +194,26 @@ def test_commercial_buyer_diligence_packet_defines_deal_room_evidence() -> None:
         assert expected_text in packet
 
 
+def test_commercial_buyer_acceptance_runbook_defines_go_no_go_workflow() -> None:
+    runbook = read_text("docs/commercial_buyer_acceptance_runbook.md")
+
+    for expected_text in [
+        "Commercial Buyer Acceptance Runbook",
+        "KRW 2,000,000,000 commercial review",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Acceptance Workflow",
+        "Go, Warning, No-Go Rules",
+        "KRW 2B Buyer Acceptance Go No Go Workflow",
+        "/api/v1/commercial_readiness/latest",
+        "measured_local",
+        "proposed_until_production",
+        "proposed_until_buyer_specific",
+    ]:
+        assert expected_text in runbook
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -203,4 +224,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_plugin_operating_model_defines_plugin_execution_scope()
     test_commercial_completion_scorecard_defines_ready_warning_blocker_rules()
     test_commercial_buyer_diligence_packet_defines_deal_room_evidence()
+    test_commercial_buyer_acceptance_runbook_defines_go_no_go_workflow()
     print("ok")
