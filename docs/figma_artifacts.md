@@ -43,6 +43,7 @@ Diagrams created:
 - `API And Control Plane Relationship`
 - `KRW 2B Commercial Readiness Flow`
 - `Library Split Decision For KRW 2B Sale`
+- `KRW 2B Completion Scorecard`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -55,6 +56,10 @@ readiness, measured analytics evidence, proposed production KPIs, and the
 The library split decision tree records the Ponytail packaging decision: keep a
 single repository now, and only extract a library or submodule when there is a
 second product, independent release cadence, or security provenance trigger.
+
+The completion scorecard diagram maps Figma, Product Design, Superpowers,
+Ponytail, and Data Analytics outputs to ready, warning, and blocker states for
+the KRW 2,000,000,000 due-diligence gate.
 
 ## Stakeholder Deck
 

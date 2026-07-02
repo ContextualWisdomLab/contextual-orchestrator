@@ -106,6 +106,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "Workflow Trace And Access Lists Clean",
         "KRW 2B Commercial Readiness Flow",
         "Library Split Decision For KRW 2B Sale",
+        "KRW 2B Completion Scorecard",
         "Contextual Orchestrator Plugin-Driven Product Plan",
         "Contextual Orchestrator KRW 2B Commercial Readiness Plan",
         "team::1408252278989737675",
@@ -148,6 +149,29 @@ def test_commercial_plugin_operating_model_defines_plugin_execution_scope() -> N
         assert expected_text in model
 
 
+def test_commercial_completion_scorecard_defines_ready_warning_blocker_rules() -> None:
+    scorecard = read_text("docs/commercial_completion_scorecard.md")
+
+    for expected_text in [
+        "Commercial Completion Scorecard",
+        "KRW 2,000,000,000 enterprise sale",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Product Design",
+        "Superpowers",
+        "Ponytail",
+        "Data Analytics",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Measured local evidence",
+        "Proposed until production",
+        "Proposed until buyer-specific",
+        "Ready:",
+        "Warning:",
+        "Blocked:",
+    ]:
+        assert expected_text in scorecard
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -156,4 +180,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_figma_artifacts_are_recorded_without_code_connect()
     test_ponytail_packaging_decision_keeps_commercial_product_unified()
     test_commercial_plugin_operating_model_defines_plugin_execution_scope()
+    test_commercial_completion_scorecard_defines_ready_warning_blocker_rules()
     print("ok")
