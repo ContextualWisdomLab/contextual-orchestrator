@@ -113,6 +113,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Runtime Buyer Evidence Endpoint",
         "Contextual Orchestrator Plugin-Driven Product Plan",
         "Contextual Orchestrator KRW 2B Commercial Readiness Plan",
+        "KRW 2B Commercial Evidence Export",
         "team::1408252278989737675",
         "Figma Code Connect was not used",
     ]:
@@ -293,6 +294,43 @@ def test_commercial_saleability_decision_defines_final_gate() -> None:
         assert expected_text in decision
 
 
+def test_commercial_evidence_export_defines_buyer_export_index() -> None:
+    export = read_text("docs/commercial_evidence_export.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-evidence-export.md")
+
+    for expected_text in [
+        "Commercial Evidence Export",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Export Inputs",
+        "Runtime Shape",
+        "Export Status Rules",
+        "KRW 2B Commercial Evidence Export",
+        "/api/v1/commercial_evidence_exports/latest",
+        "/api/v1/saleability_decisions/latest",
+        "/api/v1/buyer_handoff_bundles/latest",
+        "/api/v1/buyer_evidence_manifests/latest",
+        "/api/v1/commercial_readiness/latest",
+        "/api/v1/sales_readiness/latest",
+        "/api/v1/analytics_snapshots/latest",
+        "local_commercial_evidence_export",
+        "required_external_evidence",
+        "export_sections",
+    ]:
+        assert expected_text in export
+
+    for expected_text in [
+        "Commercial Evidence Export Implementation Plan",
+        "get_latest_commercial_evidence_export",
+        "No new repo dependencies",
+        "python tests/test_commercial_evidence_export.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -307,4 +345,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_buyer_evidence_manifest_indexes_sale_evidence()
     test_commercial_buyer_handoff_bundle_packages_sale_evidence()
     test_commercial_saleability_decision_defines_final_gate()
+    test_commercial_evidence_export_defines_buyer_export_index()
     print("ok")

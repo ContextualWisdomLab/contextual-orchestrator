@@ -50,6 +50,7 @@ Diagrams created:
 - `KRW 2B Runtime Buyer Evidence Endpoint`
 - `KRW 2B Buyer Handoff Bundle Workflow`
 - `KRW 2B Saleability Decision Gate`
+- `KRW 2B Commercial Evidence Export`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -96,6 +97,12 @@ The saleability decision gate maps `/api/v1/buyer_handoff_bundles/latest`,
 concrete blocker detection, review-process non-blocker policy, warning
 follow-ups, and ready or blocked saleability states into
 `/api/v1/saleability_decisions/latest`.
+
+The commercial evidence export workflow maps `/api/v1/saleability_decisions/latest`,
+runtime reports, buyer packet documents, Figma stakeholder artifacts,
+verification commands, review-process non-blocker policy, packaging decision,
+and required external evidence gaps into
+`/api/v1/commercial_evidence_exports/latest`.
 
 ## Stakeholder Deck
 

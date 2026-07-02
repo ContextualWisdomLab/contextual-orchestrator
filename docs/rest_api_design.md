@@ -23,6 +23,7 @@
 | `GET` | `/api/v1/buyer_evidence_manifests/latest` | Read buyer evidence manifest for commercial diligence review |
 | `GET` | `/api/v1/buyer_handoff_bundles/latest` | Read buyer handoff bundle for commercial diligence review |
 | `GET` | `/api/v1/saleability_decisions/latest` | Read KRW 2,000,000,000 saleability decision for commercial diligence review |
+| `GET` | `/api/v1/commercial_evidence_exports/latest` | Read portable commercial evidence export for buyer due diligence |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -50,6 +51,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/buyer_evidence_manifests/latest` | Produce a buyer-facing evidence index across runtime reports, repository artifacts, Figma artifacts, verification commands, and caveats. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement evidence review. |
 | `GET` | `/api/v1/buyer_handoff_bundles/latest` | Produce the buyer handoff bundle that packages runtime reports, repository packet, Figma artifacts, verification commands, packaging decision, and explicit follow-ups. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement handoff review. |
 | `GET` | `/api/v1/saleability_decisions/latest` | Produce the final saleability decision gate that separates concrete blockers from warning follow-ups and review-process non-blockers. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence decision. |
+| `GET` | `/api/v1/commercial_evidence_exports/latest` | Produce the portable commercial evidence export that packages the saleability decision, runtime reports, buyer documents, Figma artifacts, verification commands, review-process policy, packaging decision, and required external evidence gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence export. |
 
 ## Production Library Target
 

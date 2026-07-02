@@ -119,6 +119,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Saleability decision"}},
             }
         },
+        "/api/v1/commercial_evidence_exports/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_evidence_export",
+                "summary": "Get portable commercial evidence export for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial evidence export"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

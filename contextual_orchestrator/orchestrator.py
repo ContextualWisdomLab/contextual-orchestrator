@@ -1415,6 +1415,199 @@ class TaskOrchestrator:
             "plugin_traceability": handoff["plugin_traceability"],
         }
 
+    def commercial_evidence_export_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a portable buyer due-diligence export index for commercial review."""
+        saleability = self.saleability_decision_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        concrete_blockers = saleability["concrete_blockers"]
+        required_external_evidence = [
+            {
+                "evidence_name": item["item_name"],
+                "label": item["label"],
+                "reviewer": item["reviewer"],
+                "sources": item["sources"],
+                "evidence_type": item["evidence_type"],
+                "evidence": item["evidence"],
+                "next_action": item["next_action"],
+            }
+            for item in saleability["warning_conditions"]
+        ]
+        saleability_state = "blocked" if saleability["saleability_status"] == "saleability_blocked" else "ready"
+        export_sections = [
+            self._buyer_evidence_item(
+                "saleability_decision",
+                "Saleability decision",
+                "Deal owner",
+                ["/api/v1/saleability_decisions/latest", "docs/commercial_saleability_decision.md"],
+                "measured_local",
+                saleability_state,
+                f"saleability_status={saleability['saleability_status']}",
+                "Resolve concrete saleability blockers before exporting buyer evidence.",
+            ),
+            self._buyer_evidence_item(
+                "runtime_reports",
+                "Runtime reports",
+                "Technical reviewer",
+                [
+                    "/api/v1/sales_readiness/latest",
+                    "/api/v1/commercial_readiness/latest",
+                    "/api/v1/buyer_evidence_manifests/latest",
+                    "/api/v1/buyer_handoff_bundles/latest",
+                    "/api/v1/saleability_decisions/latest",
+                    "/api/v1/analytics_snapshots/latest",
+                ],
+                "measured_local",
+                "blocked" if concrete_blockers else "ready",
+                (
+                    f"buyer_handoff_status={saleability['related_runtime_reports']['buyer_handoff_status']}; "
+                    f"buyer_manifest_status={saleability['related_runtime_reports']['buyer_manifest_status']}"
+                ),
+                "Resolve blocked runtime reports before buyer export.",
+            ),
+            self._buyer_evidence_item(
+                "buyer_packet_documents",
+                "Buyer packet documents",
+                "Procurement reviewer",
+                [
+                    "docs/commercial_buyer_diligence_packet.md",
+                    "docs/commercial_buyer_acceptance_runbook.md",
+                    "docs/commercial_buyer_evidence_manifest.md",
+                    "docs/commercial_buyer_handoff_bundle.md",
+                    "docs/commercial_saleability_decision.md",
+                    "docs/commercial_evidence_export.md",
+                ],
+                "repository_artifact",
+                "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "docs/commercial_buyer_diligence_packet.md",
+                        "docs/commercial_buyer_acceptance_runbook.md",
+                        "docs/commercial_buyer_evidence_manifest.md",
+                        "docs/commercial_buyer_handoff_bundle.md",
+                        "docs/commercial_saleability_decision.md",
+                        "docs/commercial_evidence_export.md",
+                    )
+                )
+                else "blocked",
+                "Buyer diligence, acceptance, manifest, handoff, decision, and export documents are present.",
+                "Restore missing buyer packet documents before export.",
+            ),
+            self._buyer_evidence_item(
+                "figma_stakeholder_artifacts",
+                "Figma stakeholder artifacts",
+                "Stakeholder reviewer",
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
+                "figma_artifact",
+                "ready" if has_file("docs/figma_artifacts.md") else "blocked",
+                "Editable stakeholder artifacts are recorded and Code Connect is excluded.",
+                "Record Figma artifacts before exporting buyer evidence.",
+            ),
+            self._buyer_evidence_item(
+                "verification_commands",
+                "Verification commands",
+                "Technical reviewer",
+                [
+                    "tests/test_commercial_evidence_export.py",
+                    "tests/test_saleability_decision.py",
+                    "tests/test_plugin_driven_artifacts.py",
+                    "tests/test_api_contract.py",
+                    "pytest -q",
+                ],
+                "measured_local",
+                "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "tests/test_commercial_evidence_export.py",
+                        "tests/test_saleability_decision.py",
+                        "tests/test_plugin_driven_artifacts.py",
+                        "tests/test_api_contract.py",
+                    )
+                )
+                else "blocked",
+                "Focused commercial export, saleability, plugin artifact, and API contract tests are named.",
+                "Restore focused tests before buyer export.",
+            ),
+            self._buyer_evidence_item(
+                "review_process_policy",
+                "Review process policy",
+                "Deal owner",
+                ["docs/commercial_saleability_decision.md", "/api/v1/saleability_decisions/latest"],
+                "repository_artifact",
+                "ready",
+                "Reviewer delay, review bot delay, and queued model review are not concrete blockers.",
+                "Escalate only concrete security, API contract, document, or product defects.",
+            ),
+            self._buyer_evidence_item(
+                "packaging_decision",
+                "Packaging decision",
+                "Procurement and security reviewer",
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "repository_artifact",
+                "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
+                saleability["library_split_decision"]["reason"],
+                "Only extract a library after a second product, independent release cadence, or provenance trigger exists.",
+            ),
+        ]
+        export_section_summary = self._buyer_manifest_summary(export_sections)
+        blocked_count = export_section_summary["by_completion_state"]["blocked"] + len(concrete_blockers)
+        warning_count = len(required_external_evidence)
+        if blocked_count:
+            export_status = "commercial_export_blocked"
+        elif warning_count:
+            export_status = "commercial_export_ready_with_warnings"
+        else:
+            export_status = "commercial_export_ready"
+
+        return {
+            "export_status": export_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_evidence_export",
+            "source_note": (
+                "Commercial evidence export packages local runtime decisions, repository documents, "
+                "Figma artifact records, verification commands, review-process policy, packaging decision, "
+                "and explicit production or buyer-specific evidence gaps; it is not a valuation guarantee, "
+                "purchase commitment, or production compliance certificate."
+            ),
+            "export_summary": {
+                "section_count": len(export_sections),
+                "blocked_count": blocked_count,
+                "warning_count": warning_count,
+                "review_process_is_blocker": saleability["review_process_policy"]["is_blocker"],
+            },
+            "export_sections": export_sections,
+            "required_external_evidence": required_external_evidence,
+            "concrete_blockers": concrete_blockers,
+            "review_process_policy": saleability["review_process_policy"],
+            "related_runtime_reports": {
+                "saleability_status": saleability["saleability_status"],
+                **saleability["related_runtime_reports"],
+            },
+            "library_split_decision": saleability["library_split_decision"],
+            "plugin_traceability": saleability["plugin_traceability"],
+            "export_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_evidence_exports/latest",
+                "documentation": "docs/commercial_evidence_export.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
