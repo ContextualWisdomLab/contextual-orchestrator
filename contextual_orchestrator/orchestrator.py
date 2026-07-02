@@ -6684,6 +6684,340 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_saleability_gate_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the final commercial go/no-go gate for the KRW 2B standard."""
+        saleability = self.saleability_decision_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        committee = self.commercial_investment_committee_memo_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        def check(
+            check_name: str,
+            label: str,
+            owner: str,
+            sources: list[str],
+            runtime_endpoints: list[str],
+            evidence_type: str,
+            completion_state: str,
+            evidence: str,
+            next_action: str,
+        ) -> dict[str, Any]:
+            require_object_name(check_name, "commercial_saleability_gate.check_name")
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial saleability gate check state must be ready, warning, or blocked")
+            return {
+                "check_name": check_name,
+                "label": label,
+                "owner": owner,
+                "sources": sources,
+                "runtime_endpoints": runtime_endpoints,
+                "evidence_type": evidence_type,
+                "completion_state": completion_state,
+                "evidence": evidence,
+                "next_action": next_action,
+            }
+
+        committee_reports = committee["related_runtime_reports"]
+        concrete_blockers = list(
+            dict.fromkeys(
+                [
+                    str(item.get("item_name") or item.get("section_name") or item)
+                    if isinstance(item, dict)
+                    else str(item)
+                    for item in saleability["concrete_blockers"]
+                ]
+                + committee["concrete_blockers"]
+            )
+        )
+        local_runtime_state = (
+            "blocked"
+            if saleability["saleability_status"] == "saleability_blocked"
+            or committee["investment_committee_status"] == "commercial_investment_committee_blocked"
+            or concrete_blockers
+            else "ready"
+        )
+        gate_checks = [
+            check(
+                "saleability_decision",
+                "Saleability decision",
+                "Deal owner",
+                ["docs/commercial_saleability_decision.md", "/api/v1/saleability_decisions/latest"],
+                ["/api/v1/saleability_decisions/latest"],
+                "measured_local",
+                local_runtime_state if has_file("docs/commercial_saleability_decision.md") else "blocked",
+                f"saleability_status={saleability['saleability_status']}",
+                "Resolve concrete saleability blockers before buyer close review.",
+            ),
+            check(
+                "investment_committee_memo",
+                "Investment committee memo",
+                "Committee owner",
+                [
+                    "docs/commercial_investment_committee_memo.md",
+                    "/api/v1/commercial_investment_committee_memos/latest",
+                ],
+                ["/api/v1/commercial_investment_committee_memos/latest"],
+                "measured_local",
+                local_runtime_state if has_file("docs/commercial_investment_committee_memo.md") else "blocked",
+                f"investment_committee_status={committee['investment_committee_status']}",
+                "Use the memo as the final executive decision cover.",
+            ),
+            check(
+                "due_diligence_room",
+                "Due diligence room",
+                "Diligence owner",
+                ["docs/commercial_due_diligence_room.md", "/api/v1/commercial_due_diligence_rooms/latest"],
+                ["/api/v1/commercial_due_diligence_rooms/latest"],
+                "measured_local",
+                local_runtime_state
+                if committee_reports["commercial_due_diligence_status"] != "commercial_due_diligence_blocked"
+                and has_file("docs/commercial_due_diligence_room.md")
+                else "blocked",
+                f"commercial_due_diligence_status={committee_reports['commercial_due_diligence_status']}",
+                "Keep due diligence room links current for buyer review.",
+            ),
+            check(
+                "purchase_approval_packet",
+                "Purchase approval packet",
+                "Purchase sponsor",
+                [
+                    "docs/commercial_purchase_approval_packet.md",
+                    "/api/v1/commercial_purchase_approval_packets/latest",
+                ],
+                ["/api/v1/commercial_purchase_approval_packets/latest"],
+                "measured_local",
+                local_runtime_state
+                if committee_reports["commercial_purchase_approval_status"] != "commercial_purchase_approval_blocked"
+                and has_file("docs/commercial_purchase_approval_packet.md")
+                else "blocked",
+                f"commercial_purchase_approval_status={committee_reports['commercial_purchase_approval_status']}",
+                "Use purchase approval as the finance and procurement appendix.",
+            ),
+            check(
+                "close_and_terms",
+                "Close and terms",
+                "Legal and procurement reviewers",
+                [
+                    "docs/commercial_close_readiness.md",
+                    "docs/commercial_contract_readiness.md",
+                    "docs/commercial_procurement_readiness.md",
+                ],
+                [
+                    "/api/v1/commercial_close_readiness/latest",
+                    "/api/v1/commercial_contract_readiness/latest",
+                    "/api/v1/commercial_procurement_readiness/latest",
+                ],
+                "measured_local",
+                local_runtime_state
+                if committee_reports["commercial_close_status"] != "commercial_close_blocked"
+                and committee_reports["commercial_contract_status"] != "commercial_contract_blocked"
+                and committee_reports["commercial_procurement_status"] != "commercial_procurement_blocked"
+                and has_file("docs/commercial_close_readiness.md")
+                and has_file("docs/commercial_contract_readiness.md")
+                and has_file("docs/commercial_procurement_readiness.md")
+                else "blocked",
+                (
+                    f"commercial_close_status={committee_reports['commercial_close_status']}; "
+                    f"commercial_contract_status={committee_reports['commercial_contract_status']}; "
+                    f"commercial_procurement_status={committee_reports['commercial_procurement_status']}"
+                ),
+                "Attach buyer-specific order form and DPA only after legal review.",
+            ),
+            check(
+                "metric_provenance",
+                "Metric provenance",
+                "Data analytics owner",
+                ["docs/analytics_spec.md", "/api/v1/analytics_snapshots/latest"],
+                ["/api/v1/analytics_snapshots/latest"],
+                "measured_local",
+                "ready"
+                if committee_reports["analytics_measurement_status"] == "local_runtime_snapshot"
+                and has_file("docs/analytics_spec.md")
+                else "blocked",
+                f"analytics_measurement_status={committee_reports['analytics_measurement_status']}",
+                "Keep local runtime metrics separate from buyer ROI and production telemetry.",
+            ),
+            check(
+                "figma_design_review",
+                "Figma and Product Design review",
+                "Product design reviewer",
+                ["docs/figma_artifacts.md", "Figma FigJam board"],
+                [],
+                "figma_artifact",
+                "ready" if has_file("docs/figma_artifacts.md") else "blocked",
+                "FigJam stakeholder flow is recorded and Figma Code Connect is excluded.",
+                "Update the FigJam saleability gate diagram when runtime checks change.",
+            ),
+            check(
+                "buyer_final_authority",
+                "Buyer final authority",
+                "Buyer sponsor",
+                ["executive sponsor approval", "named signer", "budget owner", "purchase order"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Buyer signer, budget owner, purchase order, and executive sponsor approval are external inputs.",
+                "Collect final buyer authority artifacts or an explicit waiver.",
+            ),
+            check(
+                "production_external_evidence",
+                "Production and external evidence",
+                "Production and security owners",
+                ["production telemetry", "third-party security attestation", "hosted scan evidence"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Production telemetry, third-party attestation, and hosted scan evidence require buyer environment selection.",
+                "Collect production telemetry and third-party security evidence after environment selection.",
+            ),
+        ]
+        state_counts = Counter(item["completion_state"] for item in gate_checks)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            saleability_gate_status = "commercial_saleability_gate_blocked"
+            recommendation_status = "no_go_until_blockers_cleared"
+        elif warning_count:
+            saleability_gate_status = "commercial_saleability_gate_ready_with_warnings"
+            recommendation_status = "go_with_buyer_conditions"
+        else:
+            saleability_gate_status = "commercial_saleability_gate_ready"
+            recommendation_status = "go"
+        required_runtime_endpoints = list(
+            dict.fromkeys(
+                ["/api/v1/commercial_saleability_gates/latest"]
+                + [
+                    endpoint
+                    for item in gate_checks
+                    for endpoint in item["runtime_endpoints"]
+                    if endpoint.startswith("/")
+                ]
+            )
+        )
+
+        return {
+            "saleability_gate_status": saleability_gate_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_saleability_gate",
+            "source_note": (
+                "Commercial saleability gate packages the local saleability decision, investment committee "
+                "memo, due diligence, purchase approval, close, terms, metric provenance, Figma stakeholder "
+                "evidence, review-policy, and packaging decision for KRW 2,000,000,000 final buyer review; "
+                "it is not a valuation guarantee, purchase commitment, signed order, legal opinion, "
+                "production compliance certificate, third-party attestation, or revenue proof."
+            ),
+            "go_no_go_recommendation": {
+                "title": "KRW 2B commercial saleability gate",
+                "recommendation_status": recommendation_status,
+                "recommendation": (
+                    "Proceed to buyer close review with buyer authority, production telemetry, and external "
+                    "attestation conditions tracked separately from measured local product evidence."
+                    if recommendation_status == "go_with_buyer_conditions"
+                    else "Do not proceed until concrete blockers are cleared."
+                    if recommendation_status == "no_go_until_blockers_cleared"
+                    else "Proceed to buyer close review with no open local or buyer-specific conditions."
+                ),
+            },
+            "gate_summary": {
+                "check_count": len(gate_checks),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "endpoint_count": len(required_runtime_endpoints),
+                "review_process_is_blocker": saleability["review_process_policy"]["is_blocker"],
+                "code_connect_used": False,
+            },
+            "gate_checks": gate_checks,
+            "required_runtime_endpoints": required_runtime_endpoints,
+            "buyer_close_packet": {
+                "documents": [
+                    "docs/commercial_saleability_gate.md",
+                    "docs/commercial_saleability_decision.md",
+                    "docs/commercial_investment_committee_memo.md",
+                    "docs/commercial_due_diligence_room.md",
+                    "docs/commercial_purchase_approval_packet.md",
+                    "docs/commercial_close_readiness.md",
+                    "docs/commercial_contract_readiness.md",
+                    "docs/commercial_procurement_readiness.md",
+                ],
+                "runtime_endpoints": required_runtime_endpoints,
+                "external_conditions": [
+                    "buyer final authority",
+                    "production telemetry",
+                    "third-party security attestation",
+                ],
+            },
+            "metric_provenance": {
+                "measured_local_sources": [
+                    "/api/v1/saleability_decisions/latest",
+                    "/api/v1/commercial_investment_committee_memos/latest",
+                    "/api/v1/analytics_snapshots/latest",
+                ],
+                "proposed_sources": [
+                    "buyer final authority",
+                    "production telemetry",
+                    "third-party security attestation",
+                ],
+            },
+            "operator_next_actions": [
+                "Share the commercial saleability gate with the economic buyer and committee owner.",
+                "Collect final buyer authority artifacts or an explicit waiver.",
+                "Collect production telemetry and third-party security evidence after environment selection.",
+            ],
+            "final_buyer_authority_gaps": [
+                "executive sponsor approval",
+                "named signer",
+                "budget owner",
+                "purchase order",
+                "investment committee sign-off",
+            ],
+            "concrete_blockers": concrete_blockers,
+            "gate_status_rules": [
+                {
+                    "saleability_gate_status": "commercial_saleability_gate_ready",
+                    "rule": "all gate checks are ready and no buyer authority, production, or third-party evidence remains open",
+                },
+                {
+                    "saleability_gate_status": "commercial_saleability_gate_ready_with_warnings",
+                    "rule": "local saleability and committee evidence are ready while buyer authority, production telemetry, or external attestations remain explicit warnings",
+                },
+                {
+                    "saleability_gate_status": "commercial_saleability_gate_blocked",
+                    "rule": "security failure, API contract regression, document mismatch, runtime defect, missing local gate evidence, or Code Connect usage blocks buyer close review",
+                },
+            ],
+            "review_process_policy": saleability["review_process_policy"],
+            "related_runtime_reports": {
+                "saleability_status": saleability["saleability_status"],
+                "investment_committee_status": committee["investment_committee_status"],
+                **committee_reports,
+            },
+            "library_split_decision": saleability["library_split_decision"],
+            "plugin_traceability": saleability["plugin_traceability"],
+            "gate_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_saleability_gates/latest",
+                "documentation": "docs/commercial_saleability_gate.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

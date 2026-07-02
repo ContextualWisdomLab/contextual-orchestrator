@@ -241,6 +241,14 @@ single-product packaging decision, buyer final authority, production telemetry,
 and external attestations into
 `/api/v1/commercial_investment_committee_memos/latest`.
 
+The commercial saleability gate workflow
+`KRW 2B Commercial Saleability Gate` maps saleability decision, investment
+committee memo, due diligence, purchase approval, close and terms, metric
+provenance, Figma stakeholder review, review-process non-blocker policy,
+single-product packaging decision, buyer final authority, production telemetry,
+and external attestations into
+`/api/v1/commercial_saleability_gates/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`

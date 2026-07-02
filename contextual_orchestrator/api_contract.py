@@ -279,6 +279,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial investment committee memo"}},
             }
         },
+        "/api/v1/commercial_saleability_gates/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_saleability_gate",
+                "summary": "Get KRW 2B commercial saleability gate",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial saleability gate"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

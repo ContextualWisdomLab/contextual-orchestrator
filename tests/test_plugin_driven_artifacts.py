@@ -587,6 +587,42 @@ def test_commercial_saleability_decision_defines_final_gate() -> None:
         assert expected_text in decision
 
 
+def test_commercial_saleability_gate_defines_final_commercial_gate() -> None:
+    gate = read_text("docs/commercial_saleability_gate.md")
+    plan = read_text("docs/superpowers/plans/2026-07-03-commercial-saleability-gate.md")
+
+    for expected_text in [
+        "Commercial Saleability Gate",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Gate Inputs",
+        "Runtime Shape",
+        "Gate Status Rules",
+        "KRW 2B Commercial Saleability Gate",
+        "/api/v1/commercial_saleability_gates/latest",
+        "/api/v1/saleability_decisions/latest",
+        "/api/v1/commercial_investment_committee_memos/latest",
+        "/api/v1/commercial_due_diligence_rooms/latest",
+        "/api/v1/commercial_purchase_approval_packets/latest",
+        "/api/v1/analytics_snapshots/latest",
+        "local_commercial_saleability_gate",
+        "gate_checks",
+        "metric_provenance",
+    ]:
+        assert expected_text in gate
+
+    for expected_text in [
+        "Commercial Saleability Gate Implementation Plan",
+        "get_latest_commercial_saleability_gate",
+        "No new dependencies",
+        "python tests/test_commercial_saleability_gate.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 def test_commercial_evidence_export_defines_buyer_export_index() -> None:
     export = read_text("docs/commercial_evidence_export.md")
     plan = read_text("docs/superpowers/plans/2026-07-02-commercial-evidence-export.md")
@@ -1069,6 +1105,7 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_buyer_evidence_manifest_indexes_sale_evidence()
     test_commercial_buyer_handoff_bundle_packages_sale_evidence()
     test_commercial_saleability_decision_defines_final_gate()
+    test_commercial_saleability_gate_defines_final_commercial_gate()
     test_commercial_evidence_export_defines_buyer_export_index()
     test_commercial_acceptance_check_defines_buyer_acceptance_gate()
     test_commercial_release_candidate_defines_buyer_release_package()

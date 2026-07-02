@@ -87,6 +87,14 @@ implementation readiness, Figma stakeholder review, review-process policy, and
 packaging decision. Buyer final authority, production telemetry, and external
 attestations remain proposed or buyer-specific warnings until supplied.
 
+The prototype also exposes `/api/v1/commercial_saleability_gates/latest`. That
+endpoint packages the final commercial saleability gate as local runtime
+evidence across saleability decision, investment committee memo, due diligence,
+purchase approval, close/terms, metric provenance, Figma stakeholder review,
+review-process policy, and packaging decision. Buyer final authority,
+production telemetry, and third-party attestations remain proposed or
+buyer-specific warnings until supplied.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -138,6 +146,7 @@ with proposed production targets.
 | `commercial_purchase_approval_warning_count` | Count of warning gates in the buyer purchase approval packet, with signature authority, budget approval, purchase order, finance authority, and go-live authorization kept separate from measured local approval evidence. | proposed_until_buyer_specific | `/api/v1/commercial_purchase_approval_packets/latest` response. |
 | `commercial_due_diligence_warning_count` | Count of warning sections in the buyer due diligence room, with buyer authority documents, production telemetry, hosted scan evidence, and third-party attestations kept separate from measured local diligence evidence. | proposed_until_buyer_specific | `/api/v1/commercial_due_diligence_rooms/latest` response. |
 | `commercial_investment_committee_warning_count` | Count of warning sections in the investment committee memo, with buyer final authority, production telemetry, hosted scan evidence, and external attestations kept separate from measured local committee evidence. | proposed_until_buyer_specific | `/api/v1/commercial_investment_committee_memos/latest` response. |
+| `commercial_saleability_gate_warning_count` | Count of warning checks in the commercial saleability gate, with buyer final authority, production telemetry, hosted scan evidence, and third-party attestations kept separate from measured local gate evidence. | proposed_until_buyer_specific | `/api/v1/commercial_saleability_gates/latest` response. |
 
 Current GitHub/CI maturity evidence is a measured local or repository signal:
 CodeQL, Dependency review, Python supply chain, Trivy, coverage-evidence,
