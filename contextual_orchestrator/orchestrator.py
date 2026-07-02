@@ -922,6 +922,214 @@ class TaskOrchestrator:
             "sales_readiness": sales_readiness,
         }
 
+    def buyer_evidence_manifest_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the buyer-facing evidence index for high-value commercial review."""
+        commercial = self.commercial_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        commercial_rows = self._criteria_by_name(commercial["criteria"])
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        items = [
+            self._buyer_evidence_item(
+                "product_scope",
+                "Product scope",
+                "Economic buyer",
+                ["README.md", "docs/product_planning.md", "docs/commercial_readiness.md"],
+                "repository_artifact",
+                "ready" if all(has_file(path) for path in ("README.md", "docs/product_planning.md", "docs/commercial_readiness.md")) else "blocked",
+                "Single enterprise orchestration control plane is documented.",
+                "Keep product scope unified for buyer review.",
+            ),
+            self._buyer_evidence_item(
+                "compatible_inference_api",
+                "Compatible inference API",
+                "Platform reviewer",
+                ["/v1/chat/completions", "docs/rest_api_design.md", "tests/test_api_contract.py"],
+                "repository_artifact",
+                "ready" if has_file("docs/rest_api_design.md") and has_file("tests/test_api_contract.py") else "blocked",
+                "OpenAI-compatible endpoint and API contract tests are present.",
+                "Restore API contract docs and tests before buyer review.",
+            ),
+            self._buyer_evidence_item(
+                "admin_evidence_control_plane",
+                "Admin evidence control plane",
+                "Platform operator",
+                ["/admin", "/admin/state", "docs/screen_design.md"],
+                "repository_artifact",
+                "ready" if has_file("docs/screen_design.md") else "blocked",
+                "Admin screen design and runtime state endpoint are present.",
+                "Restore admin evidence design before buyer review.",
+            ),
+            self._buyer_evidence_item(
+                "sales_readiness",
+                "Sales readiness",
+                "Product owner",
+                ["/api/v1/sales_readiness/latest", "tests/test_sales_readiness.py"],
+                "measured_local",
+                "ready" if commercial["sales_readiness"]["readiness_summary"]["fail"] == 0 else "blocked",
+                f"sales_readiness={commercial['sales_readiness']['readiness_status']}",
+                "Resolve sales-readiness failures before commercial review.",
+            ),
+            self._buyer_evidence_item(
+                "commercial_readiness",
+                "Commercial readiness",
+                "Economic buyer",
+                ["/api/v1/commercial_readiness/latest", "tests/test_commercial_readiness.py"],
+                "measured_local",
+                "ready" if commercial["commercial_summary"]["fail"] == 0 else "blocked",
+                f"commercial_status={commercial['commercial_status']}",
+                "Resolve commercial-readiness failures before buyer review.",
+            ),
+            self._buyer_evidence_item(
+                "analytics_honesty",
+                "Analytics honesty",
+                "Analytics reviewer",
+                ["/api/v1/analytics_snapshots/latest", "docs/analytics_spec.md"],
+                "measured_local",
+                "ready" if analytics["measurement_status"] == "local_runtime_snapshot" else "blocked",
+                analytics["source_note"],
+                "Keep measured local evidence separate from production KPI proposals.",
+            ),
+            self._buyer_evidence_item(
+                "access_list_evidence",
+                "Access-list evidence",
+                "Security and compliance reviewer",
+                ["/api/v1/access_reports/{workflow_run_id}", "docs/product_planning.md"],
+                "repository_artifact",
+                "ready" if has_file("docs/product_planning.md") else "blocked",
+                "Workflow trace and access-report evidence are documented.",
+                "Restore access-list evidence docs before compliance review.",
+            ),
+            self._buyer_evidence_item(
+                "evaluation_replay",
+                "Evaluation replay",
+                "Quality reviewer",
+                ["/api/v1/evaluation_runs", "docs/screen_design.md"],
+                "repository_artifact",
+                "ready" if has_file("docs/screen_design.md") else "blocked",
+                "Evaluation replay surface is documented.",
+                "Restore evaluation replay docs before quality review.",
+            ),
+            self._buyer_evidence_item(
+                "security_posture",
+                "Security posture",
+                "Security reviewer",
+                ["SECURITY.md", "tests/test_security_hardening.py", "CodeQL", "Dependency review", "Trivy"],
+                "measured_local",
+                "ready" if commercial_rows["security_and_access_control"]["status"] == "pass" else "blocked",
+                commercial_rows["security_and_access_control"]["evidence"],
+                "Resolve concrete security failures before buyer review.",
+            ),
+            self._buyer_evidence_item(
+                "visual_stakeholder_evidence",
+                "Visual stakeholder evidence",
+                "Stakeholder reviewer",
+                ["docs/figma_artifacts.md", "Figma design file", "FigJam board", "Figma Slides deck"],
+                "figma_artifact",
+                "ready" if has_file("docs/figma_artifacts.md") else "blocked",
+                "Editable Figma, FigJam, and Slides artifacts are recorded.",
+                "Record editable Figma artifacts before stakeholder review.",
+            ),
+            self._buyer_evidence_item(
+                "buyer_diligence_packet",
+                "Buyer diligence packet",
+                "Procurement reviewer",
+                ["docs/commercial_buyer_diligence_packet.md"],
+                "repository_artifact",
+                "ready" if has_file("docs/commercial_buyer_diligence_packet.md") else "blocked",
+                "Buyer questions map to evidence paths and caveats.",
+                "Restore the buyer diligence packet before procurement review.",
+            ),
+            self._buyer_evidence_item(
+                "buyer_acceptance_runbook",
+                "Buyer acceptance runbook",
+                "Procurement reviewer",
+                ["docs/commercial_buyer_acceptance_runbook.md"],
+                "repository_artifact",
+                "ready" if has_file("docs/commercial_buyer_acceptance_runbook.md") else "blocked",
+                "Go, warning, and no-go rules are documented.",
+                "Restore acceptance runbook before procurement review.",
+            ),
+            self._buyer_evidence_item(
+                "buyer_evidence_manifest",
+                "Buyer evidence manifest",
+                "Deal owner",
+                ["docs/commercial_buyer_evidence_manifest.md", "/api/v1/buyer_evidence_manifests/latest"],
+                "measured_local",
+                "ready" if has_file("docs/commercial_buyer_evidence_manifest.md") else "blocked",
+                "Buyer evidence is indexed by owner, source, evidence type, and completion state.",
+                "Restore the manifest document and endpoint before buyer review.",
+            ),
+            self._buyer_evidence_item(
+                "packaging_decision",
+                "Packaging decision",
+                "Procurement and security reviewer",
+                ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "repository_artifact",
+                "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
+                "Single repo and one deployable product remain the current decision.",
+                "Document extraction triggers before changing package boundaries.",
+            ),
+            self._buyer_evidence_item(
+                "production_slo_support",
+                "Production SLO and support proof",
+                "Customer operations reviewer",
+                ["production telemetry", "incident drill records", "support ownership"],
+                "proposed_until_production",
+                "warning",
+                "Production SLO, incident, and support evidence require a deployed customer environment.",
+                "Collect production telemetry during paid onboarding.",
+            ),
+            self._buyer_evidence_item(
+                "buyer_specific_roi_legal",
+                "Buyer-specific ROI and legal proof",
+                "Economic buyer and procurement",
+                ["ROI model", "legal questionnaire", "data-processing terms", "support plan"],
+                "proposed_until_buyer_specific",
+                "warning",
+                "ROI, legal, procurement, and deployment evidence require a named buyer.",
+                "Collect buyer-specific inputs during account diligence.",
+            ),
+        ]
+        summary = self._buyer_manifest_summary(items)
+        if summary["by_completion_state"].get("blocked", 0):
+            manifest_status = "buyer_review_blocked"
+        elif summary["by_completion_state"].get("warning", 0):
+            manifest_status = "buyer_review_ready_with_warnings"
+        else:
+            manifest_status = "buyer_review_ready"
+
+        return {
+            "manifest_status": manifest_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_buyer_evidence_manifest",
+            "source_note": (
+                "Buyer evidence manifest combines process-local runtime reports, repository documents, "
+                "Figma artifact records, and explicit production or buyer-specific caveats; it is not a "
+                "valuation guarantee, purchase commitment, or production compliance certificate."
+            ),
+            "summary": summary,
+            "items": items,
+            "related_runtime_reports": {
+                "commercial_status": commercial["commercial_status"],
+                "sales_readiness_status": commercial["sales_readiness"]["readiness_status"],
+                "analytics_measurement_status": analytics["measurement_status"],
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
@@ -1013,6 +1221,58 @@ class TaskOrchestrator:
             "label": label,
             "evidence": evidence,
             "remediation": remediation,
+        }
+
+    def _buyer_evidence_item(
+        self,
+        item_name: str,
+        label: str,
+        reviewer: str,
+        sources: list[str],
+        evidence_type: str,
+        completion_state: str,
+        evidence: str,
+        next_action: str,
+    ) -> dict[str, Any]:
+        require_object_name(item_name, "buyer_evidence_manifest.item_name")
+        if evidence_type not in {
+            "measured_local",
+            "repository_artifact",
+            "figma_artifact",
+            "proposed_until_production",
+            "proposed_until_buyer_specific",
+        }:  # pragma: no cover
+            raise ValueError("buyer evidence type is invalid")
+        if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+            raise ValueError("buyer evidence completion state must be ready, warning, or blocked")
+        return {
+            "item_name": item_name,
+            "label": label,
+            "reviewer": reviewer,
+            "sources": sources,
+            "evidence_type": evidence_type,
+            "completion_state": completion_state,
+            "evidence": evidence,
+            "next_action": next_action,
+        }
+
+    def _buyer_manifest_summary(self, items: list[dict[str, Any]]) -> dict[str, Any]:
+        completion_counts = Counter(item["completion_state"] for item in items)
+        evidence_counts = Counter(item["evidence_type"] for item in items)
+        return {
+            "total_items": len(items),
+            "by_completion_state": {
+                "ready": completion_counts.get("ready", 0),
+                "warning": completion_counts.get("warning", 0),
+                "blocked": completion_counts.get("blocked", 0),
+            },
+            "by_evidence_type": {
+                "measured_local": evidence_counts.get("measured_local", 0),
+                "repository_artifact": evidence_counts.get("repository_artifact", 0),
+                "figma_artifact": evidence_counts.get("figma_artifact", 0),
+                "proposed_until_production": evidence_counts.get("proposed_until_production", 0),
+                "proposed_until_buyer_specific": evidence_counts.get("proposed_until_buyer_specific", 0),
+            },
         }
 
     def _security_posture_criterion(self, security_profile: dict[str, Any]) -> dict[str, str]:

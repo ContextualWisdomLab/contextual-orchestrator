@@ -69,6 +69,7 @@ One public interface:
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
 - `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
+- `/api/v1/buyer_evidence_manifests/latest` exposes the buyer evidence manifest as a runtime review index across endpoints, repository artifacts, Figma artifacts, verification evidence, and production or buyer-specific caveats.
 
 One fused orchestration loop:
 
@@ -118,4 +119,5 @@ python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py
 python tests/test_analytics_runtime.py
 python tests/test_sales_readiness.py
+python tests/test_buyer_evidence_manifest.py
 ```

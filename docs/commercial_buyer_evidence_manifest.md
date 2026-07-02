@@ -2,6 +2,8 @@
 
 This manifest is the single review index for a KRW 2,000,000,000 buyer diligence review of Contextual Orchestrator. It tells a buyer where each evidence item lives, what kind of evidence it is, who reviews it, and whether the item is ready, caveated, or blocking.
 
+Runtime endpoint: `/api/v1/buyer_evidence_manifests/latest`.
+
 The target is buyer due-diligence readiness. It is not a valuation guarantee,
 purchase commitment, revenue claim, or production compliance certificate.
 
@@ -55,6 +57,8 @@ Ready:
 - local verification passes;
 - required security checks pass or are still running without a concrete failure;
 - `docs/figma_artifacts.md` records `KRW 2B Buyer Evidence Manifest Workflow`;
+- `/api/v1/buyer_evidence_manifests/latest` returns
+  `local_buyer_evidence_manifest`;
 - production and buyer-specific gaps are labeled as warnings, not measured
   evidence.
 

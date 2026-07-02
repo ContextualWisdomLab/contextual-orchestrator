@@ -53,6 +53,7 @@ ADMIN_TRANSLATIONS = {
         "sales_readiness_title": "Sales Readiness",
         "commercial_readiness": "commercial_readiness",
         "commercial_readiness_title": "Commercial Readiness",
+        "buyer_evidence_manifest_title": "Buyer Evidence Manifest",
         "commercial_contract_value": "Target contract value",
         "sales_ready": "Sales ready",
         "pilot_ready_with_warnings": "Pilot ready with warnings",
@@ -60,6 +61,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_ready": "Commercial ready",
         "commercial_ready_with_warnings": "Commercial ready with warnings",
         "not_commercial_ready": "Not commercially ready",
+        "buyer_review_ready": "Buyer review ready",
+        "buyer_review_ready_with_warnings": "Buyer review ready with warnings",
+        "buyer_review_blocked": "Buyer review blocked",
         "readiness_pass": "Pass",
         "readiness_warn": "Warn",
         "readiness_fail": "Fail",
@@ -180,6 +184,7 @@ ADMIN_TRANSLATIONS = {
         "sales_readiness_title": "판매 준비도",
         "commercial_readiness": "commercial_readiness",
         "commercial_readiness_title": "상용 준비도",
+        "buyer_evidence_manifest_title": "구매자 증거 매니페스트",
         "commercial_contract_value": "목표 계약 금액",
         "sales_ready": "판매 준비 완료",
         "pilot_ready_with_warnings": "주의 조건부 파일럿 가능",
@@ -187,6 +192,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_ready": "상용 준비 완료",
         "commercial_ready_with_warnings": "주의 조건부 상용 가능",
         "not_commercial_ready": "상용 준비 미완료",
+        "buyer_review_ready": "구매자 검토 준비 완료",
+        "buyer_review_ready_with_warnings": "주의 조건부 구매자 검토 가능",
+        "buyer_review_blocked": "구매자 검토 차단",
         "readiness_pass": "통과",
         "readiness_warn": "주의",
         "readiness_fail": "실패",
@@ -750,7 +758,7 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="observability_title">Observability</h1><span class="chip green">Live</span></div>
           <div class="kpis" id="kpis"></div>
-          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest"></div>
+          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest"></div>
           <table><thead><tr><th>Workflow</th><th>Mode</th><th>Policy</th><th>Created</th></tr></thead><tbody id="runRows"></tbody></table>
         </section>
       </section>
@@ -911,6 +919,7 @@ Summarize this research thread and verify claims.</textarea>
     function renderReadiness() {
       const readiness = state.readiness || {};
       const commercial = state.commercialReadiness || {};
+      const buyerManifest = state.buyerEvidenceManifest || {};
       const status = readiness.readiness_status || "not_ready";
       const statusClass = status === "sales_ready" ? "green" : status === "pilot_ready_with_warnings" ? "amber" : "red";
       const criteria = readiness.criteria || [];
@@ -919,6 +928,9 @@ Summarize this research thread and verify claims.</textarea>
       const commercialStatusClass = commercialStatus === "commercial_ready" ? "green" : commercialStatus === "commercial_ready_with_warnings" ? "amber" : "red";
       const commercialCriteria = commercial.criteria || [];
       const commercialSummary = commercial.commercial_summary || commercial.summary || {};
+      const manifestStatus = buyerManifest.manifest_status || "buyer_review_blocked";
+      const manifestStatusClass = manifestStatus === "buyer_review_ready" ? "green" : manifestStatus === "buyer_review_ready_with_warnings" ? "amber" : "red";
+      const manifestSummary = buyerManifest.summary?.by_completion_state || {};
       els.salesReadiness.innerHTML = `
         <div class="metric">
           <span data-i18n="sales_readiness_title">${t("sales_readiness_title")}</span>
@@ -932,17 +944,21 @@ Summarize this research thread and verify claims.</textarea>
           <span data-i18n="commercial_contract_value">${t("commercial_contract_value")}</span>
           <strong>${escapeHtml(commercial.target_contract_value_display || "KRW 2,000,000,000")}</strong>
         </div>
+        <div class="metric">
+          <span data-i18n="buyer_evidence_manifest_title">${t("buyer_evidence_manifest_title")}</span>
+          <strong><span class="chip ${manifestStatusClass}">${escapeHtml(t(manifestStatus))}</span></strong>
+        </div>
         <div class="metric source">
           <span data-i18n="readiness_source">${t("readiness_source")}</span>
-          <strong>${escapeHtml(commercial.source_note || readiness.source_note || "No source note")}</strong>
+          <strong>${escapeHtml(buyerManifest.source_note || commercial.source_note || readiness.source_note || "No source note")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
-          <strong>${escapeHtml(commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
+          <strong>${escapeHtml(buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
-          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0}</strong>
+          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0}</strong>
         </div>
         <div class="readiness-grid">
           ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
@@ -1022,6 +1038,8 @@ Summarize this research thread and verify claims.</textarea>
       state.readiness = await readinessRes.json();
       const commercialRes = await fetch("/api/v1/commercial_readiness/latest");
       state.commercialReadiness = await commercialRes.json();
+      const buyerManifestRes = await fetch("/api/v1/buyer_evidence_manifests/latest");
+      state.buyerEvidenceManifest = await buyerManifestRes.json();
     }
     async function simulate() {
       const res = await fetch("/admin/simulate", {

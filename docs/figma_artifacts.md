@@ -47,6 +47,7 @@ Diagrams created:
 - `KRW 2B Buyer Deal Room Evidence Matrix`
 - `KRW 2B Buyer Acceptance Go No Go Workflow`
 - `KRW 2B Buyer Evidence Manifest Workflow`
+- `KRW 2B Runtime Buyer Evidence Endpoint`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -78,6 +79,11 @@ The buyer evidence manifest workflow maps the single review index from scope
 and caveats through runtime endpoints, repository documents, Figma artifacts,
 verification commands, and buyer-specific follow-ups into ready evidence,
 caveat evidence, or concrete-defect handling.
+
+The runtime buyer evidence endpoint workflow maps analytics, sales readiness,
+commercial readiness, repository documents, verification commands, Figma
+artifacts, and packaging decisions into `/api/v1/buyer_evidence_manifests/latest`
+so buyer review evidence is available as both documentation and runtime JSON.
 
 ## Stakeholder Deck
 
