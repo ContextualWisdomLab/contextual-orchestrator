@@ -4354,6 +4354,278 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_completion_scorecard_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return the final KRW 2B commercial completion scorecard."""
+        commercial = self.commercial_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        gtm = self.commercial_go_to_market_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        launch = self.commercial_launch_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        admin_state = self.admin_state()
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        concrete_blockers = list(launch["concrete_blockers"])
+        if commercial["commercial_status"] == "not_commercial_ready":
+            concrete_blockers.append("commercial_readiness_failed")
+        if launch["launch_status"] == "commercial_launch_blocked":
+            concrete_blockers.append("commercial_launch_blocked")
+        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        scorecard_items = [
+            {
+                "item_name": "product_design_evidence",
+                "label": "Product Design evidence",
+                "owner": "Product design owner",
+                "sources": [
+                    "docs/plugin_driven_design_brief.md",
+                    "docs/commercial_plugin_operating_model.md",
+                    "docs/screen_design.md",
+                    "/admin",
+                    "/api/v1/commercial_readiness/latest",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "docs/plugin_driven_design_brief.md",
+                        "docs/commercial_plugin_operating_model.md",
+                        "docs/screen_design.md",
+                    )
+                )
+                and admin_state["agents"]
+                else "blocked",
+                "evidence": "Buyer, operator, security/compliance, and procurement workflows map to admin and readiness evidence.",
+                "action": "Keep buyer evidence paths visible in the existing admin control plane.",
+                "exit_criteria": "Every persona has a product/API/docs evidence path.",
+            },
+            {
+                "item_name": "figma_artifacts",
+                "label": "Figma artifacts",
+                "owner": "Figma owner",
+                "sources": [
+                    "docs/figma_artifacts.md",
+                    "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                    "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                ],
+                "evidence_type": "figma_artifact",
+                "completion_state": "ready" if has_file("docs/figma_artifacts.md") else "blocked",
+                "evidence": "Editable design, FigJam diagrams, and stakeholder artifact records exist without Code Connect.",
+                "action": "Use Figma/FigJam artifacts for stakeholder review without generating Code Connect metadata.",
+                "exit_criteria": "Figma artifacts are recorded and Code Connect remains unused.",
+            },
+            {
+                "item_name": "superpowers_plan_evidence",
+                "label": "Superpowers plan evidence",
+                "owner": "Implementation owner",
+                "sources": [
+                    "docs/superpowers/plans/2026-07-02-commercial-completion-scorecard-runtime.md",
+                    "docs/superpowers/plans/2026-07-02-commercial-launch-readiness.md",
+                    "tests/test_commercial_completion_scorecard.py",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if has_file("docs/superpowers/plans/2026-07-02-commercial-completion-scorecard-runtime.md")
+                and has_file("tests/test_commercial_completion_scorecard.py")
+                else "blocked",
+                "evidence": "Dated plans and focused tests define files, expected failures, implementation, and verification commands.",
+                "action": "Keep TDD plans and verification commands committed with the scorecard.",
+                "exit_criteria": "Plan and focused test exist for the runtime scorecard.",
+            },
+            {
+                "item_name": "ponytail_packaging_decision",
+                "label": "Ponytail packaging decision",
+                "owner": "Procurement and security reviewer",
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if launch["library_split_decision"]["decision"] == "keep_single_product"
+                else "warning",
+                "evidence": launch["library_split_decision"]["reason"],
+                "action": "Keep one repository and one deployable product until extraction triggers are real.",
+                "exit_criteria": "No separate library, Git submodule, or extracted package is created for this increment.",
+            },
+            {
+                "item_name": "data_analytics_truthfulness",
+                "label": "Data Analytics truthfulness",
+                "owner": "Analytics owner",
+                "sources": [
+                    "docs/analytics_spec.md",
+                    "/api/v1/analytics_snapshots/latest",
+                    "/api/v1/commercial_launch_readiness/latest",
+                ],
+                "evidence_type": "measured_local",
+                "completion_state": "ready"
+                if has_file("docs/analytics_spec.md") and analytics["measurement_status"] == "local_runtime_snapshot"
+                else "blocked",
+                "evidence": "Measured local evidence and proposed production or buyer-specific inputs are separated.",
+                "action": "Do not present proposed buyer or production inputs as measured product results.",
+                "exit_criteria": "Every commercial KPI has an evidence type and source expectation.",
+            },
+            {
+                "item_name": "runtime_endpoint_chain",
+                "label": "Runtime endpoint chain",
+                "owner": "Platform operator",
+                "sources": [
+                    "/api/v1/commercial_readiness/latest",
+                    "/api/v1/commercial_go_to_market_readiness/latest",
+                    "/api/v1/commercial_launch_readiness/latest",
+                    "/api/v1/commercial_completion_scorecards/latest",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready"
+                if commercial["commercial_status"] != "not_commercial_ready"
+                and gtm["go_to_market_status"] != "commercial_go_to_market_blocked"
+                and launch["launch_status"] != "commercial_launch_blocked"
+                else "blocked",
+                "evidence": (
+                    f"commercial_status={commercial['commercial_status']}; "
+                    f"go_to_market_status={gtm['go_to_market_status']}; "
+                    f"launch_status={launch['launch_status']}"
+                ),
+                "action": "Expose completion status through the same admin-protected runtime API chain.",
+                "exit_criteria": "Runtime chain has no blocked local evidence gate.",
+            },
+            {
+                "item_name": "verification_packet",
+                "label": "Verification packet",
+                "owner": "Technical reviewer",
+                "sources": [
+                    "tests/test_commercial_completion_scorecard.py",
+                    "tests/test_commercial_launch_readiness.py",
+                    "tests/test_plugin_driven_artifacts.py",
+                    "tests/test_api_contract.py",
+                    "pytest -q",
+                ],
+                "evidence_type": "measured_local",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "tests/test_commercial_completion_scorecard.py",
+                        "tests/test_commercial_launch_readiness.py",
+                        "tests/test_plugin_driven_artifacts.py",
+                        "tests/test_api_contract.py",
+                    )
+                )
+                else "blocked",
+                "evidence": "Focused completion, launch, artifact, and API contract tests are present.",
+                "action": "Run focused tests and full pytest before presenting completion status.",
+                "exit_criteria": "Focused tests, compileall, full pytest, and diff hygiene pass.",
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": ["docs/commercial_completion_scorecard.md", "docs/commercial_launch_readiness.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready",
+                "evidence": "Review delay, model-review delay, and queued review automation are not product blockers.",
+                "action": "Block only on concrete security, API contract, document, or functional defects.",
+                "exit_criteria": "Review process delay remains non-blocking without concrete failure evidence.",
+            },
+            {
+                "item_name": "production_buyer_followups",
+                "label": "Production and buyer follow-ups",
+                "owner": "Buyer sponsor, operations owner, and deal owner",
+                "sources": [
+                    "/api/v1/commercial_launch_readiness/latest",
+                    "buyer environment",
+                    "production telemetry",
+                    "commercial signatures",
+                ],
+                "evidence_type": "external_input_required",
+                "completion_state": "warning",
+                "source_gap_status": "external_input_required",
+                "evidence": (
+                    f"external_input_group_count={launch['launch_summary']['external_input_group_count']}; "
+                    f"buyer_signature_gap_count={gtm['go_to_market_summary']['buyer_signature_gap_count']}"
+                ),
+                "action": "Collect buyer environment, production telemetry, and signature inputs or explicit waivers.",
+                "exit_criteria": "Buyer supplies or waives remaining external inputs.",
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in scorecard_items)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            completion_status = "commercial_completion_blocked"
+        elif warning_count:
+            completion_status = "commercial_completion_ready_with_warnings"
+        else:
+            completion_status = "commercial_completion_ready"
+
+        return {
+            "completion_status": completion_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_completion_scorecard",
+            "source_note": (
+                "Commercial completion scorecard aggregates repo-local product design, Figma, Superpowers, "
+                "Ponytail, Data Analytics, runtime, verification, review-process, and packaging evidence "
+                "separately from buyer and production follow-ups; it is not a valuation guarantee, purchase "
+                "commitment, signed order, legal opinion, production compliance certificate, or revenue proof."
+            ),
+            "completion_summary": {
+                "item_count": len(scorecard_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "external_input_group_count": launch["launch_summary"]["external_input_group_count"],
+                "review_process_is_blocker": launch["review_process_policy"]["is_blocker"],
+                "code_connect_used": False,
+            },
+            "completion_items": scorecard_items,
+            "concrete_blockers": concrete_blockers,
+            "completion_status_rules": [
+                {
+                    "completion_status": "commercial_completion_ready",
+                    "rule": "product design, Figma, Superpowers, Ponytail, Data Analytics, runtime, verification, review policy, packaging, and external inputs are ready",
+                },
+                {
+                    "completion_status": "commercial_completion_ready_with_warnings",
+                    "rule": "repo-local program completion evidence is ready while buyer environment, production telemetry, commercial signatures, or other external inputs remain explicit warnings",
+                },
+                {
+                    "completion_status": "commercial_completion_blocked",
+                    "rule": "security failure, API contract regression, document mismatch, reproducible product defect, missing local completion evidence, or Code Connect usage blocks completion",
+                },
+            ],
+            "review_process_policy": launch["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_readiness_status": commercial["commercial_status"],
+                "commercial_go_to_market_status": gtm["go_to_market_status"],
+                "commercial_launch_status": launch["launch_status"],
+                "analytics_measurement_status": analytics["measurement_status"],
+            },
+            "library_split_decision": launch["library_split_decision"],
+            "plugin_traceability": launch["plugin_traceability"],
+            "completion_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_completion_scorecards/latest",
+                "documentation": "docs/commercial_completion_scorecard.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

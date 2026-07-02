@@ -223,6 +223,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial launch readiness"}},
             }
         },
+        "/api/v1/commercial_completion_scorecards/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_completion_scorecard",
+                "summary": "Get KRW 2B commercial completion scorecard",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial completion scorecard"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

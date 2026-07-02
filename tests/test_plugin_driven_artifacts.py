@@ -69,6 +69,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "commercial_close_signature_gap_count",
         "commercial_go_to_market_warning_count",
         "commercial_launch_external_input_count",
+        "commercial_completion_warning_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -131,6 +132,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Close Readiness",
         "KRW 2B Commercial Go To Market Readiness",
         "KRW 2B Commercial Launch Readiness",
+        "KRW 2B Commercial Completion Runtime Scorecard",
         "Figma Code Connect was not used",
     ]:
         assert expected_text in artifacts
@@ -172,12 +174,21 @@ def test_commercial_plugin_operating_model_defines_plugin_execution_scope() -> N
 
 def test_commercial_completion_scorecard_defines_ready_warning_blocker_rules() -> None:
     scorecard = read_text("docs/commercial_completion_scorecard.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-completion-scorecard-runtime.md")
 
     for expected_text in [
         "Commercial Completion Scorecard",
         "KRW 2,000,000,000 enterprise sale",
         "Figma Code Connect is not used",
         "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Runtime Shape",
+        "Completion Status Rules",
+        "KRW 2B Commercial Completion Runtime Scorecard",
+        "/api/v1/commercial_completion_scorecards/latest",
+        "local_commercial_completion_scorecard",
+        "completion_items",
+        "commercial_completion_ready_with_warnings",
         "Product Design",
         "Superpowers",
         "Ponytail",
@@ -191,6 +202,15 @@ def test_commercial_completion_scorecard_defines_ready_warning_blocker_rules() -
         "Blocked:",
     ]:
         assert expected_text in scorecard
+
+    for expected_text in [
+        "Commercial Completion Scorecard Runtime Implementation Plan",
+        "get_latest_commercial_completion_scorecard",
+        "No new repo dependencies",
+        "python tests/test_commercial_completion_scorecard.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
 
 
 def test_commercial_buyer_diligence_packet_defines_deal_room_evidence() -> None:

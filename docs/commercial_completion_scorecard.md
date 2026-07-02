@@ -6,6 +6,8 @@ Data Analytics can do to make Contextual Orchestrator reviewable for a KRW
 
 Scope phrase: KRW 2,000,000,000 enterprise sale.
 
+Runtime endpoint: `/api/v1/commercial_completion_scorecards/latest`.
+
 The target is buyer due-diligence readiness. It is not guaranteed revenue,
 valuation, purchase approval, or a production compliance certificate. Figma Code
 Connect is not used.
@@ -144,3 +146,36 @@ Blocked:
 - API or document contract mismatch;
 - reproducible product defect;
 - Figma Code Connect usage.
+
+## Runtime Shape
+
+`commercial_completion_scorecard_report()` exposes the scorecard as runtime JSON
+with `measurement_status=local_commercial_completion_scorecard`.
+
+The endpoint returns:
+
+- `completion_status`: `commercial_completion_ready`,
+  `commercial_completion_ready_with_warnings`, or
+  `commercial_completion_blocked`;
+- `completion_summary`: ready, warning, blocked, external-input,
+  review-process, and Code Connect counts;
+- `completion_items`: Product Design, Figma, Superpowers, Ponytail, Data
+  Analytics, runtime chain, verification packet, review policy, and
+  production/buyer follow-up rows;
+- `related_runtime_reports`: commercial readiness, GTM, launch, and analytics
+  status links;
+- `library_split_decision`: keep one repository and one deployable product;
+- `completion_links`: Figma design file, FigJam board, runtime endpoint, and
+  this document.
+
+## Completion Status Rules
+
+| Status | Rule |
+|---|---|
+| `commercial_completion_ready` | Product Design, Figma, Superpowers, Ponytail, Data Analytics, runtime, verification, review policy, packaging, and external inputs are ready. |
+| `commercial_completion_ready_with_warnings` | Repo-local program completion evidence is ready while buyer environment, production telemetry, commercial signatures, or other external inputs remain explicit warnings. |
+| `commercial_completion_blocked` | Security failure, API contract regression, document mismatch, reproducible product defect, missing local completion evidence, or Code Connect usage blocks completion. |
+
+FigJam artifact: `KRW 2B Commercial Completion Runtime Scorecard`.
+
+Do not create a separate library, Git submodule, or extracted package now.

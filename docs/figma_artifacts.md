@@ -56,6 +56,7 @@ Diagrams created:
 - `KRW 2B Commercial Gap Register`
 - `KRW 2B Commercial Procurement Readiness`
 - `KRW 2B Commercial Launch Readiness`
+- `KRW 2B Commercial Completion Runtime Scorecard`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -186,6 +187,12 @@ and single-product packaging decision into
 `/api/v1/commercial_launch_readiness/latest`, while buyer environment,
 production telemetry, and commercial signature inputs remain warning inputs
 until supplied by the buyer or production deployment.
+
+The commercial completion runtime workflow
+`KRW 2B Commercial Completion Runtime Scorecard` maps Product Design, Figma,
+Superpowers, Ponytail, Data Analytics, runtime endpoint chain, verification
+packet, review-process policy, single-product packaging, and production/buyer
+follow-ups into `/api/v1/commercial_completion_scorecards/latest`.
 
 ## Stakeholder Deck
 

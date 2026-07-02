@@ -36,6 +36,7 @@
 | `GET` | `/api/v1/commercial_close_readiness/latest` | Read commercial close readiness for buyer signature and go-live review |
 | `GET` | `/api/v1/commercial_go_to_market_readiness/latest` | Read commercial go-to-market readiness for buyer and stakeholder review |
 | `GET` | `/api/v1/commercial_launch_readiness/latest` | Read commercial launch readiness for buyer trial and go-live execution |
+| `GET` | `/api/v1/commercial_completion_scorecards/latest` | Read KRW 2,000,000,000 commercial completion scorecard |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -76,6 +77,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_close_readiness/latest` | Produce the close readiness gate that separates repo-local sellable product evidence from buyer signatures, DPA/security acceptance, budget/PO, and go-live authorization gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer close and signature review. |
 | `GET` | `/api/v1/commercial_go_to_market_readiness/latest` | Produce the go-to-market readiness index that ties close, value, security, evidence export, buyer handoff, saleability, admin evidence, analytics truthfulness, Figma artifacts, review-process policy, and packaging decision into one buyer/stakeholder packet. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer and stakeholder GTM review. |
 | `GET` | `/api/v1/commercial_launch_readiness/latest` | Produce the launch readiness gate that ties GTM, runtime, acceptance, operator, admin, analytics, Figma, review-process, and packaging evidence into one trial/go-live packet while separating buyer environment, production telemetry, and signature inputs. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer trial and launch review. |
+| `GET` | `/api/v1/commercial_completion_scorecards/latest` | Produce the runtime completion scorecard for the KRW 2,000,000,000 program-completion standard across plugin artifacts, runtime readiness, verification, review policy, packaging, and external follow-ups. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; final buyer completion review. |
 
 ## Production Library Target
 
