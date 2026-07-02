@@ -197,6 +197,9 @@ def build_server(
                 if path == "/api/v1/orchestration_policies/default_policy":
                     self._send(orchestrator.admin_state()["policy"])
                     return
+                if path == "/api/v1/analytics_snapshots/latest":
+                    self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
+                    return
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
                     self._send(_response_payload({
@@ -217,6 +220,15 @@ def build_server(
                 if path.startswith("/api/v1/access_reports/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
+                        orchestrator.record_analytics_event(
+                            "access_report_viewed",
+                            {
+                                "endpoint_path": "/api/v1/access_reports/{workflow_run_id}",
+                                "workflow_run_id": workflow_run_id,
+                                "actor_scope": "admin",
+                                "status_code": 200,
+                            },
+                        )
                         self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.expose_trace_by_default))
                         return
                     except KeyError:
@@ -254,6 +266,15 @@ def build_server(
                     if not bundle:
                         self._send_error(404, "locale_not_found", f"locale {locale_code} not found")
                         return
+                    orchestrator.record_analytics_event(
+                        "locale_bundle_loaded",
+                        {
+                            "endpoint_path": "/api/v1/locale_bundles/{locale_code}",
+                            "locale_code": locale_code,
+                            "actor_scope": "admin",
+                            "status_code": 200,
+                        },
+                    )
                     self._send({"locale_code": locale_code, "messages": bundle})
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -299,7 +320,19 @@ def build_server(
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    started_at = time.perf_counter()
                     result = self._run(lambda: orchestrator.run(messages, mode=mode, workflow_run_id=f"run_{uuid.uuid4().hex}"))
+                    orchestrator.record_analytics_event(
+                        "chat_completion_requested",
+                        {
+                            "endpoint_path": "/v1/chat/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "run_mode": result["mode"],
+                            "workflow_run_id": result["workflow_run_id"],
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
                     self._send(chat_completion_response(result, model=str(body.get("model", "contextual-orchestrator")), include_trace=include_trace))
                     return
                 if path == "/admin/simulate":

@@ -10,6 +10,12 @@ dashboard claims real usage.
 
 In short: this spec provides proposed definitions and source requirements, not measured product results.
 
+The stdlib prototype now exposes `/api/v1/analytics_snapshots/latest` as a
+local runtime snapshot. It measures only in-memory events and workflow records
+from the current process, so it is source-backed for smoke tests and pilot
+readiness checks, but it is still not production telemetry or a warehouse-backed
+dashboard.
+
 Decision supported: decide whether Contextual Orchestrator is ready to move from
 lab prototype to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
@@ -31,6 +37,9 @@ Primary owners:
 | Compatible API adoption | Count of successful `/v1/chat/completions` requests by application or token scope over a completed review window. | Shows whether the single API wedge is being used without client rewrites. | HTTP request logs with endpoint, status, auth scope, and timestamp. |
 | Trace-complete workflow rate | Share of conducted workflow runs that include role, worker, subtask, access list, verifier result, and final synthesis fields. | Verifies that enterprise evidence is present when deep orchestration is used. | `workflow_runs` records plus trace schema validation. |
 | Policy-safe routing rate | Share of runs where selected mode, provider exclusions, and verifier requirement match the active orchestration policy. | Detects routing or policy regressions before rollout. | Policy snapshot joined to each run decision. |
+
+The local runtime snapshot reports these KPIs as `compatible_api_adoption`,
+`trace_complete_workflow_rate`, and `policy_safe_routing_rate`.
 
 ## Drivers
 
@@ -63,6 +72,10 @@ Minimum event or record names use lower snake_case with at least two words:
 - `agent_status_changed`
 - `provider_exclusion_changed`
 - `locale_bundle_loaded`
+
+The stdlib server records these events in memory only. The event stream is
+intended to prove schema shape and guardrail logic before a production log sink
+exists.
 
 Recommended shared fields:
 

@@ -71,6 +71,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Active policy"}},
             }
         },
+        "/api/v1/analytics_snapshots/latest": {
+            "get": {
+                "operationId": "get_latest_analytics_snapshot",
+                "summary": "Get source-backed local KPI and guardrail metrics",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Analytics snapshot"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

@@ -37,6 +37,14 @@ ADMIN_TRANSLATIONS = {
         "integrations_title": "Integrations",
         "observability_title": "Observability",
         "settings_title": "Settings",
+        "compatible_api_adoption": "Compatible API adoption",
+        "trace_complete_workflow_rate": "Trace-complete workflow rate",
+        "policy_safe_routing_rate": "Policy-safe routing rate",
+        "route_versus_conduct_mix": "Route-versus-conduct mix",
+        "evaluation_replay_usage": "Evaluation replay usage",
+        "agent_health_coverage": "Agent health coverage",
+        "provider_exclusion_miss_rate": "Provider exclusion miss rate",
+        "locale_key_parity": "Locale key parity",
         "evaluation_replay": "Evaluation Replay",
         "run_evaluation": "Run Evaluation",
         "dataset_name": "Dataset",
@@ -124,6 +132,14 @@ ADMIN_TRANSLATIONS = {
         "integrations_title": "연동",
         "observability_title": "관측",
         "settings_title": "설정",
+        "compatible_api_adoption": "호환 API 사용량",
+        "trace_complete_workflow_rate": "트레이스 완성 워크플로 비율",
+        "policy_safe_routing_rate": "정책 안전 라우팅 비율",
+        "route_versus_conduct_mix": "route/conduct 분포",
+        "evaluation_replay_usage": "평가 리플레이 사용량",
+        "agent_health_coverage": "에이전트 상태 커버리지",
+        "provider_exclusion_miss_rate": "공급자 제외 누락률",
+        "locale_key_parity": "로케일 키 일치율",
         "evaluation_replay": "평가 리플레이",
         "run_evaluation": "평가 실행",
         "dataset_name": "데이터셋",
@@ -698,7 +714,7 @@ Summarize this research thread and verify claims.</textarea>
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
-    let state = {agents: [], last: null};
+    let state = {agents: [], last: null, analytics: null};
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
@@ -785,7 +801,13 @@ Summarize this research thread and verify claims.</textarea>
     }
     function renderObservability() {
       const runs = state.recent_workflow_runs || [];
-      els.kpis.innerHTML = [
+      const analytics = state.analytics || {};
+      const metricRows = [...(analytics.kpis || []), ...(analytics.guardrails || [])];
+      els.kpis.innerHTML = metricRows.map(metric => {
+        const rawValue = metric.value_percent ?? metric.value ?? metric.numerator ?? 0;
+        const suffix = metric.value_percent == null ? "" : "%";
+        return `<div class="kpi"><span>${escapeHtml(t(metric.metric_name) || metric.label)}</span><strong>${escapeHtml(rawValue)}${suffix}</strong></div>`;
+      }).join("") || [
         ["Workflow runs", runs.length],
         ["Enabled agents", state.agents.length],
         ["Verifier required", state.policy.verifier_required ? "Yes" : "No"]
@@ -844,10 +866,15 @@ Summarize this research thread and verify claims.</textarea>
     async function load() {
       const res = await fetch("/admin/state");
       state = await res.json();
+      await refreshAnalytics();
       els.hintCount.textContent = state.policy.complex_hints.length;
       renderAgents();
       renderSecondaryViews();
       await simulate();
+    }
+    async function refreshAnalytics() {
+      const analyticsRes = await fetch("/api/v1/analytics_snapshots/latest");
+      state.analytics = await analyticsRes.json();
     }
     async function simulate() {
       const res = await fetch("/admin/simulate", {
@@ -857,6 +884,7 @@ Summarize this research thread and verify claims.</textarea>
       });
       state.last = await res.json();
       state.recent_workflow_runs = [state.last, ...(state.recent_workflow_runs || [])].slice(0, 8);
+      await refreshAnalytics();
       renderTrace(state.last);
       renderSecondaryViews();
     }
@@ -869,6 +897,8 @@ Summarize this research thread and verify claims.</textarea>
       });
       const result = await res.json();
       els.evaluationRows.insertAdjacentHTML("afterbegin", `<tr><td>${escapeHtml(result.evaluation_run_id)}</td><td>${escapeHtml(result.mode)}</td><td>${escapeHtml(result.prompt_count)}</td><td>${escapeHtml(result.success_count)}</td></tr>`);
+      await refreshAnalytics();
+      renderSecondaryViews();
     }
     els.agentSearch.addEventListener("input", renderAgents);
     els.statusFilter.addEventListener("change", renderAgents);

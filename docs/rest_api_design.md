@@ -17,6 +17,7 @@
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
 | `GET` | `/api/v1/agent_pools` | List model agents |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |
+| `GET` | `/api/v1/analytics_snapshots/latest` | Read local runtime KPI and guardrail snapshot |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -38,6 +39,7 @@ These product surfaces are now implemented in this prototype:
 | `POST` | `/api/v1/evaluation_runs` | Replay a prompt or dataset against policy variants before changing production routing. | Fugu and TRINITY optimize coordination against measured outcomes. |
 | `GET` | `/api/v1/access_reports/{workflow_run_id}` | Produce compliance evidence for which worker saw which prior outputs. | Conductor access-list visibility control. |
 | `PATCH` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Update status, priority, capability tags, or provider exclusion. | Fugu configurable worker pool and provider/compliance constraints. |
+| `GET` | `/api/v1/analytics_snapshots/latest` | Produce source-backed local KPI and guardrail evidence without claiming production telemetry. | Fugu evaluation discipline; TRINITY verification evidence; Conductor access-list guardrails. |
 
 ## Production Library Target
 

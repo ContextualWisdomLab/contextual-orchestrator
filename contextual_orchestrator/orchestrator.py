@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections import deque
+from collections import Counter, deque
 from dataclasses import dataclass, replace
 import ipaddress
 import json
@@ -236,6 +236,7 @@ class TaskOrchestrator:
         self.policy = OrchestrationPolicy()
         self._workflow_runs: dict[str, dict[str, Any]] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
+        self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
 
@@ -271,6 +272,28 @@ class TaskOrchestrator:
                 "agent_count": len(record["trace"]),
             },
         )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": record["workflow_run_id"],
+                "run_mode": record["mode"],
+                "policy_mode": record["policy_mode"],
+                "trace_step_count": len(record["trace"]),
+                "trace_complete": self._is_trace_complete(record),
+            },
+        )
+        for step in record["trace"]:
+            self.record_analytics_event(
+                "workflow_step_completed",
+                {
+                    "workflow_run_id": record["workflow_run_id"],
+                    "run_mode": record["mode"],
+                    "step_id": step["id"],
+                    "agent_id": step["agent_id"],
+                    "role": step["role"],
+                    "duration_ms": step.get("latency_ms"),
+                },
+            )
         return record
 
     def run_evaluation(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
@@ -302,6 +325,15 @@ class TaskOrchestrator:
             "evaluation_run_created",
             {
                 "evaluation_run_id": evaluation_run_id,
+                "workflow_run_count": len(workflow_run_ids),
+                "success_count": evaluation["success_count"],
+            },
+        )
+        self.record_analytics_event(
+            "evaluation_run_created",
+            {
+                "evaluation_run_id": evaluation_run_id,
+                "run_mode": mode,
                 "workflow_run_count": len(workflow_run_ids),
                 "success_count": evaluation["success_count"],
             },
@@ -367,6 +399,24 @@ class TaskOrchestrator:
                 "updated_fields": sorted(patch.keys()),
             },
         )
+        if "status" in patch:
+            self.record_analytics_event(
+                "agent_status_changed",
+                {
+                    "agent_pool_id": agent_pool_id,
+                    "agent_id": worker_agent_id,
+                    "status": self._agent_to_admin_payload(patched)["status"],
+                },
+            )
+        if "provider_exclusions" in patch:
+            self.record_analytics_event(
+                "provider_exclusion_changed",
+                {
+                    "agent_pool_id": agent_pool_id,
+                    "agent_id": worker_agent_id,
+                    "provider_exclusions": list(patched.provider_exclusions),
+                },
+            )
         return self._agent_to_admin_payload(patched)
 
     def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
@@ -566,6 +616,107 @@ class TaskOrchestrator:
         right = max(0, total - start)
         return list(reversed(events[left:right]))
 
+    def record_analytics_event(self, event_name: str, detail: dict[str, Any]) -> None:
+        """Record a compact in-memory analytics event without prompt or output text."""
+        require_object_name(event_name, "analytics.event_name")
+        self._analytics_events.append({
+            "event_time": int(time.time()),
+            "event_name": event_name,
+            "event_detail": redact_value(detail),
+        })
+
+    def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
+        """Return source-backed local KPI definitions from in-memory runtime state."""
+        runs = list(self._workflow_runs.values())
+        conducted_runs = [run for run in runs if run["mode"] == "conduct"]
+        trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
+        policy_safe_count = sum(1 for run in runs if self._is_policy_safe_run(run))
+        event_counts = Counter(event["event_name"] for event in self._analytics_events)
+        successful_chat_requests = sum(
+            1
+            for event in self._analytics_events
+            if event["event_name"] == "chat_completion_requested"
+            and event["event_detail"].get("status_code") == 200
+        )
+        route_count = sum(1 for run in runs if run["mode"] == "route")
+        conduct_count = sum(1 for run in runs if run["mode"] == "conduct")
+        step_count = sum(len(run["trace"]) for run in runs)
+        provider_exclusion_misses = sum(self._provider_exclusion_miss_count(run) for run in runs)
+        locale_parity = self._locale_key_parity(locale_bundles or {})
+
+        return {
+            "measurement_status": "local_runtime_snapshot",
+            "source_note": "Metrics are measured from this process in-memory runtime, not production telemetry.",
+            "event_counts": dict(sorted(event_counts.items())),
+            "kpis": [
+                {
+                    "metric_name": "compatible_api_adoption",
+                    "label": "Compatible API adoption",
+                    "value": successful_chat_requests,
+                    "unit": "successful_requests",
+                    "source": "chat_completion_requested events",
+                },
+                {
+                    "metric_name": "trace_complete_workflow_rate",
+                    "label": "Trace-complete workflow rate",
+                    "numerator": trace_complete_count,
+                    "denominator": len(conducted_runs),
+                    "value_percent": self._percent(trace_complete_count, len(conducted_runs)),
+                    "source": "workflow_runs conduct traces",
+                },
+                {
+                    "metric_name": "policy_safe_routing_rate",
+                    "label": "Policy-safe routing rate",
+                    "numerator": policy_safe_count,
+                    "denominator": len(runs),
+                    "value_percent": self._percent(policy_safe_count, len(runs)),
+                    "source": "workflow_runs policy snapshots",
+                },
+            ],
+            "drivers": [
+                {
+                    "metric_name": "route_versus_conduct_mix",
+                    "label": "Route-versus-conduct mix",
+                    "counts": {"route": route_count, "conduct": conduct_count},
+                    "source": "workflow_runs mode",
+                },
+                {
+                    "metric_name": "evaluation_replay_usage",
+                    "label": "Evaluation replay usage",
+                    "value": event_counts.get("evaluation_run_created", 0),
+                    "unit": "runs",
+                    "source": "evaluation_run_created events",
+                },
+                {
+                    "metric_name": "agent_health_coverage",
+                    "label": "Agent health coverage",
+                    "numerator": len([agent for agent in self.agents if agent.id and agent.model and agent.base_url]),
+                    "denominator": len(self.agents),
+                    "value_percent": self._percent(
+                        len([agent for agent in self.agents if agent.id and agent.model and agent.base_url]),
+                        len(self.agents),
+                    ),
+                    "source": "agent pool configuration",
+                },
+            ],
+            "guardrails": [
+                {
+                    "metric_name": "provider_exclusion_miss_rate",
+                    "label": "Provider exclusion miss rate",
+                    "value": provider_exclusion_misses,
+                    "denominator": step_count,
+                    "value_percent": self._percent(provider_exclusion_misses, step_count),
+                    "source": "workflow trace agent selections",
+                },
+                {
+                    "metric_name": "locale_key_parity",
+                    "label": "Locale key parity",
+                    **locale_parity,
+                    "source": "admin locale bundles",
+                },
+            ],
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
@@ -587,6 +738,58 @@ class TaskOrchestrator:
             "policy_mode": run["policy_mode"],
             "created_at": run["created_at"],
         }
+
+    def _is_trace_complete(self, run: dict[str, Any]) -> bool:
+        trace = run.get("trace", [])
+        if not trace:
+            return False
+        for step in trace:
+            if not all(key in step for key in ("id", "role", "agent_id", "subtask", "access", "output")):
+                return False
+            if not isinstance(step["access"], list) or step["output"] is None:
+                return False
+        verification = run.get("verification") or {}
+        return bool(run.get("answer") and "accepted" in verification and "reason" in verification)
+
+    def _is_policy_safe_run(self, run: dict[str, Any]) -> bool:
+        if run["mode"] == "conduct" and run["policy_snapshot"].get("verifier_required") and not run.get("verification"):
+            return False
+        return self._provider_exclusion_miss_count(run) == 0
+
+    def _provider_exclusion_miss_count(self, run: dict[str, Any]) -> int:
+        misses = 0
+        for step in run.get("trace", []):
+            try:
+                agent = self._agent(step["agent_id"])
+            except KeyError:
+                misses += 1
+                continue
+            if step["role"] in agent.provider_exclusions:
+                misses += 1
+        return misses
+
+    def _locale_key_parity(self, locale_bundles: dict[str, dict[str, str]]) -> dict[str, Any]:
+        english = locale_bundles.get("en", {})
+        other_locale_codes = sorted(code for code in locale_bundles if code != "en")
+        denominator = len(english) * len(other_locale_codes)
+        missing = [
+            f"{locale_code}.{key}"
+            for locale_code in other_locale_codes
+            for key in sorted(english)
+            if not locale_bundles[locale_code].get(key)
+        ]
+        numerator = denominator - len(missing)
+        return {
+            "numerator": numerator,
+            "denominator": denominator,
+            "value_percent": self._percent(numerator, denominator),
+            "missing_keys": missing,
+        }
+
+    def _percent(self, numerator: int, denominator: int) -> float | None:
+        if denominator == 0:
+            return None
+        return round((numerator / denominator) * 100, 2)
 
 
 def redact_text(text: str) -> str:
