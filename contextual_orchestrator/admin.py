@@ -25,6 +25,7 @@ ADMIN_TRANSLATIONS = {
         "all_statuses": "All statuses",
         "no_agents_match": "No agents match the current filters.",
         "no_agents_configured": "No agents are configured yet.",
+        "no_audit_events": "No audit events yet.",
         "orchestration_policy": "Orchestration Policy",
         "simulation_title": "Simulation",
         "run_trace": "Run Trace",
@@ -112,6 +113,7 @@ ADMIN_TRANSLATIONS = {
         "all_statuses": "전체 상태",
         "no_agents_match": "현재 필터와 일치하는 에이전트가 없습니다.",
         "no_agents_configured": "아직 구성된 에이전트가 없습니다.",
+        "no_audit_events": "아직 감사 이벤트가 없습니다.",
         "orchestration_policy": "오케스트레이션 정책",
         "simulation_title": "시뮬레이션",
         "run_trace": "트레이스 실행",
@@ -798,7 +800,7 @@ Summarize this research thread and verify claims.</textarea>
       const events = state.recent_audit_events || [];
       els.auditRows.innerHTML = events.map(event => `
         <tr><td>${escapeHtml(event.event_type)}</td><td><pre>${escapeHtml(JSON.stringify(event.event_detail))}</pre></td><td>${escapeHtml(event.created_at)}</td></tr>
-      `).join("") || `<tr><td colspan="3">No audit events yet</td></tr>`;
+      `).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`;
     }
     function renderSecondaryViews() {
       if (!state.policy) return;
