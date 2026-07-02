@@ -46,6 +46,7 @@ Diagrams created:
 - `KRW 2B Completion Scorecard`
 - `KRW 2B Buyer Deal Room Evidence Matrix`
 - `KRW 2B Buyer Acceptance Go No Go Workflow`
+- `KRW 2B Buyer Evidence Manifest Workflow`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -72,6 +73,11 @@ The buyer acceptance go/no-go workflow maps the evidence packet, acceptance
 checks, and decision states that determine whether a KRW 2,000,000,000 buyer
 review is ready, ready with caveats, buyer-specific follow-up, or blocked by a
 concrete defect.
+
+The buyer evidence manifest workflow maps the single review index from scope
+and caveats through runtime endpoints, repository documents, Figma artifacts,
+verification commands, and buyer-specific follow-ups into ready evidence,
+caveat evidence, or concrete-defect handling.
 
 ## Stakeholder Deck
 
