@@ -75,6 +75,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "commercial_proposal_warning_count",
         "commercial_purchase_approval_warning_count",
         "commercial_due_diligence_warning_count",
+        "commercial_investment_committee_warning_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -460,6 +461,50 @@ def test_commercial_due_diligence_room_defines_buyer_diligence_room() -> None:
     for expected_text in [
         "/api/v1/commercial_due_diligence_rooms/latest",
         "commercial due diligence room",
+    ]:
+        assert expected_text in rest_api
+        assert expected_text in readme
+
+
+def test_commercial_investment_committee_memo_defines_executive_decision_packet() -> None:
+    memo = read_text("docs/commercial_investment_committee_memo.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-investment-committee-memo-runtime.md")
+    rest_api = read_text("docs/rest_api_design.md")
+    readme = read_text("README.md")
+
+    for expected_text in [
+        "Commercial Investment Committee Memo",
+        "Runtime endpoint: `/api/v1/commercial_investment_committee_memos/latest`",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Memo Sections",
+        "Runtime Shape",
+        "Investment Committee Status Rules",
+        "KRW 2B Commercial Investment Committee Memo",
+        "/api/v1/commercial_due_diligence_rooms/latest",
+        "/api/v1/commercial_purchase_approval_packets/latest",
+        "/api/v1/commercial_security_attestations/latest",
+        "local_commercial_investment_committee_memo",
+        "commercial_investment_committee_ready_with_warnings",
+        "measured local evidence",
+        "proposed_until_buyer_specific",
+    ]:
+        assert expected_text in memo
+
+    for expected_text in [
+        "Commercial Investment Committee Memo Runtime Implementation Plan",
+        "get_latest_commercial_investment_committee_memo",
+        "No new repo dependencies",
+        "python tests/test_commercial_investment_committee_memo.py",
+        "pytest -q",
+        "Figma Code Connect must not be used",
+    ]:
+        assert expected_text in plan
+
+    for expected_text in [
+        "/api/v1/commercial_investment_committee_memos/latest",
+        "commercial investment committee memo",
     ]:
         assert expected_text in rest_api
         assert expected_text in readme
@@ -1020,6 +1065,7 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_proposal_packet_defines_buyer_proposal()
     test_commercial_purchase_approval_packet_defines_buyer_approval()
     test_commercial_due_diligence_room_defines_buyer_diligence_room()
+    test_commercial_investment_committee_memo_defines_executive_decision_packet()
     test_commercial_buyer_evidence_manifest_indexes_sale_evidence()
     test_commercial_buyer_handoff_bundle_packages_sale_evidence()
     test_commercial_saleability_decision_defines_final_gate()

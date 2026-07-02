@@ -6273,6 +6273,417 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_investment_committee_memo_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return executive investment committee memo sections for the KRW 2B standard."""
+        due_diligence = self.commercial_due_diligence_room_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        purchase = self.commercial_purchase_approval_packet_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        proposal = self.commercial_proposal_packet_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        completion = self.commercial_completion_scorecard_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        demo = self.commercial_demo_scenario_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        buyer_workflow = self.commercial_buyer_acceptance_workflow_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        close = self.commercial_close_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        procurement = self.commercial_procurement_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        contract = self.commercial_contract_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        value = self.commercial_value_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        security = self.commercial_security_attestation_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        onboarding = self.commercial_onboarding_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        operations = self.commercial_operations_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        admin_state = self.admin_state()
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        def all_files(*paths: str) -> bool:
+            return all(has_file(path) for path in paths)
+
+        def section(
+            section_name: str,
+            label: str,
+            reviewer: str,
+            sources: list[str],
+            runtime_endpoints: list[str],
+            evidence_type: str,
+            completion_state: str,
+            evidence: str,
+            committee_question: str,
+            next_action: str,
+        ) -> dict[str, Any]:
+            require_object_name(section_name, "commercial_investment_committee.section_name")
+            if completion_state not in {"ready", "warning", "blocked"}:  # pragma: no cover
+                raise ValueError("commercial investment committee section state must be ready, warning, or blocked")
+            return {
+                "section_name": section_name,
+                "label": label,
+                "reviewer": reviewer,
+                "sources": sources,
+                "runtime_endpoints": runtime_endpoints,
+                "evidence_type": evidence_type,
+                "completion_state": completion_state,
+                "evidence": evidence,
+                "committee_question": committee_question,
+                "next_action": next_action,
+            }
+
+        concrete_blockers = list(
+            dict.fromkeys(
+                due_diligence["concrete_blockers"]
+                + purchase["concrete_blockers"]
+                + proposal["concrete_blockers"]
+                + completion["concrete_blockers"]
+                + demo["concrete_blockers"]
+                + buyer_workflow["concrete_blockers"]
+            )
+        )
+        local_runtime_state = (
+            "blocked"
+            if due_diligence["due_diligence_status"] == "commercial_due_diligence_blocked"
+            or purchase["purchase_approval_status"] == "commercial_purchase_approval_blocked"
+            or proposal["proposal_status"] == "commercial_proposal_blocked"
+            or completion["completion_status"] == "commercial_completion_blocked"
+            or demo["demo_status"] == "commercial_demo_blocked"
+            or buyer_workflow["workflow_status"] == "buyer_acceptance_workflow_blocked"
+            or concrete_blockers
+            else "ready"
+        )
+        memo_sections = [
+            section(
+                "executive_recommendation",
+                "Executive recommendation",
+                "Investment committee chair",
+                [
+                    "docs/commercial_investment_committee_memo.md",
+                    "docs/figma_artifacts.md",
+                    "docs/superpowers/plans/2026-07-02-commercial-investment-committee-memo-runtime.md",
+                ],
+                ["/api/v1/commercial_investment_committee_memos/latest"],
+                "repository_and_runtime_artifact",
+                local_runtime_state
+                if all_files(
+                    "docs/commercial_investment_committee_memo.md",
+                    "docs/figma_artifacts.md",
+                    "docs/superpowers/plans/2026-07-02-commercial-investment-committee-memo-runtime.md",
+                )
+                else "blocked",
+                "Investment committee memo, FigJam artifact record, and implementation plan are committed.",
+                "Can the committee recommend the KRW 2B purchase path with explicit conditions?",
+                "Use this memo as the executive decision cover artifact.",
+            ),
+            section(
+                "diligence_room_ready",
+                "Due diligence room ready",
+                "Diligence owner",
+                ["docs/commercial_due_diligence_room.md", "/api/v1/commercial_due_diligence_rooms/latest"],
+                ["/api/v1/commercial_due_diligence_rooms/latest"],
+                "repository_and_runtime_artifact",
+                local_runtime_state if has_file("docs/commercial_due_diligence_room.md") else "blocked",
+                f"commercial_due_diligence_status={due_diligence['due_diligence_status']}",
+                "Can the memo point to a complete diligence room?",
+                "Reference due diligence room sections instead of duplicating evidence.",
+            ),
+            section(
+                "purchase_approval_ready",
+                "Purchase approval ready",
+                "Purchase sponsor",
+                ["docs/commercial_purchase_approval_packet.md", "/api/v1/commercial_purchase_approval_packets/latest"],
+                ["/api/v1/commercial_purchase_approval_packets/latest"],
+                "repository_and_runtime_artifact",
+                local_runtime_state if has_file("docs/commercial_purchase_approval_packet.md") else "blocked",
+                f"commercial_purchase_approval_status={purchase['purchase_approval_status']}",
+                "Can the committee see finance, procurement, legal, security, and implementation gates?",
+                "Use the purchase approval packet as committee appendix A.",
+            ),
+            section(
+                "financial_case",
+                "Financial case",
+                "Economic buyer",
+                ["docs/commercial_value_readiness.md", "docs/analytics_spec.md", "/api/v1/analytics_snapshots/latest"],
+                ["/api/v1/commercial_value_readiness/latest", "/api/v1/analytics_snapshots/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if value["value_status"] != "commercial_value_blocked"
+                and analytics["measurement_status"] == "local_runtime_snapshot"
+                and all_files("docs/commercial_value_readiness.md", "docs/analytics_spec.md")
+                else "blocked",
+                f"commercial_value_status={value['value_status']}; analytics_measurement_status={analytics['measurement_status']}",
+                "Does the memo separate measured local evidence from buyer ROI assumptions?",
+                "Attach buyer ROI model only after buyer discovery supplies it.",
+            ),
+            section(
+                "risk_and_security_summary",
+                "Risk and security summary",
+                "Security reviewer",
+                ["SECURITY.md", "docs/commercial_security_attestation.md", "/api/v1/commercial_security_attestations/latest"],
+                ["/api/v1/commercial_security_attestations/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if security["security_attestation_status"] != "commercial_security_attestation_blocked"
+                and all_files("SECURITY.md", "docs/commercial_security_attestation.md")
+                else "blocked",
+                f"commercial_security_attestation_status={security['security_attestation_status']}",
+                "Are security risks explicit without claiming external certification?",
+                "Keep third-party attestation outside measured local evidence.",
+            ),
+            section(
+                "commercial_terms_summary",
+                "Commercial terms summary",
+                "Legal and procurement reviewers",
+                [
+                    "docs/commercial_contract_readiness.md",
+                    "docs/commercial_procurement_readiness.md",
+                    "docs/commercial_close_readiness.md",
+                ],
+                [
+                    "/api/v1/commercial_contract_readiness/latest",
+                    "/api/v1/commercial_procurement_readiness/latest",
+                    "/api/v1/commercial_close_readiness/latest",
+                ],
+                "repository_and_runtime_artifact",
+                "ready"
+                if contract["contract_status"] != "commercial_contract_blocked"
+                and procurement["procurement_status"] != "commercial_procurement_blocked"
+                and close["close_status"] != "commercial_close_blocked"
+                and all_files(
+                    "docs/commercial_contract_readiness.md",
+                    "docs/commercial_procurement_readiness.md",
+                    "docs/commercial_close_readiness.md",
+                )
+                else "blocked",
+                (
+                    f"commercial_contract_status={contract['contract_status']}; "
+                    f"commercial_procurement_status={procurement['procurement_status']}; "
+                    f"commercial_close_status={close['close_status']}"
+                ),
+                "Can legal and procurement conditions be approved or tracked?",
+                "Attach order-form details only after buyer legal review.",
+            ),
+            section(
+                "implementation_readiness_summary",
+                "Implementation readiness summary",
+                "Implementation owner",
+                ["docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md"],
+                ["/api/v1/commercial_onboarding_readiness/latest", "/api/v1/commercial_operations_readiness/latest"],
+                "repository_and_runtime_artifact",
+                "ready"
+                if onboarding["onboarding_status"] != "commercial_onboarding_blocked"
+                and operations["operations_status"] != "commercial_operations_blocked"
+                and all_files("docs/commercial_onboarding_readiness.md", "docs/commercial_operations_readiness.md")
+                else "blocked",
+                f"commercial_onboarding_status={onboarding['onboarding_status']}; commercial_operations_status={operations['operations_status']}",
+                "Can implementation start after buyer environment details are supplied?",
+                "Convert buyer environment details into the paid onboarding plan.",
+            ),
+            section(
+                "design_and_figma_review",
+                "Design and Figma review",
+                "Product design reviewer",
+                ["docs/figma_artifacts.md", "docs/commercial_investment_committee_memo.md"],
+                ["/api/v1/commercial_investment_committee_memos/latest"],
+                "repository_and_runtime_artifact",
+                "ready" if all_files("docs/figma_artifacts.md", "docs/commercial_investment_committee_memo.md") else "blocked",
+                "FigJam memo flow and Product Design scope are recorded without Code Connect.",
+                "Can stakeholders inspect the memo flow in FigJam and runtime JSON?",
+                "Keep Figma Code Connect out of the committee workflow.",
+            ),
+            section(
+                "buyer_final_authority",
+                "Buyer final authority",
+                "Buyer sponsor",
+                ["executive sponsor approval", "named signer", "budget owner", "purchase order"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Executive sponsor approval, named signer, budget owner, and purchase order require buyer authority.",
+                "Can the buyer approve the final KRW 2B purchase authority?",
+                "Collect final buyer authority artifacts or explicit waiver.",
+            ),
+            section(
+                "production_external_evidence",
+                "Production and external evidence",
+                "Production and security owners",
+                ["production telemetry", "third-party security attestation", "hosted scan evidence"],
+                [],
+                "proposed_until_buyer_specific",
+                "warning",
+                "Production telemetry, third-party security attestation, and hosted scan evidence are external inputs.",
+                "Can the committee approve with production and external evidence still tracked as conditions?",
+                "Collect hosted evidence after environment selection.",
+            ),
+        ]
+        state_counts = Counter(item["completion_state"] for item in memo_sections)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            investment_committee_status = "commercial_investment_committee_blocked"
+            recommendation_status = "do_not_recommend_until_blockers_cleared"
+        elif warning_count:
+            investment_committee_status = "commercial_investment_committee_ready_with_warnings"
+            recommendation_status = "recommend_with_buyer_conditions"
+        else:
+            investment_committee_status = "commercial_investment_committee_ready"
+            recommendation_status = "recommend"
+        required_runtime_endpoints = list(
+            dict.fromkeys(
+                endpoint
+                for item in memo_sections
+                for endpoint in item["runtime_endpoints"]
+                if endpoint.startswith("/")
+            )
+        )
+
+        return {
+            "investment_committee_status": investment_committee_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_investment_committee_memo",
+            "source_note": (
+                "Commercial investment committee memo packages repo-local due diligence, purchase approval, "
+                "proposal, runtime, admin trace, security, contract, value, onboarding, operations, analytics, "
+                "Figma, review-policy, and packaging evidence for KRW 2,000,000,000 executive review; it is "
+                "not a valuation guarantee, purchase commitment, signed order, legal opinion, production "
+                "compliance certificate, third-party attestation, or revenue proof."
+            ),
+            "executive_recommendation": {
+                "title": "KRW 2B commercial investment committee memo",
+                "recommendation_status": recommendation_status,
+                "recommendation": (
+                    "Recommend committee review with buyer authority, production telemetry, and external "
+                    "attestation conditions tracked separately from measured local product evidence."
+                    if recommendation_status == "recommend_with_buyer_conditions"
+                    else "Do not recommend until concrete blockers are cleared."
+                    if recommendation_status == "do_not_recommend_until_blockers_cleared"
+                    else "Recommend committee approval with no open local or buyer-specific conditions."
+                ),
+                "audience": [
+                    "Investment committee chair",
+                    "Economic buyer",
+                    "Finance owner",
+                    "Procurement owner",
+                    "Legal owner",
+                    "Security owner",
+                    "Implementation owner",
+                ],
+            },
+            "memo_summary": {
+                "section_count": len(memo_sections),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "endpoint_count": len(required_runtime_endpoints),
+                "review_process_is_blocker": due_diligence["review_process_policy"]["is_blocker"],
+                "code_connect_used": False,
+            },
+            "memo_sections": memo_sections,
+            "required_runtime_endpoints": required_runtime_endpoints,
+            "committee_decision_questions": [
+                "Is the product evidence sufficient for KRW 2B buyer review?",
+                "Are buyer authority documents named and tracked?",
+                "Are production and third-party evidence gaps explicit warnings?",
+                "Is any concrete blocker present?",
+            ],
+            "buyer_missing_artifacts": due_diligence["buyer_missing_artifacts"]
+            + ["executive sponsor approval", "investment committee sign-off"],
+            "concrete_blockers": concrete_blockers,
+            "investment_committee_status_rules": [
+                {
+                    "investment_committee_status": "commercial_investment_committee_ready",
+                    "rule": "all memo sections are ready and no buyer authority, production, or third-party evidence remains open",
+                },
+                {
+                    "investment_committee_status": "commercial_investment_committee_ready_with_warnings",
+                    "rule": "repo-local committee memo evidence is ready while buyer authority, production telemetry, or external attestations remain explicit warnings",
+                },
+                {
+                    "investment_committee_status": "commercial_investment_committee_blocked",
+                    "rule": "security failure, API contract regression, document mismatch, runtime defect, missing local memo evidence, or Code Connect usage blocks committee recommendation",
+                },
+            ],
+            "review_process_policy": due_diligence["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_due_diligence_status": due_diligence["due_diligence_status"],
+                "commercial_purchase_approval_status": purchase["purchase_approval_status"],
+                "commercial_proposal_status": proposal["proposal_status"],
+                "commercial_completion_status": completion["completion_status"],
+                "commercial_demo_status": demo["demo_status"],
+                "buyer_acceptance_workflow_status": buyer_workflow["workflow_status"],
+                "commercial_close_status": close["close_status"],
+                "commercial_procurement_status": procurement["procurement_status"],
+                "commercial_contract_status": contract["contract_status"],
+                "commercial_value_status": value["value_status"],
+                "commercial_security_attestation_status": security["security_attestation_status"],
+                "commercial_onboarding_status": onboarding["onboarding_status"],
+                "commercial_operations_status": operations["operations_status"],
+                "analytics_measurement_status": analytics["measurement_status"],
+                "admin_agent_count": len(admin_state["agents"]),
+            },
+            "library_split_decision": due_diligence["library_split_decision"],
+            "plugin_traceability": due_diligence["plugin_traceability"],
+            "committee_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_investment_committee_memos/latest",
+                "documentation": "docs/commercial_investment_committee_memo.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

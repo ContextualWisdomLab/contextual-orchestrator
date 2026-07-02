@@ -271,6 +271,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial due diligence room"}},
             }
         },
+        "/api/v1/commercial_investment_committee_memos/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_investment_committee_memo",
+                "summary": "Get KRW 2B commercial investment committee memo",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial investment committee memo"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

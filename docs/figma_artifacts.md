@@ -233,6 +233,14 @@ non-blocker policy, single-product packaging decision, buyer authority
 documents, production telemetry, and third-party attestations into
 `/api/v1/commercial_due_diligence_rooms/latest`.
 
+The commercial investment committee workflow
+`KRW 2B Commercial Investment Committee Memo` maps due diligence, purchase
+approval, financial case, risk/security, commercial terms, implementation
+readiness, Figma stakeholder review, review-process non-blocker policy,
+single-product packaging decision, buyer final authority, production telemetry,
+and external attestations into
+`/api/v1/commercial_investment_committee_memos/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`
