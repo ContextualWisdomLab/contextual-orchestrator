@@ -78,6 +78,7 @@ One public interface:
 - `/api/v1/commercial_gap_registers/latest` exposes the commercial gap register that turns release-candidate external gaps into owner, source, required-input, and status rows for buyer due diligence.
 - `/api/v1/commercial_procurement_readiness/latest` exposes the commercial procurement readiness gate across license, rights, security metadata, distribution packet, admin evidence, production support/SLO input, buyer legal/ROI/procurement input, review-process policy, and packaging decision.
 - `/api/v1/commercial_contract_readiness/latest` exposes the commercial contract readiness gate across support/SLO terms, security/privacy terms, audit/export obligations, license/commercial rights, buyer order-form inputs, review-process policy, and packaging decision.
+- `/api/v1/commercial_onboarding_readiness/latest` exposes the commercial onboarding readiness gate that turns production support/SLO and buyer-specific input warnings into paid-onboarding owners, actions, and exit criteria.
 
 One fused orchestration loop:
 
@@ -113,6 +114,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Commercial gap register](docs/commercial_gap_register.md)
 - [Commercial procurement readiness](docs/commercial_procurement_readiness.md)
 - [Commercial contract readiness](docs/commercial_contract_readiness.md)
+- [Commercial onboarding readiness](docs/commercial_onboarding_readiness.md)
 - [Commercial completion scorecard](docs/commercial_completion_scorecard.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
 - [Figma artifacts](docs/figma_artifacts.md)
@@ -144,4 +146,5 @@ python tests/test_commercial_release_candidate.py
 python tests/test_commercial_gap_register.py
 python tests/test_commercial_procurement_readiness.py
 python tests/test_commercial_contract_readiness.py
+python tests/test_commercial_onboarding_readiness.py
 ```

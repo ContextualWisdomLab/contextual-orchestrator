@@ -62,6 +62,7 @@ ADMIN_TRANSLATIONS = {
         "commercial_gap_register_title": "Commercial Gap Register",
         "commercial_procurement_readiness_title": "Commercial Procurement Readiness",
         "commercial_contract_readiness_title": "Commercial Contract Readiness",
+        "commercial_onboarding_readiness_title": "Commercial Onboarding Readiness",
         "commercial_contract_value": "Target contract value",
         "sales_ready": "Sales ready",
         "pilot_ready_with_warnings": "Pilot ready with warnings",
@@ -96,6 +97,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_contract_ready": "Commercial contract ready",
         "commercial_contract_ready_with_warnings": "Commercial contract ready with warnings",
         "commercial_contract_blocked": "Commercial contract blocked",
+        "commercial_onboarding_ready": "Commercial onboarding ready",
+        "commercial_onboarding_ready_with_warnings": "Commercial onboarding ready with warnings",
+        "commercial_onboarding_blocked": "Commercial onboarding blocked",
         "readiness_pass": "Pass",
         "readiness_warn": "Warn",
         "readiness_fail": "Fail",
@@ -225,6 +229,7 @@ ADMIN_TRANSLATIONS = {
         "commercial_gap_register_title": "상용 갭 등록부",
         "commercial_procurement_readiness_title": "상용 조달 준비도",
         "commercial_contract_readiness_title": "상용 계약 준비도",
+        "commercial_onboarding_readiness_title": "상용 온보딩 준비도",
         "commercial_contract_value": "목표 계약 금액",
         "sales_ready": "판매 준비 완료",
         "pilot_ready_with_warnings": "주의 조건부 파일럿 가능",
@@ -259,6 +264,9 @@ ADMIN_TRANSLATIONS = {
         "commercial_contract_ready": "상용 계약 준비 완료",
         "commercial_contract_ready_with_warnings": "주의 조건부 상용 계약 가능",
         "commercial_contract_blocked": "상용 계약 차단",
+        "commercial_onboarding_ready": "상용 온보딩 준비 완료",
+        "commercial_onboarding_ready_with_warnings": "주의 조건부 상용 온보딩 가능",
+        "commercial_onboarding_blocked": "상용 온보딩 차단",
         "readiness_pass": "통과",
         "readiness_warn": "주의",
         "readiness_fail": "실패",
@@ -822,7 +830,7 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="observability_title">Observability</h1><span class="chip green">Live</span></div>
           <div class="kpis" id="kpis"></div>
-          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest" data-handoff-bundle-source="/api/v1/buyer_handoff_bundles/latest" data-saleability-source="/api/v1/saleability_decisions/latest" data-commercial-export-source="/api/v1/commercial_evidence_exports/latest" data-commercial-acceptance-source="/api/v1/commercial_acceptance_checks/latest" data-commercial-release-source="/api/v1/commercial_release_candidates/latest" data-commercial-gap-source="/api/v1/commercial_gap_registers/latest" data-commercial-procurement-source="/api/v1/commercial_procurement_readiness/latest" data-commercial-contract-source="/api/v1/commercial_contract_readiness/latest"></div>
+          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest" data-handoff-bundle-source="/api/v1/buyer_handoff_bundles/latest" data-saleability-source="/api/v1/saleability_decisions/latest" data-commercial-export-source="/api/v1/commercial_evidence_exports/latest" data-commercial-acceptance-source="/api/v1/commercial_acceptance_checks/latest" data-commercial-release-source="/api/v1/commercial_release_candidates/latest" data-commercial-gap-source="/api/v1/commercial_gap_registers/latest" data-commercial-procurement-source="/api/v1/commercial_procurement_readiness/latest" data-commercial-contract-source="/api/v1/commercial_contract_readiness/latest" data-commercial-onboarding-source="/api/v1/commercial_onboarding_readiness/latest"></div>
           <table><thead><tr><th>Workflow</th><th>Mode</th><th>Policy</th><th>Created</th></tr></thead><tbody id="runRows"></tbody></table>
         </section>
       </section>
@@ -877,7 +885,7 @@ Summarize this research thread and verify claims.</textarea>
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
-    let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null};
+    let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null};
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
@@ -992,6 +1000,7 @@ Summarize this research thread and verify claims.</textarea>
       const commercialGap = state.commercialGapRegister || {};
       const commercialProcurement = state.commercialProcurementReadiness || {};
       const commercialContract = state.commercialContractReadiness || {};
+      const commercialOnboarding = state.commercialOnboardingReadiness || {};
       const status = readiness.readiness_status || "not_ready";
       const statusClass = status === "sales_ready" ? "green" : status === "pilot_ready_with_warnings" ? "amber" : "red";
       const criteria = readiness.criteria || [];
@@ -1027,6 +1036,9 @@ Summarize this research thread and verify claims.</textarea>
       const contractStatus = commercialContract.contract_status || "commercial_contract_blocked";
       const contractStatusClass = contractStatus === "commercial_contract_ready" ? "green" : contractStatus === "commercial_contract_ready_with_warnings" ? "amber" : "red";
       const contractSummary = commercialContract.contract_summary || {};
+      const onboardingStatus = commercialOnboarding.onboarding_status || "commercial_onboarding_blocked";
+      const onboardingStatusClass = onboardingStatus === "commercial_onboarding_ready" ? "green" : onboardingStatus === "commercial_onboarding_ready_with_warnings" ? "amber" : "red";
+      const onboardingSummary = commercialOnboarding.onboarding_summary || {};
       els.salesReadiness.innerHTML = `
         <div class="metric">
           <span data-i18n="sales_readiness_title">${t("sales_readiness_title")}</span>
@@ -1076,17 +1088,21 @@ Summarize this research thread and verify claims.</textarea>
           <span data-i18n="commercial_contract_readiness_title">${t("commercial_contract_readiness_title")}</span>
           <strong><span class="chip ${contractStatusClass}">${escapeHtml(t(contractStatus))}</span></strong>
         </div>
+        <div class="metric">
+          <span data-i18n="commercial_onboarding_readiness_title">${t("commercial_onboarding_readiness_title")}</span>
+          <strong><span class="chip ${onboardingStatusClass}">${escapeHtml(t(onboardingStatus))}</span></strong>
+        </div>
         <div class="metric source">
           <span data-i18n="readiness_source">${t("readiness_source")}</span>
-          <strong>${escapeHtml(commercialContract.source_note || commercialProcurement.source_note || commercialGap.source_note || commercialRelease.source_note || commercialAcceptance.source_note || commercialExport.source_note || saleability.source_note || handoffBundle.source_note || buyerManifest.source_note || commercial.source_note || readiness.source_note || "No source note")}</strong>
+          <strong>${escapeHtml(commercialOnboarding.source_note || commercialContract.source_note || commercialProcurement.source_note || commercialGap.source_note || commercialRelease.source_note || commercialAcceptance.source_note || commercialExport.source_note || saleability.source_note || handoffBundle.source_note || buyerManifest.source_note || commercial.source_note || readiness.source_note || "No source note")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
-          <strong>${escapeHtml(commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
+          <strong>${escapeHtml(commercialOnboarding.measurement_status || commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
         </div>
         <div class="metric">
           <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
-          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0} | handoff ${handoffSummary.ready || 0}/${handoffSummary.warning || 0}/${handoffSummary.blocked || 0} | saleability ${saleabilitySummary.blocked_count || 0}/${saleabilitySummary.warning_count || 0} | export ${exportSummary.blocked_count || 0}/${exportSummary.warning_count || 0} | acceptance ${acceptanceSummary.blocked_count || 0}/${acceptanceSummary.warning_count || 0} | release ${releaseSummary.blocked_count || 0}/${releaseSummary.warning_count || 0} | gaps ${gapSummary.total_gap_count || 0}/${gapSummary.blocked_count || 0} | procurement ${procurementSummary.warning_count || 0}/${procurementSummary.blocked_count || 0} | contract ${contractSummary.warning_count || 0}/${contractSummary.blocked_count || 0}</strong>
+          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0} | handoff ${handoffSummary.ready || 0}/${handoffSummary.warning || 0}/${handoffSummary.blocked || 0} | saleability ${saleabilitySummary.blocked_count || 0}/${saleabilitySummary.warning_count || 0} | export ${exportSummary.blocked_count || 0}/${exportSummary.warning_count || 0} | acceptance ${acceptanceSummary.blocked_count || 0}/${acceptanceSummary.warning_count || 0} | release ${releaseSummary.blocked_count || 0}/${releaseSummary.warning_count || 0} | gaps ${gapSummary.total_gap_count || 0}/${gapSummary.blocked_count || 0} | procurement ${procurementSummary.warning_count || 0}/${procurementSummary.blocked_count || 0} | contract ${contractSummary.warning_count || 0}/${contractSummary.blocked_count || 0} | onboarding ${onboardingSummary.warning_count || 0}/${onboardingSummary.blocked_count || 0}</strong>
         </div>
         <div class="readiness-grid">
           ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
@@ -1184,6 +1200,8 @@ Summarize this research thread and verify claims.</textarea>
       state.commercialProcurementReadiness = await commercialProcurementRes.json();
       const commercialContractRes = await fetch("/api/v1/commercial_contract_readiness/latest");
       state.commercialContractReadiness = await commercialContractRes.json();
+      const commercialOnboardingRes = await fetch("/api/v1/commercial_onboarding_readiness/latest");
+      state.commercialOnboardingReadiness = await commercialOnboardingRes.json();
     }
     async function simulate() {
       const res = await fetch("/admin/simulate", {

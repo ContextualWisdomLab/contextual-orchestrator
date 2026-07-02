@@ -167,6 +167,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial contract readiness"}},
             }
         },
+        "/api/v1/commercial_onboarding_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_onboarding_readiness",
+                "summary": "Get commercial onboarding readiness for buyer close",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial onboarding readiness"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

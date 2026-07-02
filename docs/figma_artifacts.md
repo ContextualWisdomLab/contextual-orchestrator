@@ -136,6 +136,12 @@ privacy terms, audit/export obligations, license and commercial rights, buyer
 order-form input, review-process policy, and packaging decision into
 `/api/v1/commercial_contract_readiness/latest`.
 
+The commercial onboarding readiness workflow `KRW 2B Commercial Onboarding Readiness`
+maps contract readiness, buyer kickoff, support/SLO action, buyer order-form
+action, telemetry capture, acceptance exit criteria, security/legal handoff,
+review-process policy, and packaging decision into
+`/api/v1/commercial_onboarding_readiness/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`

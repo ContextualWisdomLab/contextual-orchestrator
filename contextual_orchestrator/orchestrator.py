@@ -2574,6 +2574,204 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_onboarding_readiness_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a paid-onboarding readiness gate over contract evidence."""
+        contract = self.commercial_contract_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        contract_by_name = {item["item_name"]: item for item in contract["contract_items"]}
+        support_item = contract_by_name["support_slo_terms"]
+        buyer_item = contract_by_name["buyer_order_form_input"]
+        packaging_item = contract_by_name["packaging_decision"]
+        concrete_blockers = contract["concrete_blockers"]
+        support_slo_action_count = 1 if support_item["completion_state"] == "warning" else 0
+        buyer_input_action_count = 1 if buyer_item["completion_state"] == "warning" else 0
+        onboarding_items = [
+            {
+                "item_name": "buyer_kickoff_packet",
+                "label": "Buyer kickoff packet",
+                "owner": "Deal owner",
+                "sources": [
+                    "README.md",
+                    "docs/commercial_onboarding_readiness.md",
+                    "docs/commercial_contract_readiness.md",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "README.md",
+                        "docs/commercial_onboarding_readiness.md",
+                        "docs/commercial_contract_readiness.md",
+                    )
+                )
+                else "blocked",
+                "evidence": "Buyer kickoff packet connects product overview, contract readiness, and onboarding plan.",
+                "action": "Use the packet to start paid onboarding with named buyer stakeholders.",
+                "exit_criteria": "Buyer confirms kickoff owner, onboarding dates, and evidence review cadence.",
+            },
+            {
+                "item_name": "support_slo_kickoff",
+                "label": "Support and SLO kickoff",
+                "owner": support_item["owner"],
+                "sources": support_item["sources"],
+                "evidence_type": support_item["evidence_type"],
+                "completion_state": support_item["completion_state"],
+                "source_gap_status": support_item.get("source_gap_status", "resolved"),
+                "evidence": support_item["evidence"],
+                "action": "Collect support rota, escalation path, SLO target, and incident drill evidence during paid onboarding.",
+                "exit_criteria": "Buyer and operator approve support owner, response target, escalation path, and first incident drill record.",
+            },
+            {
+                "item_name": "buyer_order_form_kickoff",
+                "label": "Buyer order-form kickoff",
+                "owner": buyer_item["owner"],
+                "sources": buyer_item["sources"],
+                "evidence_type": buyer_item["evidence_type"],
+                "completion_state": buyer_item["completion_state"],
+                "source_gap_status": buyer_item.get("source_gap_status", "resolved"),
+                "evidence": buyer_item["evidence"],
+                "action": "Collect buyer order-form, ROI, legal questionnaire, deployment, and support inputs.",
+                "exit_criteria": "Buyer-specific order form and legal/procurement inputs are attached to the diligence packet.",
+            },
+            {
+                "item_name": "telemetry_capture_plan",
+                "label": "Telemetry capture plan",
+                "owner": "Data analytics owner",
+                "sources": ["/api/v1/analytics_snapshots/latest", "docs/analytics_spec.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready" if has_file("docs/analytics_spec.md") else "blocked",
+                "evidence": "Analytics spec separates measured local evidence from proposed production metrics.",
+                "action": "Capture production onboarding telemetry without mixing it with local prototype metrics.",
+                "exit_criteria": "First buyer environment records adoption, latency, verification, trace completeness, and support events.",
+            },
+            {
+                "item_name": "acceptance_exit_criteria",
+                "label": "Acceptance exit criteria",
+                "owner": "Technical buyer reviewer",
+                "sources": [
+                    "/api/v1/commercial_acceptance_checks/latest",
+                    "docs/commercial_acceptance_check.md",
+                    "docs/commercial_buyer_acceptance_runbook.md",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if has_file("docs/commercial_acceptance_check.md")
+                and has_file("docs/commercial_buyer_acceptance_runbook.md")
+                else "blocked",
+                "evidence": "Acceptance check and buyer runbook define go/no-go review gates.",
+                "action": "Run the buyer acceptance checklist after kickoff evidence is attached.",
+                "exit_criteria": "Acceptance check has no concrete blockers and warnings are explicitly owned.",
+            },
+            {
+                "item_name": "security_legal_handoff",
+                "label": "Security and legal handoff",
+                "owner": "Security and legal reviewer",
+                "sources": ["SECURITY.md", "docs/commercial_contract_readiness.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if has_file("SECURITY.md") and has_file("docs/commercial_contract_readiness.md")
+                else "blocked",
+                "evidence": "Security policy and contract readiness packet are available for buyer handoff.",
+                "action": "Attach security policy, dependency lock, and contract readiness rows to buyer diligence.",
+                "exit_criteria": "Buyer security/legal reviewer accepts the packet or opens concrete findings.",
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_onboarding_readiness.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready",
+                "evidence": "Review delay is not an onboarding blocker unless a concrete failure is produced.",
+                "action": "Continue onboarding work while queued reviews are pending.",
+                "exit_criteria": "Only concrete security, API contract, document, or product defects block progress.",
+            },
+            {
+                "item_name": "packaging_decision",
+                "label": "Packaging decision",
+                "owner": packaging_item["owner"],
+                "sources": packaging_item["sources"],
+                "evidence_type": packaging_item["evidence_type"],
+                "completion_state": packaging_item["completion_state"],
+                "evidence": packaging_item["evidence"],
+                "action": "Keep one deployable enterprise control-plane product through onboarding.",
+                "exit_criteria": "Extract only after a second product, independent release cadence, or buyer provenance trigger exists.",
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in onboarding_items)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            onboarding_status = "commercial_onboarding_blocked"
+        elif warning_count:
+            onboarding_status = "commercial_onboarding_ready_with_warnings"
+        else:
+            onboarding_status = "commercial_onboarding_ready"
+
+        return {
+            "onboarding_status": onboarding_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_onboarding_readiness",
+            "source_note": (
+                "Commercial onboarding readiness converts local contract and procurement warnings into "
+                "paid-onboarding owners, actions, and exit criteria; it is not a valuation guarantee, "
+                "purchase commitment, or production compliance certificate."
+            ),
+            "onboarding_summary": {
+                "item_count": len(onboarding_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "support_slo_action_count": support_slo_action_count,
+                "buyer_input_action_count": buyer_input_action_count,
+                "review_process_is_blocker": contract["review_process_policy"]["is_blocker"],
+            },
+            "onboarding_items": onboarding_items,
+            "concrete_blockers": concrete_blockers,
+            "onboarding_status_rules": [
+                {
+                    "onboarding_status": "commercial_onboarding_ready",
+                    "rule": "kickoff packet, support/SLO, buyer input, telemetry, acceptance, security/legal, review, and packaging actions are ready",
+                },
+                {
+                    "onboarding_status": "commercial_onboarding_ready_with_warnings",
+                    "rule": "local onboarding plan is ready while production support/SLO or buyer order-form actions remain explicit warnings",
+                },
+                {
+                    "onboarding_status": "commercial_onboarding_blocked",
+                    "rule": "missing onboarding packet evidence, concrete product defect, API contract failure, security failure, or Code Connect usage blocks onboarding",
+                },
+            ],
+            "review_process_policy": contract["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_contract_status": contract["contract_status"],
+                **contract["related_runtime_reports"],
+            },
+            "library_split_decision": contract["library_split_decision"],
+            "plugin_traceability": contract["plugin_traceability"],
+            "onboarding_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_onboarding_readiness/latest",
+                "documentation": "docs/commercial_onboarding_readiness.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
