@@ -3208,6 +3208,252 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_value_readiness_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a buyer economic-review gate over value and ROI evidence."""
+        commercial = self.commercial_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        export = self.commercial_evidence_export_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        security = self.commercial_security_attestation_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        criteria_by_name = self._criteria_by_name(commercial["criteria"])
+        value_case = criteria_by_name["commercial_value_case"]
+        kpis = self._metrics_by_name(analytics["kpis"])
+        guardrails = self._metrics_by_name(analytics["guardrails"])
+        security_items = {item["item_name"]: item for item in security["security_attestation_items"]}
+        value_items = [
+            {
+                "item_name": "commercial_value_case_basis",
+                "label": "Commercial value-case basis",
+                "owner": "Deal owner",
+                "sources": ["/api/v1/commercial_readiness/latest", "docs/commercial_readiness.md"],
+                "evidence_type": "local_due_diligence_snapshot",
+                "completion_state": "ready" if value_case["status"] == "pass" else "warning",
+                "evidence": value_case["evidence"],
+                "action": "Use commercial readiness as the value-case baseline without presenting it as a valuation guarantee.",
+                "exit_criteria": "Buyer sees the KRW target as a review anchor, not as a guaranteed valuation.",
+            },
+            {
+                "item_name": "local_analytics_evidence",
+                "label": "Local analytics evidence",
+                "owner": "Product analytics owner",
+                "sources": ["/api/v1/analytics_snapshots/latest", "docs/analytics_spec.md"],
+                "evidence_type": "measured_local",
+                "completion_state": "ready",
+                "evidence": (
+                    f"compatible_api_adoption={kpis['compatible_api_adoption'].get('value')}; "
+                    f"trace_complete_workflow_rate={kpis['trace_complete_workflow_rate'].get('value_percent')}%; "
+                    f"policy_safe_routing_rate={kpis['policy_safe_routing_rate'].get('value_percent')}%; "
+                    f"provider_exclusion_miss_rate={guardrails['provider_exclusion_miss_rate'].get('value')}"
+                ),
+                "action": "Use local measured adoption, trace, policy, and provider-safety metrics as evidence only for this prototype.",
+                "exit_criteria": "Buyer understands these are local measured signals, not production revenue or customer usage claims.",
+            },
+            {
+                "item_name": "buyer_evidence_export",
+                "label": "Buyer evidence export",
+                "owner": "Evidence owner",
+                "sources": [
+                    "/api/v1/commercial_evidence_exports/latest",
+                    "/api/v1/commercial_security_attestations/latest",
+                    "docs/commercial_evidence_export.md",
+                ],
+                "evidence_type": "repository_and_runtime_artifact",
+                "completion_state": "ready" if has_file("docs/commercial_evidence_export.md") else "blocked",
+                "evidence": (
+                    f"commercial_export_status={export['export_status']}; "
+                    f"security_attestation_status={security['security_attestation_status']}"
+                ),
+                "action": "Package value evidence with export and security attestation outputs in the buyer data room.",
+                "exit_criteria": "Buyer can trace economic claims back to runtime endpoints and repo artifacts.",
+            },
+            {
+                "item_name": "pricing_package_rationale",
+                "label": "Pricing and package rationale",
+                "owner": "Deal owner",
+                "sources": [
+                    "docs/commercial_readiness.md",
+                    "docs/commercial_saleability_decision.md",
+                    "docs/commercial_procurement_readiness.md",
+                    "docs/commercial_value_readiness.md",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "docs/commercial_readiness.md",
+                        "docs/commercial_saleability_decision.md",
+                        "docs/commercial_procurement_readiness.md",
+                    )
+                )
+                else "blocked",
+                "evidence": "Commercial readiness, saleability, and procurement documents anchor the package rationale.",
+                "action": "Keep the KRW 2B package rationale tied to API compatibility, evidence control plane, replay, audit, security, and operations readiness.",
+                "exit_criteria": "Buyer can inspect which product capabilities support the package rationale.",
+            },
+            {
+                "item_name": "roi_model_inputs",
+                "label": "ROI model inputs",
+                "owner": "Buyer sponsor and deal owner",
+                "sources": ["buyer ROI model", "customer discovery", "procurement value case"],
+                "evidence_type": "buyer_input_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_financial_input_required",
+                "evidence": "Buyer-specific baseline cost, workflow volume, error/rework cost, compliance cost, and time-saving assumptions are not repo-local facts.",
+                "action": "Collect buyer baseline metrics and map them to API compatibility, trace audit, replay, and operations savings.",
+                "exit_criteria": "Buyer accepts the ROI model inputs or marks them waived for the commercial review.",
+            },
+            {
+                "item_name": "reference_customer_or_case_study",
+                "label": "Reference customer or proof",
+                "owner": "Deal owner",
+                "sources": ["reference customer", "case study", "paid pilot result"],
+                "evidence_type": "external_value_proof_required",
+                "completion_state": "warning",
+                "source_gap_status": "external_value_proof_required",
+                "evidence": "Reference customer, paid pilot, or production proof is external to the repo-local prototype.",
+                "action": "Attach a reference, pilot result, or explicit buyer waiver before treating the value case as externally proven.",
+                "exit_criteria": "Buyer accepts the reference proof, pilot result, or waiver.",
+            },
+            {
+                "item_name": "procurement_budget_owner",
+                "label": "Procurement budget owner",
+                "owner": "Buyer sponsor and procurement owner",
+                "sources": ["buyer order form", "procurement process", "budget approval"],
+                "evidence_type": "buyer_input_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_financial_input_required",
+                "evidence": "Budget owner, approval path, and order-form authority are buyer-specific inputs.",
+                "action": "Identify sponsor, budget owner, procurement path, and order-form authority.",
+                "exit_criteria": "Buyer confirms the budget owner and approval path for the KRW 2B review.",
+            },
+            {
+                "item_name": "implementation_payback_assumption",
+                "label": "Implementation payback assumption",
+                "owner": "Buyer sponsor and onboarding owner",
+                "sources": ["buyer onboarding plan", "implementation estimate", "operations handoff"],
+                "evidence_type": "buyer_input_required",
+                "completion_state": "warning",
+                "source_gap_status": "buyer_financial_input_required",
+                "evidence": "Implementation timeline, staffing, opportunity cost, and payback window depend on buyer deployment scope.",
+                "action": "Estimate implementation effort and payback window during paid onboarding or buyer diligence.",
+                "exit_criteria": "Buyer accepts the payback assumptions or marks them out of scope.",
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": security_items["review_process_policy"]["sources"],
+                "evidence_type": security_items["review_process_policy"]["evidence_type"],
+                "completion_state": security_items["review_process_policy"]["completion_state"],
+                "evidence": security_items["review_process_policy"]["evidence"],
+                "action": security_items["review_process_policy"]["action"],
+                "exit_criteria": security_items["review_process_policy"]["exit_criteria"],
+            },
+            {
+                "item_name": "packaging_decision",
+                "label": "Packaging decision",
+                "owner": security_items["packaging_decision"]["owner"],
+                "sources": security_items["packaging_decision"]["sources"],
+                "evidence_type": security_items["packaging_decision"]["evidence_type"],
+                "completion_state": security_items["packaging_decision"]["completion_state"],
+                "evidence": security_items["packaging_decision"]["evidence"],
+                "action": security_items["packaging_decision"]["action"],
+                "exit_criteria": security_items["packaging_decision"]["exit_criteria"],
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in value_items)
+        concrete_blockers = security["concrete_blockers"]
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        buyer_financial_gap_count = sum(
+            1
+            for item in value_items
+            if item.get("source_gap_status") in {"buyer_financial_input_required", "external_value_proof_required"}
+        )
+        external_value_proof_gap_count = sum(
+            1 for item in value_items if item.get("source_gap_status") == "external_value_proof_required"
+        )
+        if blocked_count:
+            value_status = "commercial_value_blocked"
+        elif warning_count:
+            value_status = "commercial_value_ready_with_warnings"
+        else:
+            value_status = "commercial_value_ready"
+
+        return {
+            "value_status": value_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_value_readiness",
+            "source_note": (
+                "Commercial value readiness separates repo-local measured evidence from buyer-specific "
+                "ROI, reference, budget, and payback inputs; it is not a valuation guarantee, purchase "
+                "commitment, revenue proof, or financial advice."
+            ),
+            "value_summary": {
+                "item_count": len(value_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "buyer_financial_gap_count": buyer_financial_gap_count,
+                "external_value_proof_gap_count": external_value_proof_gap_count,
+                "review_process_is_blocker": security["review_process_policy"]["is_blocker"],
+            },
+            "value_items": value_items,
+            "concrete_blockers": concrete_blockers,
+            "value_status_rules": [
+                {
+                    "value_status": "commercial_value_ready",
+                    "rule": "commercial value case, local analytics, evidence export, pricing rationale, ROI inputs, reference proof, budget owner, payback assumptions, review policy, and packaging evidence are ready",
+                },
+                {
+                    "value_status": "commercial_value_ready_with_warnings",
+                    "rule": "repo-local value evidence is ready while buyer ROI inputs, reference proof, budget owner, or payback assumptions remain explicit warnings",
+                },
+                {
+                    "value_status": "commercial_value_blocked",
+                    "rule": "missing local value packet evidence, concrete product defect, API contract failure, document mismatch, security failure, or Code Connect usage blocks value readiness",
+                },
+            ],
+            "review_process_policy": security["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_security_attestation_status": security["security_attestation_status"],
+                "commercial_export_status": export["export_status"],
+                "commercial_status": commercial["commercial_status"],
+                **security["related_runtime_reports"],
+            },
+            "library_split_decision": security["library_split_decision"],
+            "plugin_traceability": security["plugin_traceability"],
+            "value_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_value_readiness/latest",
+                "documentation": "docs/commercial_value_readiness.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

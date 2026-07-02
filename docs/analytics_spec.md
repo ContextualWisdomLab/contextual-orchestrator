@@ -69,6 +69,7 @@ with proposed production targets.
 | `trace_audit_completeness` | Share of conducted runs with role, agent, subtask, access list, verifier, and synthesis evidence. | measured_local | workflow run trace records. |
 | `support_operability_score` | Availability of SLO, support ownership, incident runbook, backup, and escalation evidence. | proposed_until_production | production operations documents and ticketing records. |
 | `roi_evidence_status` | Buyer-specific value case tying API compatibility, audit evidence, replay, and operating cost reduction to the KRW 2,000,000,000 target. | proposed_until_buyer_specific | customer discovery, procurement, and ROI model. |
+| `commercial_value_readiness_gap_count` | Count of buyer ROI input, reference proof, budget-owner, and implementation payback assumptions still needed for buyer economic review. | proposed_until_buyer_specific | `/api/v1/commercial_value_readiness/latest` response. |
 
 Current GitHub/CI maturity evidence is a measured local or repository signal:
 CodeQL, Dependency review, Python supply chain, Trivy, coverage-evidence,

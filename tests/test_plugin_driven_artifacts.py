@@ -65,6 +65,7 @@ def test_analytics_spec_separates_metric_design_from_real_measurement() -> None:
         "trace_audit_completeness",
         "support_operability_score",
         "roi_evidence_status",
+        "commercial_value_readiness_gap_count",
         "measured_local",
         "proposed_until_production",
         "proposed_until_buyer_specific",
@@ -626,6 +627,39 @@ def test_commercial_security_attestation_defines_security_gate() -> None:
         assert expected_text in plan
 
 
+def test_commercial_value_readiness_defines_value_gate() -> None:
+    value = read_text("docs/commercial_value_readiness.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-value-readiness.md")
+
+    for expected_text in [
+        "Commercial Value Readiness",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Value Readiness Inputs",
+        "Runtime Shape",
+        "Value Status Rules",
+        "KRW 2B Commercial Value Readiness",
+        "/api/v1/commercial_value_readiness/latest",
+        "/api/v1/commercial_security_attestations/latest",
+        "/api/v1/analytics_snapshots/latest",
+        "local_commercial_value_readiness",
+        "value_items",
+        "commercial_value_ready_with_warnings",
+    ]:
+        assert expected_text in value
+
+    for expected_text in [
+        "Commercial Value Readiness Implementation Plan",
+        "get_latest_commercial_value_readiness",
+        "No new repo dependencies",
+        "python tests/test_commercial_value_readiness.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -649,4 +683,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_onboarding_readiness_defines_onboarding_gate()
     test_commercial_operations_readiness_defines_operations_gate()
     test_commercial_security_attestation_defines_security_gate()
+    test_commercial_value_readiness_defines_value_gate()
     print("ok")

@@ -32,6 +32,7 @@
 | `GET` | `/api/v1/commercial_onboarding_readiness/latest` | Read commercial onboarding readiness for buyer close |
 | `GET` | `/api/v1/commercial_operations_readiness/latest` | Read commercial operations readiness for buyer handoff |
 | `GET` | `/api/v1/commercial_security_attestations/latest` | Read commercial security attestation for buyer security review |
+| `GET` | `/api/v1/commercial_value_readiness/latest` | Read commercial value readiness for buyer economic review |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -68,6 +69,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_onboarding_readiness/latest` | Produce the onboarding readiness gate that converts production support/SLO and buyer-specific input warnings into paid-onboarding owners, actions, and exit criteria. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer close and onboarding review. |
 | `GET` | `/api/v1/commercial_operations_readiness/latest` | Produce the operations readiness gate that converts production telemetry, incident/rollback, backup/recovery, and SLO evidence gaps into operations handoff owners, actions, and exit criteria. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer operations handoff review. |
 | `GET` | `/api/v1/commercial_security_attestations/latest` | Produce the security attestation gate that separates repo-local security evidence from external attestation, hosted scan, and buyer privacy/DPA gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer security review. |
+| `GET` | `/api/v1/commercial_value_readiness/latest` | Produce the value readiness gate that separates repo-local measured value evidence from buyer-specific ROI, reference proof, budget-owner, and payback-input gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer economic review. |
 
 ## Production Library Target
 

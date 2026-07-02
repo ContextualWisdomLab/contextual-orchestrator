@@ -156,6 +156,13 @@ third-party attestation or penetration-test evidence, buyer privacy/DPA input,
 review-process policy, and packaging decision into
 `/api/v1/commercial_security_attestations/latest`.
 
+The commercial value readiness workflow `KRW 2B Commercial Value Readiness`
+maps commercial readiness, evidence export, security attestation, local
+analytics evidence, pricing/package rationale, ROI model inputs, reference
+customer proof, procurement budget owner, implementation payback assumptions,
+review-process policy, and packaging decision into
+`/api/v1/commercial_value_readiness/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`
