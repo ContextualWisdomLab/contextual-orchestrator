@@ -118,6 +118,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Release Candidate",
         "KRW 2B Commercial Gap Register",
         "KRW 2B Commercial Procurement Readiness",
+        "KRW 2B Commercial Contract Readiness",
         "team::1408252278989737675",
         "Figma Code Connect was not used",
     ]:
@@ -487,6 +488,40 @@ def test_commercial_procurement_readiness_defines_procurement_gate() -> None:
         assert expected_text in plan
 
 
+def test_commercial_contract_readiness_defines_contract_gate() -> None:
+    contract = read_text("docs/commercial_contract_readiness.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-contract-readiness.md")
+
+    for expected_text in [
+        "Commercial Contract Readiness",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Contract Inputs",
+        "Runtime Shape",
+        "Contract Status Rules",
+        "KRW 2B Commercial Contract Readiness",
+        "/api/v1/commercial_contract_readiness/latest",
+        "/api/v1/commercial_procurement_readiness/latest",
+        "/api/v1/commercial_gap_registers/latest",
+        "/api/v1/commercial_evidence_exports/latest",
+        "local_commercial_contract_readiness",
+        "contract_items",
+        "commercial_contract_ready_with_warnings",
+    ]:
+        assert expected_text in contract
+
+    for expected_text in [
+        "Commercial Contract Readiness Implementation Plan",
+        "get_latest_commercial_contract_readiness",
+        "No new repo dependencies",
+        "python tests/test_commercial_contract_readiness.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -506,4 +541,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_release_candidate_defines_buyer_release_package()
     test_commercial_gap_register_defines_external_gap_actions()
     test_commercial_procurement_readiness_defines_procurement_gate()
+    test_commercial_contract_readiness_defines_contract_gate()
     print("ok")

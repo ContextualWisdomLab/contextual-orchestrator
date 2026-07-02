@@ -159,6 +159,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial procurement readiness"}},
             }
         },
+        "/api/v1/commercial_contract_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_contract_readiness",
+                "summary": "Get commercial contract readiness for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial contract readiness"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

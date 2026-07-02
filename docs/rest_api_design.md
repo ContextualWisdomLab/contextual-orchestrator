@@ -28,6 +28,7 @@
 | `GET` | `/api/v1/commercial_release_candidates/latest` | Read commercial release-candidate package for buyer due diligence |
 | `GET` | `/api/v1/commercial_gap_registers/latest` | Read commercial gap register for buyer due diligence |
 | `GET` | `/api/v1/commercial_procurement_readiness/latest` | Read commercial procurement readiness for buyer due diligence |
+| `GET` | `/api/v1/commercial_contract_readiness/latest` | Read commercial contract readiness for buyer due diligence |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -60,6 +61,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_release_candidates/latest` | Produce the commercial release-candidate manifest that packages acceptance status, runtime endpoints, repository distribution packet, security metadata, admin visibility, verification, Figma artifacts, review-process policy, packaging decision, and external release gaps. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer release-candidate review. |
 | `GET` | `/api/v1/commercial_gap_registers/latest` | Produce the commercial gap register that converts release-candidate external gaps into owner, source, required-input, and status rows for buyer due diligence. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer gap closure review. |
 | `GET` | `/api/v1/commercial_procurement_readiness/latest` | Produce the procurement readiness gate that packages license, rights, security metadata, distribution docs, admin evidence, support/SLO input, buyer legal/ROI/procurement input, review-process policy, and packaging decision. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement and legal review. |
+| `GET` | `/api/v1/commercial_contract_readiness/latest` | Produce the contract readiness gate that packages support/SLO terms, security/privacy terms, audit/export obligations, license/commercial rights, buyer order-form input, review-process policy, and packaging decision. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; legal and procurement contract review. |
 
 ## Production Library Target
 

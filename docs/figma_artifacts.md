@@ -130,6 +130,12 @@ packet evidence, license and rights, security metadata, distribution docs,
 admin evidence, production input, buyer input, review-process policy, and
 packaging decision into `/api/v1/commercial_procurement_readiness/latest`.
 
+The commercial contract readiness workflow `KRW 2B Commercial Contract Readiness`
+maps procurement readiness, support and SLO terms, security and
+privacy terms, audit/export obligations, license and commercial rights, buyer
+order-form input, review-process policy, and packaging decision into
+`/api/v1/commercial_contract_readiness/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`

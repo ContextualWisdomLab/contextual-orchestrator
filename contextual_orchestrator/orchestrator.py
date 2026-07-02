@@ -2371,6 +2371,209 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_contract_readiness_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a contract-readiness gate over procurement evidence."""
+        procurement = self.commercial_procurement_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        procurement_by_name = {item["item_name"]: item for item in procurement["procurement_items"]}
+        license_item = procurement_by_name["license_and_rights"]
+        security_item = procurement_by_name["security_package_metadata"]
+        support_item = procurement_by_name["production_support_slo_input"]
+        buyer_item = procurement_by_name["buyer_legal_roi_procurement_input"]
+        packaging_item = procurement_by_name["packaging_decision"]
+        concrete_blockers = procurement["concrete_blockers"]
+        support_slo_gap_count = 1 if support_item["completion_state"] == "warning" else 0
+        buyer_order_form_gap_count = 1 if buyer_item["completion_state"] == "warning" else 0
+        contract_items = [
+            {
+                "item_name": "license_commercial_rights",
+                "label": "License and commercial rights terms",
+                "owner": "Legal reviewer",
+                "sources": license_item["sources"],
+                "evidence_type": license_item["evidence_type"],
+                "completion_state": license_item["completion_state"],
+                "evidence": license_item["evidence"],
+                "required_input": license_item["required_input"],
+            },
+            {
+                "item_name": "security_privacy_terms",
+                "label": "Security and privacy terms",
+                "owner": "Security and legal reviewer",
+                "sources": [*security_item["sources"], "docs/commercial_procurement_readiness.md"],
+                "evidence_type": security_item["evidence_type"],
+                "completion_state": security_item["completion_state"],
+                "evidence": (
+                    f"{security_item['evidence']} Runtime readiness profile uses "
+                    f"auth_mode={security_profile.get('auth_mode', 'unknown') if security_profile else 'unknown'}, "
+                    f"public_bind={security_profile.get('allow_public_bind', 'unknown') if security_profile else 'unknown'}, "
+                    "and trace exposure controls."
+                ),
+                "required_input": security_item["required_input"],
+            },
+            {
+                "item_name": "audit_export_obligations",
+                "label": "Audit and export obligations",
+                "owner": "Compliance reviewer",
+                "sources": [
+                    "/api/v1/commercial_evidence_exports/latest",
+                    "docs/commercial_evidence_export.md",
+                    "docs/rest_api_design.md",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "docs/commercial_evidence_export.md",
+                        "docs/rest_api_design.md",
+                    )
+                )
+                else "blocked",
+                "evidence": "Commercial evidence export and REST API contract describe buyer-readable audit evidence.",
+                "required_input": "Restore evidence export docs and REST contract before contract review.",
+            },
+            {
+                "item_name": "contract_packet_docs",
+                "label": "Contract packet documents",
+                "owner": "Deal owner",
+                "sources": [
+                    "README.md",
+                    "docs/commercial_contract_readiness.md",
+                    "docs/commercial_procurement_readiness.md",
+                    "docs/commercial_saleability_decision.md",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "README.md",
+                        "docs/commercial_contract_readiness.md",
+                        "docs/commercial_procurement_readiness.md",
+                        "docs/commercial_saleability_decision.md",
+                    )
+                )
+                else "blocked",
+                "evidence": "Contract packet, procurement gate, and saleability blocker policy are documented.",
+                "required_input": "Restore buyer contract packet docs before legal review.",
+            },
+            {
+                "item_name": "support_slo_terms",
+                "label": "Support and SLO terms",
+                "owner": support_item["owner"],
+                "sources": support_item["sources"],
+                "evidence_type": support_item["evidence_type"],
+                "completion_state": support_item["completion_state"],
+                "source_gap_status": support_item.get("source_gap_status", "resolved"),
+                "evidence": support_item["evidence"],
+                "required_input": support_item["required_input"],
+            },
+            {
+                "item_name": "buyer_order_form_input",
+                "label": "Buyer order-form input",
+                "owner": buyer_item["owner"],
+                "sources": buyer_item["sources"],
+                "evidence_type": buyer_item["evidence_type"],
+                "completion_state": buyer_item["completion_state"],
+                "source_gap_status": buyer_item.get("source_gap_status", "resolved"),
+                "evidence": buyer_item["evidence"],
+                "required_input": buyer_item["required_input"],
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_contract_readiness.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready",
+                "evidence": "Review process delay is not a contract blocker unless a concrete failure is produced.",
+                "required_input": "Block only on concrete security, API contract, document, or product defects.",
+            },
+            {
+                "item_name": "packaging_decision",
+                "label": "Packaging decision",
+                "owner": packaging_item["owner"],
+                "sources": packaging_item["sources"],
+                "evidence_type": packaging_item["evidence_type"],
+                "completion_state": packaging_item["completion_state"],
+                "evidence": packaging_item["evidence"],
+                "required_input": packaging_item["required_input"],
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in contract_items)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            contract_status = "commercial_contract_blocked"
+        elif warning_count:
+            contract_status = "commercial_contract_ready_with_warnings"
+        else:
+            contract_status = "commercial_contract_ready"
+
+        return {
+            "contract_status": contract_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_contract_readiness",
+            "source_note": (
+                "Commercial contract readiness packages local license, security/privacy, audit export, "
+                "support/SLO, buyer order-form, review-process, and packaging evidence for legal and "
+                "procurement due diligence; it is not a valuation guarantee, purchase commitment, or "
+                "production compliance certificate."
+            ),
+            "contract_summary": {
+                "item_count": len(contract_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "support_slo_gap_count": support_slo_gap_count,
+                "buyer_order_form_gap_count": buyer_order_form_gap_count,
+                "review_process_is_blocker": procurement["review_process_policy"]["is_blocker"],
+            },
+            "contract_items": contract_items,
+            "concrete_blockers": concrete_blockers,
+            "contract_status_rules": [
+                {
+                    "contract_status": "commercial_contract_ready",
+                    "rule": "license, security/privacy, audit/export, support/SLO, buyer order-form, review, and packaging terms are ready",
+                },
+                {
+                    "contract_status": "commercial_contract_ready_with_warnings",
+                    "rule": "local contract packet is ready while production support/SLO or buyer order-form inputs remain explicit warnings",
+                },
+                {
+                    "contract_status": "commercial_contract_blocked",
+                    "rule": "missing contract packet evidence, concrete product defect, API contract failure, security failure, or Code Connect usage blocks contract readiness",
+                },
+            ],
+            "review_process_policy": procurement["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_procurement_status": procurement["procurement_status"],
+                **procurement["related_runtime_reports"],
+            },
+            "library_split_decision": procurement["library_split_decision"],
+            "plugin_traceability": procurement["plugin_traceability"],
+            "contract_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_contract_readiness/latest",
+                "documentation": "docs/commercial_contract_readiness.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
