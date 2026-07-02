@@ -151,6 +151,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial gap register"}},
             }
         },
+        "/api/v1/commercial_procurement_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_procurement_readiness",
+                "summary": "Get commercial procurement readiness for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial procurement readiness"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

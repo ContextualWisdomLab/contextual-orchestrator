@@ -2179,6 +2179,198 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_procurement_readiness_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a procurement/legal readiness gate over commercial evidence."""
+        gap_register = self.commercial_gap_register_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        gap_by_status = {item["gap_status"]: item for item in gap_register["gap_items"]}
+        production_gap = gap_by_status.get("production_input_required")
+        buyer_gap = gap_by_status.get("buyer_input_required")
+        concrete_blockers = gap_register["concrete_blockers"]
+        procurement_items = [
+            {
+                "item_name": "license_and_rights",
+                "label": "License and rights",
+                "owner": "Procurement reviewer",
+                "sources": ["LICENSE", "pyproject.toml"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready" if has_file("LICENSE") and has_file("pyproject.toml") else "blocked",
+                "evidence": "MIT license and package metadata are present for buyer rights review.",
+                "required_input": "Restore license or package metadata before procurement review.",
+            },
+            {
+                "item_name": "security_package_metadata",
+                "label": "Security package metadata",
+                "owner": "Security reviewer",
+                "sources": ["SECURITY.md", "requirements.lock", ".github/workflows/security.yml", ".github/workflows/scorecard-analysis.yml"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "SECURITY.md",
+                        "requirements.lock",
+                        ".github/workflows/security.yml",
+                        ".github/workflows/scorecard-analysis.yml",
+                    )
+                )
+                else "blocked",
+                "evidence": "Security policy, locked dependencies, and security workflows are present.",
+                "required_input": "Restore missing security metadata before procurement review.",
+            },
+            {
+                "item_name": "distribution_packet",
+                "label": "Distribution packet",
+                "owner": "Deal owner",
+                "sources": [
+                    "README.md",
+                    "docs/rest_api_design.md",
+                    "docs/commercial_release_candidate.md",
+                    "docs/commercial_gap_register.md",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "README.md",
+                        "docs/rest_api_design.md",
+                        "docs/commercial_release_candidate.md",
+                        "docs/commercial_gap_register.md",
+                    )
+                )
+                else "blocked",
+                "evidence": "Repository overview, REST contract, release candidate, and gap register documents are present.",
+                "required_input": "Restore missing distribution documents before procurement review.",
+            },
+            {
+                "item_name": "admin_evidence_surface",
+                "label": "Admin evidence surface",
+                "owner": "Platform operator",
+                "sources": ["/admin", "contextual_orchestrator/admin.py", "/api/v1/commercial_procurement_readiness/latest"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready" if has_file("contextual_orchestrator/admin.py") else "blocked",
+                "evidence": "Admin observability surface exposes procurement readiness with bilingual labels.",
+                "required_input": "Expose procurement readiness in admin observability before buyer review.",
+            },
+            {
+                "item_name": "production_support_slo_input",
+                "label": "Production support and SLO input",
+                "owner": production_gap["owner"] if production_gap else "Operations and support owner",
+                "sources": production_gap["sources"] if production_gap else ["docs/commercial_gap_register.md"],
+                "evidence_type": "proposed_until_production",
+                "completion_state": "warning" if production_gap else "ready",
+                "source_gap_status": production_gap["gap_status"] if production_gap else "resolved",
+                "evidence": production_gap["current_evidence"] if production_gap else "No production evidence gap is open.",
+                "required_input": production_gap["required_input"] if production_gap else "No production input required.",
+            },
+            {
+                "item_name": "buyer_legal_roi_procurement_input",
+                "label": "Buyer legal, ROI, and procurement input",
+                "owner": buyer_gap["owner"] if buyer_gap else "Buyer and deal owner",
+                "sources": buyer_gap["sources"] if buyer_gap else ["docs/commercial_gap_register.md"],
+                "evidence_type": "proposed_until_buyer_specific",
+                "completion_state": "warning" if buyer_gap else "ready",
+                "source_gap_status": buyer_gap["gap_status"] if buyer_gap else "resolved",
+                "evidence": buyer_gap["current_evidence"] if buyer_gap else "No buyer-specific evidence gap is open.",
+                "required_input": buyer_gap["required_input"] if buyer_gap else "No buyer input required.",
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_procurement_readiness.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready",
+                "evidence": "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers.",
+                "required_input": "Block only on concrete security, API contract, document, or product defects.",
+            },
+            {
+                "item_name": "packaging_decision",
+                "label": "Packaging decision",
+                "owner": "Procurement and security reviewer",
+                "sources": ["docs/library_research.md", "docs/commercial_plugin_operating_model.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready" if has_file("docs/library_research.md") and has_file("docs/commercial_plugin_operating_model.md") else "blocked",
+                "evidence": gap_register["library_split_decision"]["reason"],
+                "required_input": "Only extract a library after a second product, independent release cadence, or provenance trigger exists.",
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in procurement_items)
+        production_gap_count = 1 if production_gap else 0
+        buyer_specific_gap_count = 1 if buyer_gap else 0
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        if blocked_count:
+            procurement_status = "commercial_procurement_blocked"
+        elif warning_count:
+            procurement_status = "commercial_procurement_ready_with_warnings"
+        else:
+            procurement_status = "commercial_procurement_ready"
+
+        return {
+            "procurement_status": procurement_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_procurement_readiness",
+            "source_note": (
+                "Commercial procurement readiness packages local license, security, distribution, admin, "
+                "gap-register, review-process, and packaging evidence for buyer due diligence; it is not "
+                "a valuation guarantee, purchase commitment, or production compliance certificate."
+            ),
+            "procurement_summary": {
+                "item_count": len(procurement_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "production_gap_count": production_gap_count,
+                "buyer_specific_gap_count": buyer_specific_gap_count,
+                "review_process_is_blocker": gap_register["review_process_policy"]["is_blocker"],
+            },
+            "procurement_items": procurement_items,
+            "concrete_blockers": concrete_blockers,
+            "procurement_status_rules": [
+                {
+                    "procurement_status": "commercial_procurement_ready",
+                    "rule": "license, security, distribution, admin, support, legal, ROI, review, and packaging evidence are ready",
+                },
+                {
+                    "procurement_status": "commercial_procurement_ready_with_warnings",
+                    "rule": "local packet is ready while production or buyer-specific inputs remain explicit warnings",
+                },
+                {
+                    "procurement_status": "commercial_procurement_blocked",
+                    "rule": "missing packet evidence, concrete product defect, API contract failure, security failure, or Code Connect usage blocks procurement",
+                },
+            ],
+            "review_process_policy": gap_register["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_gap_register_status": gap_register["gap_register_status"],
+                **gap_register["related_runtime_reports"],
+            },
+            "library_split_decision": gap_register["library_split_decision"],
+            "plugin_traceability": gap_register["plugin_traceability"],
+            "procurement_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_procurement_readiness/latest",
+                "documentation": "docs/commercial_procurement_readiness.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))

@@ -54,6 +54,7 @@ Diagrams created:
 - `KRW 2B Commercial Acceptance Check`
 - `KRW 2B Commercial Release Candidate`
 - `KRW 2B Commercial Gap Register`
+- `KRW 2B Commercial Procurement Readiness`
 
 The first access-list diagram render accepted multiline labels, but the clean
 single-line version above is the artifact to use for review.
@@ -123,6 +124,11 @@ The commercial gap register workflow maps release-candidate external gaps into
 production input, buyer input, owner assignment, required input, concrete
 blocker handling, and clear/open/blocked register states exposed through
 `/api/v1/commercial_gap_registers/latest`.
+
+The commercial procurement readiness workflow maps the gap register, local
+packet evidence, license and rights, security metadata, distribution docs,
+admin evidence, production input, buyer input, review-process policy, and
+packaging decision into `/api/v1/commercial_procurement_readiness/latest`.
 
 ## Stakeholder Deck
 

@@ -117,6 +117,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Acceptance Check",
         "KRW 2B Commercial Release Candidate",
         "KRW 2B Commercial Gap Register",
+        "KRW 2B Commercial Procurement Readiness",
         "team::1408252278989737675",
         "Figma Code Connect was not used",
     ]:
@@ -452,6 +453,40 @@ def test_commercial_gap_register_defines_external_gap_actions() -> None:
         assert expected_text in plan
 
 
+def test_commercial_procurement_readiness_defines_procurement_gate() -> None:
+    procurement = read_text("docs/commercial_procurement_readiness.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-procurement-readiness.md")
+
+    for expected_text in [
+        "Commercial Procurement Readiness",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Procurement Inputs",
+        "Runtime Shape",
+        "Procurement Status Rules",
+        "KRW 2B Commercial Procurement Readiness",
+        "/api/v1/commercial_procurement_readiness/latest",
+        "/api/v1/commercial_gap_registers/latest",
+        "/api/v1/commercial_release_candidates/latest",
+        "/api/v1/commercial_acceptance_checks/latest",
+        "local_commercial_procurement_readiness",
+        "procurement_items",
+        "commercial_procurement_ready_with_warnings",
+    ]:
+        assert expected_text in procurement
+
+    for expected_text in [
+        "Commercial Procurement Readiness Implementation Plan",
+        "get_latest_commercial_procurement_readiness",
+        "No new repo dependencies",
+        "python tests/test_commercial_procurement_readiness.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -470,4 +505,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_acceptance_check_defines_buyer_acceptance_gate()
     test_commercial_release_candidate_defines_buyer_release_package()
     test_commercial_gap_register_defines_external_gap_actions()
+    test_commercial_procurement_readiness_defines_procurement_gate()
     print("ok")
