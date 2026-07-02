@@ -120,6 +120,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Procurement Readiness",
         "KRW 2B Commercial Contract Readiness",
         "KRW 2B Commercial Onboarding Readiness",
+        "KRW 2B Commercial Operations Readiness",
         "team::1408252278989737675",
         "Figma Code Connect was not used",
     ]:
@@ -557,6 +558,40 @@ def test_commercial_onboarding_readiness_defines_onboarding_gate() -> None:
         assert expected_text in plan
 
 
+def test_commercial_operations_readiness_defines_operations_gate() -> None:
+    operations = read_text("docs/commercial_operations_readiness.md")
+    plan = read_text("docs/superpowers/plans/2026-07-02-commercial-operations-readiness.md")
+
+    for expected_text in [
+        "Commercial Operations Readiness",
+        "KRW 2,000,000,000",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "Operations Inputs",
+        "Runtime Shape",
+        "Operations Status Rules",
+        "KRW 2B Commercial Operations Readiness",
+        "/api/v1/commercial_operations_readiness/latest",
+        "/api/v1/commercial_onboarding_readiness/latest",
+        "/api/v1/commercial_contract_readiness/latest",
+        "/api/v1/analytics_snapshots/latest",
+        "local_commercial_operations_readiness",
+        "operations_items",
+        "commercial_operations_ready_with_warnings",
+    ]:
+        assert expected_text in operations
+
+    for expected_text in [
+        "Commercial Operations Readiness Implementation Plan",
+        "get_latest_commercial_operations_readiness",
+        "No new repo dependencies",
+        "python tests/test_commercial_operations_readiness.py",
+        "pytest -q",
+    ]:
+        assert expected_text in plan
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -578,4 +613,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_procurement_readiness_defines_procurement_gate()
     test_commercial_contract_readiness_defines_contract_gate()
     test_commercial_onboarding_readiness_defines_onboarding_gate()
+    test_commercial_operations_readiness_defines_operations_gate()
     print("ok")

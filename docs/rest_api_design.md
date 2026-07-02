@@ -30,6 +30,7 @@
 | `GET` | `/api/v1/commercial_procurement_readiness/latest` | Read commercial procurement readiness for buyer due diligence |
 | `GET` | `/api/v1/commercial_contract_readiness/latest` | Read commercial contract readiness for buyer due diligence |
 | `GET` | `/api/v1/commercial_onboarding_readiness/latest` | Read commercial onboarding readiness for buyer close |
+| `GET` | `/api/v1/commercial_operations_readiness/latest` | Read commercial operations readiness for buyer handoff |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -64,6 +65,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_procurement_readiness/latest` | Produce the procurement readiness gate that packages license, rights, security metadata, distribution docs, admin evidence, support/SLO input, buyer legal/ROI/procurement input, review-process policy, and packaging decision. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; procurement and legal review. |
 | `GET` | `/api/v1/commercial_contract_readiness/latest` | Produce the contract readiness gate that packages support/SLO terms, security/privacy terms, audit/export obligations, license/commercial rights, buyer order-form input, review-process policy, and packaging decision. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; legal and procurement contract review. |
 | `GET` | `/api/v1/commercial_onboarding_readiness/latest` | Produce the onboarding readiness gate that converts production support/SLO and buyer-specific input warnings into paid-onboarding owners, actions, and exit criteria. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer close and onboarding review. |
+| `GET` | `/api/v1/commercial_operations_readiness/latest` | Produce the operations readiness gate that converts production telemetry, incident/rollback, backup/recovery, and SLO evidence gaps into operations handoff owners, actions, and exit criteria. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer operations handoff review. |
 
 ## Production Library Target
 

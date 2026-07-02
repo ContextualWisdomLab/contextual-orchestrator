@@ -142,6 +142,12 @@ action, telemetry capture, acceptance exit criteria, security/legal handoff,
 review-process policy, and packaging decision into
 `/api/v1/commercial_onboarding_readiness/latest`.
 
+The commercial operations readiness workflow `KRW 2B Commercial Operations Readiness`
+maps onboarding readiness, deployment runbook, monitoring/telemetry capture,
+incident and rollback plan, backup/recovery evidence, support/SLO ownership,
+security/legal handoff, review-process policy, and packaging decision into
+`/api/v1/commercial_operations_readiness/latest`.
+
 ## Stakeholder Deck
 
 Name: `Contextual Orchestrator Plugin-Driven Product Plan`

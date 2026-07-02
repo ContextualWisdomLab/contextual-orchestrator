@@ -2772,6 +2772,212 @@ class TaskOrchestrator:
             },
         }
 
+    def commercial_operations_readiness_report(
+        self,
+        target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
+        locale_bundles: dict[str, dict[str, str]] | None = None,
+        security_profile: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return an operations-handoff readiness gate over onboarding evidence."""
+        onboarding = self.commercial_onboarding_readiness_report(
+            target_contract_value_krw=target_contract_value_krw,
+            locale_bundles=locale_bundles,
+            security_profile=security_profile,
+        )
+        root = Path(__file__).resolve().parents[1]
+
+        def has_file(path: str) -> bool:
+            return (root / path).is_file()
+
+        onboarding_by_name = {item["item_name"]: item for item in onboarding["onboarding_items"]}
+        support_item = onboarding_by_name["support_slo_kickoff"]
+        telemetry_item = onboarding_by_name["telemetry_capture_plan"]
+        acceptance_item = onboarding_by_name["acceptance_exit_criteria"]
+        security_item = onboarding_by_name["security_legal_handoff"]
+        packaging_item = onboarding_by_name["packaging_decision"]
+        concrete_blockers = onboarding["concrete_blockers"]
+        operations_items = [
+            {
+                "item_name": "deployment_runbook",
+                "label": "Deployment runbook",
+                "owner": "Platform operator",
+                "sources": [
+                    "README.md",
+                    "docs/commercial_operations_readiness.md",
+                    "docs/commercial_onboarding_readiness.md",
+                    "docs/rest_api_design.md",
+                ],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready"
+                if all(
+                    has_file(path)
+                    for path in (
+                        "README.md",
+                        "docs/commercial_operations_readiness.md",
+                        "docs/commercial_onboarding_readiness.md",
+                        "docs/rest_api_design.md",
+                    )
+                )
+                else "blocked",
+                "evidence": "Repository overview, REST contract, onboarding plan, and operations handoff plan are present.",
+                "action": "Use existing stdlib server and documented endpoints for buyer operations handoff.",
+                "exit_criteria": "Buyer operator can start, authenticate, inspect readiness endpoints, and run verification commands.",
+            },
+            {
+                "item_name": "monitoring_telemetry_capture",
+                "label": "Monitoring and telemetry capture",
+                "owner": telemetry_item["owner"],
+                "sources": telemetry_item["sources"],
+                "evidence_type": "proposed_until_production",
+                "completion_state": "warning",
+                "source_gap_status": "production_input_required",
+                "evidence": telemetry_item["evidence"],
+                "action": "Capture adoption, latency, verifier outcomes, trace completeness, support events, and deployment health in the buyer environment.",
+                "exit_criteria": "First production telemetry snapshot is attached without mixing it with local prototype metrics.",
+            },
+            {
+                "item_name": "incident_rollback_plan",
+                "label": "Incident and rollback plan",
+                "owner": "Operations and support owner",
+                "sources": ["docs/commercial_onboarding_readiness.md", "docs/commercial_buyer_acceptance_runbook.md"],
+                "evidence_type": "proposed_until_production",
+                "completion_state": "warning",
+                "source_gap_status": "production_input_required",
+                "evidence": "Incident drill and rollback proof require a buyer deployment or paid onboarding environment.",
+                "action": "Run the first incident drill and rollback exercise during onboarding.",
+                "exit_criteria": "Incident owner, escalation path, rollback steps, and drill record are attached.",
+            },
+            {
+                "item_name": "backup_recovery_plan",
+                "label": "Backup and recovery evidence",
+                "owner": "Operations and data owner",
+                "sources": ["docs/commercial_onboarding_readiness.md", "docs/commercial_buyer_diligence_packet.md"],
+                "evidence_type": "proposed_until_production",
+                "completion_state": "warning",
+                "source_gap_status": "production_input_required",
+                "evidence": "Backup and recovery evidence depends on the buyer deployment topology and persistence choices.",
+                "action": "Define backup scope, retention, restore owner, and first restore proof during onboarding.",
+                "exit_criteria": "Buyer accepts backup scope and a restore proof is attached or explicitly waived.",
+            },
+            {
+                "item_name": "support_slo_ownership",
+                "label": "Support rota and SLO ownership",
+                "owner": support_item["owner"],
+                "sources": support_item["sources"],
+                "evidence_type": support_item["evidence_type"],
+                "completion_state": support_item["completion_state"],
+                "source_gap_status": support_item.get("source_gap_status", "resolved"),
+                "evidence": support_item["evidence"],
+                "action": support_item["action"],
+                "exit_criteria": support_item["exit_criteria"],
+            },
+            {
+                "item_name": "acceptance_handoff",
+                "label": "Acceptance handoff",
+                "owner": acceptance_item["owner"],
+                "sources": acceptance_item["sources"],
+                "evidence_type": acceptance_item["evidence_type"],
+                "completion_state": acceptance_item["completion_state"],
+                "evidence": acceptance_item["evidence"],
+                "action": acceptance_item["action"],
+                "exit_criteria": acceptance_item["exit_criteria"],
+            },
+            {
+                "item_name": "security_legal_handoff",
+                "label": "Security and legal handoff",
+                "owner": security_item["owner"],
+                "sources": security_item["sources"],
+                "evidence_type": security_item["evidence_type"],
+                "completion_state": security_item["completion_state"],
+                "evidence": security_item["evidence"],
+                "action": security_item["action"],
+                "exit_criteria": security_item["exit_criteria"],
+            },
+            {
+                "item_name": "review_process_policy",
+                "label": "Review process policy",
+                "owner": "Deal owner",
+                "sources": ["docs/commercial_saleability_decision.md", "docs/commercial_operations_readiness.md"],
+                "evidence_type": "repository_artifact",
+                "completion_state": "ready",
+                "evidence": "Review delay is not an operations blocker unless a concrete failure is produced.",
+                "action": "Continue operations handoff work while queued reviews are pending.",
+                "exit_criteria": "Only concrete security, API contract, document, or product defects block progress.",
+            },
+            {
+                "item_name": "packaging_decision",
+                "label": "Packaging decision",
+                "owner": packaging_item["owner"],
+                "sources": packaging_item["sources"],
+                "evidence_type": packaging_item["evidence_type"],
+                "completion_state": packaging_item["completion_state"],
+                "evidence": packaging_item["evidence"],
+                "action": packaging_item["action"],
+                "exit_criteria": packaging_item["exit_criteria"],
+            },
+        ]
+        state_counts = Counter(item["completion_state"] for item in operations_items)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        warning_count = state_counts.get("warning", 0)
+        production_evidence_action_count = sum(
+            1 for item in operations_items if item.get("source_gap_status") == "production_input_required"
+        )
+        if blocked_count:
+            operations_status = "commercial_operations_blocked"
+        elif warning_count:
+            operations_status = "commercial_operations_ready_with_warnings"
+        else:
+            operations_status = "commercial_operations_ready"
+
+        return {
+            "operations_status": operations_status,
+            "target_contract_value_krw": target_contract_value_krw,
+            "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
+            "measurement_status": "local_commercial_operations_readiness",
+            "source_note": (
+                "Commercial operations readiness converts local onboarding evidence and production "
+                "operations gaps into handoff owners, actions, and exit criteria; it is not a valuation "
+                "guarantee, purchase commitment, or production compliance certificate."
+            ),
+            "operations_summary": {
+                "item_count": len(operations_items),
+                "ready_count": state_counts.get("ready", 0),
+                "warning_count": warning_count,
+                "blocked_count": blocked_count,
+                "production_evidence_action_count": production_evidence_action_count,
+                "review_process_is_blocker": onboarding["review_process_policy"]["is_blocker"],
+            },
+            "operations_items": operations_items,
+            "concrete_blockers": concrete_blockers,
+            "operations_status_rules": [
+                {
+                    "operations_status": "commercial_operations_ready",
+                    "rule": "deployment, monitoring, incident, backup, support, acceptance, security/legal, review, and packaging evidence are ready",
+                },
+                {
+                    "operations_status": "commercial_operations_ready_with_warnings",
+                    "rule": "local operations plan is ready while production telemetry, incident, backup, or SLO evidence remains explicit warnings",
+                },
+                {
+                    "operations_status": "commercial_operations_blocked",
+                    "rule": "missing operations packet evidence, concrete product defect, API contract failure, security failure, or Code Connect usage blocks operations handoff",
+                },
+            ],
+            "review_process_policy": onboarding["review_process_policy"],
+            "related_runtime_reports": {
+                "commercial_onboarding_status": onboarding["onboarding_status"],
+                **onboarding["related_runtime_reports"],
+            },
+            "library_split_decision": onboarding["library_split_decision"],
+            "plugin_traceability": onboarding["plugin_traceability"],
+            "operations_links": {
+                "figma_design_file": "https://www.figma.com/design/vsZMd8WAv42HDRgcZuNcWk",
+                "figjam_board": "https://www.figma.com/board/Wr8iMlB9SHkerHSjv0Pe0M",
+                "runtime_endpoint": "/api/v1/commercial_operations_readiness/latest",
+                "documentation": "docs/commercial_operations_readiness.md",
+            },
+        }
+
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.agents))
