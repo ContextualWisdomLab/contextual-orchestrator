@@ -107,6 +107,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         "KRW 2B Commercial Readiness Flow",
         "Library Split Decision For KRW 2B Sale",
         "KRW 2B Completion Scorecard",
+        "KRW 2B Buyer Deal Room Evidence Matrix",
         "Contextual Orchestrator Plugin-Driven Product Plan",
         "Contextual Orchestrator KRW 2B Commercial Readiness Plan",
         "team::1408252278989737675",
@@ -172,6 +173,26 @@ def test_commercial_completion_scorecard_defines_ready_warning_blocker_rules() -
         assert expected_text in scorecard
 
 
+def test_commercial_buyer_diligence_packet_defines_deal_room_evidence() -> None:
+    packet = read_text("docs/commercial_buyer_diligence_packet.md")
+
+    for expected_text in [
+        "Commercial Buyer Diligence Packet",
+        "KRW 2,000,000,000 buyer review",
+        "Figma Code Connect is not used",
+        "Review process is not a blocker",
+        "Do not create a separate library, Git submodule, or extracted package now",
+        "measured_local",
+        "repository_artifact",
+        "figma_artifact",
+        "proposed_until_production",
+        "proposed_until_buyer_specific",
+        "/api/v1/commercial_readiness/latest",
+        "KRW 2B Buyer Deal Room Evidence Matrix",
+    ]:
+        assert expected_text in packet
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_plugin_design_brief_preserves_enterprise_control_plane()
     test_visual_directions_define_three_options_and_canonical_choice()
@@ -181,4 +202,5 @@ if __name__ == "__main__":  # pragma: no cover
     test_ponytail_packaging_decision_keeps_commercial_product_unified()
     test_commercial_plugin_operating_model_defines_plugin_execution_scope()
     test_commercial_completion_scorecard_defines_ready_warning_blocker_rules()
+    test_commercial_buyer_diligence_packet_defines_deal_room_evidence()
     print("ok")
