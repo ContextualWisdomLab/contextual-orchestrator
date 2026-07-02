@@ -71,6 +71,214 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Active policy"}},
             }
         },
+        "/api/v1/analytics_snapshots/latest": {
+            "get": {
+                "operationId": "get_latest_analytics_snapshot",
+                "summary": "Get source-backed local KPI and guardrail metrics",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Analytics snapshot"}},
+            }
+        },
+        "/api/v1/sales_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_sales_readiness",
+                "summary": "Get local sales-readiness criteria and evidence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Sales-readiness report"}},
+            }
+        },
+        "/api/v1/commercial_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_readiness",
+                "summary": "Get high-value commercial due-diligence criteria and evidence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial-readiness report"}},
+            }
+        },
+        "/api/v1/buyer_evidence_manifests/latest": {
+            "get": {
+                "operationId": "get_latest_buyer_evidence_manifest",
+                "summary": "Get buyer evidence manifest for commercial due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Buyer evidence manifest"}},
+            }
+        },
+        "/api/v1/buyer_handoff_bundles/latest": {
+            "get": {
+                "operationId": "get_latest_buyer_handoff_bundle",
+                "summary": "Get buyer handoff bundle for commercial due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Buyer handoff bundle"}},
+            }
+        },
+        "/api/v1/saleability_decisions/latest": {
+            "get": {
+                "operationId": "get_latest_saleability_decision",
+                "summary": "Get KRW 2B saleability decision gate",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Saleability decision"}},
+            }
+        },
+        "/api/v1/commercial_evidence_exports/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_evidence_export",
+                "summary": "Get portable commercial evidence export for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial evidence export"}},
+            }
+        },
+        "/api/v1/commercial_acceptance_checks/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_acceptance_check",
+                "summary": "Get commercial acceptance check for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial acceptance check"}},
+            }
+        },
+        "/api/v1/commercial_release_candidates/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_release_candidate",
+                "summary": "Get commercial release candidate package for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial release candidate"}},
+            }
+        },
+        "/api/v1/commercial_gap_registers/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_gap_register",
+                "summary": "Get commercial gap register for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial gap register"}},
+            }
+        },
+        "/api/v1/commercial_procurement_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_procurement_readiness",
+                "summary": "Get commercial procurement readiness for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial procurement readiness"}},
+            }
+        },
+        "/api/v1/commercial_contract_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_contract_readiness",
+                "summary": "Get commercial contract readiness for buyer due diligence",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial contract readiness"}},
+            }
+        },
+        "/api/v1/commercial_onboarding_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_onboarding_readiness",
+                "summary": "Get commercial onboarding readiness for buyer close",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial onboarding readiness"}},
+            }
+        },
+        "/api/v1/commercial_operations_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_operations_readiness",
+                "summary": "Get commercial operations readiness for buyer handoff",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial operations readiness"}},
+            }
+        },
+        "/api/v1/commercial_security_attestations/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_security_attestation",
+                "summary": "Get commercial security attestation for buyer security review",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial security attestation"}},
+            }
+        },
+        "/api/v1/commercial_value_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_value_readiness",
+                "summary": "Get commercial value readiness for buyer economic review",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial value readiness"}},
+            }
+        },
+        "/api/v1/commercial_close_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_close_readiness",
+                "summary": "Get commercial close readiness for buyer signature and go-live review",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial close readiness"}},
+            }
+        },
+        "/api/v1/commercial_go_to_market_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_go_to_market_readiness",
+                "summary": "Get commercial go-to-market readiness for buyer and stakeholder review",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial go-to-market readiness"}},
+            }
+        },
+        "/api/v1/commercial_launch_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_launch_readiness",
+                "summary": "Get commercial launch readiness for buyer trial and go-live execution",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial launch readiness"}},
+            }
+        },
+        "/api/v1/commercial_completion_scorecards/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_completion_scorecard",
+                "summary": "Get KRW 2B commercial completion scorecard",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial completion scorecard"}},
+            }
+        },
+        "/api/v1/commercial_buyer_acceptance_workflows/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_buyer_acceptance_workflow",
+                "summary": "Get KRW 2B commercial buyer acceptance workflow",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial buyer acceptance workflow"}},
+            }
+        },
+        "/api/v1/commercial_demo_scenarios/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_demo_scenarios",
+                "summary": "Get KRW 2B commercial demo scenarios",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial demo scenarios"}},
+            }
+        },
+        "/api/v1/commercial_proposal_packets/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_proposal_packet",
+                "summary": "Get KRW 2B commercial proposal packet",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial proposal packet"}},
+            }
+        },
+        "/api/v1/commercial_purchase_approval_packets/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_purchase_approval_packet",
+                "summary": "Get KRW 2B commercial purchase approval packet",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial purchase approval packet"}},
+            }
+        },
+        "/api/v1/commercial_due_diligence_rooms/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_due_diligence_room",
+                "summary": "Get KRW 2B commercial due diligence room",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial due diligence room"}},
+            }
+        },
+        "/api/v1/commercial_investment_committee_memos/latest": {
+            "get": {
+                "operationId": "get_latest_commercial_investment_committee_memo",
+                "summary": "Get KRW 2B commercial investment committee memo",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Commercial investment committee memo"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

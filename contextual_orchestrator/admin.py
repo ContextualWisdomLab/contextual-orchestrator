@@ -38,6 +38,138 @@ ADMIN_TRANSLATIONS = {
         "integrations_title": "Integrations",
         "observability_title": "Observability",
         "settings_title": "Settings",
+        "compatible_api_adoption": "Compatible API adoption",
+        "trace_complete_workflow_rate": "Trace-complete workflow rate",
+        "policy_safe_routing_rate": "Policy-safe routing rate",
+        "route_versus_conduct_mix": "Route-versus-conduct mix",
+        "evaluation_replay_usage": "Evaluation replay usage",
+        "agent_health_coverage": "Agent health coverage",
+        "provider_exclusion_miss_rate": "Provider exclusion miss rate",
+        "locale_key_parity": "Locale key parity",
+        "readiness_summary": "Readiness summary",
+        "readiness_source": "Readiness source",
+        "readiness_measurement_status": "Measurement status",
+        "readiness_remediation_label": "Remediation",
+        "sales_readiness": "sales_readiness",
+        "sales_readiness_title": "Sales Readiness",
+        "commercial_readiness": "commercial_readiness",
+        "commercial_readiness_title": "Commercial Readiness",
+        "buyer_evidence_manifest_title": "Buyer Evidence Manifest",
+        "buyer_handoff_bundle_title": "Buyer Handoff Bundle",
+        "saleability_decision_title": "Saleability Decision",
+        "commercial_evidence_export_title": "Commercial Evidence Export",
+        "commercial_acceptance_check_title": "Commercial Acceptance Check",
+        "commercial_release_candidate_title": "Commercial Release Candidate",
+        "commercial_gap_register_title": "Commercial Gap Register",
+        "commercial_procurement_readiness_title": "Commercial Procurement Readiness",
+        "commercial_contract_readiness_title": "Commercial Contract Readiness",
+        "commercial_onboarding_readiness_title": "Commercial Onboarding Readiness",
+        "commercial_operations_readiness_title": "Commercial Operations Readiness",
+        "commercial_security_attestation_title": "Commercial Security Attestation",
+        "commercial_value_readiness_title": "Commercial Value Readiness",
+        "commercial_close_readiness_title": "Commercial Close Readiness",
+        "commercial_go_to_market_readiness_title": "Commercial Go-To-Market Readiness",
+        "commercial_launch_readiness_title": "Commercial Launch Readiness",
+        "commercial_completion_scorecard_title": "Commercial Completion Scorecard",
+        "commercial_buyer_acceptance_workflow_title": "Buyer Acceptance Workflow",
+        "commercial_demo_scenarios_title": "Commercial Demo Scenarios",
+        "commercial_proposal_packet_title": "Commercial Proposal Packet",
+        "commercial_purchase_approval_packet_title": "Commercial Purchase Approval Packet",
+        "commercial_due_diligence_room_title": "Commercial Due Diligence Room",
+        "commercial_investment_committee_memo_title": "Commercial Investment Committee Memo",
+        "commercial_contract_value": "Target contract value",
+        "sales_ready": "Sales ready",
+        "pilot_ready_with_warnings": "Pilot ready with warnings",
+        "not_ready": "Not ready",
+        "commercial_ready": "Commercial ready",
+        "commercial_ready_with_warnings": "Commercial ready with warnings",
+        "not_commercial_ready": "Not commercially ready",
+        "buyer_review_ready": "Buyer review ready",
+        "buyer_review_ready_with_warnings": "Buyer review ready with warnings",
+        "buyer_review_blocked": "Buyer review blocked",
+        "buyer_handoff_ready": "Buyer handoff ready",
+        "buyer_handoff_ready_with_warnings": "Buyer handoff ready with warnings",
+        "buyer_handoff_blocked": "Buyer handoff blocked",
+        "saleability_ready": "Saleability ready",
+        "saleability_ready_with_warnings": "Saleability ready with warnings",
+        "saleability_blocked": "Saleability blocked",
+        "commercial_export_ready": "Commercial export ready",
+        "commercial_export_ready_with_warnings": "Commercial export ready with warnings",
+        "commercial_export_blocked": "Commercial export blocked",
+        "commercial_acceptance_ready": "Commercial acceptance ready",
+        "commercial_acceptance_ready_with_warnings": "Commercial acceptance ready with warnings",
+        "commercial_acceptance_blocked": "Commercial acceptance blocked",
+        "commercial_release_ready": "Commercial release ready",
+        "commercial_release_ready_with_warnings": "Commercial release ready with warnings",
+        "commercial_release_blocked": "Commercial release blocked",
+        "commercial_gap_register_clear": "Commercial gap register clear",
+        "commercial_gap_register_open": "Commercial gap register open",
+        "commercial_gap_register_blocked": "Commercial gap register blocked",
+        "commercial_procurement_ready": "Commercial procurement ready",
+        "commercial_procurement_ready_with_warnings": "Commercial procurement ready with warnings",
+        "commercial_procurement_blocked": "Commercial procurement blocked",
+        "commercial_contract_ready": "Commercial contract ready",
+        "commercial_contract_ready_with_warnings": "Commercial contract ready with warnings",
+        "commercial_contract_blocked": "Commercial contract blocked",
+        "commercial_onboarding_ready": "Commercial onboarding ready",
+        "commercial_onboarding_ready_with_warnings": "Commercial onboarding ready with warnings",
+        "commercial_onboarding_blocked": "Commercial onboarding blocked",
+        "commercial_operations_ready": "Commercial operations ready",
+        "commercial_operations_ready_with_warnings": "Commercial operations ready with warnings",
+        "commercial_operations_blocked": "Commercial operations blocked",
+        "commercial_security_attestation_ready": "Commercial security attestation ready",
+        "commercial_security_attestation_ready_with_warnings": "Commercial security attestation ready with warnings",
+        "commercial_security_attestation_blocked": "Commercial security attestation blocked",
+        "commercial_value_ready": "Commercial value ready",
+        "commercial_value_ready_with_warnings": "Commercial value ready with warnings",
+        "commercial_value_blocked": "Commercial value blocked",
+        "commercial_close_ready": "Commercial close ready",
+        "commercial_close_ready_with_warnings": "Commercial close ready with warnings",
+        "commercial_close_blocked": "Commercial close blocked",
+        "commercial_go_to_market_ready": "Commercial go-to-market ready",
+        "commercial_go_to_market_ready_with_warnings": "Commercial go-to-market ready with warnings",
+        "commercial_go_to_market_blocked": "Commercial go-to-market blocked",
+        "commercial_launch_ready": "Commercial launch ready",
+        "commercial_launch_ready_with_warnings": "Commercial launch ready with warnings",
+        "commercial_launch_blocked": "Commercial launch blocked",
+        "commercial_completion_ready": "Commercial completion ready",
+        "commercial_completion_ready_with_warnings": "Commercial completion ready with warnings",
+        "commercial_completion_blocked": "Commercial completion blocked",
+        "buyer_acceptance_workflow_ready": "Buyer acceptance workflow ready",
+        "buyer_acceptance_workflow_ready_with_warnings": "Buyer acceptance workflow ready with warnings",
+        "buyer_acceptance_workflow_blocked": "Buyer acceptance workflow blocked",
+        "commercial_demo_ready": "Commercial demo ready",
+        "commercial_demo_ready_with_warnings": "Commercial demo ready with warnings",
+        "commercial_demo_blocked": "Commercial demo blocked",
+        "commercial_proposal_ready": "Commercial proposal ready",
+        "commercial_proposal_ready_with_warnings": "Commercial proposal ready with warnings",
+        "commercial_proposal_blocked": "Commercial proposal blocked",
+        "commercial_purchase_approval_ready": "Commercial purchase approval ready",
+        "commercial_purchase_approval_ready_with_warnings": "Commercial purchase approval ready with warnings",
+        "commercial_purchase_approval_blocked": "Commercial purchase approval blocked",
+        "commercial_due_diligence_ready": "Commercial due diligence ready",
+        "commercial_due_diligence_ready_with_warnings": "Commercial due diligence ready with warnings",
+        "commercial_due_diligence_blocked": "Commercial due diligence blocked",
+        "commercial_investment_committee_ready": "Commercial investment committee ready",
+        "commercial_investment_committee_ready_with_warnings": "Commercial investment committee ready with warnings",
+        "commercial_investment_committee_blocked": "Commercial investment committee blocked",
+        "readiness_pass": "Pass",
+        "readiness_warn": "Warn",
+        "readiness_fail": "Fail",
+        "api_compatibility": "OpenAI-compatible API",
+        "admin_evidence": "Operator evidence surface",
+        "trace_evidence": "Workflow trace evidence",
+        "security_posture": "Security posture",
+        "analytics_truthfulness": "Analytics truthfulness",
+        "locale_readiness": "Locale readiness",
+        "provider_egress_safety": "Provider egress safety",
+        "product_capability_evidence": "Product capability evidence",
+        "security_and_access_control": "Security and access control",
+        "operational_resilience": "Operational resilience",
+        "audit_and_compliance_evidence": "Audit and compliance evidence",
+        "buyer_due_diligence_packet": "Buyer due-diligence packet",
+        "support_and_localization": "Support and localization",
+        "commercial_value_case": "Commercial value case",
         "evaluation_replay": "Evaluation Replay",
         "run_evaluation": "Run Evaluation",
         "dataset_name": "Dataset",
@@ -126,6 +258,138 @@ ADMIN_TRANSLATIONS = {
         "integrations_title": "연동",
         "observability_title": "관측",
         "settings_title": "설정",
+        "compatible_api_adoption": "호환 API 사용량",
+        "trace_complete_workflow_rate": "트레이스 완성 워크플로 비율",
+        "policy_safe_routing_rate": "정책 안전 라우팅 비율",
+        "route_versus_conduct_mix": "route/conduct 분포",
+        "evaluation_replay_usage": "평가 리플레이 사용량",
+        "agent_health_coverage": "에이전트 상태 커버리지",
+        "provider_exclusion_miss_rate": "공급자 제외 누락률",
+        "locale_key_parity": "로케일 키 일치율",
+        "readiness_summary": "판매 준비 지표",
+        "readiness_source": "근거",
+        "readiness_measurement_status": "측정 상태",
+        "readiness_remediation_label": "보완 조치",
+        "sales_readiness": "sales_readiness",
+        "sales_readiness_title": "판매 준비도",
+        "commercial_readiness": "commercial_readiness",
+        "commercial_readiness_title": "상용 준비도",
+        "buyer_evidence_manifest_title": "구매자 증거 매니페스트",
+        "buyer_handoff_bundle_title": "구매자 인수인계 번들",
+        "saleability_decision_title": "판매 가능성 판단",
+        "commercial_evidence_export_title": "상용 증거 Export",
+        "commercial_acceptance_check_title": "상용 인수 검증",
+        "commercial_release_candidate_title": "상용 릴리스 후보",
+        "commercial_gap_register_title": "상용 갭 등록부",
+        "commercial_procurement_readiness_title": "상용 조달 준비도",
+        "commercial_contract_readiness_title": "상용 계약 준비도",
+        "commercial_onboarding_readiness_title": "상용 온보딩 준비도",
+        "commercial_operations_readiness_title": "상용 운영 준비도",
+        "commercial_security_attestation_title": "상용 보안 증명 준비도",
+        "commercial_value_readiness_title": "상용 가치 준비도",
+        "commercial_close_readiness_title": "상용 체결 준비도",
+        "commercial_go_to_market_readiness_title": "상용 GTM 준비도",
+        "commercial_launch_readiness_title": "상용 출시 준비도",
+        "commercial_completion_scorecard_title": "상용 완성 스코어카드",
+        "commercial_buyer_acceptance_workflow_title": "구매자 인수 워크플로",
+        "commercial_demo_scenarios_title": "상용 데모 시나리오",
+        "commercial_proposal_packet_title": "상용 제안서 패킷",
+        "commercial_purchase_approval_packet_title": "상용 구매 승인 패킷",
+        "commercial_due_diligence_room_title": "상용 실사방",
+        "commercial_investment_committee_memo_title": "상용 투자심의 메모",
+        "commercial_contract_value": "목표 계약 금액",
+        "sales_ready": "판매 준비 완료",
+        "pilot_ready_with_warnings": "주의 조건부 파일럿 가능",
+        "not_ready": "준비 미완료",
+        "commercial_ready": "상용 준비 완료",
+        "commercial_ready_with_warnings": "주의 조건부 상용 가능",
+        "not_commercial_ready": "상용 준비 미완료",
+        "buyer_review_ready": "구매자 검토 준비 완료",
+        "buyer_review_ready_with_warnings": "주의 조건부 구매자 검토 가능",
+        "buyer_review_blocked": "구매자 검토 차단",
+        "buyer_handoff_ready": "구매자 인수인계 준비 완료",
+        "buyer_handoff_ready_with_warnings": "주의 조건부 구매자 인수인계 가능",
+        "buyer_handoff_blocked": "구매자 인수인계 차단",
+        "saleability_ready": "판매 가능 준비 완료",
+        "saleability_ready_with_warnings": "주의 조건부 판매 가능",
+        "saleability_blocked": "판매 가능성 차단",
+        "commercial_export_ready": "상용 export 준비 완료",
+        "commercial_export_ready_with_warnings": "주의 조건부 상용 export 가능",
+        "commercial_export_blocked": "상용 export 차단",
+        "commercial_acceptance_ready": "상용 인수 준비 완료",
+        "commercial_acceptance_ready_with_warnings": "주의 조건부 상용 인수 가능",
+        "commercial_acceptance_blocked": "상용 인수 차단",
+        "commercial_release_ready": "상용 릴리스 준비 완료",
+        "commercial_release_ready_with_warnings": "주의 조건부 상용 릴리스 가능",
+        "commercial_release_blocked": "상용 릴리스 차단",
+        "commercial_gap_register_clear": "상용 갭 없음",
+        "commercial_gap_register_open": "상용 갭 조치 필요",
+        "commercial_gap_register_blocked": "상용 갭 차단",
+        "commercial_procurement_ready": "상용 조달 준비 완료",
+        "commercial_procurement_ready_with_warnings": "주의 조건부 상용 조달 가능",
+        "commercial_procurement_blocked": "상용 조달 차단",
+        "commercial_contract_ready": "상용 계약 준비 완료",
+        "commercial_contract_ready_with_warnings": "주의 조건부 상용 계약 가능",
+        "commercial_contract_blocked": "상용 계약 차단",
+        "commercial_onboarding_ready": "상용 온보딩 준비 완료",
+        "commercial_onboarding_ready_with_warnings": "주의 조건부 상용 온보딩 가능",
+        "commercial_onboarding_blocked": "상용 온보딩 차단",
+        "commercial_operations_ready": "상용 운영 준비 완료",
+        "commercial_operations_ready_with_warnings": "주의 조건부 상용 운영 가능",
+        "commercial_operations_blocked": "상용 운영 차단",
+        "commercial_security_attestation_ready": "상용 보안 증명 준비 완료",
+        "commercial_security_attestation_ready_with_warnings": "주의 조건부 상용 보안 증명 가능",
+        "commercial_security_attestation_blocked": "상용 보안 증명 차단",
+        "commercial_value_ready": "상용 가치 준비 완료",
+        "commercial_value_ready_with_warnings": "주의 조건부 상용 가치 검토 가능",
+        "commercial_value_blocked": "상용 가치 검토 차단",
+        "commercial_close_ready": "상용 체결 준비 완료",
+        "commercial_close_ready_with_warnings": "주의 조건부 상용 체결 가능",
+        "commercial_close_blocked": "상용 체결 차단",
+        "commercial_go_to_market_ready": "상용 GTM 준비 완료",
+        "commercial_go_to_market_ready_with_warnings": "주의 조건부 상용 GTM 가능",
+        "commercial_go_to_market_blocked": "상용 GTM 차단",
+        "commercial_launch_ready": "상용 출시 준비 완료",
+        "commercial_launch_ready_with_warnings": "주의 조건부 상용 출시 가능",
+        "commercial_launch_blocked": "상용 출시 차단",
+        "commercial_completion_ready": "상용 완성 준비 완료",
+        "commercial_completion_ready_with_warnings": "주의 조건부 상용 완성 가능",
+        "commercial_completion_blocked": "상용 완성 차단",
+        "buyer_acceptance_workflow_ready": "구매자 인수 워크플로 준비 완료",
+        "buyer_acceptance_workflow_ready_with_warnings": "주의 조건부 구매자 인수 워크플로 가능",
+        "buyer_acceptance_workflow_blocked": "구매자 인수 워크플로 차단",
+        "commercial_demo_ready": "상용 데모 준비 완료",
+        "commercial_demo_ready_with_warnings": "주의 조건부 상용 데모 가능",
+        "commercial_demo_blocked": "상용 데모 차단",
+        "commercial_proposal_ready": "상용 제안서 준비 완료",
+        "commercial_proposal_ready_with_warnings": "주의 조건부 상용 제안 가능",
+        "commercial_proposal_blocked": "상용 제안서 차단",
+        "commercial_purchase_approval_ready": "상용 구매 승인 준비 완료",
+        "commercial_purchase_approval_ready_with_warnings": "주의 조건부 상용 구매 승인 가능",
+        "commercial_purchase_approval_blocked": "상용 구매 승인 차단",
+        "commercial_due_diligence_ready": "상용 실사 준비 완료",
+        "commercial_due_diligence_ready_with_warnings": "주의 조건부 상용 실사 가능",
+        "commercial_due_diligence_blocked": "상용 실사 차단",
+        "commercial_investment_committee_ready": "상용 투자심의 준비 완료",
+        "commercial_investment_committee_ready_with_warnings": "주의 조건부 상용 투자심의 가능",
+        "commercial_investment_committee_blocked": "상용 투자심의 차단",
+        "readiness_pass": "통과",
+        "readiness_warn": "주의",
+        "readiness_fail": "실패",
+        "api_compatibility": "OpenAI 호환 API",
+        "admin_evidence": "운영자 근거 화면",
+        "trace_evidence": "워크플로 트레이스 근거",
+        "security_posture": "보안 자세",
+        "analytics_truthfulness": "분석 지표 진실성",
+        "locale_readiness": "로케일 준비도",
+        "provider_egress_safety": "공급자 송신 안전성",
+        "product_capability_evidence": "제품 역량 근거",
+        "security_and_access_control": "보안 및 접근 제어",
+        "operational_resilience": "운영 회복력",
+        "audit_and_compliance_evidence": "감사 및 컴플라이언스 근거",
+        "buyer_due_diligence_packet": "구매자 실사 패킷",
+        "support_and_localization": "지원 및 로컬라이제이션",
+        "commercial_value_case": "상용 가치 근거",
         "evaluation_replay": "평가 리플레이",
         "run_evaluation": "평가 실행",
         "dataset_name": "데이터셋",
@@ -366,6 +630,7 @@ ADMIN_HTML = r"""<!doctype html>
     }
     .chip.green { background: #e7f6ec; color: var(--green); }
     .chip.amber { background: var(--amber-soft); color: var(--amber); }
+    .chip.red { background: #ffe8e5; color: var(--red); }
     .bar { width: 90px; height: 4px; border-radius: 999px; background: #d9eeeb; overflow: hidden; margin-top: 5px; }
     .bar span { display: block; height: 100%; background: var(--teal); }
     .split { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
@@ -451,6 +716,29 @@ ADMIN_HTML = r"""<!doctype html>
       background: #fbfcfc;
     }
     .kpi strong { display: block; font-size: 22px; margin-top: 5px; }
+    .readiness {
+      border-top: 1px solid var(--line);
+      padding: 14px;
+      display: grid;
+      gap: 10px;
+    }
+    .readiness-grid {
+      display: grid;
+      grid-template-columns: repeat(4, minmax(0, 1fr));
+      gap: 10px;
+    }
+    .readiness-row {
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      background: #fbfcfc;
+      padding: 10px;
+      display: grid;
+      gap: 6px;
+      min-width: 0;
+    }
+    .readiness-row strong,
+    .readiness-row small { overflow-wrap: anywhere; }
+    .readiness-row small { color: var(--muted); }
     .audit { display: grid; gap: 12px; }
     .audit { align-self: start; align-content: start; }
     .audit-list { padding: 10px 14px 14px; display: grid; gap: 10px; }
@@ -485,6 +773,7 @@ ADMIN_HTML = r"""<!doctype html>
       .panel { max-width: calc(100vw - 24px); overflow-x: auto; }
       .wide { grid-column: auto; }
       .kpis { grid-template-columns: 1fr; }
+      .readiness-grid { grid-template-columns: 1fr; }
       table { min-width: 560px; }
       .workflow { grid-column: auto; }
       .steps { grid-template-columns: 1fr; }
@@ -647,6 +936,7 @@ Summarize this research thread and verify claims.</textarea>
         <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="observability_title">Observability</h1><span class="chip green">Live</span></div>
           <div class="kpis" id="kpis"></div>
+          <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest" data-handoff-bundle-source="/api/v1/buyer_handoff_bundles/latest" data-saleability-source="/api/v1/saleability_decisions/latest" data-commercial-export-source="/api/v1/commercial_evidence_exports/latest" data-commercial-acceptance-source="/api/v1/commercial_acceptance_checks/latest" data-commercial-release-source="/api/v1/commercial_release_candidates/latest" data-commercial-gap-source="/api/v1/commercial_gap_registers/latest" data-commercial-procurement-source="/api/v1/commercial_procurement_readiness/latest" data-commercial-contract-source="/api/v1/commercial_contract_readiness/latest" data-commercial-onboarding-source="/api/v1/commercial_onboarding_readiness/latest" data-commercial-operations-source="/api/v1/commercial_operations_readiness/latest" data-commercial-security-attestation-source="/api/v1/commercial_security_attestations/latest" data-commercial-value-source="/api/v1/commercial_value_readiness/latest" data-commercial-close-source="/api/v1/commercial_close_readiness/latest" data-commercial-gtm-source="/api/v1/commercial_go_to_market_readiness/latest" data-commercial-launch-source="/api/v1/commercial_launch_readiness/latest" data-commercial-completion-source="/api/v1/commercial_completion_scorecards/latest" data-commercial-buyer-acceptance-workflow-source="/api/v1/commercial_buyer_acceptance_workflows/latest" data-commercial-demo-source="/api/v1/commercial_demo_scenarios/latest" data-commercial-proposal-source="/api/v1/commercial_proposal_packets/latest" data-commercial-purchase-approval-source="/api/v1/commercial_purchase_approval_packets/latest" data-commercial-due-diligence-source="/api/v1/commercial_due_diligence_rooms/latest" data-commercial-investment-committee-source="/api/v1/commercial_investment_committee_memos/latest"></div>
           <table><thead><tr><th>Workflow</th><th>Mode</th><th>Policy</th><th>Created</th></tr></thead><tbody id="runRows"></tbody></table>
         </section>
       </section>
@@ -692,6 +982,7 @@ Summarize this research thread and verify claims.</textarea>
       datasetRows: document.querySelector("#datasetRows"),
       integrationRows: document.querySelector("#integrationRows"),
       kpis: document.querySelector("#kpis"),
+      salesReadiness: document.querySelector("#salesReadiness"),
       runRows: document.querySelector("#runRows"),
       auditRows: document.querySelector("#auditRows"),
       viewAudit: document.querySelector("#viewAudit"),
@@ -700,7 +991,7 @@ Summarize this research thread and verify claims.</textarea>
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language")
     };
-    let state = {agents: [], last: null};
+    let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
     let currentLang = "en";
     let activeTraceTab = "timeline";
     const datasets = [
@@ -787,7 +1078,13 @@ Summarize this research thread and verify claims.</textarea>
     }
     function renderObservability() {
       const runs = state.recent_workflow_runs || [];
-      els.kpis.innerHTML = [
+      const analytics = state.analytics || {};
+      const metricRows = [...(analytics.kpis || []), ...(analytics.guardrails || [])];
+      els.kpis.innerHTML = metricRows.map(metric => {
+        const rawValue = metric.value_percent ?? metric.value ?? metric.numerator ?? 0;
+        const suffix = metric.value_percent == null ? "" : "%";
+        return `<div class="kpi"><span>${escapeHtml(t(metric.metric_name) || metric.label)}</span><strong>${escapeHtml(rawValue)}${suffix}</strong></div>`;
+      }).join("") || [
         ["Workflow runs", runs.length],
         ["Enabled agents", state.agents.length],
         ["Verifier required", state.policy.verifier_required ? "Yes" : "No"]
@@ -795,6 +1092,239 @@ Summarize this research thread and verify claims.</textarea>
       els.runRows.innerHTML = runs.map(run => `
         <tr><td>${escapeHtml(run.workflow_run_id)}</td><td>${escapeHtml(run.mode)}</td><td>${escapeHtml(run.policy_mode)}</td><td>${escapeHtml(run.created_at)}</td></tr>
       `).join("") || `<tr><td colspan="4">${t("no_trace")}</td></tr>`;
+      renderReadiness();
+    }
+    function renderReadiness() {
+      const readiness = state.readiness || {};
+      const commercial = state.commercialReadiness || {};
+      const buyerManifest = state.buyerEvidenceManifest || {};
+      const handoffBundle = state.buyerHandoffBundle || {};
+      const saleability = state.saleabilityDecision || {};
+      const commercialExport = state.commercialEvidenceExport || {};
+      const commercialAcceptance = state.commercialAcceptanceCheck || {};
+      const commercialRelease = state.commercialReleaseCandidate || {};
+      const commercialGap = state.commercialGapRegister || {};
+      const commercialProcurement = state.commercialProcurementReadiness || {};
+      const commercialContract = state.commercialContractReadiness || {};
+      const commercialOnboarding = state.commercialOnboardingReadiness || {};
+      const commercialOperations = state.commercialOperationsReadiness || {};
+      const commercialSecurity = state.commercialSecurityAttestation || {};
+      const commercialValue = state.commercialValueReadiness || {};
+      const commercialClose = state.commercialCloseReadiness || {};
+      const commercialGtm = state.commercialGoToMarketReadiness || {};
+      const commercialLaunch = state.commercialLaunchReadiness || {};
+      const commercialCompletion = state.commercialCompletionScorecard || {};
+      const buyerAcceptanceWorkflow = state.commercialBuyerAcceptanceWorkflow || {};
+      const commercialDemo = state.commercialDemoScenarios || {};
+      const commercialProposal = state.commercialProposalPacket || {};
+      const commercialPurchaseApproval = state.commercialPurchaseApprovalPacket || {};
+      const commercialDueDiligence = state.commercialDueDiligenceRoom || {};
+      const commercialInvestmentCommittee = state.commercialInvestmentCommitteeMemo || {};
+      const status = readiness.readiness_status || "not_ready";
+      const statusClass = status === "sales_ready" ? "green" : status === "pilot_ready_with_warnings" ? "amber" : "red";
+      const criteria = readiness.criteria || [];
+      const readinessSummary = readiness.readiness_summary || readiness.summary || {};
+      const commercialStatus = commercial.commercial_status || "not_commercial_ready";
+      const commercialStatusClass = commercialStatus === "commercial_ready" ? "green" : commercialStatus === "commercial_ready_with_warnings" ? "amber" : "red";
+      const commercialCriteria = commercial.criteria || [];
+      const commercialSummary = commercial.commercial_summary || commercial.summary || {};
+      const manifestStatus = buyerManifest.manifest_status || "buyer_review_blocked";
+      const manifestStatusClass = manifestStatus === "buyer_review_ready" ? "green" : manifestStatus === "buyer_review_ready_with_warnings" ? "amber" : "red";
+      const manifestSummary = buyerManifest.summary?.by_completion_state || {};
+      const handoffStatus = handoffBundle.bundle_status || "buyer_handoff_blocked";
+      const handoffStatusClass = handoffStatus === "buyer_handoff_ready" ? "green" : handoffStatus === "buyer_handoff_ready_with_warnings" ? "amber" : "red";
+      const handoffSummary = handoffBundle.summary?.by_completion_state || {};
+      const saleabilityStatus = saleability.saleability_status || "saleability_blocked";
+      const saleabilityStatusClass = saleabilityStatus === "saleability_ready" ? "green" : saleabilityStatus === "saleability_ready_with_warnings" ? "amber" : "red";
+      const saleabilitySummary = saleability.decision_summary || {};
+      const exportStatus = commercialExport.export_status || "commercial_export_blocked";
+      const exportStatusClass = exportStatus === "commercial_export_ready" ? "green" : exportStatus === "commercial_export_ready_with_warnings" ? "amber" : "red";
+      const exportSummary = commercialExport.export_summary || {};
+      const acceptanceStatus = commercialAcceptance.acceptance_status || "commercial_acceptance_blocked";
+      const acceptanceStatusClass = acceptanceStatus === "commercial_acceptance_ready" ? "green" : acceptanceStatus === "commercial_acceptance_ready_with_warnings" ? "amber" : "red";
+      const acceptanceSummary = commercialAcceptance.acceptance_summary || {};
+      const releaseStatus = commercialRelease.release_status || "commercial_release_blocked";
+      const releaseStatusClass = releaseStatus === "commercial_release_ready" ? "green" : releaseStatus === "commercial_release_ready_with_warnings" ? "amber" : "red";
+      const releaseSummary = commercialRelease.release_summary || {};
+      const gapStatus = commercialGap.gap_register_status || "commercial_gap_register_blocked";
+      const gapStatusClass = gapStatus === "commercial_gap_register_clear" ? "green" : gapStatus === "commercial_gap_register_open" ? "amber" : "red";
+      const gapSummary = commercialGap.gap_summary || {};
+      const procurementStatus = commercialProcurement.procurement_status || "commercial_procurement_blocked";
+      const procurementStatusClass = procurementStatus === "commercial_procurement_ready" ? "green" : procurementStatus === "commercial_procurement_ready_with_warnings" ? "amber" : "red";
+      const procurementSummary = commercialProcurement.procurement_summary || {};
+      const contractStatus = commercialContract.contract_status || "commercial_contract_blocked";
+      const contractStatusClass = contractStatus === "commercial_contract_ready" ? "green" : contractStatus === "commercial_contract_ready_with_warnings" ? "amber" : "red";
+      const contractSummary = commercialContract.contract_summary || {};
+      const onboardingStatus = commercialOnboarding.onboarding_status || "commercial_onboarding_blocked";
+      const onboardingStatusClass = onboardingStatus === "commercial_onboarding_ready" ? "green" : onboardingStatus === "commercial_onboarding_ready_with_warnings" ? "amber" : "red";
+      const onboardingSummary = commercialOnboarding.onboarding_summary || {};
+      const operationsStatus = commercialOperations.operations_status || "commercial_operations_blocked";
+      const operationsStatusClass = operationsStatus === "commercial_operations_ready" ? "green" : operationsStatus === "commercial_operations_ready_with_warnings" ? "amber" : "red";
+      const operationsSummary = commercialOperations.operations_summary || {};
+      const securityStatus = commercialSecurity.security_attestation_status || "commercial_security_attestation_blocked";
+      const securityStatusClass = securityStatus === "commercial_security_attestation_ready" ? "green" : securityStatus === "commercial_security_attestation_ready_with_warnings" ? "amber" : "red";
+      const securitySummary = commercialSecurity.security_attestation_summary || {};
+      const valueStatus = commercialValue.value_status || "commercial_value_blocked";
+      const valueStatusClass = valueStatus === "commercial_value_ready" ? "green" : valueStatus === "commercial_value_ready_with_warnings" ? "amber" : "red";
+      const valueSummary = commercialValue.value_summary || {};
+      const closeStatus = commercialClose.close_status || "commercial_close_blocked";
+      const closeStatusClass = closeStatus === "commercial_close_ready" ? "green" : closeStatus === "commercial_close_ready_with_warnings" ? "amber" : "red";
+      const closeSummary = commercialClose.close_summary || {};
+      const gtmStatus = commercialGtm.go_to_market_status || "commercial_go_to_market_blocked";
+      const gtmStatusClass = gtmStatus === "commercial_go_to_market_ready" ? "green" : gtmStatus === "commercial_go_to_market_ready_with_warnings" ? "amber" : "red";
+      const gtmSummary = commercialGtm.go_to_market_summary || {};
+      const launchStatus = commercialLaunch.launch_status || "commercial_launch_blocked";
+      const launchStatusClass = launchStatus === "commercial_launch_ready" ? "green" : launchStatus === "commercial_launch_ready_with_warnings" ? "amber" : "red";
+      const launchSummary = commercialLaunch.launch_summary || {};
+      const completionStatus = commercialCompletion.completion_status || "commercial_completion_blocked";
+      const completionStatusClass = completionStatus === "commercial_completion_ready" ? "green" : completionStatus === "commercial_completion_ready_with_warnings" ? "amber" : "red";
+      const completionSummary = commercialCompletion.completion_summary || {};
+      const workflowStatus = buyerAcceptanceWorkflow.workflow_status || "buyer_acceptance_workflow_blocked";
+      const workflowStatusClass = workflowStatus === "buyer_acceptance_workflow_ready" ? "green" : workflowStatus === "buyer_acceptance_workflow_ready_with_warnings" ? "amber" : "red";
+      const workflowSummary = buyerAcceptanceWorkflow.workflow_summary || {};
+      const demoStatus = commercialDemo.demo_status || "commercial_demo_blocked";
+      const demoStatusClass = demoStatus === "commercial_demo_ready" ? "green" : demoStatus === "commercial_demo_ready_with_warnings" ? "amber" : "red";
+      const demoSummary = commercialDemo.demo_summary || {};
+      const proposalStatus = commercialProposal.proposal_status || "commercial_proposal_blocked";
+      const proposalStatusClass = proposalStatus === "commercial_proposal_ready" ? "green" : proposalStatus === "commercial_proposal_ready_with_warnings" ? "amber" : "red";
+      const proposalSummary = commercialProposal.proposal_summary || {};
+      const purchaseApprovalStatus = commercialPurchaseApproval.purchase_approval_status || "commercial_purchase_approval_blocked";
+      const purchaseApprovalStatusClass = purchaseApprovalStatus === "commercial_purchase_approval_ready" ? "green" : purchaseApprovalStatus === "commercial_purchase_approval_ready_with_warnings" ? "amber" : "red";
+      const purchaseApprovalSummary = commercialPurchaseApproval.approval_summary || {};
+      const dueDiligenceStatus = commercialDueDiligence.due_diligence_status || "commercial_due_diligence_blocked";
+      const dueDiligenceStatusClass = dueDiligenceStatus === "commercial_due_diligence_ready" ? "green" : dueDiligenceStatus === "commercial_due_diligence_ready_with_warnings" ? "amber" : "red";
+      const dueDiligenceSummary = commercialDueDiligence.diligence_summary || {};
+      const investmentCommitteeStatus = commercialInvestmentCommittee.investment_committee_status || "commercial_investment_committee_blocked";
+      const investmentCommitteeStatusClass = investmentCommitteeStatus === "commercial_investment_committee_ready" ? "green" : investmentCommitteeStatus === "commercial_investment_committee_ready_with_warnings" ? "amber" : "red";
+      const investmentCommitteeSummary = commercialInvestmentCommittee.memo_summary || {};
+      els.salesReadiness.innerHTML = `
+        <div class="metric">
+          <span data-i18n="sales_readiness_title">${t("sales_readiness_title")}</span>
+          <strong><span class="chip ${statusClass}">${escapeHtml(t(status))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_readiness_title">${t("commercial_readiness_title")}</span>
+          <strong><span class="chip ${commercialStatusClass}">${escapeHtml(t(commercialStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_contract_value">${t("commercial_contract_value")}</span>
+          <strong>${escapeHtml(commercial.target_contract_value_display || "KRW 2,000,000,000")}</strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="buyer_evidence_manifest_title">${t("buyer_evidence_manifest_title")}</span>
+          <strong><span class="chip ${manifestStatusClass}">${escapeHtml(t(manifestStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="buyer_handoff_bundle_title">${t("buyer_handoff_bundle_title")}</span>
+          <strong><span class="chip ${handoffStatusClass}">${escapeHtml(t(handoffStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="saleability_decision_title">${t("saleability_decision_title")}</span>
+          <strong><span class="chip ${saleabilityStatusClass}">${escapeHtml(t(saleabilityStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_evidence_export_title">${t("commercial_evidence_export_title")}</span>
+          <strong><span class="chip ${exportStatusClass}">${escapeHtml(t(exportStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_acceptance_check_title">${t("commercial_acceptance_check_title")}</span>
+          <strong><span class="chip ${acceptanceStatusClass}">${escapeHtml(t(acceptanceStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_release_candidate_title">${t("commercial_release_candidate_title")}</span>
+          <strong><span class="chip ${releaseStatusClass}">${escapeHtml(t(releaseStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_gap_register_title">${t("commercial_gap_register_title")}</span>
+          <strong><span class="chip ${gapStatusClass}">${escapeHtml(t(gapStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_procurement_readiness_title">${t("commercial_procurement_readiness_title")}</span>
+          <strong><span class="chip ${procurementStatusClass}">${escapeHtml(t(procurementStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_contract_readiness_title">${t("commercial_contract_readiness_title")}</span>
+          <strong><span class="chip ${contractStatusClass}">${escapeHtml(t(contractStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_onboarding_readiness_title">${t("commercial_onboarding_readiness_title")}</span>
+          <strong><span class="chip ${onboardingStatusClass}">${escapeHtml(t(onboardingStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_operations_readiness_title">${t("commercial_operations_readiness_title")}</span>
+          <strong><span class="chip ${operationsStatusClass}">${escapeHtml(t(operationsStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_security_attestation_title">${t("commercial_security_attestation_title")}</span>
+          <strong><span class="chip ${securityStatusClass}">${escapeHtml(t(securityStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_value_readiness_title">${t("commercial_value_readiness_title")}</span>
+          <strong><span class="chip ${valueStatusClass}">${escapeHtml(t(valueStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_close_readiness_title">${t("commercial_close_readiness_title")}</span>
+          <strong><span class="chip ${closeStatusClass}">${escapeHtml(t(closeStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_go_to_market_readiness_title">${t("commercial_go_to_market_readiness_title")}</span>
+          <strong><span class="chip ${gtmStatusClass}">${escapeHtml(t(gtmStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_launch_readiness_title">${t("commercial_launch_readiness_title")}</span>
+          <strong><span class="chip ${launchStatusClass}">${escapeHtml(t(launchStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_completion_scorecard_title">${t("commercial_completion_scorecard_title")}</span>
+          <strong><span class="chip ${completionStatusClass}">${escapeHtml(t(completionStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_buyer_acceptance_workflow_title">${t("commercial_buyer_acceptance_workflow_title")}</span>
+          <strong><span class="chip ${workflowStatusClass}">${escapeHtml(t(workflowStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_demo_scenarios_title">${t("commercial_demo_scenarios_title")}</span>
+          <strong><span class="chip ${demoStatusClass}">${escapeHtml(t(demoStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_proposal_packet_title">${t("commercial_proposal_packet_title")}</span>
+          <strong><span class="chip ${proposalStatusClass}">${escapeHtml(t(proposalStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_purchase_approval_packet_title">${t("commercial_purchase_approval_packet_title")}</span>
+          <strong><span class="chip ${purchaseApprovalStatusClass}">${escapeHtml(t(purchaseApprovalStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_due_diligence_room_title">${t("commercial_due_diligence_room_title")}</span>
+          <strong><span class="chip ${dueDiligenceStatusClass}">${escapeHtml(t(dueDiligenceStatus))}</span></strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="commercial_investment_committee_memo_title">${t("commercial_investment_committee_memo_title")}</span>
+          <strong><span class="chip ${investmentCommitteeStatusClass}">${escapeHtml(t(investmentCommitteeStatus))}</span></strong>
+        </div>
+        <div class="metric source">
+          <span data-i18n="readiness_source">${t("readiness_source")}</span>
+          <strong>${escapeHtml(commercialInvestmentCommittee.source_note || commercialDueDiligence.source_note || commercialPurchaseApproval.source_note || commercialProposal.source_note || commercialDemo.source_note || buyerAcceptanceWorkflow.source_note || commercialCompletion.source_note || commercialLaunch.source_note || commercialGtm.source_note || commercialClose.source_note || commercialValue.source_note || commercialSecurity.source_note || commercialOperations.source_note || commercialOnboarding.source_note || commercialContract.source_note || commercialProcurement.source_note || commercialGap.source_note || commercialRelease.source_note || commercialAcceptance.source_note || commercialExport.source_note || saleability.source_note || handoffBundle.source_note || buyerManifest.source_note || commercial.source_note || readiness.source_note || "No source note")}</strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="readiness_measurement_status">${t("readiness_measurement_status")}</span>
+          <strong>${escapeHtml(commercialInvestmentCommittee.measurement_status || commercialDueDiligence.measurement_status || commercialPurchaseApproval.measurement_status || commercialProposal.measurement_status || commercialDemo.measurement_status || buyerAcceptanceWorkflow.measurement_status || commercialCompletion.measurement_status || commercialLaunch.measurement_status || commercialGtm.measurement_status || commercialClose.measurement_status || commercialValue.measurement_status || commercialSecurity.measurement_status || commercialOperations.measurement_status || commercialOnboarding.measurement_status || commercialContract.measurement_status || commercialProcurement.measurement_status || commercialGap.measurement_status || commercialRelease.measurement_status || commercialAcceptance.measurement_status || commercialExport.measurement_status || saleability.measurement_status || handoffBundle.measurement_status || buyerManifest.measurement_status || commercial.measurement_status || readiness.measurement_status || "unknown")}</strong>
+        </div>
+        <div class="metric">
+          <span data-i18n="readiness_summary">${t("readiness_summary")}</span>
+          <strong>sales ${readinessSummary.pass || 0}/${readinessSummary.warn || 0}/${readinessSummary.fail || 0} | commercial ${commercialSummary.pass || 0}/${commercialSummary.warn || 0}/${commercialSummary.fail || 0} | buyer ${manifestSummary.ready || 0}/${manifestSummary.warning || 0}/${manifestSummary.blocked || 0} | handoff ${handoffSummary.ready || 0}/${handoffSummary.warning || 0}/${handoffSummary.blocked || 0} | saleability ${saleabilitySummary.blocked_count || 0}/${saleabilitySummary.warning_count || 0} | export ${exportSummary.blocked_count || 0}/${exportSummary.warning_count || 0} | acceptance ${acceptanceSummary.blocked_count || 0}/${acceptanceSummary.warning_count || 0} | release ${releaseSummary.blocked_count || 0}/${releaseSummary.warning_count || 0} | gaps ${gapSummary.total_gap_count || 0}/${gapSummary.blocked_count || 0} | procurement ${procurementSummary.warning_count || 0}/${procurementSummary.blocked_count || 0} | contract ${contractSummary.warning_count || 0}/${contractSummary.blocked_count || 0} | onboarding ${onboardingSummary.warning_count || 0}/${onboardingSummary.blocked_count || 0} | operations ${operationsSummary.warning_count || 0}/${operationsSummary.blocked_count || 0} | security ${securitySummary.warning_count || 0}/${securitySummary.blocked_count || 0} | value ${valueSummary.warning_count || 0}/${valueSummary.blocked_count || 0} | close ${closeSummary.warning_count || 0}/${closeSummary.blocked_count || 0} | gtm ${gtmSummary.warning_count || 0}/${gtmSummary.blocked_count || 0} | launch ${launchSummary.warning_count || 0}/${launchSummary.blocked_count || 0} | completion ${completionSummary.warning_count || 0}/${completionSummary.blocked_count || 0} | workflow ${workflowSummary.warning_count || 0}/${workflowSummary.blocked_count || 0} | demo ${demoSummary.warning_count || 0}/${demoSummary.blocked_count || 0} | proposal ${proposalSummary.warning_count || 0}/${proposalSummary.blocked_count || 0} | approval ${purchaseApprovalSummary.warning_count || 0}/${purchaseApprovalSummary.blocked_count || 0} | diligence ${dueDiligenceSummary.warning_count || 0}/${dueDiligenceSummary.blocked_count || 0} | committee ${investmentCommitteeSummary.warning_count || 0}/${investmentCommitteeSummary.blocked_count || 0}</strong>
+        </div>
+        <div class="readiness-grid">
+          ${[...commercialCriteria, ...criteria].slice(0, 10).map(row => {
+            const chip = row.status === "pass" ? "green" : row.status === "warn" ? "amber" : "red";
+            return `<div class="readiness-row">
+              <span class="chip ${chip}">${escapeHtml(t(`readiness_${row.status}`))}</span>
+              <strong>${escapeHtml(t(row.criterion_name) || row.label)}</strong>
+              <small>${escapeHtml(row.evidence)}</small>
+              <small><b>${escapeHtml(t("readiness_remediation_label"))}:</b> ${escapeHtml(row.remediation || "")}</small>
+            </div>`;
+          }).join("")}
+        </div>`;
     }
     function renderAudit() {
       const events = state.recent_audit_events || [];
@@ -846,10 +1376,68 @@ Summarize this research thread and verify claims.</textarea>
     async function load() {
       const res = await fetch("/admin/state");
       state = await res.json();
+      await refreshAnalytics();
+      await refreshReadiness();
       els.hintCount.textContent = state.policy.complex_hints.length;
       renderAgents();
       renderSecondaryViews();
       await simulate();
+    }
+    async function refreshAnalytics() {
+      const analyticsRes = await fetch("/api/v1/analytics_snapshots/latest");
+      state.analytics = await analyticsRes.json();
+    }
+    async function refreshReadiness() {
+      const readinessRes = await fetch("/api/v1/sales_readiness/latest");
+      state.readiness = await readinessRes.json();
+      const commercialRes = await fetch("/api/v1/commercial_readiness/latest");
+      state.commercialReadiness = await commercialRes.json();
+      const buyerManifestRes = await fetch("/api/v1/buyer_evidence_manifests/latest");
+      state.buyerEvidenceManifest = await buyerManifestRes.json();
+      const handoffBundleRes = await fetch("/api/v1/buyer_handoff_bundles/latest");
+      state.buyerHandoffBundle = await handoffBundleRes.json();
+      const saleabilityRes = await fetch("/api/v1/saleability_decisions/latest");
+      state.saleabilityDecision = await saleabilityRes.json();
+      const commercialExportRes = await fetch("/api/v1/commercial_evidence_exports/latest");
+      state.commercialEvidenceExport = await commercialExportRes.json();
+      const commercialAcceptanceRes = await fetch("/api/v1/commercial_acceptance_checks/latest");
+      state.commercialAcceptanceCheck = await commercialAcceptanceRes.json();
+      const commercialReleaseRes = await fetch("/api/v1/commercial_release_candidates/latest");
+      state.commercialReleaseCandidate = await commercialReleaseRes.json();
+      const commercialGapRes = await fetch("/api/v1/commercial_gap_registers/latest");
+      state.commercialGapRegister = await commercialGapRes.json();
+      const commercialProcurementRes = await fetch("/api/v1/commercial_procurement_readiness/latest");
+      state.commercialProcurementReadiness = await commercialProcurementRes.json();
+      const commercialContractRes = await fetch("/api/v1/commercial_contract_readiness/latest");
+      state.commercialContractReadiness = await commercialContractRes.json();
+      const commercialOnboardingRes = await fetch("/api/v1/commercial_onboarding_readiness/latest");
+      state.commercialOnboardingReadiness = await commercialOnboardingRes.json();
+      const commercialOperationsRes = await fetch("/api/v1/commercial_operations_readiness/latest");
+      state.commercialOperationsReadiness = await commercialOperationsRes.json();
+      const commercialSecurityRes = await fetch("/api/v1/commercial_security_attestations/latest");
+      state.commercialSecurityAttestation = await commercialSecurityRes.json();
+      const commercialValueRes = await fetch("/api/v1/commercial_value_readiness/latest");
+      state.commercialValueReadiness = await commercialValueRes.json();
+      const commercialCloseRes = await fetch("/api/v1/commercial_close_readiness/latest");
+      state.commercialCloseReadiness = await commercialCloseRes.json();
+      const commercialGtmRes = await fetch("/api/v1/commercial_go_to_market_readiness/latest");
+      state.commercialGoToMarketReadiness = await commercialGtmRes.json();
+      const commercialLaunchRes = await fetch("/api/v1/commercial_launch_readiness/latest");
+      state.commercialLaunchReadiness = await commercialLaunchRes.json();
+      const commercialCompletionRes = await fetch("/api/v1/commercial_completion_scorecards/latest");
+      state.commercialCompletionScorecard = await commercialCompletionRes.json();
+      const commercialBuyerAcceptanceWorkflowRes = await fetch("/api/v1/commercial_buyer_acceptance_workflows/latest");
+      state.commercialBuyerAcceptanceWorkflow = await commercialBuyerAcceptanceWorkflowRes.json();
+      const commercialDemoRes = await fetch("/api/v1/commercial_demo_scenarios/latest");
+      state.commercialDemoScenarios = await commercialDemoRes.json();
+      const commercialProposalRes = await fetch("/api/v1/commercial_proposal_packets/latest");
+      state.commercialProposalPacket = await commercialProposalRes.json();
+      const commercialPurchaseApprovalRes = await fetch("/api/v1/commercial_purchase_approval_packets/latest");
+      state.commercialPurchaseApprovalPacket = await commercialPurchaseApprovalRes.json();
+      const commercialDueDiligenceRes = await fetch("/api/v1/commercial_due_diligence_rooms/latest");
+      state.commercialDueDiligenceRoom = await commercialDueDiligenceRes.json();
+      const commercialInvestmentCommitteeRes = await fetch("/api/v1/commercial_investment_committee_memos/latest");
+      state.commercialInvestmentCommitteeMemo = await commercialInvestmentCommitteeRes.json();
     }
     async function simulate() {
       const res = await fetch("/admin/simulate", {
@@ -859,6 +1447,8 @@ Summarize this research thread and verify claims.</textarea>
       });
       state.last = await res.json();
       state.recent_workflow_runs = [state.last, ...(state.recent_workflow_runs || [])].slice(0, 8);
+      await refreshAnalytics();
+      await refreshReadiness();
       renderTrace(state.last);
       renderSecondaryViews();
     }
@@ -871,6 +1461,9 @@ Summarize this research thread and verify claims.</textarea>
       });
       const result = await res.json();
       els.evaluationRows.insertAdjacentHTML("afterbegin", `<tr><td>${escapeHtml(result.evaluation_run_id)}</td><td>${escapeHtml(result.mode)}</td><td>${escapeHtml(result.prompt_count)}</td><td>${escapeHtml(result.success_count)}</td></tr>`);
+      await refreshAnalytics();
+      await refreshReadiness();
+      renderSecondaryViews();
     }
     els.agentSearch.addEventListener("input", renderAgents);
     els.statusFilter.addEventListener("change", renderAgents);
