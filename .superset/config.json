@@ -1,0 +1,7 @@
+{
+  "setup": [
+    "python -m pip install --require-hashes -r requirements.lock",
+    "python -m pip install --no-deps -e ."
+  ],
+  "run": ["./.superset/run.sh"]
+}
