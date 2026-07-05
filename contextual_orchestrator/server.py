@@ -14,10 +14,16 @@ import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .api_contract import OPENAPI_SPEC
-from .orchestrator import TaskOrchestrator, chat_completion_response, redact_value
+from .orchestrator import (
+    TaskOrchestrator,
+    chat_completion_chunks,
+    chat_completion_response,
+    redact_value,
+    sse_stream_body,
+)
 
 
-ALLOWED_CHAT_KEYS = {"model", "messages", "orchestration", "orchestration_mode", "mode", "include_orchestration_trace"}
+ALLOWED_CHAT_KEYS = {"model", "messages", "orchestration", "orchestration_mode", "mode", "include_orchestration_trace", "stream"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -487,6 +493,10 @@ def build_server(
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    stream = body.get("stream", False)
+                    if not isinstance(stream, bool):
+                        raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
                     result = self._run(lambda: orchestrator.run(messages, mode=mode, workflow_run_id=f"run_{uuid.uuid4().hex}"))
                     orchestrator.record_analytics_event(
@@ -498,9 +508,14 @@ def build_server(
                             "run_mode": result["mode"],
                             "workflow_run_id": result["workflow_run_id"],
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            "response_streamed": stream,
                         },
                     )
-                    self._send(chat_completion_response(result, model=str(body.get("model", "contextual-orchestrator")), include_trace=include_trace))
+                    if stream:
+                        chunks = chat_completion_chunks(result, model=model_name, include_trace=include_trace)
+                        self._send_sse(sse_stream_body(chunks))
+                        return
+                    self._send(chat_completion_response(result, model=model_name, include_trace=include_trace))
                     return
                 if path == "/admin/simulate":
                     _reject_unknown_keys(body, ALLOWED_SIMULATE_KEYS)
@@ -607,6 +622,16 @@ def build_server(
             raw = payload.encode("utf-8")
             self.send_response(status)
             self.send_header("content-type", content_type)
+            self.send_header("content-length", str(len(raw)))
+            self._send_security_headers()
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def _send_sse(self, body: str, status: int = 200) -> None:
+            raw = body.encode("utf-8")
+            self.send_response(status)
+            self.send_header("content-type", "text/event-stream; charset=utf-8")
+            self.send_header("cache-control", "no-cache")
             self.send_header("content-length", str(len(raw)))
             self._send_security_headers()
             self.end_headers()
