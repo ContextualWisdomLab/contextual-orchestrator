@@ -63,7 +63,7 @@ Non-mock providers must use `https://` URLs and an explicit `api_key_env`. The r
 
 One public interface:
 
-- `/v1/chat/completions` accepts normal chat messages.
+- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]` (the answer is orchestrated first, then framed as deltas; true token streaming needs a streaming model client).
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.

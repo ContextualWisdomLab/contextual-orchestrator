@@ -7101,3 +7101,49 @@ def chat_completion_response(
         "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
     }
+
+
+_STREAM_CHUNK_SIZE = 32
+
+
+def chat_completion_chunks(
+    result: dict[str, Any],
+    model: str = "contextual-orchestrator",
+    include_trace: bool = False,
+) -> list[dict[str, Any]]:
+    """Frame an orchestration result as OpenAI-compatible ``chat.completion.chunk`` deltas.
+
+    The engine produces the full answer before framing, so this yields a correct-shape
+    SSE stream (role delta, content deltas, terminal stop delta) rather than true
+    token-by-token streaming — real token streaming requires a streaming ModelClient.
+    """
+    answer = result.get("answer", "")
+    completion_id = f"chatcmpl-{int(time.time() * 1000)}"
+    created = int(time.time())
+    base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+
+    chunks: list[dict[str, Any]] = [
+        {**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
+    ]
+    for start in range(0, len(answer), _STREAM_CHUNK_SIZE):
+        piece = answer[start : start + _STREAM_CHUNK_SIZE]
+        chunks.append({**base, "choices": [{"index": 0, "delta": {"content": piece}, "finish_reason": None}]})
+
+    orchestration = {
+        "workflow_run_id": result.get("workflow_run_id"),
+        "mode": result.get("mode"),
+        "verification": result.get("verification"),
+    }
+    if include_trace and "trace" in result:
+        orchestration["trace"] = redact_value(result["trace"])
+    final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+    final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
+    chunks.append(final)
+    return chunks
+
+
+def sse_stream_body(chunks: list[dict[str, Any]]) -> str:
+    """Serialize chat completion chunks as a Server-Sent Events body terminated by ``[DONE]``."""
+    frames = [f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n" for chunk in chunks]
+    frames.append("data: [DONE]\n\n")
+    return "".join(frames)
