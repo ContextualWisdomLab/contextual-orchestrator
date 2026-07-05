@@ -6962,6 +6962,7 @@ class TaskOrchestrator:
             },
             "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
             "recent_audit_events": self.list_recent_audit_events(),
+            "spend": self.spend_analytics(),
         }
 
     def _shorten_run(self, run: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
