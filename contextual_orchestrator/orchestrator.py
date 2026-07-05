@@ -2,8 +2,10 @@
 
 from __future__ import annotations
 
-from collections import Counter, deque
+from collections import Counter, deque, OrderedDict
+import copy
 from dataclasses import dataclass, replace
+import hashlib
 import ipaddress
 import json
 import os
@@ -317,6 +319,40 @@ class _StateStore:
         return [json.loads(row[0]) for row in rows]
 
 
+class _ResponseCache:
+    """Exact-match TTL + LRU cache for orchestration results.
+
+    ponytail: stdlib OrderedDict, no cache library. Deep-copies on the way in and out
+    so callers can never mutate a cached entry. Thread-safe (the HTTP server is threaded).
+    """
+
+    def __init__(self, ttl: float, max_entries: int = 256, clock: Any = time.monotonic) -> None:
+        self.ttl = ttl
+        self.max_entries = max_entries
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._data: "OrderedDict[str, tuple[float, dict[str, Any]]]" = OrderedDict()
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            entry = self._data.get(key)
+            if entry is None:
+                return None
+            stored_at, value = entry
+            if self._clock() - stored_at >= self.ttl:
+                del self._data[key]
+                return None
+            self._data.move_to_end(key)  # LRU: most-recently used at the end
+            return copy.deepcopy(value)
+
+    def put(self, key: str, value: dict[str, Any]) -> None:
+        with self._lock:
+            self._data[key] = (self._clock(), copy.deepcopy(value))
+            self._data.move_to_end(key)
+            while len(self._data) > self.max_entries:
+                self._data.popitem(last=False)  # evict least-recently used
+
+
 class TaskOrchestrator:
     """Coordinate model routing, conducted workflows, governance, and audit state."""
 
@@ -359,6 +395,8 @@ class TaskOrchestrator:
         budget_max_output_tokens: int | None = None,
         budget_max_cost_usd: float | None = None,
         state_db: str | None = None,
+        cache_ttl: float = 0.0,
+        cache_max_entries: int = 256,
     ) -> None:
         self.agents = [agent for agent in agents if not agent.disabled]
         if not self.agents:  # pragma: no cover
@@ -380,6 +418,8 @@ class TaskOrchestrator:
         self._circuit: dict[str, dict[str, float]] = {}
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
+        # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
+        self._cache = _ResponseCache(cache_ttl, cache_max_entries) if cache_ttl and cache_ttl > 0 else None
         # Optional durable persistence: default None keeps all state purely in-memory
         # (zero behavior change). When set, runs/audit/analytics survive restart.
         self._store = _StateStore(state_db) if state_db else None
@@ -399,10 +439,25 @@ class TaskOrchestrator:
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
+        if self._cache is None:
+            return self._dispatch(messages, mode)
+        key = self._cache_key(messages, mode)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        result = self._dispatch(messages, mode)
+        self._cache.put(key, result)
+        return result
+
+    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
             return self.route_once(messages)
         return self.conduct(messages)
+
+    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
+        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
     def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
