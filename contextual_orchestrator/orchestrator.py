@@ -215,7 +215,7 @@ class ModelClient:
         ceiling = min(self.retry_backoff_cap, self.retry_backoff * (2 ** attempt))
         return random.uniform(0.0, ceiling)
 
-    def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:  # pragma: no cover
+    def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
         api_key = os.environ.get(agent.api_key_env, "")
         request = urllib.request.Request(
