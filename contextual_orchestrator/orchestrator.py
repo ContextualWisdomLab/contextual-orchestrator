@@ -8,12 +8,14 @@ import ipaddress
 import json
 import os
 from pathlib import Path
+import random
 import re
 import socket
 import time
 import uuid
 from typing import Any
 from urllib.parse import urlparse
+import urllib.error
 import urllib.request
 
 from .conventions import require_object_name
@@ -110,16 +112,43 @@ class OrchestrationPolicy:
         }
 
 
-class ModelClient:
-    """Small chat-completions client with deterministic mock support."""
+# HTTP statuses worth retrying: request timeout, conflict, too-early, rate limit,
+# and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
+# is a caller or configuration error and must not be retried.
+TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
-    def __init__(self, timeout: int = 90, max_output_tokens: int = 2048, max_retries: int = 1) -> None:
+
+def is_transient_error(exc: BaseException) -> bool:
+    """Return True when a provider call failure is worth retrying with backoff."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return exc.code in TRANSIENT_HTTP_STATUS
+    # Network-level failures (DNS, connection reset, read timeout) are transient.
+    if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
+        return True
+    return False
+
+
+class ModelClient:
+    """Small chat-completions client with retry, backoff, and mock support."""
+
+    def __init__(
+        self,
+        timeout: int = 90,
+        max_output_tokens: int = 2048,
+        max_retries: int = 2,
+        retry_backoff: float = 0.5,
+        retry_backoff_cap: float = 8.0,
+    ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
         self.max_retries = max_retries
+        self.retry_backoff = retry_backoff
+        self.retry_backoff_cap = retry_backoff_cap
+        # Seam so tests can observe/skip real sleeping during backoff.
+        self._sleep = time.sleep
 
     def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
-        """Send messages to a mock or OpenAI-compatible chat endpoint."""
+        """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
@@ -135,24 +164,41 @@ class ModelClient:
             "stream": False,
             "max_tokens": self.max_output_tokens,
         }
-        last_error: Exception | None = None  # pragma: no cover
-        for _ in range(self.max_retries + 1):  # pragma: no cover
+        return self._send_with_retry(agent, payload)
+
+    def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
+        """Call the provider, retrying transient failures with exponential backoff + jitter."""
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
             try:
-                request = urllib.request.Request(
-                    f"{agent.base_url.rstrip('/')}/chat/completions",
-                    data=json.dumps(payload).encode("utf-8"),
-                    headers={
-                        "authorization": f"Bearer {api_key}",
-                        "content-type": "application/json",
-                    },
-                    method="POST",
-                )
-                with urllib.request.urlopen(request, timeout=self.timeout) as response:
-                    data = json.loads(response.read().decode("utf-8"))
-                return data["choices"][0]["message"]["content"]
-            except Exception as exc:
+                return self._send(agent, payload)
+            except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
-        raise RuntimeError(f"provider {agent.id} request failed") from last_error  # pragma: no cover
+                if attempt >= self.max_retries or not is_transient_error(exc):
+                    break
+                self._sleep(self._backoff_delay(attempt))
+        raise RuntimeError(f"provider {agent.id} request failed") from last_error
+
+    def _backoff_delay(self, attempt: int) -> float:
+        """Full-jitter exponential backoff, capped, so retries do not thundering-herd a provider."""
+        ceiling = min(self.retry_backoff_cap, self.retry_backoff * (2 ** attempt))
+        return random.uniform(0.0, ceiling)
+
+    def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:  # pragma: no cover
+        """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
+        api_key = os.environ.get(agent.api_key_env, "")
+        request = urllib.request.Request(
+            f"{agent.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        return data["choices"][0]["message"]["content"]
 
     def _validate_provider(self, agent: ModelAgent) -> None:
         """Reject unsafe remote model endpoints before any egress happens."""
@@ -242,6 +288,11 @@ class TaskOrchestrator:
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
+        # Per-agent circuit breaker: consecutive failures trip an agent "open"
+        # so a persistently failing provider is skipped until it cools down.
+        self._circuit: dict[str, dict[str, float]] = {}
+        self.circuit_failure_threshold = 3
+        self.circuit_reset_seconds = 30.0
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
@@ -427,23 +478,25 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         start = time.perf_counter()
-        answer = self.client.chat(agent, messages)
+        answer, served_id = self._invoke(agent, messages, text=text, role="worker")
         latency_ms = (time.perf_counter() - start) * 1000
+        row = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "subtask": "Direct route",
+            "access": [],
+            "latency_ms": round(latency_ms, 2),
+            "output": answer,
+        }
+        if served_id != agent.id:  # pragma: no cover
+            row["served_agent_id"] = served_id
+            row["failover_from"] = agent.id
         return {
             "mode": "route",
             "answer": answer,
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
-            "trace": [
-                {
-                    "id": 0,
-                    "role": "worker",
-                    "agent_id": agent.id,
-                    "subtask": "Direct route",
-                    "access": [],
-                    "latency_ms": round(latency_ms, 2),
-                    "output": answer,
-                }
-            ],
+            "trace": [row],
         }
 
     def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
@@ -471,11 +524,15 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
-            outputs[step.id] = self.client.chat(agent, step_messages)
+            output, served_id = self._invoke(agent, step_messages, text=task, role=step.role)
             elapsed = (time.perf_counter() - start) * 1000
+            outputs[step.id] = output
             row = step.as_dict()
             row["latency_ms"] = round(elapsed, 2)
-            row["output"] = outputs[step.id]
+            row["output"] = output
+            if served_id != agent.id:  # pragma: no cover
+                row["served_agent_id"] = served_id
+                row["failover_from"] = agent.id
             trace.append(row)
 
         verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
@@ -502,27 +559,77 @@ class TaskOrchestrator:
             WorkflowStep(3, "synthesizer", synthesizer, "Produce the final answer, incorporating only verified work.", (0, 1, 2)),
         ]
 
-    def _select_agent(self, text: str, role: str) -> ModelAgent:
+    def _score_agent(self, agent: ModelAgent, role: str, lowered: str) -> tuple[int, int, str]:
+        if agent.disabled:
+            return (-20_000, len(agent.tags), agent.id)
+        if role in agent.provider_exclusions:
+            return (-10_000, len(agent.tags), agent.id)
+        role_score = sum(3 for tag in agent.tags if tag in self.ROLE_TAGS.get(role, ()))
+        domain_score = 0
+        for tag, hints in self.DOMAIN_HINTS.items():
+            if tag in agent.tags and any(hint in lowered for hint in hints):
+                domain_score += 2
+        return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
+
+    def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
+        """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
         lowered = text.lower()
+        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
 
-        def score(agent: ModelAgent) -> tuple[int, int, str]:
-            if agent.disabled:
-                return (-20_000, len(agent.tags), agent.id)
-            if role in agent.provider_exclusions:
-                return (-10_000, len(agent.tags), agent.id)
-            role_score = sum(3 for tag in agent.tags if tag in self.ROLE_TAGS.get(role, ()))
-            domain_score = 0
-            for tag, hints in self.DOMAIN_HINTS.items():
-                if tag in agent.tags and any(hint in lowered for hint in hints):
-                    domain_score += 2
-            return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
-
-        selected = max(self.agents, key=score)
+    def _select_agent(self, text: str, role: str) -> ModelAgent:
+        selected = self._ranked_agents(text, role)[0]
         if selected.disabled:  # pragma: no cover
             raise RuntimeError(f"no enabled agent available for role={role}")
         if role in selected.provider_exclusions:  # pragma: no cover
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
+
+    def _invoke(self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str) -> tuple[str, str]:
+        """Call the primary agent, failing over across capability-matched agents on error.
+
+        Transient retry/backoff happens inside ``ModelClient``; this layer adds
+        cross-agent failover plus a per-agent circuit breaker, and returns
+        ``(output, served_agent_id)`` so the trace can record who actually answered.
+        """
+        candidates = self._failover_candidates(primary, text, role)
+        last_error: Exception | None = None
+        for agent in candidates:
+            try:
+                output = self.client.chat(agent, messages)
+            except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
+                last_error = exc
+                self._record_failure(agent.id)
+                continue
+            self._record_success(agent.id)
+            return output, agent.id
+        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+
+    def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
+        ranked = self._ranked_agents(text, role)
+        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
+        eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
+        healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
+        # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
+        return healthy or eligible or [primary]
+
+    def _circuit_open(self, agent_id: str) -> bool:
+        state = self._circuit.get(agent_id)
+        if not state or state["failures"] < self.circuit_failure_threshold:
+            return False
+        if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
+            state["failures"] = 0.0
+            state["opened_at"] = 0.0
+            return False
+        return True
+
+    def _record_failure(self, agent_id: str) -> None:
+        state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
+        state["failures"] += 1.0
+        if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
+            state["opened_at"] = time.monotonic()
+
+    def _record_success(self, agent_id: str) -> None:
+        self._circuit.pop(agent_id, None)
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.agents:
