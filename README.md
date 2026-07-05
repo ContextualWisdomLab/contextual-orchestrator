@@ -67,7 +67,7 @@ One public interface:
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
-- `/api/v1/spend_analytics/latest` exposes estimated per-model token and cost spend aggregated from workflow runs. Tokens are estimated (~4 chars/token), not provider-reported; cost is computed only for models with an operator-supplied price (`TaskOrchestrator(price_per_million=...)`), otherwise reported as null with the model listed under `unpriced_models`.
+- `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Output tokens use provider-reported `usage` when available and fall back to a ~4 chars/token estimate otherwise (each model row is labeled `usage_source: reported | mixed | estimated`); cost is computed only for models with an operator-supplied price (`TaskOrchestrator(price_per_million=...)`), otherwise reported as null with the model listed under `unpriced_models`. See [Observability & spend](#observability--spend).
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
 - `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
 - `/api/v1/buyer_evidence_manifests/latest` exposes the buyer evidence manifest as a runtime review index across endpoints, repository artifacts, Figma artifacts, verification evidence, and production or buyer-specific caveats.
@@ -103,6 +103,29 @@ One fused orchestration loop:
 - Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
 
 See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
+
+## Observability & spend
+
+Local spend observability, aggregated from in-memory workflow runs. It is honest by construction — estimates are labeled, and cost is only reported when a price is configured.
+
+```bash
+curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
+  -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN" | jq '.totals, .by_model, .budget'
+```
+
+- **Tokens.** `by_model[].output_tokens` uses the provider-reported `usage.completion_tokens` when a real worker returns it, and falls back to a `~4 chars/token` estimate otherwise. Each row carries `usage_source`: `reported` (all steps reported), `mixed`, or `estimated`. `estimated_output_tokens` is always the estimate, kept alongside for comparison. `measurement_status` is `local_runtime_estimate`, not production telemetry.
+- **Cost.** Supply a price table to turn tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models` with `estimated_cost_usd: null`. No prices are assumed or fabricated.
+- **Budget cap.** Set an operator cap to refuse runaway spend (default: no cap):
+
+  ```bash
+  python -m contextual_orchestrator --serve --agents examples/agents.mock.json \
+    --budget-max-output-tokens 2000000 --budget-max-cost-usd 50
+  ```
+
+  Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. Once spend reaches a cap, the next run is refused — `run()` raises `BudgetExceededError` and `/v1/chat/completions` returns HTTP `429 budget_exceeded`. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, `spent_*`, `remaining_*`, `exceeded`). Cost caps require a price table; token caps do not.
+- **Admin.** The `/admin` **Observability** view renders the totals and the per-model table (unpriced models show an `unpriced` chip).
+
+These are process-local measured signals for a stdlib lab, not a billing system or production compliance data.
 
 ## Design Artifacts
 
