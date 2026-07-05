@@ -394,6 +394,75 @@ class TaskOrchestrator:
         )
         return evaluation
 
+    def compare_to_baseline(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
+        """Measure the orchestration engine against a single-worker baseline.
+
+        For each prompt: run the full orchestration (route/conduct per mode) and a
+        single-agent baseline (one worker call, no verifier/synthesizer), then report
+        latency and a structural coverage proxy plus the delta.
+
+        This is a MEASURED report, not a quality claim: the proxy is structural
+        (contributing steps + verifier-pass presence, computable from mock/runtime
+        outputs), NOT human-judged answer quality. Read-only — it does not persist runs.
+        """
+        results: list[dict[str, Any]] = []
+        for prompt in prompts:
+            messages = [{"role": "user", "content": prompt}]
+
+            start = time.perf_counter()
+            orchestrated = self.complete(messages, mode=mode)
+            orchestrated_latency = round((time.perf_counter() - start) * 1000, 2)
+
+            start = time.perf_counter()
+            baseline = self.route_once(messages)
+            baseline_latency = round((time.perf_counter() - start) * 1000, 2)
+
+            orchestrated_steps = len(orchestrated["trace"])
+            baseline_steps = len(baseline["trace"])
+            results.append({
+                "prompt": prompt[:120],
+                "orchestrated": {
+                    "mode": orchestrated["mode"],
+                    "latency_ms": orchestrated_latency,
+                    "steps": orchestrated_steps,
+                    "verified": bool(orchestrated.get("verification", {}).get("accepted")),
+                    "answer_length": len(orchestrated["answer"]),
+                },
+                "baseline": {
+                    "mode": baseline["mode"],
+                    "latency_ms": baseline_latency,
+                    "steps": baseline_steps,
+                    "answer_length": len(baseline["answer"]),
+                },
+                "latency_overhead_ms": round(orchestrated_latency - baseline_latency, 2),
+                "structural_coverage_delta": orchestrated_steps - baseline_steps,
+            })
+
+        count = len(results)
+
+        def avg(select: Any) -> float:
+            return round(sum(select(row) for row in results) / count, 2) if count else 0.0
+
+        aggregate = {
+            "orchestrated_avg_latency_ms": avg(lambda row: row["orchestrated"]["latency_ms"]),
+            "baseline_avg_latency_ms": avg(lambda row: row["baseline"]["latency_ms"]),
+            "avg_latency_overhead_ms": avg(lambda row: row["latency_overhead_ms"]),
+            "orchestrated_avg_steps": avg(lambda row: row["orchestrated"]["steps"]),
+            "baseline_avg_steps": avg(lambda row: row["baseline"]["steps"]),
+            "avg_structural_coverage_delta": avg(lambda row: row["structural_coverage_delta"]),
+            "verified_share": round(sum(1 for row in results if row["orchestrated"]["verified"]) / count, 2) if count else 0.0,
+        }
+        return {
+            "mode": mode,
+            "prompt_count": count,
+            "results": results,
+            "aggregate": aggregate,
+            "quality_proxy": (
+                "structural proxy from mock/runtime outputs (contributing steps + verifier-pass presence); "
+                "measures the latency-for-verification tradeoff, NOT human-judged quality"
+            ),
+        }
+
     def get_workflow_run(self, workflow_run_id: str) -> dict[str, Any]:
         """Return a persisted workflow run by identifier."""
         if workflow_run_id not in self._workflow_runs:  # pragma: no cover
