@@ -11,6 +11,7 @@ from pathlib import Path
 import random
 import re
 import socket
+import threading
 import time
 import uuid
 from typing import Any
@@ -156,9 +157,18 @@ class ModelClient:
         self.retry_backoff_cap = retry_backoff_cap
         # Seam so tests can observe/skip real sleeping during backoff.
         self._sleep = time.sleep
+        # Per-thread usage from the most recent chat() (the server is threaded).
+        self._local = threading.local()
+
+    def take_usage(self) -> dict[str, Any] | None:
+        """Return and clear provider-reported usage from the most recent chat() on this thread."""
+        usage = getattr(self._local, "usage", None)
+        self._local.usage = None
+        return usage
 
     def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
+        self._local.usage = None
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
@@ -208,6 +218,9 @@ class ModelClient:
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
             data = json.loads(response.read().decode("utf-8"))
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            self._local.usage = usage
         return data["choices"][0]["message"]["content"]
 
     def _validate_provider(self, agent: ModelAgent) -> None:
@@ -495,7 +508,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         start = time.perf_counter()
-        answer, served_id = self._invoke(agent, messages, text=text, role="worker")
+        answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
             "id": 0,
@@ -506,6 +519,8 @@ class TaskOrchestrator:
             "latency_ms": round(latency_ms, 2),
             "output": answer,
         }
+        if usage is not None:
+            row["usage"] = usage
         if served_id != agent.id:  # pragma: no cover
             row["served_agent_id"] = served_id
             row["failover_from"] = agent.id
@@ -541,12 +556,14 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
-            output, served_id = self._invoke(agent, step_messages, text=task, role=step.role)
+            output, served_id, usage = self._invoke(agent, step_messages, text=task, role=step.role)
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
             row["latency_ms"] = round(elapsed, 2)
             row["output"] = output
+            if usage is not None:
+                row["usage"] = usage
             if served_id != agent.id:  # pragma: no cover
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
@@ -601,12 +618,15 @@ class TaskOrchestrator:
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
 
-    def _invoke(self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str) -> tuple[str, str]:
+    def _invoke(
+        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+    ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
         Transient retry/backoff happens inside ``ModelClient``; this layer adds
         cross-agent failover plus a per-agent circuit breaker, and returns
-        ``(output, served_agent_id)`` so the trace can record who actually answered.
+        ``(output, served_agent_id, usage)`` — usage is the provider-reported token
+        usage when available (else None), so spend analytics can prefer it.
         """
         candidates = self._failover_candidates(primary, text, role)
         last_error: Exception | None = None
@@ -618,7 +638,8 @@ class TaskOrchestrator:
                 self._record_failure(agent.id)
                 continue
             self._record_success(agent.id)
-            return output, agent.id
+            usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+            return output, agent.id, usage
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
@@ -770,25 +791,43 @@ class TaskOrchestrator:
             total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
             for step in run["trace"]:
                 model = model_by_agent.get(step.get("agent_id"), "unknown")
-                tokens = estimate_tokens(step.get("output", ""))
-                bucket = by_model.setdefault(model, {"estimated_output_tokens": 0, "step_count": 0})
-                bucket["estimated_output_tokens"] += tokens
+                estimated = estimate_tokens(step.get("output", ""))
+                usage = step.get("usage")
+                reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
+                if isinstance(reported, int):
+                    effective, is_reported = reported, True
+                else:
+                    effective, is_reported = estimated, False
+                bucket = by_model.setdefault(
+                    model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
+                )
+                bucket["estimated_output_tokens"] += estimated
+                bucket["output_tokens"] += effective
                 bucket["step_count"] += 1
-                total_output_tokens += tokens
+                bucket["reported_steps"] += 1 if is_reported else 0
+                total_output_tokens += effective
 
         rows: list[dict[str, Any]] = []
         unpriced: list[str] = []
         total_cost = 0.0
         for model, bucket in sorted(by_model.items()):
             price = prices.get(model)
-            cost = round(bucket["estimated_output_tokens"] / 1_000_000 * price, 6) if price is not None else None
+            cost = round(bucket["output_tokens"] / 1_000_000 * price, 6) if price is not None else None
             if price is None:
                 unpriced.append(model)
             else:
                 total_cost += cost
+            if bucket["reported_steps"] == 0:
+                usage_source = "estimated"
+            elif bucket["reported_steps"] == bucket["step_count"]:
+                usage_source = "reported"
+            else:
+                usage_source = "mixed"
             rows.append({
                 "model": model,
                 "estimated_output_tokens": bucket["estimated_output_tokens"],
+                "output_tokens": bucket["output_tokens"],
+                "usage_source": usage_source,
                 "step_count": bucket["step_count"],
                 "price_per_million_usd": price,
                 "estimated_cost_usd": cost,
@@ -797,8 +836,8 @@ class TaskOrchestrator:
         return {
             "measurement_status": "local_runtime_estimate",
             "source_note": (
-                "Token counts are estimated (~4 chars/token) from in-memory runtime outputs, not "
-                "provider-reported usage; cost is computed only for models with an operator-supplied price."
+                "output_tokens use provider-reported usage when available (usage_source=reported/mixed) and "
+                "fall back to a ~4 chars/token estimate otherwise; cost = output_tokens x operator-supplied price only."
             ),
             "pricing_configured": bool(prices),
             "totals": {
