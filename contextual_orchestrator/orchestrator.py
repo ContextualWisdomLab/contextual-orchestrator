@@ -23,6 +23,16 @@ from .conventions import require_object_name
 
 ChatMessage = dict[str, str]
 
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
+
+    Honest floor for spend analytics on mock/runtime text; replace with provider-reported
+    usage when real workers return it.
+    """
+    return (len(text) + 3) // 4 if text else 0
+
+
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
@@ -277,12 +287,19 @@ class TaskOrchestrator:
         "논문",
     )
 
-    def __init__(self, agents: list[ModelAgent], client: ModelClient | None = None) -> None:
+    def __init__(
+        self,
+        agents: list[ModelAgent],
+        client: ModelClient | None = None,
+        price_per_million: dict[str, float] | None = None,
+    ) -> None:
         self.agents = [agent for agent in agents if not agent.disabled]
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
         self.client = client or ModelClient()
         self.policy = OrchestrationPolicy()
+        # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
+        self.price_per_million = dict(price_per_million or {})
         self._workflow_runs: dict[str, dict[str, Any]] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
@@ -734,6 +751,66 @@ class TaskOrchestrator:
             "event_name": event_name,
             "event_detail": redact_value(detail),
         })
+
+    def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
+        """Estimated token and cost spend per model, aggregated from workflow runs.
+
+        Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
+        usage. Cost is computed only for models with an operator-supplied price; models without
+        one are reported under ``unpriced_models`` with a null cost. This is the honest local
+        floor for spend observability, not a billing system.
+        """
+        prices = {**self.price_per_million, **(price_per_million or {})}
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        by_model: dict[str, dict[str, Any]] = {}
+        total_output_tokens = 0
+        total_prompt_tokens = 0
+
+        for run in self._workflow_runs.values():
+            total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
+            for step in run["trace"]:
+                model = model_by_agent.get(step.get("agent_id"), "unknown")
+                tokens = estimate_tokens(step.get("output", ""))
+                bucket = by_model.setdefault(model, {"estimated_output_tokens": 0, "step_count": 0})
+                bucket["estimated_output_tokens"] += tokens
+                bucket["step_count"] += 1
+                total_output_tokens += tokens
+
+        rows: list[dict[str, Any]] = []
+        unpriced: list[str] = []
+        total_cost = 0.0
+        for model, bucket in sorted(by_model.items()):
+            price = prices.get(model)
+            cost = round(bucket["estimated_output_tokens"] / 1_000_000 * price, 6) if price is not None else None
+            if price is None:
+                unpriced.append(model)
+            else:
+                total_cost += cost
+            rows.append({
+                "model": model,
+                "estimated_output_tokens": bucket["estimated_output_tokens"],
+                "step_count": bucket["step_count"],
+                "price_per_million_usd": price,
+                "estimated_cost_usd": cost,
+            })
+
+        return {
+            "measurement_status": "local_runtime_estimate",
+            "source_note": (
+                "Token counts are estimated (~4 chars/token) from in-memory runtime outputs, not "
+                "provider-reported usage; cost is computed only for models with an operator-supplied price."
+            ),
+            "pricing_configured": bool(prices),
+            "totals": {
+                "run_count": len(self._workflow_runs),
+                "estimated_output_tokens": total_output_tokens,
+                "estimated_prompt_tokens": total_prompt_tokens,
+                "estimated_cost_usd": round(total_cost, 6) if prices else None,
+                "currency": "USD",
+            },
+            "by_model": rows,
+            "unpriced_models": unpriced,
+        }
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
