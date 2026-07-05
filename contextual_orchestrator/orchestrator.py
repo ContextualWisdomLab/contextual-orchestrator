@@ -200,6 +200,61 @@ class ModelClient:
             data = json.loads(response.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
 
+    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+        """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
+
+        Real token streaming: the provider is called with stream=true and its SSE deltas
+        are yielded as they arrive (not computed-then-framed). The mock path yields its
+        answer in fixed chunks so behavior shape stays testable and unchanged.
+        """
+        if agent.base_url.startswith("mock://"):
+            answer = self._mock(agent, messages)
+            for start in range(0, len(answer), 24):
+                yield answer[start : start + 24]
+            return
+
+        self._validate_provider(agent)  # pragma: no cover
+        api_key = os.environ.get(agent.api_key_env)  # pragma: no cover
+        if not api_key:  # pragma: no cover
+            raise RuntimeError(f"{agent.id} requires ${agent.api_key_env}")
+        payload = {  # pragma: no cover
+            "model": agent.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+            "max_tokens": self.max_output_tokens,
+        }
+        yield from self._stream_send(agent, payload)  # pragma: no cover
+
+    def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
+        """Stream content deltas from a provider SSE response (real transport, testable)."""
+        api_key = os.environ.get(agent.api_key_env, "")
+        request = urllib.request.Request(
+            f"{agent.base_url.rstrip('/')}/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+                "accept": "text/event-stream",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            for raw in response:
+                line = raw.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                if delta:
+                    yield delta
+
     def _validate_provider(self, agent: ModelAgent) -> None:
         """Reject unsafe remote model endpoints before any egress happens."""
         if not agent.api_key_env:
@@ -300,6 +355,50 @@ class TaskOrchestrator:
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
             return self.route_once(messages)
         return self.conduct(messages)
+
+    def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
+        """True when this request takes the single-worker route path (vs the conduct workflow)."""
+        text = self._latest_user_text(messages)
+        return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
+
+    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+        """Stream a single worker's content deltas as they arrive, then persist the run.
+
+        True streaming for the route path. ponytail: no cross-agent failover here — bytes
+        already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
+        """
+        text = self._latest_user_text(messages)
+        agent = self._select_agent(text, "worker")
+        parts: list[str] = []
+        for delta in self.client.stream_chat(agent, messages):
+            parts.append(delta)
+            yield delta
+        answer = "".join(parts)
+        record = {
+            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+            "created_at": int(time.time()),
+            "mode": "route",
+            "policy_mode": "route",
+            "prompt_text": text,
+            "answer": answer,
+            "trace": [
+                {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
+                 "access": [], "output": answer}
+            ],
+            "policy_snapshot": self.policy.as_dict(),
+            "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+        }
+        self._workflow_runs[record["workflow_run_id"]] = record
+        self._run_order.appendleft(record["workflow_run_id"])
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
+             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
+        )
 
     def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
