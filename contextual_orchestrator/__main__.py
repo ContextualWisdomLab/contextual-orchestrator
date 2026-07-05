@@ -33,6 +33,8 @@ def main() -> None:
                         help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
     parser.add_argument("--cache-ttl", type=float, default=0.0,
                         help="Seconds to cache identical requests (default 0 = disabled).")
+    parser.add_argument("--eval", nargs="+", metavar="PROMPT",
+                        help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
     orchestrator = TaskOrchestrator(
@@ -42,6 +44,10 @@ def main() -> None:
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
     )
+
+    if args.eval:
+        print(json.dumps(orchestrator.compare_to_baseline(args.eval, mode=args.mode), ensure_ascii=False, indent=2))
+        return
 
     if args.serve:
         if not (args.auth_token or args.admin_token or args.inference_token) and not args.insecure_disable_auth:
