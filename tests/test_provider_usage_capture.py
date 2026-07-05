@@ -54,6 +54,24 @@ def test_reported_usage_preferred_and_labeled() -> None:
     assert row["estimated_cost_usd"] == round(50 / 1_000_000 * 10.0, 6)  # cost from reported tokens
 
 
+def test_reported_prompt_tokens_surface_in_totals() -> None:
+    client = _ReportingClient(completion_tokens=30)  # also reports prompt_tokens=5 per call
+    orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))], client=client)
+    orchestrator.run([{"role": "user", "content": "route once"}])
+    totals = orchestrator.spend_analytics()["totals"]
+    assert totals["prompt_tokens_source"] == "reported"
+    assert totals["reported_prompt_tokens"] == 5  # provider-reported prompt tokens, one route step
+
+
+def test_mock_prompt_tokens_source_is_estimated() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("general_agent", "free-model", tags=("reasoning",))])
+    orchestrator.run([{"role": "user", "content": "no usage here"}])
+    totals = orchestrator.spend_analytics()["totals"]
+    assert totals["prompt_tokens_source"] == "estimated"
+    assert totals["reported_prompt_tokens"] == 0
+    assert totals["estimated_prompt_tokens"] > 0
+
+
 def test_mock_path_stays_estimated() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "free-model", tags=("reasoning",))])
     orchestrator.run([{"role": "user", "content": "do the work"}])

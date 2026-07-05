@@ -997,6 +997,8 @@ class TaskOrchestrator:
         by_model: dict[str, dict[str, Any]] = {}
         total_output_tokens = 0
         total_prompt_tokens = 0
+        reported_prompt_tokens = 0
+        any_reported_prompt = False
 
         for run in self._workflow_runs.values():
             total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
@@ -1004,6 +1006,10 @@ class TaskOrchestrator:
                 model = model_by_agent.get(step.get("agent_id"), "unknown")
                 estimated = estimate_tokens(step.get("output", ""))
                 usage = step.get("usage")
+                reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+                if isinstance(reported_prompt, int):
+                    reported_prompt_tokens += reported_prompt
+                    any_reported_prompt = True
                 reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
                 if isinstance(reported, int):
                     effective, is_reported = reported, True
@@ -1055,6 +1061,8 @@ class TaskOrchestrator:
                 "run_count": len(self._workflow_runs),
                 "estimated_output_tokens": total_output_tokens,
                 "estimated_prompt_tokens": total_prompt_tokens,
+                "reported_prompt_tokens": reported_prompt_tokens,
+                "prompt_tokens_source": "reported" if any_reported_prompt else "estimated",
                 "estimated_cost_usd": round(total_cost, 6) if prices else None,
                 "currency": "USD",
             },
