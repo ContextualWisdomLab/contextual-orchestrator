@@ -1,7 +1,7 @@
 uv>=0.5
 pytest>=8
 pytest-cov>=5
-coverage>=7
+coverage>=7.15.0
 interrogate>=1.7
 
 
