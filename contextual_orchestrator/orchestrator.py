@@ -25,6 +25,14 @@ from .conventions import require_object_name
 ChatMessage = dict[str, str]
 
 
+class BudgetExceededError(RuntimeError):
+    """Raised when an operator-configured spend budget is already exhausted."""
+
+    def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.detail = detail or {}
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
 
@@ -305,6 +313,8 @@ class TaskOrchestrator:
         agents: list[ModelAgent],
         client: ModelClient | None = None,
         price_per_million: dict[str, float] | None = None,
+        budget_max_output_tokens: int | None = None,
+        budget_max_cost_usd: float | None = None,
     ) -> None:
         self.agents = [agent for agent in agents if not agent.disabled]
         if not self.agents:  # pragma: no cover
@@ -313,6 +323,9 @@ class TaskOrchestrator:
         self.policy = OrchestrationPolicy()
         # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
         self.price_per_million = dict(price_per_million or {})
+        # Operator spend caps; None => disabled (no behavior change). Enforced in run().
+        self.budget_max_output_tokens = budget_max_output_tokens
+        self.budget_max_cost_usd = budget_max_cost_usd
         self._workflow_runs: dict[str, dict[str, Any]] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
@@ -333,6 +346,10 @@ class TaskOrchestrator:
 
     def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
+        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+            budget = self.budget_status()
+            if budget["exceeded"]:
+                raise BudgetExceededError("spend budget exceeded", detail=budget)
         result = self.complete(messages, mode=mode)
         prompt = self._latest_user_text(messages)
         record = {
@@ -849,7 +866,33 @@ class TaskOrchestrator:
             },
             "by_model": rows,
             "unpriced_models": unpriced,
+            "budget": self._budget_block(total_output_tokens, round(total_cost, 6) if prices else None),
         }
+
+    def _budget_block(self, spent_tokens: int, spent_cost: float | None) -> dict[str, Any]:
+        token_limit = self.budget_max_output_tokens
+        cost_limit = self.budget_max_cost_usd
+        exceeded = bool(
+            (token_limit is not None and spent_tokens >= token_limit)
+            or (cost_limit is not None and spent_cost is not None and spent_cost >= cost_limit)
+        )
+        return {
+            "enabled": token_limit is not None or cost_limit is not None,
+            "max_output_tokens": token_limit,
+            "max_cost_usd": cost_limit,
+            "spent_output_tokens": spent_tokens,
+            "spent_cost_usd": spent_cost,
+            "remaining_output_tokens": max(0, token_limit - spent_tokens) if token_limit is not None else None,
+            "remaining_cost_usd": (
+                round(max(0.0, cost_limit - spent_cost), 6)
+                if cost_limit is not None and spent_cost is not None else None
+            ),
+            "exceeded": exceeded,
+        }
+
+    def budget_status(self) -> dict[str, Any]:
+        """Current spend-budget state (limits, spent, remaining, exceeded)."""
+        return self.spend_analytics()["budget"]
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""

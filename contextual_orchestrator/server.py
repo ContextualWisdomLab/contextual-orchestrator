@@ -15,6 +15,7 @@ import uuid
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .api_contract import OPENAPI_SPEC
 from .orchestrator import (
+    BudgetExceededError,
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
@@ -555,6 +556,8 @@ def build_server(
                 self._send_error(404, "route_not_found", "not found")
             except json.JSONDecodeError:
                 self._send_error(400, "invalid_json", "request body is not valid JSON")
+            except BudgetExceededError as exc:
+                self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:

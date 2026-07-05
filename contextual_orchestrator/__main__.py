@@ -25,9 +25,17 @@ def main() -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Only allowed for loopback local development.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
+    parser.add_argument("--budget-max-output-tokens", type=int, default=None,
+                        help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
+    parser.add_argument("--budget-max-cost-usd", type=float, default=None,
+                        help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
     args = parser.parse_args()
 
-    orchestrator = TaskOrchestrator(load_agents(args.agents))
+    orchestrator = TaskOrchestrator(
+        load_agents(args.agents),
+        budget_max_output_tokens=args.budget_max_output_tokens,
+        budget_max_cost_usd=args.budget_max_cost_usd,
+    )
 
     if args.serve:
         if not (args.auth_token or args.admin_token or args.inference_token) and not args.insecure_disable_auth:
