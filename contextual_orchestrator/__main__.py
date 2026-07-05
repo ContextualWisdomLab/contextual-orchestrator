@@ -25,9 +25,11 @@ def main() -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Only allowed for loopback local development.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
+    parser.add_argument("--cache-ttl", type=float, default=0.0,
+                        help="Seconds to cache identical requests (default 0 = disabled).")
     args = parser.parse_args()
 
-    orchestrator = TaskOrchestrator(load_agents(args.agents))
+    orchestrator = TaskOrchestrator(load_agents(args.agents), cache_ttl=args.cache_ttl)
 
     if args.serve:
         if not (args.auth_token or args.admin_token or args.inference_token) and not args.insecure_disable_auth:
