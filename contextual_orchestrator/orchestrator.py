@@ -11,6 +11,8 @@ from pathlib import Path
 import random
 import re
 import socket
+import sqlite3
+import threading
 import time
 import uuid
 from typing import Any
@@ -243,6 +245,48 @@ def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
     return [ModelAgent.from_dict(item) for item in data["agents"]]
 
 
+class _StateStore:
+    """Minimal write-through sqlite persistence for orchestrator runtime state.
+
+    ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
+    upsert by key; stream kinds (analytics, audit) append. Stream rows grow unbounded
+    on disk while the in-memory deques stay capped — add pruning if db size matters.
+    """
+
+    _KEYED = {"workflow_run", "evaluation_run"}
+
+    def __init__(self, path: str) -> None:
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn.execute(
+            "CREATE TABLE IF NOT EXISTS records ("
+            "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
+        )
+        self._conn.execute("CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)")
+        self._conn.commit()
+
+    def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
+        blob = json.dumps(payload, ensure_ascii=False)
+        with self._lock:
+            if kind in self._KEYED:
+                self._conn.execute("DELETE FROM records WHERE kind = ? AND key = ?", (kind, key))
+            self._conn.execute("INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)", (kind, key, blob))
+            self._conn.commit()
+
+    def load(self, kind: str, limit: int | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            if limit is None:
+                rows = self._conn.execute(
+                    "SELECT payload FROM records WHERE kind = ? ORDER BY seq", (kind,)
+                ).fetchall()
+            else:
+                rows = self._conn.execute(
+                    "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?", (kind, limit)
+                ).fetchall()
+                rows = list(reversed(rows))
+        return [json.loads(row[0]) for row in rows]
+
+
 class TaskOrchestrator:
     """Coordinate model routing, conducted workflows, governance, and audit state."""
 
@@ -277,7 +321,7 @@ class TaskOrchestrator:
         "논문",
     )
 
-    def __init__(self, agents: list[ModelAgent], client: ModelClient | None = None) -> None:
+    def __init__(self, agents: list[ModelAgent], client: ModelClient | None = None, state_db: str | None = None) -> None:
         self.agents = [agent for agent in agents if not agent.disabled]
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
@@ -293,6 +337,22 @@ class TaskOrchestrator:
         self._circuit: dict[str, dict[str, float]] = {}
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
+        # Optional durable persistence: default None keeps all state purely in-memory
+        # (zero behavior change). When set, runs/audit/analytics survive restart.
+        self._store = _StateStore(state_db) if state_db else None
+        if self._store is not None:
+            self._reload_state()
+
+    def _reload_state(self) -> None:
+        for record in self._store.load("workflow_run"):
+            self._workflow_runs[record["workflow_run_id"]] = record
+            self._run_order.appendleft(record["workflow_run_id"])
+        for evaluation in self._store.load("evaluation_run"):
+            self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
+        for event in self._store.load("analytics", self._analytics_events.maxlen):
+            self._analytics_events.append(event)
+        for event in self._store.load("audit", self._audit_events.maxlen):
+            self._audit_events.append(event)
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
@@ -318,6 +378,8 @@ class TaskOrchestrator:
         }
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
             "workflow_run_created",
             {
@@ -375,6 +437,8 @@ class TaskOrchestrator:
             "success_count": len([r for r in results if r["answer"]]),
         }
         self._evaluation_runs[evaluation_run_id] = evaluation
+        if self._store is not None:
+            self._store.save("evaluation_run", evaluation_run_id, evaluation)
         self._append_audit_event(
             "evaluation_run_created",
             {
@@ -672,11 +736,14 @@ class TaskOrchestrator:
         }
 
     def _append_audit_event(self, event_type: str, detail: dict[str, Any]) -> None:
-        self._audit_events.append({
+        event = {
             "created_at": int(time.time()),
             "event_type": event_type,
             "event_detail": detail,
-        })
+        }
+        self._audit_events.append(event)
+        if self._store is not None:
+            self._store.save("audit", None, event)
 
     def _infer_provider_name(self, base_url: str) -> str:
         if base_url.startswith("mock://"):
@@ -729,11 +796,14 @@ class TaskOrchestrator:
     def record_analytics_event(self, event_name: str, detail: dict[str, Any]) -> None:
         """Record a compact in-memory analytics event without prompt or output text."""
         require_object_name(event_name, "analytics.event_name")
-        self._analytics_events.append({
+        event = {
             "event_time": int(time.time()),
             "event_name": event_name,
             "event_detail": redact_value(detail),
-        })
+        }
+        self._analytics_events.append(event)
+        if self._store is not None:
+            self._store.save("analytics", None, event)
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
