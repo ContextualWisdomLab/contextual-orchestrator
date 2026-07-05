@@ -11,6 +11,7 @@ from pathlib import Path
 import random
 import re
 import socket
+import ssl
 import time
 import uuid
 from typing import Any
@@ -138,6 +139,8 @@ class ModelClient:
         max_retries: int = 2,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
+        ca_bundle: str | None = None,
+        verify_tls: bool = True,
     ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
@@ -146,6 +149,18 @@ class ModelClient:
         self.retry_backoff_cap = retry_backoff_cap
         # Seam so tests can observe/skip real sleeping during backoff.
         self._sleep = time.sleep
+        # TLS trust for provider egress. Default verifies against the system trust store;
+        # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
+        # explicit dev-only opt-out (insecure) for self-signed endpoints.
+        self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+
+    @staticmethod
+    def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
+        if not verify_tls:
+            return ssl._create_unverified_context()
+        if ca_bundle:
+            return ssl.create_default_context(cafile=ca_bundle)
+        return ssl.create_default_context()
 
     def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
@@ -196,7 +211,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with urllib.request.urlopen(request, timeout=self.timeout, context=self._ssl_context) as response:
             data = json.loads(response.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
 

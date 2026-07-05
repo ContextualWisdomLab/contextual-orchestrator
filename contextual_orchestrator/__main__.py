@@ -6,7 +6,7 @@ import argparse
 import json
 import os
 
-from .orchestrator import TaskOrchestrator, load_agents
+from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
 
@@ -25,9 +25,14 @@ def main() -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Only allowed for loopback local development.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
+    parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
+                        help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
+    parser.add_argument("--insecure-skip-tls-verify", action="store_true",
+                        help="Dev only: do not verify provider TLS certificates (insecure).")
     args = parser.parse_args()
 
-    orchestrator = TaskOrchestrator(load_agents(args.agents))
+    client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
+    orchestrator = TaskOrchestrator(load_agents(args.agents), client=client)
 
     if args.serve:
         if not (args.auth_token or args.admin_token or args.inference_token) and not args.insecure_disable_auth:
