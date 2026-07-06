@@ -7435,6 +7435,86 @@ def redact_value(value: Any) -> Any:
     return value
 
 
+def _pareto_front(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Configs not dominated on (quality up, cost down)."""
+    front: list[dict[str, Any]] = []
+    for a in results:
+        dominated = any(
+            b is not a
+            and b["quality"] >= a["quality"]
+            and b["cost_usd"] <= a["cost_usd"]
+            and (b["quality"] > a["quality"] or b["cost_usd"] < a["cost_usd"])
+            for b in results
+        )
+        if not dominated:
+            front.append(a)
+    return front
+
+
+def _recommend_config(results: list[dict[str, Any]], cost_budget_usd: float | None) -> dict[str, Any] | None:
+    if not results:
+        return None
+    if cost_budget_usd is not None:
+        affordable = [r for r in results if r["cost_usd"] <= cost_budget_usd]
+        if affordable:
+            best = max(affordable, key=lambda r: (r["quality"], -r["cost_usd"]))
+            reason = "highest quality within cost budget"
+        else:
+            best = min(results, key=lambda r: r["cost_usd"])
+            reason = "no config within budget; cheapest instead"
+    else:
+        best = max(results, key=lambda r: (r["quality_per_usd"] or 0.0))
+        reason = "best quality per USD"
+    return {"name": best["name"], "quality": best["quality"], "cost_usd": best["cost_usd"], "reason": reason}
+
+
+def optimize_orchestration(
+    candidates: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    quality_fn: Any,
+    cost_budget_usd: float | None = None,
+) -> dict[str, Any]:
+    """Search orchestration configs for maximum quality at minimum cost (the Fugu tradeoff).
+
+    - ``candidates``: ``[{"name": str, "orchestrator": TaskOrchestrator, "mode": str}]``.
+      Each orchestrator should be fresh so its spend reflects only this search.
+    - ``tasks``: ``[{"prompt": str, ...}]`` — the eval set; each task + the produced
+      answer is passed to ``quality_fn``.
+    - ``quality_fn(task, answer_text) -> float`` in [0, 1] — the caller's real quality
+      signal (e.g. checkable answers or a judge). This function does not fabricate quality.
+    - ``cost_budget_usd``: optional cap. Recommendation = highest-quality config within
+      budget, else the cheapest; with no budget, the best quality-per-USD.
+
+    Returns per-config measured quality + real cost, the Pareto front, and a recommendation.
+    """
+    results: list[dict[str, Any]] = []
+    for candidate in candidates:
+        orchestrator = candidate["orchestrator"]
+        mode = candidate.get("mode", "auto")
+        scores: list[float] = []
+        for task in tasks:
+            output = orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)
+            scores.append(float(quality_fn(task, output["answer"])))
+        quality = sum(scores) / len(scores) if scores else 0.0
+        cost = orchestrator.spend_analytics()["totals"]["estimated_cost_usd"] or 0.0
+        results.append({
+            "name": candidate["name"],
+            "mode": mode,
+            "quality": round(quality, 4),
+            "cost_usd": round(cost, 6),
+            "quality_per_usd": round(quality / cost, 2) if cost > 0 else None,
+            "task_count": len(tasks),
+        })
+
+    return {
+        "objective": "maximize quality, minimize cost",
+        "cost_budget_usd": cost_budget_usd,
+        "results": sorted(results, key=lambda r: (-r["quality"], r["cost_usd"])),
+        "pareto_front": [r["name"] for r in _pareto_front(results)],
+        "recommended": _recommend_config(results, cost_budget_usd),
+    }
+
+
 def chat_completion_response(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
