@@ -52,12 +52,17 @@ def test_pareto_front_keeps_nondominated() -> None:
     assert set(report["pareto_front"]) == {"cheap", "strong"}
 
 
-def test_recommend_prefers_quality_per_usd_without_budget() -> None:
-    # cheap is far cheaper for 2/3 the quality -> better quality-per-USD.
-    candidates = [_candidate("cheap", "cheap_worker", 1.0), _candidate("strong", "strong_worker", 50.0)]
+def test_recommend_maxes_quality_then_cheapest_without_budget() -> None:
+    # Two equal-quality "strong" configs (0.9) at different prices, plus a cheap-but-weaker one.
+    # No budget -> maximize quality (0.9), then break the tie on cost -> the cheaper strong config.
+    candidates = [
+        _candidate("cheap", "cheap_worker", 1.0),          # quality 0.6
+        _candidate("strong_pricey", "strong_worker", 50.0),  # quality 0.9
+        _candidate("strong_cheap", "strong_worker", 10.0),   # quality 0.9, cheaper
+    ]
     report = optimize_orchestration(candidates, TASKS, _quality)
-    assert report["recommended"]["name"] == "cheap"
-    assert report["recommended"]["reason"] == "best quality per USD"
+    assert report["recommended"]["name"] == "strong_cheap"
+    assert report["recommended"]["reason"] == "highest quality; cheapest among equal-quality configs"
 
 
 def test_recommend_maximizes_quality_within_budget() -> None:

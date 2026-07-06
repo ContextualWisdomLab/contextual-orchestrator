@@ -7463,8 +7463,10 @@ def _recommend_config(results: list[dict[str, Any]], cost_budget_usd: float | No
             best = min(results, key=lambda r: r["cost_usd"])
             reason = "no config within budget; cheapest instead"
     else:
-        best = max(results, key=lambda r: (r["quality_per_usd"] or 0.0))
-        reason = "best quality per USD"
+        # Maximize performance first, minimize cost as the tie-break (cheapest among the
+        # best-quality configs) — the honest reading of "max quality while min cost".
+        best = max(results, key=lambda r: (r["quality"], -r["cost_usd"]))
+        reason = "highest quality; cheapest among equal-quality configs"
     return {"name": best["name"], "quality": best["quality"], "cost_usd": best["cost_usd"], "reason": reason}
 
 
