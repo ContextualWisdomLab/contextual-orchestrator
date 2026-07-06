@@ -44,7 +44,8 @@ jobs:
 
   dependency_review:
     name: Dependency review
-    if: github.event_name == 'pull_request'
+    # Central Security Scan runs dependency-review on PRs; disabled here to avoid duplication.
+    if: false
     runs-on: ubuntu-latest
     permissions:
       contents: read
