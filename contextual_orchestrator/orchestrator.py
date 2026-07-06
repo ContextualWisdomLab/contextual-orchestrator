@@ -269,6 +269,126 @@ class ModelClient:
             role = match.group(1)
         return f"[{agent.id}:{role}] {last[:220]}"
 
+    # --- OpenAI Batch API (async, ~50% provider discount; NOT for latency-sensitive chat) ---
+
+    def batch_chat(
+        self,
+        agent: ModelAgent,
+        requests: dict[str, list[ChatMessage]],
+        temperature: float = 0.2,
+        poll_interval: float = 5.0,
+        poll_timeout: float = 3600.0,
+    ) -> dict[str, dict[str, Any]]:
+        """Run many chat requests through the provider's Batch API and return results by id.
+
+        ``requests`` maps a caller custom_id to its messages. Suited to eval/benchmark
+        workloads (24h completion window, ~half the price); real-time chat should keep
+        using ``chat``. The mock path answers synchronously so tests and local runs work.
+        """
+        if agent.base_url.startswith("mock://"):
+            return {
+                custom_id: {"content": self._mock(agent, messages), "usage": None}
+                for custom_id, messages in requests.items()
+            }
+        self._validate_provider(agent)  # pragma: no cover
+        return self._batch_run(agent, requests, temperature, poll_interval, poll_timeout)  # pragma: no cover
+
+    def _batch_run(
+        self,
+        agent: ModelAgent,
+        requests: dict[str, list[ChatMessage]],
+        temperature: float,
+        poll_interval: float,
+        poll_timeout: float,
+    ) -> dict[str, dict[str, Any]]:
+        """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
+        lines = [
+            json.dumps({
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": agent.model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": self.max_output_tokens,
+                },
+            }, ensure_ascii=False)
+            for custom_id, messages in requests.items()
+        ]
+        input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"))
+        batch_id = self._batch_json(agent, "POST", "/batches", {
+            "input_file_id": input_file_id,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        })["id"]
+        deadline = time.monotonic() + poll_timeout
+        while True:
+            batch = self._batch_json(agent, "GET", f"/batches/{batch_id}")
+            status = batch.get("status")
+            if status == "completed":
+                break
+            if status in {"failed", "expired", "cancelled"}:
+                raise RuntimeError(f"batch {batch_id} ended with status {status}")
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"batch {batch_id} still {status} after {poll_timeout}s")
+            self._sleep(poll_interval)
+        raw = self._batch_raw(agent, f"/files/{batch['output_file_id']}/content")
+        results: dict[str, dict[str, Any]] = {}
+        for line in raw.decode("utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            body = (row.get("response") or {}).get("body") or {}
+            choices = body.get("choices") or [{}]
+            results[row.get("custom_id", "")] = {
+                "content": (choices[0].get("message") or {}).get("content"),
+                "usage": body.get("usage"),
+            }
+        return results
+
+    def _batch_upload(self, agent: ModelAgent, payload: bytes) -> str:
+        """Upload a JSONL batch input via multipart/form-data; returns the file id."""
+        boundary = f"co-batch-{uuid.uuid4().hex}"
+        body = (
+            f"--{boundary}\r\ncontent-disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n"
+            f"--{boundary}\r\ncontent-disposition: form-data; name=\"file\"; filename=\"batch.jsonl\"\r\n"
+            "content-type: application/jsonl\r\n\r\n"
+        ).encode("utf-8") + payload + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        request = urllib.request.Request(
+            f"{agent.base_url.rstrip('/')}/files",
+            data=body,
+            headers={
+                "authorization": f"Bearer {os.environ.get(agent.api_key_env, '')}",
+                "content-type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            return json.loads(response.read().decode("utf-8"))["id"]
+
+    def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        request = urllib.request.Request(
+            f"{agent.base_url.rstrip('/')}{path}",
+            data=json.dumps(payload).encode("utf-8") if payload is not None else None,
+            headers={
+                "authorization": f"Bearer {os.environ.get(agent.api_key_env, '')}",
+                "content-type": "application/json",
+            },
+            method=method,
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
+        request = urllib.request.Request(
+            f"{agent.base_url.rstrip('/')}{path}",
+            headers={"authorization": f"Bearer {os.environ.get(agent.api_key_env, '')}"},
+            method="GET",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            return response.read()
+
 
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
     """Load model agent definitions from an agents JSON file."""
