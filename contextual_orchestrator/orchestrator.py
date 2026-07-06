@@ -7517,6 +7517,116 @@ def optimize_orchestration(
     }
 
 
+def evolve_orchestration(
+    build_orchestrator: Any,
+    search_space: dict[str, list[Any]],
+    tasks: list[dict[str, Any]],
+    quality_fn: Any,
+    generations: int = 4,
+    population: int = 6,
+    cost_budget_usd: float | None = None,
+    seed: int = 7,
+) -> dict[str, Any]:
+    """Evolve orchestration configs toward max quality at min cost (TRINITY-style search).
+
+    For search spaces too large to enumerate: a seeded mutation+selection loop over
+    ``search_space`` (param -> candidate values). ``build_orchestrator(config)`` returns a
+    fresh TaskOrchestrator for a config (the caller owns provider wiring); each config is
+    evaluated ONCE and cached — critical when evaluation costs real API money.
+
+    Fitness maximizes measured quality, then minimizes measured cost; configs whose cost
+    exceeds ``cost_budget_usd`` rank below all affordable ones. Quality comes from the
+    caller's ``quality_fn(task, answer) -> [0,1]`` — never fabricated.
+    """
+    rng = random.Random(seed)
+    params = sorted(search_space)
+
+    def random_config() -> dict[str, Any]:
+        return {p: rng.choice(search_space[p]) for p in params}
+
+    def mutate(config: dict[str, Any]) -> dict[str, Any]:
+        child = dict(config)
+        gene = rng.choice(params)
+        choices = [v for v in search_space[gene] if v != config[gene]] or search_space[gene]
+        child[gene] = rng.choice(choices)
+        return child
+
+    def key(config: dict[str, Any]) -> str:
+        return json.dumps({p: config[p] for p in params}, sort_keys=True, ensure_ascii=False)
+
+    evaluated: dict[str, dict[str, Any]] = {}
+
+    def evaluate(config: dict[str, Any]) -> dict[str, Any]:
+        config_key = key(config)
+        if config_key in evaluated:
+            return evaluated[config_key]
+        orchestrator = build_orchestrator(config)
+        mode = config.get("mode", "auto")
+        scores = [
+            float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
+            for task in tasks
+        ]
+        quality = sum(scores) / len(scores) if scores else 0.0
+        cost = orchestrator.spend_analytics()["totals"]["estimated_cost_usd"] or 0.0
+        result = {
+            "name": config_key,
+            "config": dict(config),
+            "quality": round(quality, 4),
+            "cost_usd": round(cost, 6),
+            "quality_per_usd": round(quality / cost, 2) if cost > 0 else None,
+            "task_count": len(tasks),
+        }
+        evaluated[config_key] = result
+        return result
+
+    def fitness(row: dict[str, Any]) -> tuple[int, float, float]:
+        affordable = 1 if cost_budget_usd is None or row["cost_usd"] <= cost_budget_usd else 0
+        return (affordable, row["quality"], -row["cost_usd"])
+
+    # Seed population (dedup keys so a tiny space doesn't waste evaluations).
+    pool: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    while len(pool) < population and len(seen) < min(population * 4, _space_size(search_space)):
+        config = random_config()
+        if key(config) not in seen:
+            seen.add(key(config))
+            pool.append(config)
+
+    history: list[dict[str, Any]] = []
+    for generation in range(generations):
+        rows = [evaluate(config) for config in pool]
+        rows.sort(key=fitness, reverse=True)
+        survivors = rows[: max(1, len(rows) // 2)]
+        history.append({
+            "generation": generation,
+            "best": {"config": survivors[0]["config"], "quality": survivors[0]["quality"], "cost_usd": survivors[0]["cost_usd"]},
+            "evaluated_total": len(evaluated),
+        })
+        pool = [dict(row["config"]) for row in survivors]
+        while len(pool) < population:
+            pool.append(mutate(rng.choice(survivors)["config"]))
+
+    results = sorted(evaluated.values(), key=fitness, reverse=True)
+    return {
+        "objective": "maximize quality, minimize cost (evolutionary search)",
+        "cost_budget_usd": cost_budget_usd,
+        "generations": generations,
+        "evaluations": len(evaluated),
+        "space_size": _space_size(search_space),
+        "results": results,
+        "pareto_front": [row["name"] for row in _pareto_front(results)],
+        "recommended": _recommend_config(results, cost_budget_usd),
+        "history": history,
+    }
+
+
+def _space_size(search_space: dict[str, list[Any]]) -> int:
+    size = 1
+    for values in search_space.values():
+        size *= max(1, len(values))
+    return size
+
+
 def chat_completion_response(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
