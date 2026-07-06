@@ -30,6 +30,7 @@ ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions"}
+ALLOWED_AGENT_CREATE_KEYS = {"id", "model", "base_url", "api_key_env", "tags", "priority", "disabled", "provider_name", "provider_exclusions"}
 
 
 class RequestError(Exception):
@@ -481,12 +482,40 @@ def build_server(
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
+        def do_DELETE(self) -> None:  # noqa: N802
+            try:
+                self._authorize("admin")
+                path = urllib.parse.urlparse(self.path).path
+                if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
+                    segments = [part for part in path.split("/") if part]
+                    if len(segments) != 6 or segments[:3] != ["api", "v1", "agent_pools"] or segments[4] != "worker_agents":
+                        raise RequestError(400, "bad_path", "agent delete path missing worker agent")
+                    self._send(orchestrator.remove_agent(segments[3], segments[-1]), 200)
+                    return
+                self._send_error(404, "route_not_found", "not found")
+            except RequestError as exc:
+                self._send_error(exc.status, exc.code, exc.message, exc.detail)
+            except (ValueError, TypeError) as exc:
+                self._send_error(400, "invalid_request", str(exc))
+            except KeyError as exc:
+                self._send_error(404, "resource_not_found", str(exc))
+            except Exception:
+                self._send_error(500, "internal_error", "internal server error")
+
         def do_POST(self) -> None:  # noqa: N802
             try:
                 path = urllib.parse.urlparse(self.path).path
-                scope = "admin" if path == "/admin/simulate" else "inference"
+                scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
                 self._authorize(scope)
                 body = self._read_json()
+
+                if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
+                    segments = [part for part in path.split("/") if part]
+                    if len(segments) != 5 or segments[:3] != ["api", "v1", "agent_pools"]:
+                        raise RequestError(400, "bad_path", "agent create path must be /api/v1/agent_pools/{pool}/worker_agents")
+                    _reject_unknown_keys(body, ALLOWED_AGENT_CREATE_KEYS)
+                    self._send(orchestrator.add_agent(segments[3], body), 201)
+                    return
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)

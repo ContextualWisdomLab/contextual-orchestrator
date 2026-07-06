@@ -25,9 +25,11 @@ def main() -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Only allowed for loopback local development.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
+    parser.add_argument("--agents-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None,
+                        help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
     args = parser.parse_args()
 
-    orchestrator = TaskOrchestrator(load_agents(args.agents))
+    orchestrator = TaskOrchestrator(load_agents(args.agents), agents_db=args.agents_db)
 
     if args.serve:
         if not (args.auth_token or args.admin_token or args.inference_token) and not args.insecure_disable_auth:
