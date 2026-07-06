@@ -38,3 +38,18 @@ single-run measurement — method and caveats below; not a general quality claim
 - Task types (short checkable questions) are favorable to `route`; long decomposition/verification workloads may favor `conduct` — unmeasured here.
 - Prices are approximate list prices, not billed amounts; tokens are provider-reported usage.
 - Reproduce: `evolve_orchestration(build, SPACE, TASKS, quality_fn, generations=3, population=4, seed=7)` with an `OPENAI_API_KEY`; the harness lives in the engine, the task list in this document's history.
+
+## Batch API smoke (real endpoint, 2026-07-06)
+
+One real `TaskOrchestrator.batch_route` run against live `api.openai.com` Batch API
+(2 requests, gpt-4.1-nano): upload → batch create → poll → parse.
+
+- **Wall time:** 131.3 s end-to-end (the async Batch queue dominates; fine for eval
+  workloads, confirms it is wrong for interactive chat).
+- **Answers:** `"4"` (2+2) and `"Paris"` — both correct.
+- **Usage:** provider-reported per line (prompt 20/19, completion 1/1) and threaded
+  into spend analytics: `prompt_tokens_source=reported`, `reported_prompt_tokens=39`,
+  run_count 2, estimated cost $0.000001 at the nano list price.
+- Caveat: cost is computed at the list price table; the Batch ~50% discount is a
+  provider billing property not reflected in the operator price table unless the
+  operator supplies batch-specific prices.
