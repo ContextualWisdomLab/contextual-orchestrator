@@ -127,6 +127,10 @@ class OrchestrationPolicy:
     # fixed 4-step plan. Generated plans that fail validation fall back to the template.
     workflow_planning: str = "template"
     max_workflow_steps: int = 6
+    # Verifier verdict: "terms" (default) matches accept/reject vocabulary in the verifier
+    # report; "model" asks a verifier-selected model to reply ACCEPT/REJECT (fixes the
+    # known term-matching false negative on risk-vocabulary verifier outputs).
+    verifier_judge: str = "terms"
 
     def as_dict(self) -> dict[str, Any]:
         """Return the API-safe policy snapshot for workflow records."""
@@ -135,6 +139,7 @@ class OrchestrationPolicy:
             "conduct_hint_threshold": self.conduct_hint_threshold,
             "verifier_required": self.verifier_required,
             "workflow_planning": self.workflow_planning,
+            "verifier_judge": self.verifier_judge,
             "max_workflow_steps": self.max_workflow_steps,
             "workflow_steps": ["thinker", "worker", "verifier", "synthesizer"],
             "supported_locales": ["en", "ko"],
@@ -978,13 +983,17 @@ class TaskOrchestrator:
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
+            if self.policy.verifier_judge == "model":
+                verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
                 answer = last_output("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
+            if self.policy.verifier_judge == "model":
+                verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
-            if not verification["accepted"] and self.policy.verifier_required:  # pragma: no cover
+            if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
         return {
@@ -1155,6 +1164,36 @@ class TaskOrchestrator:
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
+
+    def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
+        """Ask a model to judge the verifier report (fixes term-matching false negatives).
+
+        The judge must answer ACCEPT or REJECT; an ambiguous reply or a judge failure
+        keeps the term-based fallback verdict — the judge can only refine, never break.
+        """
+        verifier_output = fallback.get("verifier_output", "")
+        if not verifier_output:
+            return fallback
+        judge = self._select_agent(task, "verifier")
+        try:
+            reply = self.client.chat(judge, [
+                {"role": "system", "content": (
+                    "You are the verification judge. Read the verifier report about the task. "
+                    "Reply with exactly one word: ACCEPT if the verified work is sound, "
+                    "REJECT if it has disqualifying problems."
+                )},
+                {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
+            ])
+        except Exception:  # noqa: BLE001 - judge failure must not break the request
+            return fallback
+        upper = (reply or "").strip().upper()
+        if "ACCEPT" in upper and "REJECT" not in upper:
+            return {"accepted": True, "reason": "model judge accepted the verifier report",
+                    "verifier_output": verifier_output, "judge": "model"}
+        if "REJECT" in upper and "ACCEPT" not in upper:
+            return {"accepted": False, "reason": "model judge rejected the verifier report",
+                    "verifier_output": verifier_output, "judge": "model"}
+        return fallback
 
     def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
         lowered = verifier_output.lower()

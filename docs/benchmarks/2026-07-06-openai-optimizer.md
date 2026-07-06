@@ -66,7 +66,6 @@ end-to-end in 48.2 s, producing a coherent rollback-safe migration plan.
   backward-only access, answerable final step) with automatic template fallback held.
 - Honest limitation observed: `verification.accepted=false` because the term-matching
   verifier judge saw risk-vocabulary in a verifier step *about* downtime risks — a
-  false negative of the heuristic judge, not of the plan. A model-based judge is the
-  known upgrade path.
+  false negative of the heuristic judge, not of the plan. **Fixed since:** `OrchestrationPolicy.verifier_judge="model"` asks a verifier-selected model to reply ACCEPT/REJECT on the verifier report (ambiguous replies and judge failures keep the term verdict; default remains "terms").
 - This validation exercised `conduct()` directly (not `run()`), so it does not appear
   in spend totals.
