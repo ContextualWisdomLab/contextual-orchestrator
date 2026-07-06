@@ -53,3 +53,20 @@ One real `TaskOrchestrator.batch_route` run against live `api.openai.com` Batch 
 - Caveat: cost is computed at the list price table; the Batch ~50% discount is a
   provider billing property not reflected in the operator price table unless the
   operator supplies batch-specific prices.
+
+## Generated-workflow validation (Conductor, real endpoint, 2026-07-06)
+
+One real `conduct()` with `workflow_planning="generated"` (gpt-4.1-mini as planner and
+workers): the model **generated a valid Conductor-style plan** — 4 steps with
+natural-language subtasks and non-template access lists (e.g. the synthesizer accessed
+`[1, 2]`, not the fixed template's `[0, 1, 2]`) — which parsed, validated, and executed
+end-to-end in 48.2 s, producing a coherent rollback-safe migration plan.
+
+- `plan_source=generated`; strict validation (sequential ids, known roles,
+  backward-only access, answerable final step) with automatic template fallback held.
+- Honest limitation observed: `verification.accepted=false` because the term-matching
+  verifier judge saw risk-vocabulary in a verifier step *about* downtime risks — a
+  false negative of the heuristic judge, not of the plan. A model-based judge is the
+  known upgrade path.
+- This validation exercised `conduct()` directly (not `run()`), so it does not appear
+  in spend totals.

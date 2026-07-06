@@ -122,6 +122,11 @@ class OrchestrationPolicy:
     verifier_required: bool = True
     verifier_positive_terms: tuple[str, ...] = ("verified", "accepted", "confirmed", "pass", "good", "ok")
     verifier_negative_terms: tuple[str, ...] = ("reject", "disagree", "conflict", "unsafe", "fails", "error", "risky")
+    # Conductor-style planning (arXiv:2512.04388): "generated" asks the planner model to
+    # emit the workflow (subtasks, worker assignment, access lists); "template" keeps the
+    # fixed 4-step plan. Generated plans that fail validation fall back to the template.
+    workflow_planning: str = "template"
+    max_workflow_steps: int = 6
 
     def as_dict(self) -> dict[str, Any]:
         """Return the API-safe policy snapshot for workflow records."""
@@ -129,6 +134,8 @@ class OrchestrationPolicy:
             "route_p95_seconds": self.route_p95_seconds,
             "conduct_hint_threshold": self.conduct_hint_threshold,
             "verifier_required": self.verifier_required,
+            "workflow_planning": self.workflow_planning,
+            "max_workflow_steps": self.max_workflow_steps,
             "workflow_steps": ["thinker", "worker", "verifier", "synthesizer"],
             "supported_locales": ["en", "ko"],
         }
@@ -916,9 +923,18 @@ class TaskOrchestrator:
         }
 
     def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
-        """Run the thinker-worker-verifier-synthesizer workflow for complex prompts."""
+        """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
-        steps = self._plan(task)
+        plan_source = "template"
+        if self.policy.workflow_planning == "generated":
+            try:
+                steps = self._plan_generated(task)
+                plan_source = "generated"
+            except Exception:  # noqa: BLE001 - invalid plans must not break the request
+                steps = self._plan(task)
+                plan_source = "template_fallback"
+        else:
+            steps = self._plan(task)
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
 
@@ -953,17 +969,90 @@ class TaskOrchestrator:
                 row["failover_from"] = agent.id
             trace.append(row)
 
-        verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
-        answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
-        if not verification["accepted"] and self.policy.verifier_required:  # pragma: no cover
-            answer = outputs[steps[1].id]
+        if plan_source == "generated":
+            # Generated plans have variable shape: locate roles instead of fixed indices.
+            def last_output(role: str) -> str:
+                ids = [step.id for step in steps if step.role == role]
+                return outputs.get(ids[-1], "") if ids else ""
+
+            # Generated plans may omit a thinker; the first step's output is the upstream evidence.
+            upstream = last_output("thinker") or outputs.get(steps[0].id, "")
+            verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
+            answer = outputs[steps[-1].id]
+            if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
+                answer = last_output("worker")
+        else:
+            verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
+            answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
+            if not verification["accepted"] and self.policy.verifier_required:  # pragma: no cover
+                answer = outputs[steps[1].id]
 
         return {
             "mode": "conduct",
             "answer": answer,
             "trace": trace,
             "verification": verification,
+            "plan_source": plan_source,
         }
+
+    def _plan_generated(self, task: str) -> list[WorkflowStep]:
+        """Ask the planner model to generate the workflow (Conductor, arXiv:2512.04388).
+
+        The plan is JSON: natural-language subtasks, a worker assignment, and an access
+        list of prior step outputs per step. Anything invalid raises so conduct() falls
+        back to the fixed template — a bad plan must never break the request.
+        """
+        planner = self._select_agent(task, "thinker")
+        pool = "\n".join(
+            f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
+            for agent in self.agents
+        )
+        system = (
+            "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
+            'Return ONLY a JSON object, no prose: {"steps": [{"id": 0, "role": "thinker|worker|verifier|synthesizer", '
+            '"agent_id": "<agent id>", "subtask": "natural-language instruction", "access": [prior step ids]}]}\n'
+            f"Rules: 2 to {self.policy.max_workflow_steps} steps; ids sequential from 0; access may list only earlier "
+            "step ids (each step sees ONLY the outputs it lists); the final step must produce the answer; include a "
+            "verifier step when correctness matters.\n"
+            f"Available agents:\n{pool}"
+        )
+        raw = self.client.chat(planner, [
+            {"role": "system", "content": system},
+            {"role": "user", "content": task},
+        ])
+        return self._parse_workflow_plan(raw)
+
+    def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
+        """Validate a generated plan strictly; raise ValueError on any structural problem."""
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("plan contains no JSON object")
+        data = json.loads(raw[start : end + 1])
+        raw_steps = data.get("steps")
+        if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
+            raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
+        known_agents = {agent.id for agent in self.agents}
+        steps: list[WorkflowStep] = []
+        for index, item in enumerate(raw_steps):
+            if int(item.get("id", -1)) != index:
+                raise ValueError("step ids must be sequential from 0")
+            role = str(item.get("role", ""))
+            if role not in {"thinker", "worker", "verifier", "synthesizer"}:
+                raise ValueError(f"unknown role {role!r}")
+            subtask = str(item.get("subtask", "")).strip()
+            if not subtask:
+                raise ValueError("step subtask must be non-empty")
+            access = tuple(sorted({int(value) for value in item.get("access", [])}))
+            if any(value < 0 or value >= index for value in access):
+                raise ValueError("access may reference only earlier steps")
+            agent_id = item.get("agent_id")
+            if agent_id not in known_agents:
+                # The planner named an unknown agent: reselect honestly instead of failing the plan.
+                agent_id = self._select_agent(subtask, role).id
+            steps.append(WorkflowStep(index, role, agent_id, subtask, access))
+        if steps[-1].role not in {"synthesizer", "worker"}:
+            raise ValueError("final step must produce the answer")
+        return steps
 
     def _plan(self, task: str) -> list[WorkflowStep]:
         thinker = self._select_agent(task, "thinker").id
