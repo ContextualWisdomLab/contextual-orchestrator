@@ -634,6 +634,65 @@ class TaskOrchestrator:
             )
         return record
 
+    def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
+        """Route many prompts through the provider's Batch API and persist each run.
+
+        The cheap lane for bulk/eval workloads (~50% provider discount, async window) —
+        not for latency-sensitive chat. Each prompt gets the same worker selection as
+        ``route_once``; results are persisted as normal route runs (with provider usage
+        when reported) so spend analytics and the admin console see them unchanged.
+        """
+        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+            budget = self.budget_status()
+            if budget["exceeded"]:
+                raise BudgetExceededError("spend budget exceeded", detail=budget)
+        selected = [(prompt, self._select_agent(prompt, "worker")) for prompt in prompts]
+        agents_by_id = {agent.id: agent for _, agent in selected}
+        requests_by_agent: dict[str, dict[str, list[ChatMessage]]] = {}
+        for index, (prompt, agent) in enumerate(selected):
+            requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [{"role": "user", "content": prompt}]
+
+        answers: dict[int, dict[str, Any]] = {}
+        for agent_id, requests in requests_by_agent.items():
+            for custom_id, result in self.client.batch_chat(agents_by_id[agent_id], requests).items():
+                answers[int(custom_id.rsplit("_", 1)[1])] = result
+
+        records: list[dict[str, Any]] = []
+        for index, (prompt, agent) in enumerate(selected):
+            result = answers.get(index, {"content": None, "usage": None})
+            row: dict[str, Any] = {
+                "id": 0, "role": "worker", "agent_id": agent.id,
+                "subtask": "Direct route (batched)", "access": [], "output": result["content"],
+            }
+            if result.get("usage") is not None:
+                row["usage"] = result["usage"]
+            record = {
+                "workflow_run_id": f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": prompt,
+                "answer": result["content"],
+                "trace": [row],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
+            }
+            self._workflow_runs[record["workflow_run_id"]] = record
+            self._run_order.appendleft(record["workflow_run_id"])
+            if self._store is not None:
+                self._store.save("workflow_run", record["workflow_run_id"], record)
+            self._append_audit_event(
+                "workflow_run_created",
+                {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
+            )
+            self.record_analytics_event(
+                "workflow_run_created",
+                {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
+                 "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
+            )
+            records.append(record)
+        return records
+
     def run_evaluation(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
         """Replay prompts through the runtime and persist an evaluation record."""
         if not prompts:  # pragma: no cover
@@ -7590,11 +7649,25 @@ def _recommend_config(results: list[dict[str, Any]], cost_budget_usd: float | No
     return {"name": best["name"], "quality": best["quality"], "cost_usd": best["cost_usd"], "reason": reason}
 
 
+def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: Any, mode: str, use_batch: bool) -> float:
+    """Mean quality of one config over the task set; route configs may evaluate via Batch."""
+    if use_batch and mode == "route":
+        records = orchestrator.batch_route([task["prompt"] for task in tasks])
+        scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
+    else:
+        scores = [
+            float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
+            for task in tasks
+        ]
+    return sum(scores) / len(scores) if scores else 0.0
+
+
 def optimize_orchestration(
     candidates: list[dict[str, Any]],
     tasks: list[dict[str, Any]],
     quality_fn: Any,
     cost_budget_usd: float | None = None,
+    use_batch: bool = False,
 ) -> dict[str, Any]:
     """Search orchestration configs for maximum quality at minimum cost (the Fugu tradeoff).
 
@@ -7613,11 +7686,7 @@ def optimize_orchestration(
     for candidate in candidates:
         orchestrator = candidate["orchestrator"]
         mode = candidate.get("mode", "auto")
-        scores: list[float] = []
-        for task in tasks:
-            output = orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)
-            scores.append(float(quality_fn(task, output["answer"])))
-        quality = sum(scores) / len(scores) if scores else 0.0
+        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
         cost = orchestrator.spend_analytics()["totals"]["estimated_cost_usd"] or 0.0
         results.append({
             "name": candidate["name"],
@@ -7646,6 +7715,7 @@ def evolve_orchestration(
     population: int = 6,
     cost_budget_usd: float | None = None,
     seed: int = 7,
+    use_batch: bool = False,
 ) -> dict[str, Any]:
     """Evolve orchestration configs toward max quality at min cost (TRINITY-style search).
 
@@ -7682,11 +7752,7 @@ def evolve_orchestration(
             return evaluated[config_key]
         orchestrator = build_orchestrator(config)
         mode = config.get("mode", "auto")
-        scores = [
-            float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
-            for task in tasks
-        ]
-        quality = sum(scores) / len(scores) if scores else 0.0
+        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
         cost = orchestrator.spend_analytics()["totals"]["estimated_cost_usd"] or 0.0
         result = {
             "name": config_key,
