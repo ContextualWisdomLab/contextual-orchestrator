@@ -200,6 +200,91 @@ class ModelClient:
             data = json.loads(response.read().decode("utf-8"))
         return data["choices"][0]["message"]["content"]
 
+    # -- Full OpenAI passthrough (transport) ------------------------------------
+    # Requests that carry provider features the multi-agent verifier cannot merge
+    # (response_format / tools / the Responses API) are proxied to a single agent
+    # so the full provider response shape (tool_calls, parsed structured output,
+    # Responses output items) survives verbatim. Agent selection lives on the
+    # orchestrator; this is the agent-level transport.
+    def proxy_send(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Passthrough a full request to one agent, returning the raw provider JSON."""
+        if agent.base_url.startswith("mock://"):
+            return self._mock_raw(agent, endpoint, payload)
+        self._validate_provider(agent)  # pragma: no cover
+        return self._send_raw_with_retry(agent, endpoint, payload)  # pragma: no cover
+
+    def _send_raw_with_retry(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:  # pragma: no cover
+        """Passthrough transport with the same transient-failure retry policy as _send."""
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                return self._send_raw(agent, endpoint, payload)
+            except Exception as exc:  # noqa: BLE001 - classify then decide
+                last_error = exc
+                if attempt >= self.max_retries or not is_transient_error(exc):
+                    break
+                self._sleep(self._backoff_delay(attempt))
+        raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
+
+    def _send_raw(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:  # pragma: no cover
+        """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
+        api_key = os.environ.get(agent.api_key_env, "")
+        request = urllib.request.Request(
+            f"{agent.base_url.rstrip('/')}/{endpoint.lstrip('/')}",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _mock_raw(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
+        echoed = {
+            key: payload[key]
+            for key in ("model", "response_format", "tools", "tool_choice", "temperature", "max_tokens")
+            if key in payload
+        }
+        if endpoint.strip("/") == "responses":
+            return {
+                "id": f"resp_mock_{agent.id}",
+                "object": "response",
+                "model": agent.model,
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
+                    }
+                ],
+                "echo": echoed,
+            }
+        return {
+            "id": f"chatcmpl_mock_{agent.id}",
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": f"[{agent.id}] chat-mock"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "echo": echoed,
+        }
+
     def _validate_provider(self, agent: ModelAgent) -> None:
         """Reject unsafe remote model endpoints before any egress happens."""
         if not agent.api_key_env:
@@ -234,6 +319,26 @@ class ModelClient:
         if match:
             role = match.group(1)
         return f"[{agent.id}:{role}] {last[:220]}"
+
+
+def _coerce_input_text(value: Any) -> str:
+    """Best-effort text (for agent selection) from a Responses API ``input`` field."""
+    if isinstance(value, str):
+        return value
+    parts: list[str] = []
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                content = item.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for chunk in content:
+                        if isinstance(chunk, dict) and isinstance(chunk.get("text"), str):
+                            parts.append(chunk["text"])
+    return " ".join(parts)
 
 
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
@@ -293,6 +398,38 @@ class TaskOrchestrator:
         self._circuit: dict[str, dict[str, float]] = {}
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
+
+    # Orchestration-only body keys that must not be forwarded to the provider.
+    _ORCHESTRATION_ONLY_KEYS = frozenset(
+        {"orchestration", "orchestration_mode", "mode", "include_orchestration_trace"}
+    )
+
+    def proxy_completion(
+        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
+    ) -> dict[str, Any]:
+        """Passthrough a full OpenAI request to the primary agent, returning its raw response.
+
+        Requests carrying provider features the multi-agent verifier cannot merge
+        (``response_format``, ``tools``, or the Responses API) are handled by a
+        single selected agent so the full provider response shape survives; the
+        orchestration path stays reserved for plain-text routing/verification.
+        """
+        messages = body.get("messages")
+        if isinstance(messages, list):
+            text = self._latest_user_text(messages)
+        else:
+            text = _coerce_input_text(body.get("input"))
+        agent = self._select_agent(text, "worker")
+        upstream = {
+            key: value
+            for key, value in body.items()
+            if key not in self._ORCHESTRATION_ONLY_KEYS
+        }
+        upstream["model"] = agent.model
+        # v1 passthrough returns the full JSON body; SSE stream passthrough is a
+        # follow-up, so force a non-streamed upstream response here.
+        upstream["stream"] = False
+        return self.client.proxy_send(agent, endpoint, upstream)
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""

@@ -23,7 +23,24 @@ from .orchestrator import (
 )
 
 
-ALLOWED_CHAT_KEYS = {"model", "messages", "orchestration", "orchestration_mode", "mode", "include_orchestration_trace", "stream"}
+# OpenAI request params forwarded verbatim to the provider on passthrough.
+OPENAI_PASSTHROUGH_PARAM_KEYS = {
+    "temperature", "top_p", "max_tokens", "max_completion_tokens", "n", "stop",
+    "seed", "presence_penalty", "frequency_penalty", "logit_bias", "logprobs",
+    "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
+    "response_format", "tools", "tool_choice", "functions", "function_call",
+    "modalities", "prediction", "store", "service_tier",
+}
+# Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
+PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
+ALLOWED_CHAT_KEYS = {
+    "model", "messages", "orchestration", "orchestration_mode", "mode",
+    "include_orchestration_trace", "stream",
+} | OPENAI_PASSTHROUGH_PARAM_KEYS
+# Responses API body keys (`input` replaces `messages`).
+ALLOWED_RESPONSES_KEYS = {
+    "model", "input", "instructions", "stream", "metadata", "reasoning",
+} | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -490,6 +507,24 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    if PASSTHROUGH_TRIGGER_KEYS & set(body):
+                        # response_format / tools cannot be merged across agents;
+                        # proxy the full request to one agent and return it verbatim.
+                        started_at = time.perf_counter()
+                        proxied = self._run(
+                            lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
+                        )
+                        orchestrator.record_analytics_event(
+                            "chat_completion_passthrough",
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(proxied)
+                        return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
@@ -517,6 +552,26 @@ def build_server(
                         return
                     self._send(chat_completion_response(result, model=model_name, include_trace=include_trace))
                     return
+                if path == "/v1/responses":
+                    # The Responses API has no chat-completions verifier equivalent,
+                    # so every request is proxied to one agent verbatim.
+                    _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    started_at = time.perf_counter()
+                    proxied = self._run(
+                        lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                    )
+                    orchestrator.record_analytics_event(
+                        "responses_passthrough",
+                        {
+                            "endpoint_path": "/v1/responses",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(proxied)
+                    return
+
                 if path == "/admin/simulate":
                     _reject_unknown_keys(body, ALLOWED_SIMULATE_KEYS)
                     prompt = body.get("prompt", "")
