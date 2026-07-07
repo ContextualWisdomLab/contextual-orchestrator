@@ -1,0 +1,20 @@
+{
+  "agents": [
+    {
+      "id": "general_agent",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "tags": ["reasoning", "writing", "planning", "analysis"],
+      "priority": 1
+    },
+    {
+      "id": "fast_agent",
+      "model": "gpt-5.5-mini",
+      "base_url": "https://api.openai.com/v1",
+      "api_key_env": "OPENAI_API_KEY",
+      "tags": ["summarization", "classification"],
+      "priority": 2
+    }
+  ]
+}
