@@ -186,10 +186,16 @@ def build_server(
     host: str = "127.0.0.1",
     port: int = 8000,
     security: SecurityConfig | None = None,
+    clearfolio_url: str | None = None,
 ) -> ThreadingHTTPServer:
     """Build, but do not start, the orchestration HTTP server."""
     security = security or SecurityConfig()
     security.check_bind(host)
+    if clearfolio_url is not None:
+        parsed_viewer = urllib.parse.urlparse(clearfolio_url)
+        if parsed_viewer.scheme not in {"http", "https"} or not parsed_viewer.netloc:
+            raise ValueError("clearfolio_url must be an http(s) URL")
+        clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -205,7 +211,11 @@ def build_server(
                     self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
                     return
                 if path == "/admin/state":
-                    self._send(_response_payload(orchestrator.admin_state(), security.expose_trace_by_default))
+                    state = orchestrator.admin_state()
+                    state["document_viewer"] = (
+                        {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
+                    )
+                    self._send(_response_payload(state, security.expose_trace_by_default))
                     return
                 if path == "/api/v1/agent_pools":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=100)
@@ -651,8 +661,9 @@ def serve(
     host: str = "127.0.0.1",
     port: int = 8000,
     security: SecurityConfig | None = None,
+    clearfolio_url: str | None = None,
 ) -> None:
     """Serve the admin console and resource-oriented orchestration API."""
-    server = build_server(orchestrator, host=host, port=port, security=security)
+    server = build_server(orchestrator, host=host, port=port, security=security, clearfolio_url=clearfolio_url)
     print(f"listening on http://{host}:{port}")
     server.serve_forever()

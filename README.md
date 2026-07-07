@@ -67,6 +67,7 @@ One public interface:
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
+- The admin console can use [Clearfolio](https://github.com/ContextualWisdomLab/clearfolio) as its document viewer: pass `--clearfolio-url URL` (or `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`) and the Integrations view gains a Document Viewer card (open viewer / deep-link `{url}/viewer/{docId}`). Default: disabled, console unchanged.
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
 - `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
 - `/api/v1/buyer_evidence_manifests/latest` exposes the buyer evidence manifest as a runtime review index across endpoints, repository artifacts, Figma artifacts, verification evidence, and production or buyer-specific caveats.

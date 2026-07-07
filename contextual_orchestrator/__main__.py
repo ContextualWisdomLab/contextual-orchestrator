@@ -25,6 +25,8 @@ def main() -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Only allowed for loopback local development.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
+    parser.add_argument("--clearfolio-url", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL") or None,
+                        help="Base URL of a Clearfolio deployment to use as the admin document viewer (default: disabled).")
     args = parser.parse_args()
 
     orchestrator = TaskOrchestrator(load_agents(args.agents))
@@ -50,6 +52,7 @@ def main() -> None:
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
             ),
+            clearfolio_url=args.clearfolio_url,
         )
         return
 
