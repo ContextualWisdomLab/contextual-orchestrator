@@ -45,4 +45,32 @@ push or open a PR.
   `.codegraph/` directory is ever added at the repo root, prefer CodeGraph
   (`codegraph explore "<query>"`, or the code-review-graph MCP tools) BEFORE
   grep/find — it surfaces callers, callees, and impact that text search misses.
+
+### Config & secrets (KV, not env)
+
+- Do **NOT** read config or secrets via `os.getenv()` / raw environment
+  variables at runtime. Read them from a **KV / credential registry**. Org
+  Actions secrets (e.g. `OPENAI_API_KEY`) flow **into** the KV via a
+  bootstrap/CI step; runtime reads from the KV — env is only transport into the
+  KV, never the runtime source.
+- The reference implementation is xtrmLLMBatchPython's pgcrypto-encrypted
+  Postgres credential registry (`get_credential(name)`); reuse that pattern (a
+  DB-backed KV is fine) unless a dedicated KV is adopted.
+- **Known deviation to migrate:** this repo currently resolves provider API
+  keys from env — `ModelClient` reads `os.environ.get(agent.api_key_env)` in
+  `contextual_orchestrator/orchestrator.py` (and `CONTEXTUAL_ORCHESTRATOR_*`
+  tokens in `__main__.py`). Move these to KV-backed reads; keep env only as the
+  bootstrap path that seeds the KV.
+
+### This repo: the org LLM gateway
+
+- `contextual-orchestrator` is the org's **LLM-communication hub** — the
+  OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
+- **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
+  org is open to a **Rust/Python hybrid** to cut overhead.
+- Its `ModelClient` currently reads `os.environ.get(agent.api_key_env)` — this
+  is the KV-principle deviation above. Resolve the API key (including the org
+  `OPENAI_API_KEY`) from the **KV / credential registry**, not env.
+- The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
+  do not change it.
 <!-- END cwl-agent-guidance -->
