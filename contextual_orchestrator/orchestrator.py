@@ -7077,12 +7077,21 @@ def chat_completion_response(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
     include_trace: bool = False,
+    usage: dict[str, int] | None = None,
 ) -> dict[str, Any]:  # pragma: no cover
-    """Wrap orchestration output in an OpenAI-compatible chat completion response."""
+    """Wrap orchestration output in an OpenAI-compatible chat completion response.
+
+    ``usage`` carries the token counts recorded by the cost ledger; when absent
+    the response reports zeros (the count could not be computed).
+    """
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result["mode"],
         "verification": result.get("verification"),
+        "channel": result.get("channel"),
+        "routing_reason": result.get("routing_reason"),
+        "usage_record_id": result.get("usage_record_id"),
+        "cost": result.get("cost"),
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
@@ -7098,7 +7107,7 @@ def chat_completion_response(
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
     }
 

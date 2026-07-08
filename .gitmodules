@@ -1,0 +1,4 @@
+[submodule "external/pg-llm-batch"]
+	path = external/pg-llm-batch
+	url = https://github.com/ContextualWisdomLab/pg-llm-batch.git
+	branch = feat/extract-pg-llm-batch-core

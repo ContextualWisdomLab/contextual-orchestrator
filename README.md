@@ -103,6 +103,46 @@ One fused orchestration loop:
 
 See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 
+## Cost review + routing hub
+
+The orchestrator is the single control point for **LLM cost review** and
+**sync-vs-batch routing** (a LiteLLM-plus scope: cost optimiser + upstream load
+balancing + batch routing). All config — prices, thresholds, batch endpoints —
+is read from a **KV config store**, never `os.getenv`.
+
+- **Usage + cost ledger.** Every completion, sync *and* batch, writes a row to
+  the `llm_usage_records` ledger with token counts and a cost computed from a
+  configurable price table (`llm_price_entries`). Cost is attributable on seven
+  first-class dimensions catalogued in `cost_attribution_dimensions`: **account,
+  service, upstream API/provider, model name, team, group, company**. Token
+  counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is
+  configured, and fall back to a deterministic heuristic otherwise.
+- **Reporting.** `GET /api/v1/cost_reports/rollup?dimension=team&start=&end=`
+  rolls up cost + tokens by any dimension over any time window;
+  `GET /api/v1/llm_usage_records` lists raw ledger rows;
+  `GET /api/v1/cost_attribution_dimensions` lists the dimension catalog.
+- **Routing.** `RoutingPolicy` decides sync vs batch from request hints
+  (`{"routing": {"latency_tolerant": true}}` on `/v1/chat/completions`) plus
+  KV thresholds. Interactive requests stay on the fast sync path; latency-tolerant
+  or bulk requests are dispatched to a batch backend.
+- **Batch routing to pg-llm-batch.** The batch backend is
+  [`pg-llm-batch`](https://github.com/ContextualWisdomLab/pg-llm-batch), added as
+  a git **submodule** under `external/pg-llm-batch` and driven through its
+  OpenAI-compatible Batch API client (submit JSONL → poll → retrieve). A local
+  in-process backend preserves the mock/standalone path with no external service.
+  Submit via `POST /api/v1/batch_routing_jobs`, poll
+  `GET /api/v1/batch_routing_jobs/{id}`, retrieve
+  `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
+- **Health.** `GET /healthz` is an unauthenticated liveness probe.
+- **Standalone + submodule.** The hub runs standalone with the in-memory config
+  store and local batch backend; wiring a Postgres DSN activates the
+  `pg-llm-batch` KV/secret stores, `pg_tiktoken` counting, and the pg-llm-batch
+  batch backend. Clone with submodules via
+  `git clone --recurse-submodules` (or `git submodule update --init`).
+
+Grounding papers (LLM cost, routing, load balancing) live in
+[docs/papers](docs/papers/README.md) with citations.
+
 ## Design Artifacts
 
 - [Library research](docs/library_research.md)

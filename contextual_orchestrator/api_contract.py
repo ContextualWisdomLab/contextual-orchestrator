@@ -324,6 +324,95 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Workflow run"}},
             }
         },
+        "/api/v1/cost_reports/rollup": {
+            "get": {
+                "operationId": "get_cost_report",
+                "summary": "Roll up LLM cost + tokens by an attribution dimension over a time window",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {
+                        "name": "dimension",
+                        "in": "query",
+                        "required": False,
+                        "schema": {
+                            "type": "string",
+                            "enum": ["account", "service", "upstream_api", "provider", "model_name", "team", "group", "company"],
+                        },
+                    },
+                    {"name": "start", "in": "query", "required": False, "schema": {"type": "integer"}},
+                    {"name": "end", "in": "query", "required": False, "schema": {"type": "integer"}},
+                ],
+                "responses": {"200": {"description": "Cost rollup report"}},
+            }
+        },
+        "/api/v1/cost_attribution_dimensions": {
+            "get": {
+                "operationId": "list_cost_attribution_dimensions",
+                "summary": "List the attribution dimensions cost can be rolled up by",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Attribution dimension catalog"}},
+            }
+        },
+        "/api/v1/llm_usage_records": {
+            "get": {
+                "operationId": "list_llm_usage_records",
+                "summary": "List recorded per-request usage + cost ledger entries",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": "start", "in": "query", "required": False, "schema": {"type": "integer"}},
+                    {"name": "end", "in": "query", "required": False, "schema": {"type": "integer"}},
+                    {"name": "page_number", "in": "query", "required": False, "schema": {"type": "integer"}},
+                    {"name": "page_size", "in": "query", "required": False, "schema": {"type": "integer"}},
+                ],
+                "responses": {"200": {"description": "Usage record collection"}},
+            }
+        },
+        "/api/v1/batch_routing_jobs": {
+            "post": {
+                "operationId": "create_batch_routing_job",
+                "summary": "Submit a batch of latency-tolerant requests to the batch backend (pg-llm-batch)",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["requests"],
+                                "properties": {
+                                    "requests": {"type": "array", "items": {"type": "object"}},
+                                    "attribution": {"type": "object"},
+                                    "model": {"type": "string"},
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {"201": {"description": "Batch routing job created"}},
+            }
+        },
+        "/api/v1/batch_routing_jobs/{batch_routing_job_id}": {
+            "get": {
+                "operationId": "get_batch_routing_job",
+                "summary": "Poll a submitted batch routing job",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [
+                    {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
+                ],
+                "responses": {"200": {"description": "Batch routing job status"}},
+            }
+        },
+        "/api/v1/batch_routing_jobs/{batch_routing_job_id}/results": {
+            "post": {
+                "operationId": "create_batch_routing_job_results",
+                "summary": "Retrieve batch results and record their usage + cost",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [
+                    {"name": "batch_routing_job_id", "in": "path", "required": True, "schema": {"type": "string"}}
+                ],
+                "responses": {"200": {"description": "Batch results with recorded usage"}},
+            }
+        },
         "/api/v1/access_reports/{workflow_run_id}": {
             "get": {
                 "operationId": "get_access_report",
