@@ -28,6 +28,7 @@ from .orchestrator import (
 
 ALLOWED_CHAT_KEYS = {"model", "messages", "orchestration", "orchestration_mode", "mode", "include_orchestration_trace", "stream", "attribution", "routing"}
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -219,6 +220,47 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     return batch
 
 
+def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
+    """Validate the embeddings batch inputs (accepts ``inputs`` or ``input``)."""
+    raw = body.get("inputs")
+    if raw is None:
+        raw = body.get("input")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
+        raise RequestError(400, "invalid_request", "input/inputs must be a non-empty array of strings")
+    inputs: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise RequestError(400, "invalid_request", "each embedding input must be a string")
+        inputs.append(item)
+    return inputs
+
+
+def _embeddings_attribution(body: dict[str, Any]) -> dict[str, Any]:
+    """Build ledger attribution from the explicit ``attribution`` field merged
+    with any attribution dimensions carried inside ``metadata``.
+
+    naruon sends full cost attribution (service, team, group, company, plus the
+    provider alias) inside ``metadata`` alongside observability-only keys
+    (source, organization_id, user_id). Only recognised dimension keys feed the
+    ledger; the rest are ignored here but still accepted.
+    """
+    attribution = _validate_attribution(body.get("attribution")) or {}
+    metadata = body.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_request", "metadata must be an object")
+    known = set(ATTRIBUTION_DIMENSIONS) | {"provider"}
+    merged: dict[str, Any] = {}
+    if isinstance(metadata, dict):
+        for key, value in metadata.items():
+            if key in known and value not in (None, ""):
+                merged[key] = str(value)
+    # An explicit attribution field wins over metadata-derived dimensions.
+    merged.update(attribution)
+    return merged
+
+
 def _strip_trace(payload: Any) -> Any:
     if isinstance(payload, list):
         return [_strip_trace(item) for item in payload]
@@ -266,8 +308,19 @@ def build_server(
                         "service": "contextual-orchestrator",
                         "agent_count": len(orchestrator.agents),
                         "batch_backend": coordinator.batch_backend.name,
+                        "embedding_batch_backend": coordinator.embedding_batch_backend.name,
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
+                    return
+                if path.startswith("/v1/batch/embeddings/"):
+                    # Embeddings batch polling is an inference-scope surface, so
+                    # it is authorized here before the admin gate below.
+                    self._authorize("inference")
+                    batch_id = path[len("/v1/batch/embeddings/"):]
+                    try:
+                        self._send(coordinator.embeddings_batch_document(batch_id))
+                    except KeyError:
+                        self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
                 self._authorize("admin")
                 if path == "/api/v1/cost_attribution_dimensions":
@@ -642,6 +695,35 @@ def build_server(
                     self._send(chat_completion_response(
                         result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
                     ))
+                    return
+                if path == "/v1/batch/embeddings":
+                    _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
+                    inputs = _validate_embeddings_inputs(body)
+                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    attribution = _embeddings_attribution(body)
+                    submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
+                    endpoint_alias = body.get("endpoint")
+                    if endpoint_alias:
+                        submit_metadata["endpoint_alias"] = str(endpoint_alias)
+                    document = self._run(lambda: coordinator.complete_embeddings_batch(
+                        inputs,
+                        model=model_name,
+                        attribution=attribution,
+                        metadata=submit_metadata,
+                    ))
+                    is_complete = document.get("status") == "completed"
+                    orchestrator.record_analytics_event(
+                        "embeddings_batch_created",
+                        {
+                            "endpoint_path": "/v1/batch/embeddings",
+                            "actor_scope": "inference",
+                            "status_code": 200 if is_complete else 202,
+                            "batch_id": document.get("batch_id"),
+                            "batch_backend": document.get("backend"),
+                            "input_count": len(inputs),
+                        },
+                    )
+                    self._send(document, 200 if is_complete else 202)
                     return
                 if path == "/api/v1/batch_routing_jobs":
                     _reject_unknown_keys(body, ALLOWED_BATCH_KEYS)

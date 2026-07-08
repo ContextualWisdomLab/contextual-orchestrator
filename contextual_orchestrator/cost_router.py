@@ -25,7 +25,11 @@ from .batch_routing import (
     BatchJob,
     BatchRequest,
     BatchResultItem,
+    EmbeddingBatchBackend,
+    EmbeddingBatchRequest,
+    EmbeddingBatchResultItem,
     LocalBatchBackend,
+    LocalEmbeddingBatchBackend,
     RoutingHints,
     RoutingPolicy,
 )
@@ -47,6 +51,7 @@ class CostRoutingCoordinator:
         token_counter: Any = None,
         routing_policy: Optional[RoutingPolicy] = None,
         batch_backend: Optional[BatchBackend] = None,
+        embedding_batch_backend: Optional[EmbeddingBatchBackend] = None,
         postgres_dsn: Optional[str] = None,
     ) -> None:
         self.orchestrator = orchestrator
@@ -60,8 +65,17 @@ class CostRoutingCoordinator:
         self.batch_backend: BatchBackend = batch_backend or LocalBatchBackend(
             runner=lambda messages, mode: orchestrator.complete(messages, mode=mode)
         )
+        self.embedding_batch_backend: EmbeddingBatchBackend = (
+            embedding_batch_backend
+            or LocalEmbeddingBatchBackend(token_counter=self.token_counter)
+        )
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs: Dict[str, BatchJob] = {}
+        # embeddings batch state: job handle + submitted requests + cached doc,
+        # keyed by batch id so poll/retrieve is idempotent (usage recorded once).
+        self._embedding_jobs: Dict[str, BatchJob] = {}
+        self._embedding_requests: Dict[str, List[EmbeddingBatchRequest]] = {}
+        self._embedding_documents: Dict[str, Dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
     # Provider / model resolution
@@ -239,6 +253,136 @@ class CostRoutingCoordinator:
         job = self._batch_jobs.get(job_id)
         if job is None:
             raise KeyError(f"batch job {job_id!r} not found")
+        return job
+
+    # ------------------------------------------------------------------
+    # Embeddings batch lifecycle
+    # ------------------------------------------------------------------
+    def submit_embeddings_batch(
+        self,
+        inputs: List[str],
+        *,
+        model: str = "contextual-orchestrator",
+        attribution: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> BatchJob:
+        """Submit a bulk embeddings batch to the configured embeddings backend.
+
+        This is the surface naruon's batch embedding service submits to. Each
+        input becomes one :class:`EmbeddingBatchRequest`; routing + cost stay
+        owned by the orchestrator. Returns the backend job handle; the vectors
+        and recorded cost are produced by :meth:`embeddings_batch_document`.
+        """
+        shared_attribution = dict(attribution or {})
+        requests = [
+            EmbeddingBatchRequest(
+                input_text=str(text),
+                model=model,
+                attribution=dict(shared_attribution),
+            )
+            for text in inputs
+        ]
+        job = self.embedding_batch_backend.submit(requests, metadata=metadata)
+        self._embedding_jobs[job.job_id] = job
+        self._embedding_requests[job.job_id] = requests
+        return job
+
+    def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
+        """Return the naruon-shaped batch document for ``batch_id``.
+
+        Polls the backend; once complete, retrieves the vectors, records one
+        usage record per embedding in the cost ledger (full attribution), and
+        returns ``{batch_id, status, embeddings, cost_micro_usd, token_counts,
+        total_tokens, part_count, model}``. Idempotent: the completed document is
+        cached so a poll after completion never double-records cost.
+        """
+        cached = self._embedding_documents.get(batch_id)
+        if cached is not None:
+            return cached
+
+        job = self._require_embedding_job(batch_id)
+        status = self.embedding_batch_backend.poll(job)
+        if not status.get("is_complete"):
+            return {
+                "batch_id": batch_id,
+                "status": status.get("status") or job.status,
+                "backend": job.backend,
+                "embeddings": None,
+            }
+
+        items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
+        requests = self._embedding_requests.get(batch_id, [])
+        request_by_custom_id = {request.custom_id: request for request in requests}
+        ordered = sorted(items, key=lambda item: item.index)
+
+        embeddings: List[Dict[str, Any]] = []
+        token_counts: List[int] = []
+        total_cost_amount = 0.0
+        currency_code = "USD"
+        for item in ordered:
+            request = request_by_custom_id.get(item.custom_id)
+            attribution = dict(request.attribution) if request else {}
+            prompt_tokens = int(item.prompt_tokens)
+            if prompt_tokens <= 0 and request is not None:
+                prompt_tokens = int(self.token_counter.count_text(request.input_text, item.model))
+            provider = str(
+                attribution.get("provider") or attribution.get("upstream_api") or "unknown"
+            )
+            record = self.ledger.record_usage(
+                provider=provider,
+                model=item.model,
+                prompt_tokens=prompt_tokens,
+                completion_tokens=0,
+                request_channel="batch",
+                route_mode="embedding",
+                workflow_run_id=batch_id,
+                attribution=attribution,
+            )
+            total_cost_amount += float(record.cost_amount)
+            currency_code = record.currency_code
+            token_counts.append(record.prompt_tokens)
+            embeddings.append({"index": item.index, "embedding": item.embedding})
+
+        document = {
+            "batch_id": batch_id,
+            "status": "completed",
+            "backend": job.backend,
+            "model": ordered[0].model if ordered else "contextual-orchestrator",
+            "embeddings": embeddings,
+            "token_counts": token_counts,
+            "total_tokens": sum(token_counts),
+            "part_count": 1,
+            "cost_amount": round(total_cost_amount, 6),
+            "currency_code": currency_code,
+            "cost_micro_usd": int(round(total_cost_amount * 1_000_000)),
+        }
+        self._embedding_documents[batch_id] = document
+        return document
+
+    def complete_embeddings_batch(
+        self,
+        inputs: List[str],
+        *,
+        model: str = "contextual-orchestrator",
+        attribution: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Submit an embeddings batch and return its document (one round-trip).
+
+        For the local/in-process backend the batch completes synchronously, so
+        this returns the finished ``completed`` document with vectors and cost.
+        For an async backend (pg-llm-batch) it returns a ``{batch_id, status}``
+        envelope the caller then polls via :meth:`embeddings_batch_document`.
+        """
+        job = self.submit_embeddings_batch(
+            inputs, model=model, attribution=attribution, metadata=metadata
+        )
+        return self.embeddings_batch_document(job.job_id)
+
+    def _require_embedding_job(self, batch_id: str) -> BatchJob:
+        job = self._embedding_jobs.get(batch_id)
+        if job is None:
+            raise KeyError(f"embeddings batch job {batch_id!r} not found")
         return job
 
     # ------------------------------------------------------------------

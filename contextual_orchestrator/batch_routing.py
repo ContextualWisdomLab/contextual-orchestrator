@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass, field
+import hashlib
 import json
 import time
 from typing import Any, Callable, Dict, List, Optional, Protocol
@@ -377,4 +378,269 @@ def _extract_answer(body: Dict[str, Any]) -> str:
 
 def build_jsonl_body(requests: List[BatchRequest], endpoint: str = "/v1/chat/completions") -> str:
     """Serialize batch requests into an OpenAI Batch API JSONL body."""
+    return "\n".join(json.dumps(request.to_jsonl_line(endpoint)) for request in requests)
+
+
+# ---------------------------------------------------------------------------
+# Embeddings batch requests / results / backends
+# ---------------------------------------------------------------------------
+#
+# The embeddings batch path mirrors the chat path above but carries a single
+# ``input`` string per request and returns a vector per input. It is the surface
+# naruon's ``batch_embedding_service`` submits to: bulk, latency-tolerant
+# embedding work is dispatched here, routed through the same cost ledger, and
+# forwarded to pg-llm-batch in production (embeddings JSONL) or run in-process by
+# :class:`LocalEmbeddingBatchBackend` for the mock/standalone path.
+
+_DEFAULT_EMBEDDING_DIMENSION = 8
+
+
+@dataclass
+class EmbeddingBatchRequest:
+    """One text destined for the embeddings batch backend."""
+
+    input_text: str
+    model: str = "contextual-orchestrator"
+    custom_id: str = field(default_factory=lambda: f"emb_{uuid.uuid4().hex}")
+    attribution: Dict[str, Any] = field(default_factory=dict)
+
+    def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
+        """Render this request as an OpenAI Batch API embeddings JSONL line."""
+        return {
+            "custom_id": self.custom_id,
+            "method": "POST",
+            "url": endpoint,
+            "body": {"model": self.model, "input": self.input_text},
+        }
+
+
+@dataclass
+class EmbeddingBatchResultItem:
+    """A single completed embedding within a batch."""
+
+    custom_id: str
+    index: int
+    embedding: List[float]
+    prompt_tokens: int = 0
+    model: str = "contextual-orchestrator"
+
+
+class EmbeddingBatchBackend(Protocol):
+    """Submit/poll/retrieve contract shared by every embeddings batch backend."""
+
+    name: str
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Submit a batch of embedding requests and return a job handle."""
+        ...
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Return the current status of an embeddings batch job."""
+        ...
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        """Retrieve completed embeddings for a batch job."""
+        ...
+
+
+def heuristic_embedding(text: str, dimension: int = _DEFAULT_EMBEDDING_DIMENSION) -> List[float]:
+    """Deterministic, dependency-free embedding for the local/standalone path.
+
+    Derives a stable unit-range vector from a SHA-256 digest of ``text`` so the
+    mock/standalone batch path returns real, reproducible vectors without any
+    external provider call. Not semantically meaningful — it exists so the batch
+    lifecycle (and the naruon contract) is fully exercisable offline.
+    """
+    if dimension <= 0:
+        raise ValueError("dimension must be positive")
+    digest = hashlib.sha256(text.encode("utf-8")).digest()
+    vector: List[float] = []
+    for index in range(dimension):
+        byte_value = digest[index % len(digest)]
+        vector.append(round((byte_value / 255.0) * 2.0 - 1.0, 6))
+    return vector
+
+
+class LocalEmbeddingBatchBackend:
+    """In-process embeddings batch backend (preserves the mock/local path).
+
+    Runs every input through an injected ``embedder`` callable
+    (``input_text -> vector``) and, when given a ``token_counter``, records a
+    real per-input prompt-token count so cost attribution is exact. No external
+    service and no Postgres, so the batch lifecycle is fully observable in tests
+    and usable standalone.
+    """
+
+    name = "local"
+
+    def __init__(
+        self,
+        embedder: Optional[Callable[[str], List[float]]] = None,
+        *,
+        token_counter: Any = None,
+        dimension: int = _DEFAULT_EMBEDDING_DIMENSION,
+    ) -> None:
+        self._embedder = embedder or (lambda text: heuristic_embedding(text, dimension))
+        self._token_counter = token_counter
+        self._results: Dict[str, List[EmbeddingBatchResultItem]] = {}
+
+    def _count_tokens(self, text: str, model: str) -> int:
+        if self._token_counter is not None:
+            return int(self._token_counter.count_text(text, model))
+        # Dependency-free fallback: count word-ish units.
+        return len(text.split())
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Embed every input in-process and stash the results under a job id."""
+        job_id = f"localembed_{uuid.uuid4().hex}"
+        items: List[EmbeddingBatchResultItem] = []
+        for index, request in enumerate(requests):
+            items.append(
+                EmbeddingBatchResultItem(
+                    custom_id=request.custom_id,
+                    index=index,
+                    embedding=list(self._embedder(request.input_text)),
+                    prompt_tokens=self._count_tokens(request.input_text, request.model),
+                    model=request.model,
+                )
+            )
+        self._results[job_id] = items
+        return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Local batches complete synchronously, so always report completed."""
+        return {"job_id": job.job_id, "status": "completed", "is_complete": True}
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        """Return the embeddings computed at submit time."""
+        return self._results.get(job.job_id, [])
+
+
+class PgLlmBatchEmbeddingBackend:
+    """Embeddings batch backend that submits to **pg-llm-batch** and retrieves.
+
+    Mirrors :class:`PgLlmBatchBackend` but targets the OpenAI-compatible
+    ``/v1/embeddings`` endpoint: it uploads an embeddings JSONL, creates a batch
+    job, polls, and downloads the vectors. The client is injected so it can be
+    the real ``pg_llm_batch.BatchAPIClient`` in production or a fake in tests.
+    """
+
+    name = "pg-llm-batch"
+
+    def __init__(
+        self,
+        client: Any,
+        *,
+        endpoint_alias: str = "default",
+        endpoint: str = "/v1/embeddings",
+        payload_assembler: Any = None,
+    ) -> None:
+        self._client = client
+        self._endpoint_alias = endpoint_alias
+        self._endpoint = endpoint
+        self._assembler = payload_assembler
+        self._jobs: Dict[str, Dict[str, Any]] = {}
+
+    def _assemble_payload(self, requests: List[EmbeddingBatchRequest]) -> str:
+        if self._assembler is not None:
+            return self._assembler.assemble(
+                [request.to_jsonl_line(self._endpoint) for request in requests]
+            )
+        return f"memory://{uuid.uuid4().hex}"
+
+    @staticmethod
+    def _run(coro: Any) -> Any:
+        return asyncio.run(coro)
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        """Upload embeddings JSONL + create a batch job via the pg-llm-batch client."""
+        file_path = self._assemble_payload(requests)
+
+        async def _submit() -> Dict[str, Any]:
+            uploaded = await self._client.upload_jsonl(file_path, self._endpoint_alias)
+            input_file_id = uploaded["id"]
+            return await self._client.create_batch_job(
+                input_file_id,
+                self._endpoint_alias,
+                endpoint=self._endpoint,
+                metadata=metadata,
+            )
+
+        job_payload = self._run(_submit())
+        batch_id = job_payload["id"]
+        self._jobs[batch_id] = {
+            "endpoint_alias": self._endpoint_alias,
+            "requests": {request.custom_id: request for request in requests},
+            "order": [request.custom_id for request in requests],
+        }
+        return BatchJob(
+            job_id=batch_id,
+            backend=self.name,
+            status=job_payload.get("status", "validating"),
+            request_count=len(requests),
+        )
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        """Poll embeddings batch status via the pg-llm-batch client."""
+        async def _poll() -> Dict[str, Any]:
+            return await self._client.get_batch_status(job.job_id, self._endpoint_alias)
+
+        status = self._run(_poll())
+        return {
+            "job_id": job.job_id,
+            "status": status.get("status"),
+            "is_complete": status.get("is_complete", False),
+            "progress_percentage": status.get("progress_percentage", 0),
+        }
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        """Download + parse embedding results, mapping them back to input order."""
+        async def _download() -> Dict[str, Any]:
+            return await self._client.download_results(job.job_id, self._endpoint_alias)
+
+        payload = self._run(_download())
+        if not payload.get("success"):
+            return []
+        tracked = self._jobs.get(job.job_id, {})
+        requests = tracked.get("requests", {})
+        order = tracked.get("order", [])
+        position_by_custom_id = {custom_id: pos for pos, custom_id in enumerate(order)}
+        items: List[EmbeddingBatchResultItem] = []
+        for entry in payload.get("responses", []):
+            custom_id = entry.get("custom_id", "")
+            body = (entry.get("response") or {}).get("body", {})
+            embedding = _extract_embedding(body)
+            usage = body.get("usage", {}) or {}
+            request = requests.get(custom_id)
+            items.append(
+                EmbeddingBatchResultItem(
+                    custom_id=custom_id,
+                    index=position_by_custom_id.get(custom_id, len(items)),
+                    embedding=embedding,
+                    prompt_tokens=int(usage.get("prompt_tokens", 0)),
+                    model=request.model if request else "contextual-orchestrator",
+                )
+            )
+        items.sort(key=lambda item: item.index)
+        return items
+
+
+def _extract_embedding(body: Dict[str, Any]) -> List[float]:
+    data = body.get("data") or []
+    if not data:
+        return []
+    vector = data[0].get("embedding") or []
+    return [float(value) for value in vector]
+
+
+def build_embeddings_jsonl_body(
+    requests: List[EmbeddingBatchRequest], endpoint: str = "/v1/embeddings"
+) -> str:
+    """Serialize embedding batch requests into an OpenAI Batch API JSONL body."""
     return "\n".join(json.dumps(request.to_jsonl_line(endpoint)) for request in requests)

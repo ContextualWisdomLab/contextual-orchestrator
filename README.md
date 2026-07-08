@@ -133,6 +133,16 @@ is read from a **KV config store**, never `os.getenv`.
   Submit via `POST /api/v1/batch_routing_jobs`, poll
   `GET /api/v1/batch_routing_jobs/{id}`, retrieve
   `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
+- **Batch embeddings.** Bulk, latency-tolerant embedding work (e.g. naruon's
+  email-import backfill) submits to `POST /v1/batch/embeddings`
+  (`{model, input|inputs:[...], endpoint, metadata|attribution}`) and polls
+  `GET /v1/batch/embeddings/{batch_id}`. The response is
+  `{batch_id, status, embeddings:[{index, embedding}], cost_micro_usd,
+  token_counts, total_tokens, part_count}`. It routes through the same
+  RoutingPolicy/cost optimiser and `pg-llm-batch` embeddings backend (local
+  in-process backend standalone), and records one usage-ledger row per vector
+  with the full attribution dimensions (service, team, group, company, provider)
+  carried in `metadata`.
 - **Health.** `GET /healthz` is an unauthenticated liveness probe.
 - **Standalone + submodule.** The hub runs standalone with the in-memory config
   store and local batch backend; wiring a Postgres DSN activates the

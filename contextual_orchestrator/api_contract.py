@@ -413,6 +413,68 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Batch results with recorded usage"}},
             }
         },
+        "/v1/batch/embeddings": {
+            "post": {
+                "operationId": "create_batch_embeddings_job",
+                "summary": "Submit a bulk, latency-tolerant embeddings batch (routed via pg-llm-batch, cost-recorded)",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["model"],
+                                "properties": {
+                                    "model": {"type": "string"},
+                                    "input": {
+                                        "oneOf": [
+                                            {"type": "string"},
+                                            {"type": "array", "items": {"type": "string"}},
+                                        ]
+                                    },
+                                    "inputs": {"type": "array", "items": {"type": "string"}},
+                                    "endpoint": {"type": "string", "description": "batch endpoint alias"},
+                                    "metadata": {
+                                        "type": "object",
+                                        "description": "observability + attribution dims (service, team, group, company, provider)",
+                                    },
+                                    "attribution": {"type": "object"},
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {
+                        "description": (
+                            "Batch completed synchronously: "
+                            "{batch_id, status, embeddings:[{index, embedding}], "
+                            "cost_micro_usd, token_counts, total_tokens, part_count}"
+                        )
+                    },
+                    "202": {"description": "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}"},
+                },
+            }
+        },
+        "/v1/batch/embeddings/{batch_id}": {
+            "get": {
+                "operationId": "get_batch_embeddings_job",
+                "summary": "Poll an embeddings batch; returns vectors + recorded cost once completed",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [
+                    {"name": "batch_id", "in": "path", "required": True, "schema": {"type": "string"}}
+                ],
+                "responses": {
+                    "200": {
+                        "description": (
+                            "{batch_id, status, embeddings:[[...]], cost_micro_usd, token_counts}"
+                        )
+                    },
+                    "404": {"description": "Embeddings batch not found"},
+                },
+            }
+        },
         "/api/v1/access_reports/{workflow_run_id}": {
             "get": {
                 "operationId": "get_access_report",

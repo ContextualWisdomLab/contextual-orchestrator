@@ -4,12 +4,18 @@ from .batch_routing import (
     BatchJob,
     BatchRequest,
     BatchResultItem,
+    EmbeddingBatchRequest,
+    EmbeddingBatchResultItem,
     LocalBatchBackend,
+    LocalEmbeddingBatchBackend,
     PgLlmBatchBackend,
+    PgLlmBatchEmbeddingBackend,
     RoutingDecision,
     RoutingHints,
     RoutingPolicy,
+    build_embeddings_jsonl_body,
     cheapest_upstream,
+    heuristic_embedding,
 )
 from .cost_ledger import (
     ATTRIBUTION_DIMENSIONS,
@@ -56,6 +62,13 @@ __all__ = [
     "BatchResultItem",
     "LocalBatchBackend",
     "PgLlmBatchBackend",
+    # embeddings batch
+    "EmbeddingBatchRequest",
+    "EmbeddingBatchResultItem",
+    "LocalEmbeddingBatchBackend",
+    "PgLlmBatchEmbeddingBackend",
+    "heuristic_embedding",
+    "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
 ]
