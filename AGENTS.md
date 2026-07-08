@@ -73,4 +73,39 @@ push or open a PR.
   `OPENAI_API_KEY`) from the **KV / credential registry**, not env.
 - The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
   do not change it.
+
+### This repo's role in the ecosystem
+
+- **Role:** LLM gateway — token-cost optimizer + performance + upstream load
+  balancer, covering beyond LiteLLM. KV-based keys; open to a Rust/Python
+  hybrid.
+- **Where it fits:** the org is an ecosystem around **naruon** (the hub:
+  email/PIM that DOM-decomposes emails/files into a persisted knowledge graph).
+  Each component below is a **standalone program that must ALSO work as a git
+  submodule**, grown separately and together:
+  - **waf-ids-ai-soc** — WAF / IDS / AI SOC / LB / APIM.
+  - **clearfolio** — document viewer.
+  - **pg-erd-cloud** — ERD tool.
+  - **contextual-orchestrator** — this repo: LLM cost/perf/upstream-LB gateway
+    (beyond LiteLLM).
+  - **codec-carver** — STT / omni-modal speech-video codec.
+  - **fast-mlsirm** — LLM-as-a-Judge calibration + evaluation-item quality
+    (uses aFIPC FIPC + kaefa item-fit).
+  - **feelanet-adfs** — passwordless SSO (OIDC/SCIM/ADFS/LDAP/FIDO2/OAuth2.1,
+    eliminate passwords).
+  - **newsdom-api** — PDF→DOM sidecar.
+  - **semantic-data-portal** — upper ontology / catalog / governance plane with
+    its own graph engine.
+
+### Research grounding (attach paper PDFs)
+
+- **Org rule:** substantive feature or process PRs should locate the relevant
+  academic papers and **commit their PDFs into the PR** (e.g. a `docs/papers/`
+  or `references/` directory) with full citations.
+- **Respect copyright:** attach the PDF only when redistribution is permissible;
+  otherwise **cite + link + summary** in place of the file.
+- **This repo's angle:** ground routing/gateway work in the literature on
+  cost-optimal LLM routing, upstream load balancing, and latency/throughput
+  scheduling (e.g. LLM-cascade / model-routing and queueing/load-balancing
+  papers).
 <!-- END cwl-agent-guidance -->
