@@ -16,6 +16,26 @@ db = [
   "alembic>=1.17",
   "psycopg[binary]>=3.2",
 ]
+# Fuzzing extras. Both licenses are permissive (no GPL/AGPL/copyleft):
+#   hypothesis -> MPL-2.0, atheris -> Apache-2.0.
+# hypothesis runs the always-on property tests (tests/fuzz/) on every platform;
+# atheris runs the coverage-guided harnesses (fuzz/) and needs a Clang/libFuzzer
+# toolchain, so it is exercised in the dedicated CI job on Python 3.11.
+fuzz = [
+  "hypothesis>=6.100",
+]
+fuzz-coverage = [
+  "atheris>=2.3; python_version < '3.13'",
+]
+
+[tool.pytest.ini_options]
+# Put the repo root on sys.path so both ``contextual_orchestrator`` and the
+# top-level ``fuzz`` package import under any pytest invocation (not only
+# ``python -m pytest``). The Atheris harnesses in ``fuzz/`` import ``atheris``
+# at module load and are excluded from collection via the root ``conftest.py``
+# (``collect_ignore``), which -- unlike ``norecursedirs`` -- targets only the
+# top-level ``fuzz/`` directory and not ``tests/fuzz/``.
+pythonpath = ["."]
 
 [tool.contextual_orchestrator]
 object_name_pattern = "two_or_more_words_snake_case"
