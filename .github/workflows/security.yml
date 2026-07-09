@@ -86,8 +86,8 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install audit and SBOM tools
-        run: python -m pip install pip-audit cyclonedx-bom
+      - name: Install pinned audit and SBOM tools
+        run: python -m pip install --require-hashes -r requirements-security-tools.txt
 
       - name: Install pinned Python dependencies
         run: |

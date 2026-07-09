@@ -41,11 +41,11 @@ def test_security_workflow_covers_core_repository_security_process():
         "actions/dependency-review-action@v5",
         "python_supply_chain:",
         "actions/setup-python@v6",
+        "requirements-security-tools.txt",
+        "python -m pip install --require-hashes -r requirements-security-tools.txt",
         "python -m pip install --require-hashes -r requirements.lock",
         "python -m pip install --no-deps -e .",
-        "pip-audit",
         "python -m pip_audit -r requirements.lock",
-        "cyclonedx-bom",
         "cyclonedx-py environment",
         "actions/upload-artifact@v5",
         "aquasecurity/trivy-action@v0.36.0",
@@ -78,6 +78,7 @@ def test_security_policy_documents_reporting_and_automation():
     assert "dependency review" in policy_text
     assert "pip-audit" in policy_text
     assert "requirements.lock" in policy_text
+    assert "requirements-security-tools.txt" in policy_text
     assert "CycloneDX SBOM" in policy_text
     assert "Trivy filesystem scanning" in policy_text
     assert "OpenSSF Scorecard" in policy_text

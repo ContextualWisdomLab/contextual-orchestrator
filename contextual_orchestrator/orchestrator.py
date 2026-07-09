@@ -5,6 +5,7 @@ from __future__ import annotations
 from collections import Counter, deque, OrderedDict
 import copy
 from dataclasses import dataclass, replace
+from functools import wraps
 import hashlib
 import ipaddress
 import json
@@ -231,7 +232,7 @@ class ModelClient:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
         api_key = os.environ.get(agent.api_key_env, "")
         request = urllib.request.Request(
-            f"{agent.base_url.rstrip('/')}/chat/completions",
+            self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "authorization": f"Bearer {api_key}",
@@ -271,6 +272,15 @@ class ModelClient:
                 or ip_address.is_reserved
             ):
                 raise RuntimeError(f"{agent.id} provider resolves to non-public address")
+
+    def _provider_url(self, agent: ModelAgent, path: str) -> str:
+        """Build a provider URL while rejecting urllib-supported local schemes."""
+        parsed = urlparse(agent.base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise RuntimeError(f"{agent.id} base_url must be an http(s) provider URL")
+        if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
+            raise RuntimeError("provider path must be a single absolute URL path")
+        return f"{agent.base_url.rstrip('/')}{path}"
 
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
@@ -368,7 +378,7 @@ class ModelClient:
             "content-type: application/jsonl\r\n\r\n"
         ).encode("utf-8") + payload + f"\r\n--{boundary}--\r\n".encode("utf-8")
         request = urllib.request.Request(
-            f"{agent.base_url.rstrip('/')}/files",
+            self._provider_url(agent, "/files"),
             data=body,
             headers={
                 "authorization": f"Bearer {os.environ.get(agent.api_key_env, '')}",
@@ -381,7 +391,7 @@ class ModelClient:
 
     def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         request = urllib.request.Request(
-            f"{agent.base_url.rstrip('/')}{path}",
+            self._provider_url(agent, path),
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             headers={
                 "authorization": f"Bearer {os.environ.get(agent.api_key_env, '')}",
@@ -394,7 +404,7 @@ class ModelClient:
 
     def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
         request = urllib.request.Request(
-            f"{agent.base_url.rstrip('/')}{path}",
+            self._provider_url(agent, path),
             headers={"authorization": f"Bearer {os.environ.get(agent.api_key_env, '')}"},
             method="GET",
         )
@@ -449,6 +459,11 @@ class _StateStore:
                 ).fetchall()
                 rows = list(reversed(rows))
         return [json.loads(row[0]) for row in rows]
+
+    def close(self) -> None:
+        """Close the sqlite handle so Windows can release the database file."""
+        with self._lock:
+            self._conn.close()
 
 
 class _ResponseCache:
@@ -555,8 +570,14 @@ class TaskOrchestrator:
         # Optional durable persistence: default None keeps all state purely in-memory
         # (zero behavior change). When set, runs/audit/analytics survive restart.
         self._store = _StateStore(state_db) if state_db else None
+        self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
+
+    def close(self) -> None:
+        """Release optional durable resources owned by this orchestrator."""
+        if self._store is not None:
+            self._store.close()
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
@@ -7609,11 +7630,9 @@ class TaskOrchestrator:
         auth_mode = security_profile.get("auth_mode", "loopback_no_auth")
         issues: list[str] = []
         warnings: list[str] = []
-        if auth_mode == "split_token":
-            pass
-        elif auth_mode == "single_token":
+        if auth_mode == "single_token":
             warnings.append("single bearer token shared by admin and inference scopes")
-        else:
+        elif auth_mode != "split_token":
             issues.append("no bearer token configured outside loopback-only development")
         if security_profile.get("allow_public_bind"):
             issues.append("public bind is enabled")
@@ -7716,6 +7735,44 @@ class TaskOrchestrator:
             "warn": counts.get("warn", 0),
             "fail": counts.get("fail", 0),
         }
+
+
+def _report_cache_token(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool, type(None))):
+        return value
+    if isinstance(value, tuple):
+        return tuple(_report_cache_token(item) for item in value)
+    return ("id", id(value))
+
+
+def _commercial_report_cached(method: Any) -> Any:
+    @wraps(method)
+    def wrapper(self: TaskOrchestrator, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        local = self._commercial_report_cache_local
+        depth = getattr(local, "depth", 0)
+        if depth == 0:
+            local.cache = {}
+        local.depth = depth + 1
+        try:
+            key = (
+                method.__name__,
+                _report_cache_token(args),
+                tuple(sorted((name, _report_cache_token(value)) for name, value in kwargs.items())),
+            )
+            if key not in local.cache:
+                local.cache[key] = method(self, *args, **kwargs)
+            return local.cache[key]
+        finally:
+            local.depth -= 1
+            if depth == 0:
+                local.cache = {}
+
+    return wrapper
+
+
+for _report_name, _report_method in list(TaskOrchestrator.__dict__.items()):
+    if _report_name.startswith("commercial_") and _report_name.endswith("_report"):
+        setattr(TaskOrchestrator, _report_name, _commercial_report_cached(_report_method))
 
 
 def redact_text(text: str) -> str:
