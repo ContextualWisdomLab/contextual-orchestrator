@@ -32,13 +32,13 @@ jobs:
           persist-credentials: false
 
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@411bbbe57033eedfc1a82d68c01345aa96c737d7 # github/codeql-action/init@v4
+        uses: github/codeql-action/init@e46ed2cbd01164d986452f91f178727624ae40d7 # github/codeql-action/init@v4.35.3
         with:
           languages: python
           build-mode: none
 
       - name: Run CodeQL analysis
-        uses: github/codeql-action/analyze@411bbbe57033eedfc1a82d68c01345aa96c737d7 # github/codeql-action/analyze@v4
+        uses: github/codeql-action/analyze@e46ed2cbd01164d986452f91f178727624ae40d7 # github/codeql-action/analyze@v4.35.3
         with:
           category: "/language:python"
 
@@ -133,7 +133,7 @@ jobs:
 
       - name: Upload Trivy SARIF
         if: ${{ always() && hashFiles('trivy-results.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # github/codeql-action/upload-sarif@v4.35.3
         with:
           sarif_file: trivy-results.sarif
           category: trivy-filesystem
@@ -153,7 +153,7 @@ jobs:
           persist-credentials: false
 
       - name: Run OpenSSF Scorecard
-        uses: ossf/scorecard-action@99c09fe975337306107572b4fdf4db224cf8e2f2 # ossf/scorecard-action@v2.4.3
+        uses: ossf/scorecard-action@4eaacf0543bb3f2c246792bd56e8cdeffafb205a # ossf/scorecard-action@v2.4.3
         with:
           results_format: sarif
           results_file: scorecard-results.sarif
@@ -161,7 +161,7 @@ jobs:
 
       - name: Upload Scorecard SARIF
         if: ${{ always() && hashFiles('scorecard-results.sarif') != '' }}
-        uses: github/codeql-action/upload-sarif@411bbbe57033eedfc1a82d68c01345aa96c737d7 # github/codeql-action/upload-sarif@v4
+        uses: github/codeql-action/upload-sarif@e46ed2cbd01164d986452f91f178727624ae40d7 # github/codeql-action/upload-sarif@v4.35.3
         with:
           sarif_file: scorecard-results.sarif
           category: openssf-scorecard

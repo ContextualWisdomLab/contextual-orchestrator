@@ -44,7 +44,7 @@ HTTP serving is hardened for local lab use:
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
 - `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
 
-Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints and environment-backed API keys:
+Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints. Provider secrets are resolved from a KV credential registry via `get_credential`, never from `os.getenv` at request time (see [docs/kv-credentials.md](docs/kv-credentials.md)):
 
 ```json
 {
@@ -53,14 +53,22 @@ Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints 
       "id": "coding_agent",
       "model": "gpt-5.5",
       "base_url": "https://api.openai.com/v1",
-      "api_key_env": "OPENAI_API_KEY",
+      "credential_key": "OPENAI_API_KEY",
       "tags": ["coding", "debugging", "reasoning"]
     }
   ]
 }
 ```
 
-Non-mock providers must use `https://` URLs and an explicit `api_key_env`. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
+Seed the credential into the KV once at bootstrap:
+
+```bash
+echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
+```
+
+Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
+
+> The legacy `api_key_env` field is still accepted for back-compat, but its value is now treated as the **credential name** in the KV, not as an environment variable to read. This supersedes the old `api_key_env` env pattern.
 
 ## Architecture
 

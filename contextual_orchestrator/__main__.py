@@ -1,17 +1,66 @@
-"""Command-line entrypoint for routing prompts or serving the orchestration API."""
+"""Command-line entrypoint for routing prompts, serving the API, or KV bootstrap."""
 
 from __future__ import annotations
 
 import argparse
 import json
 import os
+import sys
 
+from .credentials import register_credential
 from .orchestrator import TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
 
+def _register_credential_command(argv: list[str]) -> None:
+    """Bootstrap: read a deploy-time secret and store it in the KV credential registry.
+
+    Environment is used ONLY as bootstrap transport here (to select/connect to
+    the KV, and optionally to carry the secret value in from the deploy step).
+    The running orchestrator never reads the provider key from os.getenv — it
+    resolves it from the KV via get_credential(). See docs/kv-credentials.md.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator register-credential",
+        description="Store a provider credential into the KV registry at bootstrap.",
+    )
+    parser.add_argument("--name", required=True, help="Credential name, e.g. OPENAI_API_KEY.")
+    source = parser.add_mutually_exclusive_group()
+    source.add_argument(
+        "--value-stdin",
+        action="store_true",
+        help="Read the secret value from stdin (preferred; keeps it out of argv/env).",
+    )
+    source.add_argument(
+        "--from-env",
+        metavar="VAR",
+        help="Bootstrap transport: read the secret value from this env var (e.g. --from-env OPENAI_API_KEY).",
+    )
+    args = parser.parse_args(argv)
+
+    if args.from_env:
+        # Bootstrap transport only: the deploy step injects secrets.OPENAI_API_KEY
+        # into this one-shot process; it is never read at request time.
+        if args.from_env not in os.environ:
+            parser.error(f"env var {args.from_env} is not set for bootstrap transport")
+        value = os.environ[args.from_env]
+    else:
+        # Default: read from stdin so the secret never touches argv or the app env.
+        value = sys.stdin.read().strip()
+
+    if not value:
+        parser.error("empty credential value; provide a non-empty secret")
+
+    register_credential(args.name, value)
+    print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
+
+
 def main() -> None:
-    """Parse CLI options and run either prompt completion or the HTTP server."""
+    """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
+    if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
+        _register_credential_command(sys.argv[2:])
+        return
+
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")

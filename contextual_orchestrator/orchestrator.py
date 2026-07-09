@@ -24,6 +24,7 @@ import urllib.error
 import urllib.request
 
 from .conventions import require_object_name
+from .credentials import NotConfigured, get_credential
 
 
 ChatMessage = dict[str, str]
@@ -62,7 +63,11 @@ class ModelAgent:
     id: str
     model: str
     base_url: str = "mock://local"
+    # Legacy field: kept for back-compat. When set, its STRING is treated as the
+    # KV credential NAME (never read as an environment variable). Prefer
+    # ``credential_key``. See docs/kv-credentials.md.
     api_key_env: str = ""
+    credential_key: str = "OPENAI_API_KEY"
     tags: tuple[str, ...] = ()
     priority: int = 0
     disabled: bool = False
@@ -71,6 +76,16 @@ class ModelAgent:
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+
+    @property
+    def credential_name(self) -> str:
+        """KV credential name for this agent's provider secret.
+
+        Back-compat: a legacy ``api_key_env`` value is treated as the credential
+        NAME (its string), not as an environment variable to read. Otherwise the
+        modern ``credential_key`` is used.
+        """
+        return self.api_key_env or self.credential_key
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ModelAgent":  # pragma: no cover
@@ -81,6 +96,7 @@ class ModelAgent:
             model=value["model"],
             base_url=value.get("base_url", "mock://local"),
             api_key_env=value.get("api_key_env", ""),
+            credential_key=value.get("credential_key", "OPENAI_API_KEY"),
             tags=tuple(value.get("tags", ())),
             priority=int(value.get("priority", 0)),
             disabled=bool(value.get("disabled", False)),
@@ -197,9 +213,11 @@ class ModelClient:
             return self._mock(agent, messages)
 
         self._validate_provider(agent)  # pragma: no cover
-        api_key = os.environ.get(agent.api_key_env)  # pragma: no cover
+        api_key = get_credential(agent.credential_name)  # pragma: no cover
         if not api_key:  # pragma: no cover
-            raise RuntimeError(f"{agent.id} requires ${agent.api_key_env}")
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV"
+            )
 
         payload = {  # pragma: no cover
             "model": agent.model,
@@ -230,7 +248,7 @@ class ModelClient:
 
     def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
-        api_key = os.environ.get(agent.api_key_env, "")
+        api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
@@ -249,8 +267,14 @@ class ModelClient:
 
     def _validate_provider(self, agent: ModelAgent) -> None:
         """Reject unsafe remote model endpoints before any egress happens."""
-        if not agent.api_key_env:
-            raise RuntimeError(f"{agent.id} requires explicit api_key_env")
+        # Runtime secret must be resolvable from the KV — never an env var name,
+        # never a silent os.getenv fallback. (Legacy api_key_env, if set, is used
+        # only as the credential NAME; see ModelAgent.credential_name.)
+        if get_credential(agent.credential_name) is None:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
+                "(this replaces the legacy api_key_env environment pattern)"
+            )
         parsed = urlparse(agent.base_url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise RuntimeError(f"{agent.id} base_url must use https")
@@ -7682,18 +7706,18 @@ class TaskOrchestrator:
                 continue
             remote.append(agent.id)
             parsed = urlparse(agent.base_url)
-            if parsed.scheme != "https" or not agent.api_key_env:
+            if parsed.scheme != "https" or not agent.credential_name:
                 unsafe.append(agent.id)
         if unsafe:
             status = "fail"
             evidence = f"unsafe provider egress config for agents: {', '.join(sorted(unsafe))}"
-            remediation = "Use https provider endpoints with explicit api_key_env before enabling remote egress."
+            remediation = "Use https provider endpoints with a named KV credential before enabling remote egress."
         else:
             status = "pass"
             evidence = (
                 "mock providers only"
                 if not remote
-                else f"{len(remote)} remote providers use https and explicit api_key_env"
+                else f"{len(remote)} remote providers use https and a named KV credential"
             )
             remediation = "Keep provider allow-list enforcement enabled for non-mock providers."
         return self._criterion("provider_egress_safety", "Provider egress safety", status, evidence, remediation)
