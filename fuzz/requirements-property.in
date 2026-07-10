@@ -1,0 +1,4 @@
+# Property-based fuzz job deps (Python 3.12). Compile: uv pip compile fuzz/requirements-property.in --generate-hashes --universal -o fuzz/requirements-property.txt
+pip
+hypothesis>=6.100
+pytest

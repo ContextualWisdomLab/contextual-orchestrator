@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
+from contextvars import ContextVar
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
@@ -29,7 +30,6 @@ from .credentials import NotConfigured, get_credential
 
 ChatMessage = dict[str, str]
 
-
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
 
@@ -46,6 +46,11 @@ def estimate_tokens(text: str) -> int:
     """
     return (len(text) + 3) // 4 if text else 0
 
+
+_COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
+    "commercial_report_cache",
+    default=None,
+)
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -7822,6 +7827,61 @@ def redact_value(value: Any) -> Any:
         return {key: redact_value(item) for key, item in value.items()}
     return value
 
+def _freeze_report_cache_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (str(key), _freeze_report_cache_value(item))
+                for key, item in value.items()
+            )
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_report_cache_value(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted(_freeze_report_cache_value(item) for item in value))
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def _cached_commercial_report(method: Any) -> Any:
+    @wraps(method)
+    def wrapper(self: TaskOrchestrator, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        cache = _COMMERCIAL_REPORT_CACHE.get()
+        token = None
+        if cache is None:
+            cache = {}
+            token = _COMMERCIAL_REPORT_CACHE.set(cache)
+        try:
+            key = (
+                method.__name__,
+                _freeze_report_cache_value(args),
+                _freeze_report_cache_value(kwargs),
+            )
+            if key not in cache:
+                cache[key] = method(self, *args, **kwargs)
+            return cache[key]
+        finally:
+            if token is not None:
+                _COMMERCIAL_REPORT_CACHE.reset(token)
+
+    return wrapper
+
+
+for _commercial_report_name, _commercial_report_method in list(TaskOrchestrator.__dict__.items()):
+    if (
+        _commercial_report_name.startswith("commercial_")
+        and _commercial_report_name.endswith("_report")
+        and callable(_commercial_report_method)
+    ):
+        setattr(
+            TaskOrchestrator,
+            _commercial_report_name,
+            _cached_commercial_report(_commercial_report_method),
+        )
+
 
 def _pareto_front(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
     """Configs not dominated on (quality up, cost down)."""
@@ -8026,12 +8086,21 @@ def chat_completion_response(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
     include_trace: bool = False,
+    usage: dict[str, int] | None = None,
 ) -> dict[str, Any]:  # pragma: no cover
-    """Wrap orchestration output in an OpenAI-compatible chat completion response."""
+    """Wrap orchestration output in an OpenAI-compatible chat completion response.
+
+    ``usage`` carries the token counts recorded by the cost ledger; when absent
+    the response reports zeros (the count could not be computed).
+    """
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result["mode"],
         "verification": result.get("verification"),
+        "channel": result.get("channel"),
+        "routing_reason": result.get("routing_reason"),
+        "usage_record_id": result.get("usage_record_id"),
+        "cost": result.get("cost"),
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
@@ -8047,7 +8116,7 @@ def chat_completion_response(
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
     }
 

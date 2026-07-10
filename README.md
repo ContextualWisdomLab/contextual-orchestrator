@@ -139,6 +139,66 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
 
 These are process-local measured signals for a stdlib lab, not a billing system or production compliance data.
 
+## Cost review + routing hub
+
+The orchestrator is the single control point for **LLM cost review** and
+**sync-vs-batch routing** (a LiteLLM-plus scope: cost optimiser + upstream load
+balancing + batch routing). All config — prices, thresholds, batch endpoints —
+is read from a **KV config store**, never `os.getenv`.
+
+- **Usage + cost ledger.** Every completion, sync *and* batch, builds a
+  prompt-safe usage record with generated IDs, token counts, cost, provider,
+  model, channel, route mode, and attribution dimensions. Raw prompt and answer
+  text are not part of the usage record or telemetry event. The default
+  in-memory ledger keeps local reports available; external persistence/export
+  should be wired through the OpenTelemetry-shaped usage event sink or the
+  bounded `NonBlockingLedgerStore`, so store failures are observable as usage
+  export health without failing completions. Cost is attributable on seven
+  first-class dimensions catalogued in `cost_attribution_dimensions`: **account,
+  service, upstream API/provider, model name, team, group, company**. Token
+  counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is
+  configured, and fall back to a deterministic heuristic otherwise.
+- **Reporting.** `GET /api/v1/cost_reports/rollup?dimension=team&start=&end=`
+  rolls up cost + tokens by any dimension over any time window;
+  `GET /api/v1/llm_usage_records` lists raw ledger rows;
+  `GET /api/v1/cost_attribution_dimensions` lists the dimension catalog.
+- **Routing.** `RoutingPolicy` decides sync vs batch from request hints
+  (`{"routing": {"latency_tolerant": true}}` on `/v1/chat/completions`) plus
+  KV thresholds. Interactive requests stay on the fast sync path; latency-tolerant
+  or bulk requests are dispatched to a batch backend.
+- **Batch routing to pg-llm-batch.** The production batch backend is an injected
+  [`pg-llm-batch`](https://github.com/ContextualWisdomLab/pg-llm-batch)
+  OpenAI-compatible Batch API client (submit JSONL -> poll -> retrieve). A local
+  in-process backend preserves the mock/standalone path with no external service
+  or repository split.
+  Submit via `POST /api/v1/batch_routing_jobs`, poll
+  `GET /api/v1/batch_routing_jobs/{id}`, retrieve
+  `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
+- **Batch embeddings.** Bulk, latency-tolerant embedding work (e.g. naruon's
+  email-import backfill) submits to `POST /v1/batch/embeddings`
+  (`{model, input|inputs:[...], endpoint, metadata|attribution}`) and polls
+  `GET /v1/batch/embeddings/{batch_id}`. The response is
+  `{batch_id, status, embeddings:[{index, embedding}], cost_micro_usd,
+  token_counts, total_tokens, part_count, input_part_counts, map_reduce}`. Before
+  the provider call, the coordinator maps oversized inputs into token-budgeted
+  embedding parts (`routing.embedding_max_tokens_per_request`, default 280,000;
+  `routing.embedding_max_chars_per_part`, default 240,000) and reduces part
+  vectors with a token-weighted average, so Azure/LiteLLM over-limit embedding
+  requests are split internally instead of surfacing as caller errors. It routes
+  through the same RoutingPolicy/cost optimiser and `pg-llm-batch` embeddings
+  backend (local in-process backend standalone), and records one usage-ledger row
+  per original vector with the full attribution dimensions (service, team,
+  group, company, provider) carried in `metadata`.
+- **Health.** `GET /healthz` is an unauthenticated liveness probe.
+- **Standalone + optional pg-llm-batch integration.** The hub runs standalone
+  with the in-memory config store and local batch backend; wiring a Postgres DSN
+  and an installed/deployed `pg_llm_batch` client activates the KV/secret stores,
+  `pg_tiktoken` counting, and the production batch backend without adding a
+  repository split here.
+
+Grounding papers (LLM cost, routing, load balancing) live in
+[docs/papers](docs/papers/README.md) with citations.
+
 ## Design Artifacts
 
 - [Library research](docs/library_research.md)
