@@ -7,7 +7,7 @@ strategies are provided behind one :class:`TokenCounter`-compatible surface:
   It approximates BPE token counts from whitespace/word structure so standalone
   runs and tests get stable, deterministic numbers without Postgres.
 * :class:`PgTiktokenAdapter` — delegates to ``pg_llm_batch.TokenCounter``
-  (``pg_tiktoken`` running *inside* Postgres) when a DSN + the submodule are
+  (``pg_tiktoken`` running *inside* Postgres) when a DSN + the package are
   available, so counts match exactly what the batch engine bills against.
 
 Selection is centralised in :func:`build_token_counter`, which never reads the
@@ -93,7 +93,7 @@ def build_token_counter(
 ) -> HeuristicTokenCounter | PgTiktokenAdapter:
     """Return the best available token counter.
 
-    Prefers ``pg_tiktoken`` (via the submodule) when a DSN is supplied and the
+    Prefers ``pg_tiktoken`` (via ``pg_llm_batch``) when a DSN is supplied and the
     dependency is importable; otherwise returns the heuristic estimator. Never
     reads the environment.
     """

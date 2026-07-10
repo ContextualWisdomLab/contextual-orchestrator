@@ -6,9 +6,9 @@ batch-backend endpoints, credentials — is read from a KV store, **never** from
 
 * :class:`InMemoryConfigStore` — the always-available, dependency-free default
   used for standalone runs, tests, and the mock/local path.
-* A thin adapter over ``pg_llm_batch.PostgresConfigStore`` /
-  ``pg_llm_batch.SecretStore`` (the submodule) when a Postgres DSN is supplied
-  via :func:`get_config_store`. The DSN itself is the only bootstrap transport;
+* A thin adapter over an installed ``pg_llm_batch.PostgresConfigStore`` /
+  ``pg_llm_batch.SecretStore`` when a Postgres DSN is supplied via
+  :func:`get_config_store`. The DSN itself is the only bootstrap transport;
   it is passed in explicitly by the caller, not resolved from the environment
   here.
 
@@ -86,7 +86,7 @@ class InMemoryConfigStore:
 class PostgresConfigStoreAdapter:
     """Adapter exposing ``pg_llm_batch`` KV + secret stores as a :class:`ConfigStore`.
 
-    Instantiated only when a DSN is supplied and the submodule is importable;
+    Instantiated only when a DSN is supplied and ``pg_llm_batch`` is importable;
     keeps the orchestrator dependency-light while reusing the batch engine's
     audited ``com_config`` / ``com_secrets`` tables when Postgres is available.
     """
@@ -129,12 +129,12 @@ def get_config_store(
 
     With no DSN, an :class:`InMemoryConfigStore` is returned (the standalone /
     test default). With a DSN, the ``pg_llm_batch`` Postgres-backed stores are
-    used when the submodule is importable; otherwise the call degrades to the
+    used when ``pg_llm_batch`` is importable; otherwise the call degrades to the
     in-memory store so the orchestrator never hard-depends on Postgres.
     """
     if not postgres_dsn:
         return InMemoryConfigStore(seed=seed)
-    try:  # pragma: no cover - exercised only with the submodule + Postgres present
+    try:  # pragma: no cover - exercised only with pg_llm_batch + Postgres present
         from pg_llm_batch import PostgresConfigStore, SecretStore  # type: ignore
 
         config_store = PostgresConfigStore(postgres_dsn)

@@ -133,11 +133,11 @@ is read from a **KV config store**, never `os.getenv`.
   (`{"routing": {"latency_tolerant": true}}` on `/v1/chat/completions`) plus
   KV thresholds. Interactive requests stay on the fast sync path; latency-tolerant
   or bulk requests are dispatched to a batch backend.
-- **Batch routing to pg-llm-batch.** The batch backend is
-  [`pg-llm-batch`](https://github.com/ContextualWisdomLab/pg-llm-batch), added as
-  a git **submodule** under `external/pg-llm-batch` and driven through its
-  OpenAI-compatible Batch API client (submit JSONL → poll → retrieve). A local
-  in-process backend preserves the mock/standalone path with no external service.
+- **Batch routing to pg-llm-batch.** The production batch backend is an injected
+  [`pg-llm-batch`](https://github.com/ContextualWisdomLab/pg-llm-batch)
+  OpenAI-compatible Batch API client (submit JSONL -> poll -> retrieve). A local
+  in-process backend preserves the mock/standalone path with no external service
+  or repository split.
   Submit via `POST /api/v1/batch_routing_jobs`, poll
   `GET /api/v1/batch_routing_jobs/{id}`, retrieve
   `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
@@ -157,11 +157,11 @@ is read from a **KV config store**, never `os.getenv`.
   per original vector with the full attribution dimensions (service, team,
   group, company, provider) carried in `metadata`.
 - **Health.** `GET /healthz` is an unauthenticated liveness probe.
-- **Standalone + submodule.** The hub runs standalone with the in-memory config
-  store and local batch backend; wiring a Postgres DSN activates the
-  `pg-llm-batch` KV/secret stores, `pg_tiktoken` counting, and the pg-llm-batch
-  batch backend. Clone with submodules via
-  `git clone --recurse-submodules` (or `git submodule update --init`).
+- **Standalone + optional pg-llm-batch integration.** The hub runs standalone
+  with the in-memory config store and local batch backend; wiring a Postgres DSN
+  and an installed/deployed `pg_llm_batch` client activates the KV/secret stores,
+  `pg_tiktoken` counting, and the production batch backend without adding a
+  repository split here.
 
 Grounding papers (LLM cost, routing, load balancing) live in
 [docs/papers](docs/papers/README.md) with citations.

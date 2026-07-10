@@ -35,13 +35,13 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
-## Batch execution / load balancing (submodule)
+## Batch execution / load balancing
 
-The batch backend (`pg-llm-batch`, added as a git submodule) carries its own
-grounding papers under `external/pg-llm-batch/docs/papers/` — PagedAttention /
-vLLM (2309.06180) and DeepSpeed-FastGen (2401.08671) — which motivate
-throughput-oriented **batched** inference and the load-balancing that makes the
-latency-tolerant batch route economical.
+The external `pg-llm-batch` service carries its own grounding papers, including
+PagedAttention / vLLM (2309.06180) and DeepSpeed-FastGen (2401.08671), which
+motivate throughput-oriented **batched** inference and the load-balancing that
+makes the latency-tolerant batch route economical. Those sources are referenced
+but not vendored here so this repository remains one deployable control plane.
 
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no

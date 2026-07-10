@@ -11,8 +11,8 @@ backend (latency-tolerant, cost-optimised). This module owns:
 * Batch backends behind one :class:`BatchBackend` surface:
     * :class:`LocalBatchBackend` — runs requests in-process via an injected
       runner (preserves the mock/local path; used by tests and standalone).
-    * :class:`PgLlmBatchBackend` — submits to **pg-llm-batch** (the submodule /
-      service) over its OpenAI-compatible ``BatchAPIClient`` and retrieves
+    * :class:`PgLlmBatchBackend` — submits to **pg-llm-batch** through an
+      injected OpenAI-compatible ``BatchAPIClient`` and retrieves
       results, so batch model routing is controlled by the orchestrator.
 
 Config/thresholds come from KV, never ``os.getenv``.
@@ -262,8 +262,8 @@ class PgLlmBatchBackend:
 
     Drives the pg-llm-batch OpenAI-compatible ``BatchAPIClient`` async flow
     (upload JSONL -> create batch job -> poll -> download results). The client
-    is injected so it can be the real ``pg_llm_batch.BatchAPIClient`` (from the
-    submodule/service) in production or a fake in tests. An optional
+    is injected so it can be the real ``pg_llm_batch.BatchAPIClient`` in
+    production or a fake in tests. An optional
     ``payload_assembler`` persists the JSONL into Postgres and returns a
     ``memory://`` reference; without one, an in-memory reference is used (the
     injected client is responsible for loading it).
