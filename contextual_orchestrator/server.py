@@ -320,6 +320,7 @@ def build_server(
                     self._send(OPENAPI_SPEC)
                     return
                 if path == "/healthz":
+                    # Unauthenticated liveness probe for containers/orchestrators.
                     self._send({
                         "status": "ok",
                         "service": "contextual-orchestrator",
