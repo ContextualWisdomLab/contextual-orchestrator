@@ -403,6 +403,10 @@ class EmbeddingBatchRequest:
     model: str = "contextual-orchestrator"
     custom_id: str = field(default_factory=lambda: f"emb_{uuid.uuid4().hex}")
     attribution: Dict[str, Any] = field(default_factory=dict)
+    source_index: int = 0
+    part_index: int = 0
+    part_count: int = 1
+    token_count: int = 0
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API embeddings JSONL line."""

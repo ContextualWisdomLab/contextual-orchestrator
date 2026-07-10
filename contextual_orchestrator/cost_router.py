@@ -18,6 +18,7 @@ store, never ``os.getenv``.
 
 from __future__ import annotations
 
+import re
 from typing import Any, Callable, Dict, List, Optional
 
 from .batch_routing import (
@@ -36,6 +37,11 @@ from .batch_routing import (
 from .cost_ledger import AttributionDimensions, CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
 from .token_counting import HeuristicTokenCounter, build_token_counter
+
+_EMBEDDING_CONFIG_CATEGORY = "routing"
+_DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
+_DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
+_EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
 
 class CostRoutingCoordinator:
@@ -75,6 +81,9 @@ class CostRoutingCoordinator:
         # keyed by batch id so poll/retrieve is idempotent (usage recorded once).
         self._embedding_jobs: Dict[str, BatchJob] = {}
         self._embedding_requests: Dict[str, List[EmbeddingBatchRequest]] = {}
+        self._embedding_input_counts: Dict[str, int] = {}
+        self._embedding_part_counts: Dict[str, List[int]] = {}
+        self._embedding_part_limits: Dict[str, Dict[str, int]] = {}
         self._embedding_documents: Dict[str, Dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
@@ -274,18 +283,177 @@ class CostRoutingCoordinator:
         and recorded cost are produced by :meth:`embeddings_batch_document`.
         """
         shared_attribution = dict(attribution or {})
-        requests = [
-            EmbeddingBatchRequest(
-                input_text=str(text),
-                model=model,
-                attribution=dict(shared_attribution),
-            )
-            for text in inputs
-        ]
+        requests, part_counts, part_limits = self._build_embedding_requests(
+            inputs, model=model, attribution=shared_attribution
+        )
         job = self.embedding_batch_backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
         self._embedding_requests[job.job_id] = requests
+        self._embedding_input_counts[job.job_id] = len(inputs)
+        self._embedding_part_counts[job.job_id] = part_counts
+        self._embedding_part_limits[job.job_id] = part_limits
         return job
+
+    def _build_embedding_requests(
+        self,
+        inputs: List[str],
+        *,
+        model: str,
+        attribution: Dict[str, Any],
+    ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
+        """Map original embedding inputs into token-budgeted provider parts."""
+        max_tokens, max_chars = self._embedding_request_limits()
+        requests: List[EmbeddingBatchRequest] = []
+        part_counts: List[int] = []
+        for source_index, text in enumerate(inputs):
+            source_text = str(text)
+            parts = self._split_embedding_input(
+                source_text, model=model, max_tokens=max_tokens, max_chars=max_chars
+            )
+            part_count = len(parts)
+            part_counts.append(part_count)
+            for part_index, (part_text, token_count) in enumerate(parts):
+                requests.append(
+                    EmbeddingBatchRequest(
+                        input_text=part_text,
+                        model=model,
+                        attribution=dict(attribution),
+                        source_index=source_index,
+                        part_index=part_index,
+                        part_count=part_count,
+                        token_count=token_count,
+                    )
+                )
+        return requests, part_counts, {
+            "max_tokens_per_part": max_tokens,
+            "max_chars_per_part": max_chars,
+        }
+
+    def _embedding_request_limits(self) -> tuple[int, int]:
+        """Return configured per-provider-call embedding ceilings.
+
+        Azure's current embeddings limit is surfaced by LiteLLM as a 300,000
+        token request cap. The default stays below that ceiling and also applies
+        a character guard so heuristic token counters cannot accidentally send a
+        very long no-whitespace string as one provider request.
+        """
+        max_tokens = _positive_int(
+            self.config.get(
+                _EMBEDDING_CONFIG_CATEGORY,
+                "embedding_max_tokens_per_request",
+                _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST,
+            ),
+            _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST,
+        )
+        max_chars = _positive_int(
+            self.config.get(
+                _EMBEDDING_CONFIG_CATEGORY,
+                "embedding_max_chars_per_part",
+                _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART,
+            ),
+            _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART,
+        )
+        return max_tokens, max_chars
+
+    def _split_embedding_input(
+        self,
+        text: str,
+        *,
+        model: str,
+        max_tokens: int,
+        max_chars: int,
+    ) -> List[tuple[str, int]]:
+        """Split one original embedding input into provider-safe map parts."""
+        if text == "":
+            return [("", 0)]
+        parts = self._force_token_safe_chunks(
+            text, model=model, max_tokens=max_tokens, max_chars=max_chars
+        )
+        return parts or [("", 0)]
+
+    def _force_token_safe_chunks(
+        self,
+        text: str,
+        *,
+        model: str,
+        max_tokens: int,
+        max_chars: int,
+    ) -> List[tuple[str, int]]:
+        """Recursively split text until each chunk fits token and char budgets."""
+        if text == "":
+            return [("", 0)]
+        if len(text) > max_chars:
+            chunks: List[tuple[str, int]] = []
+            for start in range(0, len(text), max_chars):
+                chunks.extend(
+                    self._force_token_safe_chunks(
+                        text[start : start + max_chars],
+                        model=model,
+                        max_tokens=max_tokens,
+                        max_chars=max_chars,
+                    )
+                )
+            return chunks
+
+        token_count = self._count_embedding_tokens(text, model)
+        if token_count <= max_tokens or len(text) <= 1:
+            return [(text, token_count)]
+
+        units = _EMBEDDING_UNIT_RE.findall(text)
+        if len(units) > 1:
+            chunks = []
+            current = ""
+            for unit in units:
+                candidate = f"{current}{unit}"
+                if current and (
+                    len(candidate) > max_chars
+                    or self._count_embedding_tokens(candidate, model) > max_tokens
+                ):
+                    chunks.extend(
+                        self._force_token_safe_chunks(
+                            current,
+                            model=model,
+                            max_tokens=max_tokens,
+                            max_chars=max_chars,
+                        )
+                    )
+                    current = unit
+                else:
+                    current = candidate
+            if current:
+                chunks.extend(
+                    self._force_token_safe_chunks(
+                        current,
+                        model=model,
+                        max_tokens=max_tokens,
+                        max_chars=max_chars,
+                    )
+                )
+            if len(chunks) > 1 or (chunks and chunks[0][0] != text):
+                return chunks
+
+        midpoint = max(1, len(text) // 2)
+        return self._force_token_safe_chunks(
+            text[:midpoint],
+            model=model,
+            max_tokens=max_tokens,
+            max_chars=max_chars,
+        ) + self._force_token_safe_chunks(
+            text[midpoint:],
+            model=model,
+            max_tokens=max_tokens,
+            max_chars=max_chars,
+        )
+
+    def _count_embedding_tokens(self, text: str, model: str) -> int:
+        """Count tokens for embedding split decisions, tolerating adapters."""
+        try:
+            value = int(self.token_counter.count_text(text, model))
+        except Exception:
+            value = len(text.split())
+        if text and value <= 0:
+            return 1
+        return max(0, value)
 
     def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
         """Return the naruon-shaped batch document for ``batch_id``.
@@ -313,24 +481,49 @@ class CostRoutingCoordinator:
         items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
         requests = self._embedding_requests.get(batch_id, [])
         request_by_custom_id = {request.custom_id: request for request in requests}
+        input_count = self._embedding_input_counts.get(batch_id, len(requests))
+        part_counts = self._embedding_part_counts.get(batch_id, [1] * input_count)
+        part_limits = self._embedding_part_limits.get(batch_id, {})
         ordered = sorted(items, key=lambda item: item.index)
+        parts_by_source: Dict[int, List[Dict[str, Any]]] = {index: [] for index in range(input_count)}
+        for item in ordered:
+            request = request_by_custom_id.get(item.custom_id)
+            source_index = request.source_index if request else item.index
+            prompt_tokens = int(item.prompt_tokens)
+            if prompt_tokens <= 0 and request is not None:
+                prompt_tokens = request.token_count or int(
+                    self.token_counter.count_text(request.input_text, item.model)
+                )
+            parts_by_source.setdefault(source_index, []).append(
+                {
+                    "part_index": request.part_index if request else 0,
+                    "embedding": item.embedding,
+                    "prompt_tokens": max(0, prompt_tokens),
+                    "model": item.model,
+                    "attribution": dict(request.attribution) if request else {},
+                }
+            )
 
         embeddings: List[Dict[str, Any]] = []
         token_counts: List[int] = []
         total_cost_amount = 0.0
         currency_code = "USD"
-        for item in ordered:
-            request = request_by_custom_id.get(item.custom_id)
-            attribution = dict(request.attribution) if request else {}
-            prompt_tokens = int(item.prompt_tokens)
-            if prompt_tokens <= 0 and request is not None:
-                prompt_tokens = int(self.token_counter.count_text(request.input_text, item.model))
+        model_name = "contextual-orchestrator"
+        for source_index in range(input_count):
+            parts = sorted(parts_by_source.get(source_index, []), key=lambda item: item["part_index"])
+            if not parts:
+                embeddings.append({"index": source_index, "embedding": []})
+                token_counts.append(0)
+                continue
+            attribution = dict(parts[0]["attribution"])
+            prompt_tokens = sum(int(part["prompt_tokens"]) for part in parts)
+            model_name = str(parts[0]["model"])
             provider = str(
                 attribution.get("provider") or attribution.get("upstream_api") or "unknown"
             )
             record = self.ledger.record_usage(
                 provider=provider,
-                model=item.model,
+                model=model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
                 request_channel="batch",
@@ -341,17 +534,29 @@ class CostRoutingCoordinator:
             total_cost_amount += float(record.cost_amount)
             currency_code = record.currency_code
             token_counts.append(record.prompt_tokens)
-            embeddings.append({"index": item.index, "embedding": item.embedding})
+            embeddings.append(
+                {
+                    "index": source_index,
+                    "embedding": _weighted_average_embedding(
+                        [(part["embedding"], int(part["prompt_tokens"])) for part in parts]
+                    ),
+                }
+            )
 
         document = {
             "batch_id": batch_id,
             "status": "completed",
             "backend": job.backend,
-            "model": ordered[0].model if ordered else "contextual-orchestrator",
+            "model": model_name,
             "embeddings": embeddings,
             "token_counts": token_counts,
             "total_tokens": sum(token_counts),
-            "part_count": 1,
+            "part_count": len(requests),
+            "input_part_counts": part_counts,
+            "map_reduce": {
+                "strategy": "token_budgeted_embedding_parts_weighted_average",
+                **part_limits,
+            },
             "cost_amount": round(total_cost_amount, 6),
             "currency_code": currency_code,
             "cost_micro_usd": int(round(total_cost_amount * 1_000_000)),
@@ -409,3 +614,30 @@ def _provider_from_base_url(base_url: str) -> str:
     except Exception:
         return ""
     return host
+
+
+def _positive_int(value: Any, default: int) -> int:
+    """Return ``value`` as a positive int, or ``default`` when invalid."""
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
+def _weighted_average_embedding(parts: List[tuple[List[float], int]]) -> List[float]:
+    """Reduce mapped chunk vectors into one deterministic embedding vector."""
+    vectors = [vector for vector, _weight in parts if vector]
+    if not vectors:
+        return []
+    dimension = max(len(vector) for vector in vectors)
+    total_weight = sum(max(1, int(weight)) for _vector, weight in parts)
+    if total_weight <= 0:
+        total_weight = len(parts)
+    reduced: List[float] = []
+    for offset in range(dimension):
+        weighted_sum = 0.0
+        for vector, weight in parts:
+            weighted_sum += (vector[offset] if offset < len(vector) else 0.0) * max(1, int(weight))
+        reduced.append(round(weighted_sum / total_weight, 8))
+    return reduced

@@ -416,7 +416,7 @@ OPENAPI_SPEC = {
         "/v1/batch/embeddings": {
             "post": {
                 "operationId": "create_batch_embeddings_job",
-                "summary": "Submit a bulk, latency-tolerant embeddings batch (routed via pg-llm-batch, cost-recorded)",
+                "summary": "Submit a bulk, latency-tolerant embeddings batch (token-split, routed via pg-llm-batch, cost-recorded)",
                 "security": [{"inference_bearer_auth": []}],
                 "requestBody": {
                     "required": True,
@@ -450,7 +450,8 @@ OPENAPI_SPEC = {
                         "description": (
                             "Batch completed synchronously: "
                             "{batch_id, status, embeddings:[{index, embedding}], "
-                            "cost_micro_usd, token_counts, total_tokens, part_count}"
+                            "cost_micro_usd, token_counts, total_tokens, part_count, "
+                            "input_part_counts, map_reduce}"
                         )
                     },
                     "202": {"description": "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}"},
@@ -460,7 +461,7 @@ OPENAPI_SPEC = {
         "/v1/batch/embeddings/{batch_id}": {
             "get": {
                 "operationId": "get_batch_embeddings_job",
-                "summary": "Poll an embeddings batch; returns vectors + recorded cost once completed",
+                "summary": "Poll an embeddings batch; returns reduced vectors + recorded cost once completed",
                 "security": [{"inference_bearer_auth": []}],
                 "parameters": [
                     {"name": "batch_id", "in": "path", "required": True, "schema": {"type": "string"}}
@@ -468,7 +469,8 @@ OPENAPI_SPEC = {
                 "responses": {
                     "200": {
                         "description": (
-                            "{batch_id, status, embeddings:[[...]], cost_micro_usd, token_counts}"
+                            "{batch_id, status, embeddings:[[...]], cost_micro_usd, "
+                            "token_counts, input_part_counts, map_reduce}"
                         )
                     },
                     "404": {"description": "Embeddings batch not found"},

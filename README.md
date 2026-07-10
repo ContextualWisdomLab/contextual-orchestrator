@@ -138,11 +138,16 @@ is read from a **KV config store**, never `os.getenv`.
   (`{model, input|inputs:[...], endpoint, metadata|attribution}`) and polls
   `GET /v1/batch/embeddings/{batch_id}`. The response is
   `{batch_id, status, embeddings:[{index, embedding}], cost_micro_usd,
-  token_counts, total_tokens, part_count}`. It routes through the same
-  RoutingPolicy/cost optimiser and `pg-llm-batch` embeddings backend (local
-  in-process backend standalone), and records one usage-ledger row per vector
-  with the full attribution dimensions (service, team, group, company, provider)
-  carried in `metadata`.
+  token_counts, total_tokens, part_count, input_part_counts, map_reduce}`. Before
+  the provider call, the coordinator maps oversized inputs into token-budgeted
+  embedding parts (`routing.embedding_max_tokens_per_request`, default 280,000;
+  `routing.embedding_max_chars_per_part`, default 240,000) and reduces part
+  vectors with a token-weighted average, so Azure/LiteLLM over-limit embedding
+  requests are split internally instead of surfacing as caller errors. It routes
+  through the same RoutingPolicy/cost optimiser and `pg-llm-batch` embeddings
+  backend (local in-process backend standalone), and records one usage-ledger row
+  per original vector with the full attribution dimensions (service, team,
+  group, company, provider) carried in `metadata`.
 - **Health.** `GET /healthz` is an unauthenticated liveness probe.
 - **Standalone + submodule.** The hub runs standalone with the in-memory config
   store and local batch backend; wiring a Postgres DSN activates the

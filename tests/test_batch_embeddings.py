@@ -31,7 +31,13 @@ from contextual_orchestrator import (  # noqa: E402
     PriceEntry,
     TaskOrchestrator,
 )
+from contextual_orchestrator.batch_routing import (  # noqa: E402
+    BatchJob,
+    EmbeddingBatchRequest,
+    EmbeddingBatchResultItem,
+)
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
 
 
 CONTRACT = json.loads(
@@ -80,6 +86,45 @@ def _request(method, url, token=None, body=None):
             return response.status, json.loads(response.read())
     except urllib.error.HTTPError as exc:  # pragma: no cover - surfaced in asserts
         return exc.code, json.loads(exc.read())
+
+
+class _RecordingEmbeddingBackend:
+    """Embedding backend that records the exact mapped requests it receives."""
+
+    name = "recording"
+
+    def __init__(self) -> None:
+        self.requests: list[EmbeddingBatchRequest] = []
+        self._results: list[EmbeddingBatchResultItem] = []
+
+    def submit(self, requests, metadata=None):
+        self.requests = list(requests)
+        self._results = [
+            EmbeddingBatchResultItem(
+                custom_id=request.custom_id,
+                index=position,
+                embedding=[
+                    float(request.source_index),
+                    float(request.part_index),
+                    float(request.token_count),
+                ],
+                prompt_tokens=request.token_count,
+                model=request.model,
+            )
+            for position, request in enumerate(self.requests)
+        ]
+        return BatchJob(
+            job_id="recording-embeddings",
+            backend=self.name,
+            status="completed",
+            request_count=len(self.requests),
+        )
+
+    def poll(self, job):
+        return {"job_id": job.job_id, "status": "completed", "is_complete": True}
+
+    def retrieve(self, job):
+        return list(self._results)
 
 
 def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
@@ -166,3 +211,92 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         assert document["status"] == "completed"
     finally:
         server.shutdown()
+
+
+def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
+    """Large embedding inputs are mapped into provider-safe parts, then reduced."""
+    agents = [
+        ModelAgent(
+            id="mock_worker",
+            model="mock-a",
+            base_url="mock://a",
+            provider_name="mock",
+            tags=("reasoning",),
+            priority=1,
+        )
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    config.set("routing", "embedding_max_tokens_per_request", 4)
+    config.set("routing", "embedding_max_chars_per_part", 200)
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("acme-provider", "text-embedding-test", 1.0, 0.0))
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        price_book=price_book,
+        token_counter=HeuristicTokenCounter(tokens_per_word=1.0),
+        embedding_batch_backend=backend,
+    )
+
+    document = coordinator.complete_embeddings_batch(
+        ["one two three four five six seven eight", "short input"],
+        model="text-embedding-test",
+        attribution={"provider": "acme-provider", "team": "hyosung"},
+    )
+
+    assert len(backend.requests) > 2
+    assert all(request.token_count <= 4 for request in backend.requests)
+    assert document["part_count"] == len(backend.requests)
+    assert document["input_part_counts"][0] > 1
+    assert document["input_part_counts"][1] == 1
+    assert [item["index"] for item in document["embeddings"]] == [0, 1]
+
+    expected_token_counts = []
+    for source_index in range(2):
+        expected_token_counts.append(
+            sum(request.token_count for request in backend.requests if request.source_index == source_index)
+        )
+    assert document["token_counts"] == expected_token_counts
+    assert document["total_tokens"] == sum(expected_token_counts)
+
+    records = coordinator.ledger.records()
+    assert len(records) == 2
+    assert all(record["request_channel"] == "batch" for record in records)
+    assert all(record["route_mode"] == "embedding" for record in records)
+
+
+def test_batch_embeddings_char_guard_splits_no_whitespace_input() -> None:
+    """The char budget catches inputs a heuristic token counter may undercount."""
+    agents = [
+        ModelAgent(
+            id="mock_worker",
+            model="mock-a",
+            base_url="mock://a",
+            provider_name="mock",
+            tags=("reasoning",),
+            priority=1,
+        )
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    config.set("routing", "embedding_max_tokens_per_request", 100)
+    config.set("routing", "embedding_max_chars_per_part", 5)
+    backend = _RecordingEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        config,
+        token_counter=HeuristicTokenCounter(tokens_per_word=1.0),
+        embedding_batch_backend=backend,
+    )
+
+    document = coordinator.complete_embeddings_batch(
+        ["abcdefghijkl"],
+        model="text-embedding-test",
+        attribution={"provider": "acme-provider"},
+    )
+
+    assert [request.input_text for request in backend.requests] == ["abcde", "fghij", "kl"]
+    assert document["part_count"] == 3
+    assert document["input_part_counts"] == [3]
