@@ -270,6 +270,30 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
             os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
 
 
+def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:
+    client = ModelClient()
+    file_agent = ModelAgent("file_agent", "gpt-example", "file:///etc/passwd", "MODEL_KEY")
+
+    try:
+        client._send(file_agent, {"model": "gpt-example"})
+    except RuntimeError as exc:
+        assert "http(s)" in str(exc)
+    else:
+        raise AssertionError("file:// provider URL should fail before urllib opens it")
+
+
+def test_provider_transport_rejects_protocol_relative_batch_paths() -> None:
+    client = ModelClient()
+    remote_agent = ModelAgent("remote_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY")
+
+    try:
+        client._batch_raw(remote_agent, "//evil.example/files/leak")
+    except RuntimeError as exc:
+        assert "absolute URL path" in str(exc)
+    else:
+        raise AssertionError("protocol-relative provider path should fail before urllib opens it")
+
+
 def test_redact_value_preserves_non_string_scalars() -> None:
     assert redact_value(7) == 7
 
@@ -286,5 +310,7 @@ if __name__ == "__main__":
     test_redaction_masks_common_sensitive_values()
     test_external_provider_requires_explicit_key_env_and_public_https()
     test_external_provider_rejects_insecure_or_unlisted_hosts()
+    test_provider_transport_rejects_local_url_schemes_before_urllib()
+    test_provider_transport_rejects_protocol_relative_batch_paths()
     test_redact_value_preserves_non_string_scalars()
     print("ok")

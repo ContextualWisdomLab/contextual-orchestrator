@@ -18,6 +18,7 @@ from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
 from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
 from .orchestrator import (
+    BudgetExceededError,
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
@@ -376,6 +377,9 @@ def build_server(
                     return
                 if path == "/api/v1/analytics_snapshots/latest":
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
+                    return
+                if path == "/api/v1/spend_analytics/latest":
+                    self._send(orchestrator.spend_analytics())
                     return
                 if path == "/api/v1/sales_readiness/latest":
                     self._send(orchestrator.sales_readiness_report(
@@ -792,6 +796,8 @@ def build_server(
                 self._send_error(404, "route_not_found", "not found")
             except json.JSONDecodeError:
                 self._send_error(400, "invalid_json", "request body is not valid JSON")
+            except BudgetExceededError as exc:
+                self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:

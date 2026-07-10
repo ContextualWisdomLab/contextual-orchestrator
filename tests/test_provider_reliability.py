@@ -142,7 +142,7 @@ def test_circuit_breaker_opens_then_skips_dead_agent() -> None:
 
     # Each invoke fails on primary then succeeds on backup; primary accrues failures.
     for _ in range(orchestrator.circuit_failure_threshold):
-        output, served = orchestrator._invoke(
+        output, served, _usage = orchestrator._invoke(
             primary, [{"role": "system", "content": "Role: worker"}], text="task", role="worker"
         )
         assert served == "backup_worker"

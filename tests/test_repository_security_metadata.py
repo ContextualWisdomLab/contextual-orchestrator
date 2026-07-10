@@ -87,6 +87,7 @@ def test_security_policy_documents_reporting_and_automation():
     assert "dependency review" in policy_text
     assert "pip-audit" in policy_text
     assert "requirements.lock" in policy_text
+    assert "requirements-security-ci.txt" in policy_text
     assert "CycloneDX SBOM" in policy_text
     assert "Trivy filesystem scanning" in policy_text
     assert "OpenSSF Scorecard" in policy_text
