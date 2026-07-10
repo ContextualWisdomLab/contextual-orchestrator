@@ -454,38 +454,42 @@ class _StateStore:
     ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
     upsert by key; stream kinds (analytics, audit) append. Stream rows grow unbounded
     on disk while the in-memory deques stay capped — add pruning if db size matters.
+    Runtime values (kind, key, payload, limit) are always bound through SQLite
+    placeholders so persisted prompts and identifiers cannot become SQL syntax.
     """
 
     _KEYED = {"workflow_run", "evaluation_run"}
+    _CREATE_RECORDS_SQL = (
+        "CREATE TABLE IF NOT EXISTS records ("
+        "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
+    )
+    _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = "CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)"
+    _DELETE_KEYED_SQL = "DELETE FROM records WHERE kind = ? AND key = ?"
+    _INSERT_SQL = "INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)"
+    _SELECT_ALL_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq"
+    _SELECT_LIMIT_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._conn.execute(
-            "CREATE TABLE IF NOT EXISTS records ("
-            "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
-        )
-        self._conn.execute("CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)")
+        self._conn.execute(self._CREATE_RECORDS_SQL)
+        self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
         self._conn.commit()
 
     def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
         blob = json.dumps(payload, ensure_ascii=False)
         with self._lock:
             if kind in self._KEYED:
-                self._conn.execute("DELETE FROM records WHERE kind = ? AND key = ?", (kind, key))
-            self._conn.execute("INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)", (kind, key, blob))
+                self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
+            self._conn.execute(self._INSERT_SQL, (kind, key, blob))
             self._conn.commit()
 
     def load(self, kind: str, limit: int | None = None) -> list[dict[str, Any]]:
         with self._lock:
             if limit is None:
-                rows = self._conn.execute(
-                    "SELECT payload FROM records WHERE kind = ? ORDER BY seq", (kind,)
-                ).fetchall()
+                rows = self._conn.execute(self._SELECT_ALL_SQL, (kind,)).fetchall()
             else:
-                rows = self._conn.execute(
-                    "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?", (kind, limit)
-                ).fetchall()
+                rows = self._conn.execute(self._SELECT_LIMIT_SQL, (kind, limit)).fetchall()
                 rows = list(reversed(rows))
         return [json.loads(row[0]) for row in rows]
 

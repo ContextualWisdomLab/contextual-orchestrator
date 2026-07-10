@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import os
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 
@@ -67,6 +68,34 @@ def test_store_upserts_keyed_records_and_appends_streams() -> None:
         store.save("audit", None, {"a": 2})
         assert store.load("audit") == [{"a": 1}, {"a": 2}]  # streams append in order
         assert store.load("audit", 1) == [{"a": 2}]  # limit keeps the newest
+        store.close()
+
+
+def test_store_treats_kind_key_and_limit_as_sql_parameters() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        malicious_kind = "audit'; DROP TABLE records; --"
+        malicious_key = "run_k1'; DROP TABLE records; --"
+        store.save(malicious_kind, malicious_key, {"payload": "kind is data"})
+        store.save("workflow_run", malicious_key, {"workflow_run_id": malicious_key, "v": 1})
+
+        assert store.load(malicious_kind) == [{"payload": "kind is data"}]
+        assert store.load("workflow_run", 1) == [{"workflow_run_id": malicious_key, "v": 1}]
+        assert store._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = ? AND name = ?",
+            ("table", "records"),
+        ).fetchone() == ("records",)
+
+        try:
+            store.load("workflow_run", "1; DROP TABLE records; --")  # type: ignore[arg-type]
+        except sqlite3.IntegrityError:
+            pass
+        except sqlite3.OperationalError:
+            pass
+        assert store._conn.execute(
+            "SELECT name FROM sqlite_master WHERE type = ? AND name = ?",
+            ("table", "records"),
+        ).fetchone() == ("records",)
         store.close()
 
 
