@@ -35,7 +35,12 @@ def test_healthz_is_unauthenticated_liveness() -> None:
         thread.join(timeout=5)
 
     assert status == 200
-    assert body == {"status": "ok"}
+    assert body["status"] == "ok"
+    assert body["service"] == "contextual-orchestrator"
+    assert body["agent_count"] == 1
+    assert body["batch_backend"]
+    assert body["embedding_batch_backend"]
+    assert body["usage_record_count"] == 0
 
 
 if __name__ == "__main__":

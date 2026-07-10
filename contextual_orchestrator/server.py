@@ -300,14 +300,11 @@ def build_server(
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
             try:
-                if path == "/healthz":
-                    # Unauthenticated liveness probe for containers/orchestrators.
-                    self._send({"status": "ok"})
-                    return
                 if path == "/openapi.json":
                     self._send(OPENAPI_SPEC)
                     return
                 if path == "/healthz":
+                    # Unauthenticated liveness probe for containers/orchestrators.
                     self._send({
                         "status": "ok",
                         "service": "contextual-orchestrator",
