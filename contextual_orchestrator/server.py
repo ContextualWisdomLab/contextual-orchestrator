@@ -165,7 +165,7 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
         content = message.get("content")
-        if role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
         validated.append({"role": role, "content": content})
     return validated

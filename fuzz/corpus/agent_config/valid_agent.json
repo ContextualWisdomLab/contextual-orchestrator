@@ -1,0 +1,1 @@
+{"id":"general_agent","model":"mock-generalist","base_url":"mock://x","tags":["reasoning"],"priority":1}
