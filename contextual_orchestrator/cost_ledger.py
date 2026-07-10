@@ -27,6 +27,8 @@ DB object names are two-or-more-word snake_case per the repository convention:
 
 from __future__ import annotations
 
+import queue
+import threading
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
 import time
@@ -259,6 +261,220 @@ class LedgerStore(Protocol):
         ...
 
 
+@dataclass(frozen=True)
+class UsageTelemetryEvent:
+    """OpenTelemetry-shaped usage event without prompt or answer content."""
+
+    name: str
+    attributes: Dict[str, Any]
+    metrics: Dict[str, float]
+    status: str = "ok"
+    error_type: Optional[str] = None
+
+    @classmethod
+    def from_record(
+        cls,
+        record: UsageRecord,
+        *,
+        export_state: str,
+        error_type: Optional[str] = None,
+    ) -> "UsageTelemetryEvent":
+        """Build a prompt-safe usage telemetry event from a ledger record."""
+        attributes: Dict[str, Any] = {
+            "gen_ai.system": record.provider_name or "unknown",
+            "gen_ai.operation.name": "chat.completions",
+            "gen_ai.request.model": record.model_name,
+            "gen_ai.response.model": record.model_name,
+            "contextual_orchestrator.usage_record_id": record.usage_record_id,
+            "contextual_orchestrator.request_channel": record.request_channel,
+            "contextual_orchestrator.usage.export_state": export_state,
+        }
+        if record.workflow_run_id:
+            attributes["contextual_orchestrator.workflow_run_id"] = record.workflow_run_id
+        if record.route_mode:
+            attributes["contextual_orchestrator.route_mode"] = record.route_mode
+        for name, value in record.attribution.as_dict().items():
+            attributes[f"contextual_orchestrator.attribution.{name}"] = value
+        if error_type:
+            attributes["error.type"] = error_type
+
+        metrics = {
+            "gen_ai.usage.input_tokens": float(record.prompt_tokens),
+            "gen_ai.usage.output_tokens": float(record.completion_tokens),
+            "gen_ai.usage.total_tokens": float(record.total_tokens),
+            "gen_ai.usage.cost": float(record.cost_amount),
+            "contextual_orchestrator.usage.records": 1.0,
+        }
+        if error_type:
+            metrics["contextual_orchestrator.usage.export_failures"] = 1.0
+        return cls(
+            name="gen_ai.client.usage",
+            attributes=attributes,
+            metrics=metrics,
+            status="error" if error_type else "ok",
+            error_type=error_type,
+        )
+
+
+class UsageTelemetrySink(Protocol):
+    """Sink contract for prompt-safe usage telemetry."""
+
+    def emit_usage(self, event: UsageTelemetryEvent) -> None:
+        """Emit one usage telemetry event."""
+        ...
+
+
+class NoopUsageTelemetrySink:
+    """Default sink for callers that do not wire telemetry yet."""
+
+    def emit_usage(self, event: UsageTelemetryEvent) -> None:
+        return None
+
+
+class InMemoryUsageTelemetrySink:
+    """Small test/operator sink that keeps recent prompt-safe usage events."""
+
+    def __init__(self, max_events: int = 512) -> None:
+        self._max_events = max_events
+        self._events: List[UsageTelemetryEvent] = []
+        self._lock = threading.Lock()
+
+    def emit_usage(self, event: UsageTelemetryEvent) -> None:
+        with self._lock:
+            self._events.append(event)
+            if len(self._events) > self._max_events:
+                del self._events[: len(self._events) - self._max_events]
+
+    def events(self) -> List[UsageTelemetryEvent]:
+        with self._lock:
+            return list(self._events)
+
+
+@dataclass
+class UsageTelemetryHealth:
+    """Health counters for usage ledger export, safe for operator surfaces."""
+
+    records_accepted: int = 0
+    records_stored: int = 0
+    records_dropped: int = 0
+    store_failures: int = 0
+    last_error_type: Optional[str] = None
+
+    def as_dict(self) -> Dict[str, Any]:
+        return {
+            "records_accepted": self.records_accepted,
+            "records_stored": self.records_stored,
+            "records_dropped": self.records_dropped,
+            "store_failures": self.store_failures,
+            "last_error_type": self.last_error_type,
+        }
+
+
+def _emit_usage_event(
+    sink: UsageTelemetrySink,
+    event: UsageTelemetryEvent,
+) -> None:
+    try:
+        sink.emit_usage(event)
+    except Exception:
+        # Telemetry export is best-effort and must not affect completions.
+        return None
+
+
+class NonBlockingLedgerStore:
+    """Ledger store wrapper that keeps persistence out of the request path."""
+
+    def __init__(
+        self,
+        backend: LedgerStore,
+        *,
+        queue_size: int = 1000,
+        telemetry_sink: Optional[UsageTelemetrySink] = None,
+    ) -> None:
+        if queue_size < 1:
+            raise ValueError("queue_size must be at least 1")
+        self.backend = backend
+        self._telemetry_sink = telemetry_sink or NoopUsageTelemetrySink()
+        self._queue: queue.Queue[UsageRecord] = queue.Queue(maxsize=queue_size)
+        self._health = UsageTelemetryHealth()
+        self._lock = threading.Lock()
+        self._worker = threading.Thread(
+            target=self._run,
+            name="contextual-orchestrator-usage-ledger",
+            daemon=True,
+        )
+        self._worker.start()
+
+    def append(self, record: UsageRecord) -> None:
+        """Queue a record for background persistence without blocking."""
+        try:
+            self._queue.put_nowait(record)
+        except queue.Full:
+            self._mark("records_dropped", error_type="queue.Full")
+            _emit_usage_event(
+                self._telemetry_sink,
+                UsageTelemetryEvent.from_record(
+                    record,
+                    export_state="dropped",
+                    error_type="queue.Full",
+                ),
+            )
+            return
+        self._mark("records_accepted")
+        _emit_usage_event(
+            self._telemetry_sink,
+            UsageTelemetryEvent.from_record(record, export_state="queued"),
+        )
+
+    def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
+        """Query the backing store; queued writes may still be in flight."""
+        return self.backend.query(start, end)
+
+    def flush(self, timeout: Optional[float] = None) -> bool:
+        """Wait for queued writes to finish. Returns ``False`` on timeout."""
+        deadline = time.monotonic() + timeout if timeout is not None else None
+        while self._queue.unfinished_tasks:
+            if deadline is not None and time.monotonic() >= deadline:
+                return False
+            time.sleep(0.01)
+        return True
+
+    def telemetry_health(self) -> Dict[str, Any]:
+        with self._lock:
+            return self._health.as_dict()
+
+    def _run(self) -> None:
+        while True:
+            record = self._queue.get()
+            try:
+                self.backend.append(record)
+            except Exception as exc:
+                error_type = type(exc).__name__
+                self._mark("store_failures", error_type=error_type)
+                _emit_usage_event(
+                    self._telemetry_sink,
+                    UsageTelemetryEvent.from_record(
+                        record,
+                        export_state="export_error",
+                        error_type=error_type,
+                    ),
+                )
+            else:
+                self._mark("records_stored")
+                _emit_usage_event(
+                    self._telemetry_sink,
+                    UsageTelemetryEvent.from_record(record, export_state="stored"),
+                )
+            finally:
+                self._queue.task_done()
+
+    def _mark(self, field_name: str, error_type: Optional[str] = None) -> None:
+        with self._lock:
+            setattr(self._health, field_name, getattr(self._health, field_name) + 1)
+            if error_type:
+                self._health.last_error_type = error_type
+
+
 class InMemoryLedgerStore:
     """Dependency-free ledger store backed by a list (default)."""
 
@@ -431,9 +647,23 @@ class CostLedger:
         price_book: PriceBook,
         store: Optional[LedgerStore] = None,
         clock: Any = None,
+        telemetry_sink: Optional[UsageTelemetrySink] = None,
+        non_blocking_store: Optional[bool] = None,
+        store_queue_size: int = 1000,
     ) -> None:
         self.price_book = price_book
-        self.store = store or InMemoryLedgerStore()
+        self.telemetry_sink = telemetry_sink or NoopUsageTelemetrySink()
+        base_store = store or InMemoryLedgerStore()
+        should_wrap = bool(non_blocking_store)
+        if should_wrap:
+            self.store: LedgerStore = NonBlockingLedgerStore(
+                base_store,
+                queue_size=store_queue_size,
+                telemetry_sink=self.telemetry_sink,
+            )
+        else:
+            self.store = base_store
+        self._inline_health = UsageTelemetryHealth()
         self._clock = clock or (lambda: int(time.time()))
 
     def record_usage(
@@ -479,8 +709,45 @@ class CostLedger:
             currency_code=currency,
             attribution=dims,
         )
-        self.store.append(record)
+        try:
+            self.store.append(record)
+        except Exception as exc:
+            self._mark_inline_failure(type(exc).__name__)
+            _emit_usage_event(
+                self.telemetry_sink,
+                UsageTelemetryEvent.from_record(
+                    record,
+                    export_state="export_error",
+                    error_type=type(exc).__name__,
+                ),
+            )
+        else:
+            if not isinstance(self.store, NonBlockingLedgerStore):
+                self._mark_inline_success()
+                _emit_usage_event(
+                    self.telemetry_sink,
+                    UsageTelemetryEvent.from_record(record, export_state="stored"),
+                )
         return record
+
+    def flush(self, timeout: Optional[float] = None) -> bool:
+        """Wait for pending non-blocking usage writes, if any."""
+        flush = getattr(self.store, "flush", None)
+        if callable(flush):
+            return bool(flush(timeout=timeout))
+        return True
+
+    def telemetry_health(self) -> Dict[str, Any]:
+        """Return prompt-safe ledger export health counters."""
+        health = self._inline_health.as_dict()
+        store_health = getattr(self.store, "telemetry_health", None)
+        if callable(store_health):
+            for key, value in store_health().items():
+                if isinstance(value, int):
+                    health[key] = int(health.get(key, 0)) + value
+                elif value:
+                    health[key] = value
+        return health
 
     def rollup(
         self,
@@ -561,6 +828,15 @@ class CostLedger:
     def records(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return raw usage record rows in the optional window."""
         return self.store.query(start, end)
+
+    def _mark_inline_success(self) -> None:
+        self._inline_health.records_accepted += 1
+        self._inline_health.records_stored += 1
+
+    def _mark_inline_failure(self, error_type: str) -> None:
+        self._inline_health.records_accepted += 1
+        self._inline_health.store_failures += 1
+        self._inline_health.last_error_type = error_type
 
 
 def dimension_catalog() -> List[Dict[str, Any]]:

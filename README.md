@@ -118,9 +118,14 @@ The orchestrator is the single control point for **LLM cost review** and
 balancing + batch routing). All config — prices, thresholds, batch endpoints —
 is read from a **KV config store**, never `os.getenv`.
 
-- **Usage + cost ledger.** Every completion, sync *and* batch, writes a row to
-  the `llm_usage_records` ledger with token counts and a cost computed from a
-  configurable price table (`llm_price_entries`). Cost is attributable on seven
+- **Usage + cost ledger.** Every completion, sync *and* batch, builds a
+  prompt-safe usage record with generated IDs, token counts, cost, provider,
+  model, channel, route mode, and attribution dimensions. Raw prompt and answer
+  text are not part of the usage record or telemetry event. The default
+  in-memory ledger keeps local reports available; external persistence/export
+  should be wired through the OpenTelemetry-shaped usage event sink or the
+  bounded `NonBlockingLedgerStore`, so store failures are observable as usage
+  export health without failing completions. Cost is attributable on seven
   first-class dimensions catalogued in `cost_attribution_dimensions`: **account,
   service, upstream API/provider, model name, team, group, company**. Token
   counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is

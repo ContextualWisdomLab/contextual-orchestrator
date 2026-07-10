@@ -12,6 +12,8 @@ from contextual_orchestrator.cost_ledger import (  # noqa: E402
     ATTRIBUTION_DIMENSIONS,
     CostLedger,
     InMemoryLedgerStore,
+    InMemoryUsageTelemetrySink,
+    NonBlockingLedgerStore,
     PriceBook,
     PriceEntry,
     SqlLedgerStore,
@@ -21,12 +23,20 @@ from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: 
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 
 
-def _priced_ledger(store=None) -> CostLedger:
+def _priced_ledger(store=None, **kwargs) -> CostLedger:
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
     price_book.set_price(PriceEntry("openai", "gpt-x", prompt_price_per_1k=2.0, completion_price_per_1k=4.0))
     price_book.set_price(PriceEntry("anthropic", "claude-y", prompt_price_per_1k=3.0, completion_price_per_1k=6.0))
-    return CostLedger(price_book, store=store)
+    return CostLedger(price_book, store=store, **kwargs)
+
+
+class _FailingLedgerStore:
+    def append(self, record) -> None:
+        raise RuntimeError("P2028 Transaction API error with secret prompt and secret answer")
+
+    def query(self, start=None, end=None):
+        return []
 
 
 def test_price_computation_uses_per_1k_rates() -> None:
@@ -82,6 +92,63 @@ def test_writes_carry_full_attribution() -> None:
     # upstream_api + model_name default to the served provider/model
     assert row["upstream_api"] == "openai"
     assert row["model_name"] == "gpt-x"
+
+
+def test_usage_telemetry_event_is_prompt_and_answer_safe() -> None:
+    sink = InMemoryUsageTelemetrySink()
+    ledger = _priced_ledger(telemetry_sink=sink)
+
+    ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=10,
+        completion_tokens=5,
+        attribution={"team": "alpha", "company": "acme"},
+        workflow_run_id="run_123",
+    )
+
+    event = sink.events()[-1]
+    assert event.name == "gen_ai.client.usage"
+    assert event.metrics["gen_ai.usage.input_tokens"] == 10.0
+    assert event.attributes["contextual_orchestrator.attribution.team"] == "alpha"
+    assert "prompt_text" not in event.attributes
+    assert "answer" not in event.attributes
+    assert all("prompt" not in key for key in event.attributes)
+    assert all("answer" not in key for key in event.attributes)
+
+
+def test_non_blocking_store_records_p2028_like_failure_as_telemetry_only() -> None:
+    sink = InMemoryUsageTelemetrySink()
+    ledger = _priced_ledger(
+        store=NonBlockingLedgerStore(
+            _FailingLedgerStore(),
+            queue_size=4,
+            telemetry_sink=sink,
+        )
+    )
+
+    record = ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=10,
+        completion_tokens=5,
+    )
+    assert record.usage_record_id.startswith("usage_")
+    assert ledger.flush(timeout=1.0)
+
+    health = ledger.telemetry_health()
+    assert health["store_failures"] == 1
+    assert health["records_stored"] == 0
+    export_states = {
+        event.attributes["contextual_orchestrator.usage.export_state"]
+        for event in sink.events()
+    }
+    assert {"queued", "export_error"} <= export_states
+    # Only the exception type is exported; DB/client messages can contain
+    # deployment-specific text and must not become telemetry payload.
+    assert "P2028" not in repr(sink.events())
+    assert "secret prompt" not in repr(sink.events())
+    assert "secret answer" not in repr(sink.events())
 
 
 def test_multi_dimensional_rollup_correctness() -> None:

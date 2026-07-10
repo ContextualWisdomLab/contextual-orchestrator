@@ -8,9 +8,12 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
+    CostLedger,
     CostRoutingCoordinator,
+    InMemoryUsageTelemetrySink,
     InMemoryConfigStore,
     ModelAgent,
+    NonBlockingLedgerStore,
     PriceBook,
     PriceEntry,
     TaskOrchestrator,
@@ -18,7 +21,15 @@ from contextual_orchestrator import (  # noqa: E402
 from contextual_orchestrator.batch_routing import PgLlmBatchBackend  # noqa: E402
 
 
-def _coordinator() -> CostRoutingCoordinator:
+class _FailingLedgerStore:
+    def append(self, record) -> None:
+        raise RuntimeError("P2028 Transaction API error")
+
+    def query(self, start=None, end=None):
+        return []
+
+
+def _coordinator(ledger=None) -> CostRoutingCoordinator:
     agents = [
         ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
                    tags=("reasoning", "coding", "writing"), priority=1),
@@ -27,7 +38,7 @@ def _coordinator() -> CostRoutingCoordinator:
     config = InMemoryConfigStore()
     price_book = PriceBook(config)
     price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
-    return CostRoutingCoordinator(orchestrator, config, price_book=price_book)
+    return CostRoutingCoordinator(orchestrator, config, price_book=price_book, ledger=ledger)
 
 
 def test_sync_completion_records_usage_and_returns_costs() -> None:
@@ -54,6 +65,33 @@ def test_sync_records_derive_provider_and_model_from_served_agent() -> None:
     # cost = prompt/1k * 1 + completion/1k * 2, both > 0 given the mock echo answer
     assert row["cost_amount"] >= 0.0
     assert row["upstream_api"] == "mock"
+
+
+def test_sync_completion_survives_usage_persistence_failure() -> None:
+    sink = InMemoryUsageTelemetrySink()
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
+    ledger = CostLedger(
+        price_book,
+        store=NonBlockingLedgerStore(
+            _FailingLedgerStore(),
+            telemetry_sink=sink,
+        ),
+    )
+    coordinator = _coordinator(ledger=ledger)
+
+    result = coordinator.complete([{"role": "user", "content": "hello without blocking"}])
+    assert result["channel"] == "sync"
+    assert result["usage_record_id"].startswith("usage_")
+    assert result["usage"]["total_tokens"] > 0
+
+    assert ledger.flush(timeout=1.0)
+    assert ledger.telemetry_health()["store_failures"] == 1
+    assert any(
+        event.attributes["contextual_orchestrator.usage.export_state"] == "export_error"
+        for event in sink.events()
+    )
 
 
 def test_batch_completion_records_on_retrieve() -> None:

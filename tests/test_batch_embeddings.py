@@ -243,7 +243,7 @@ def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:
     document = coordinator.complete_embeddings_batch(
         ["one two three four five six seven eight", "short input"],
         model="text-embedding-test",
-        attribution={"provider": "acme-provider", "team": "hyosung"},
+        attribution={"provider": "acme-provider", "team": "platform"},
     )
 
     assert len(backend.requests) > 2
