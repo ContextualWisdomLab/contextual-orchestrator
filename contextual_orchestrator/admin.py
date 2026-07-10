@@ -37,6 +37,13 @@ ADMIN_TRANSLATIONS = {
         "access_control_title": "Access Control",
         "integrations_title": "Integrations",
         "observability_title": "Observability",
+        "spend_title": "Spend",
+        "spend_model": "Model",
+        "spend_output_tokens": "Est. output tokens",
+        "spend_prompt_tokens": "Est. prompt tokens",
+        "spend_steps": "Steps",
+        "spend_cost": "Est. cost",
+        "spend_runs": "Runs",
         "settings_title": "Settings",
         "compatible_api_adoption": "Compatible API adoption",
         "trace_complete_workflow_rate": "Trace-complete workflow rate",
@@ -257,6 +264,13 @@ ADMIN_TRANSLATIONS = {
         "access_control_title": "접근 제어",
         "integrations_title": "연동",
         "observability_title": "관측",
+        "spend_title": "비용",
+        "spend_model": "모델",
+        "spend_output_tokens": "추정 출력 토큰",
+        "spend_prompt_tokens": "추정 입력 토큰",
+        "spend_steps": "단계",
+        "spend_cost": "추정 비용",
+        "spend_runs": "실행",
         "settings_title": "설정",
         "compatible_api_adoption": "호환 API 사용량",
         "trace_complete_workflow_rate": "트레이스 완성 워크플로 비율",
@@ -939,6 +953,12 @@ Summarize this research thread and verify claims.</textarea>
           <div class="readiness" id="salesReadiness" data-source="/api/v1/sales_readiness/latest" data-commercial-source="/api/v1/commercial_readiness/latest" data-buyer-manifest-source="/api/v1/buyer_evidence_manifests/latest" data-handoff-bundle-source="/api/v1/buyer_handoff_bundles/latest" data-saleability-source="/api/v1/saleability_decisions/latest" data-commercial-export-source="/api/v1/commercial_evidence_exports/latest" data-commercial-acceptance-source="/api/v1/commercial_acceptance_checks/latest" data-commercial-release-source="/api/v1/commercial_release_candidates/latest" data-commercial-gap-source="/api/v1/commercial_gap_registers/latest" data-commercial-procurement-source="/api/v1/commercial_procurement_readiness/latest" data-commercial-contract-source="/api/v1/commercial_contract_readiness/latest" data-commercial-onboarding-source="/api/v1/commercial_onboarding_readiness/latest" data-commercial-operations-source="/api/v1/commercial_operations_readiness/latest" data-commercial-security-attestation-source="/api/v1/commercial_security_attestations/latest" data-commercial-value-source="/api/v1/commercial_value_readiness/latest" data-commercial-close-source="/api/v1/commercial_close_readiness/latest" data-commercial-gtm-source="/api/v1/commercial_go_to_market_readiness/latest" data-commercial-launch-source="/api/v1/commercial_launch_readiness/latest" data-commercial-completion-source="/api/v1/commercial_completion_scorecards/latest" data-commercial-buyer-acceptance-workflow-source="/api/v1/commercial_buyer_acceptance_workflows/latest" data-commercial-demo-source="/api/v1/commercial_demo_scenarios/latest" data-commercial-proposal-source="/api/v1/commercial_proposal_packets/latest" data-commercial-purchase-approval-source="/api/v1/commercial_purchase_approval_packets/latest" data-commercial-due-diligence-source="/api/v1/commercial_due_diligence_rooms/latest" data-commercial-investment-committee-source="/api/v1/commercial_investment_committee_memos/latest"></div>
           <table><thead><tr><th>Workflow</th><th>Mode</th><th>Policy</th><th>Created</th></tr></thead><tbody id="runRows"></tbody></table>
         </section>
+        <section class="panel wide">
+          <div class="panel-header"><h1 data-i18n="spend_title">Spend</h1><span class="chip" id="spendStatus">estimate</span></div>
+          <div class="kpis" id="spendTotals"></div>
+          <table><thead><tr><th data-i18n="spend_model">Model</th><th data-i18n="spend_output_tokens">Est. output tokens</th><th data-i18n="spend_steps">Steps</th><th>$/1M</th><th data-i18n="spend_cost">Est. cost</th></tr></thead><tbody id="spendRows"></tbody></table>
+          <p class="muted" id="spendNote"></p>
+        </section>
       </section>
       <section class="detail-grid view" data-view="audit" hidden>
         <section class="panel wide">
@@ -1092,7 +1112,34 @@ Summarize this research thread and verify claims.</textarea>
       els.runRows.innerHTML = runs.map(run => `
         <tr><td>${escapeHtml(run.workflow_run_id)}</td><td>${escapeHtml(run.mode)}</td><td>${escapeHtml(run.policy_mode)}</td><td>${escapeHtml(run.created_at)}</td></tr>
       `).join("") || `<tr><td colspan="4">${t("no_trace")}</td></tr>`;
+      renderSpend();
       renderReadiness();
+    }
+    function renderSpend() {
+      const spend = state.spend || {};
+      const totals = spend.totals || {};
+      const statusEl = document.getElementById("spendStatus");
+      if (statusEl) statusEl.textContent = spend.measurement_status || "estimate";
+      const totalsEl = document.getElementById("spendTotals");
+      if (totalsEl) {
+        const cost = totals.estimated_cost_usd == null ? "—" : ("$" + totals.estimated_cost_usd);
+        totalsEl.innerHTML = [
+          [t("spend_runs") || "Runs", totals.run_count ?? 0],
+          [t("spend_output_tokens") || "Est. output tokens", totals.estimated_output_tokens ?? 0],
+          [t("spend_prompt_tokens") || "Est. prompt tokens", totals.estimated_prompt_tokens ?? 0],
+          [t("spend_cost") || "Est. cost (USD)", cost]
+        ].map(([l, v]) => `<div class="kpi"><span>${escapeHtml(l)}</span><strong>${escapeHtml(v)}</strong></div>`).join("");
+      }
+      const rowsEl = document.getElementById("spendRows");
+      if (rowsEl) {
+        rowsEl.innerHTML = (spend.by_model || []).map(row => {
+          const price = row.price_per_million_usd == null ? "&mdash;" : escapeHtml(row.price_per_million_usd);
+          const cost = row.estimated_cost_usd == null ? '<span class="chip">unpriced</span>' : ("$" + escapeHtml(row.estimated_cost_usd));
+          return `<tr><td>${escapeHtml(row.model)}</td><td>${escapeHtml(row.estimated_output_tokens)}</td><td>${escapeHtml(row.step_count)}</td><td>${price}</td><td>${cost}</td></tr>`;
+        }).join("") || `<tr><td colspan="5">${t("no_trace")}</td></tr>`;
+      }
+      const noteEl = document.getElementById("spendNote");
+      if (noteEl) noteEl.textContent = spend.source_note || "";
     }
     function renderReadiness() {
       const readiness = state.readiness || {};
