@@ -2,7 +2,9 @@
 
 ## Reporting a Vulnerability
 
-Report suspected vulnerabilities through GitHub private vulnerability reporting for `ContextualWisdomLab/contextual-orchestrator`.
+Report suspected vulnerabilities through GitHub private vulnerability reporting for `ContextualWisdomLab/contextual-orchestrator`:
+
+https://github.com/ContextualWisdomLab/contextual-orchestrator/security/advisories/new
 
 If private reporting is unavailable, open a public issue that contains only a request for a secure disclosure channel. Do not include exploit details, secrets, personal data, or unreleased vulnerability details in a public issue.
 
@@ -14,4 +16,4 @@ If private reporting is unavailable, open a public issue that contains only a re
 
 ## Automated Checks
 
-The `Security` GitHub Actions workflow runs CodeQL, dependency review, pip-audit against the hash-pinned `requirements.lock`, CycloneDX SBOM generation, Trivy filesystem scanning, and OpenSSF Scorecard checks on the configured branch, pull request, schedule, and manual triggers. Third-party GitHub Actions in the workflow are pinned to reviewed commit SHAs with the source tag kept in comments for maintenance.
+The `Security` GitHub Actions workflow runs CodeQL, dependency review, pip-audit against the hash-pinned `requirements.lock`, CycloneDX SBOM generation, Trivy filesystem scanning, and OpenSSF Scorecard checks on the configured branch, pull request, schedule, and manual triggers. Third-party GitHub Actions and Python security-tool installers in `requirements-security-ci.txt` are pinned to reviewed commit SHAs or hash-locked package requirements with source files kept for maintenance.

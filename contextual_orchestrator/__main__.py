@@ -64,6 +64,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
+    parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
+                        help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -74,9 +76,27 @@ def main() -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Only allowed for loopback local development.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
+    parser.add_argument("--budget-max-output-tokens", type=int, default=None,
+                        help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
+    parser.add_argument("--budget-max-cost-usd", type=float, default=None,
+                        help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
+    parser.add_argument("--cache-ttl", type=float, default=0.0,
+                        help="Seconds to cache identical requests (default 0 = disabled).")
+    parser.add_argument("--eval", nargs="+", metavar="PROMPT",
+                        help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
-    orchestrator = TaskOrchestrator(load_agents(args.agents))
+    orchestrator = TaskOrchestrator(
+        load_agents(args.agents),
+        state_db=args.state_db,
+        budget_max_output_tokens=args.budget_max_output_tokens,
+        budget_max_cost_usd=args.budget_max_cost_usd,
+        cache_ttl=args.cache_ttl,
+    )
+
+    if args.eval:
+        print(json.dumps(orchestrator.compare_to_baseline(args.eval, mode=args.mode), ensure_ascii=False, indent=2))
+        return
 
     if args.serve:
         if not (args.auth_token or args.admin_token or args.inference_token) and not args.insecure_disable_auth:

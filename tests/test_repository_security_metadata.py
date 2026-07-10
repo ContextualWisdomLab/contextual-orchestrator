@@ -33,29 +33,35 @@ def test_security_workflow_covers_core_repository_security_process():
         "cron:",
         "workflow_dispatch:",
         "contents: read",
-        "security-events: write",
-        "id-token: write",
+        "ContextualWisdomLab/.github",
+        "CodeQL, dependency-review, Trivy filesystem, and OpenSSF Scorecard were",
+        "Security Scan = trivy-fs/osv-scan/scorecard",
         "actions/checkout@v7",
-        "github/codeql-action/init@v4",
-        "github/codeql-action/analyze@v4",
-        "actions/dependency-review-action@v5",
         "python_supply_chain:",
         "actions/setup-python@v6",
+        "python -m pip install --require-hashes -r requirements-security-ci.txt",
         "python -m pip install --require-hashes -r requirements.lock",
         "python -m pip install --no-deps -e .",
-        "pip-audit",
         "python -m pip_audit -r requirements.lock",
-        "cyclonedx-bom",
         "cyclonedx-py environment",
         "actions/upload-artifact@v5",
-        "aquasecurity/trivy-action@v0.36.0",
-        "github/codeql-action/upload-sarif@v4",
-        "ossf/scorecard-action@v2.4.3",
-        "publish_results: true",
     ]
 
     for expected_token in expected_tokens:
         assert expected_token in workflow_text
+
+    removed_duplicate_scanners = [
+        "github/codeql-action/init@",
+        "github/codeql-action/analyze@",
+        "actions/dependency-review-action@",
+        "aquasecurity/trivy-action@",
+        "ossf/scorecard-action@",
+        "github/codeql-action/upload-sarif@",
+        "security-events: write",
+        "id-token: write",
+    ]
+    for duplicate_scanner in removed_duplicate_scanners:
+        assert duplicate_scanner not in workflow_text
 
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
     assert uses_lines
@@ -70,18 +76,29 @@ def test_dependabot_tracks_actions_and_python_dependencies():
     assert "timezone: Asia/Seoul" in dependabot_text
 
 
+def test_codeowners_requires_repository_owner_review():
+    codeowners_text = read_text(".github/CODEOWNERS")
+
+    assert "* @seonghobae" in codeowners_text
+
+
 def test_security_policy_documents_reporting_and_automation():
     policy_text = read_text("SECURITY.md")
 
     assert "GitHub private vulnerability reporting" in policy_text
+    assert (
+        "https://github.com/ContextualWisdomLab/contextual-orchestrator/"
+        "security/advisories/new"
+    ) in policy_text
     assert "CodeQL" in policy_text
     assert "dependency review" in policy_text
     assert "pip-audit" in policy_text
     assert "requirements.lock" in policy_text
+    assert "requirements-security-ci.txt" in policy_text
     assert "CycloneDX SBOM" in policy_text
     assert "Trivy filesystem scanning" in policy_text
     assert "OpenSSF Scorecard" in policy_text
-    assert "pinned to reviewed commit SHAs" in policy_text
+    assert "pinned to reviewed commit SHAs or hash-locked package requirements" in policy_text
 
 
 def test_database_design_avoids_plaintext_prompt_output_storage():
@@ -108,11 +125,22 @@ def test_python_lockfile_uses_hash_pinning():
     assert "sqlalchemy==" in lock_text
 
 
+def test_security_tool_lockfile_uses_hash_pinning():
+    lock_text = read_text("requirements-security-ci.txt")
+
+    assert "uv pip compile" in lock_text
+    assert "--hash=sha256:" in lock_text
+    assert "pip-audit==2.10.1" in lock_text
+    assert "cyclonedx-bom==7.3.0" in lock_text
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_readme_links_deepwiki_and_security_workflow_badges()
     test_security_workflow_covers_core_repository_security_process()
     test_dependabot_tracks_actions_and_python_dependencies()
+    test_codeowners_requires_repository_owner_review()
     test_security_policy_documents_reporting_and_automation()
     test_database_design_avoids_plaintext_prompt_output_storage()
     test_python_lockfile_uses_hash_pinning()
+    test_security_tool_lockfile_uses_hash_pinning()
     print("ok")

@@ -39,7 +39,7 @@ jobs:
           python-version: "3.12"
 
       - name: Install audit and SBOM tools
-        run: python -m pip install pip-audit cyclonedx-bom
+        run: python -m pip install --require-hashes -r requirements-security-ci.txt
 
       - name: Install pinned Python dependencies
         run: |
