@@ -4,4 +4,3 @@ pytest-cov>=5
 coverage>=7
 interrogate>=1.7
 
-
