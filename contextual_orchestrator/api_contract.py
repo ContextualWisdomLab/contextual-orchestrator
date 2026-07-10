@@ -279,6 +279,26 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Commercial investment committee memo"}},
             }
         },
+        "/api/v1/operational_alert_classifications": {
+            "post": {
+                "operationId": "create_operational_alert_classification",
+                "summary": "Classify external gateway alerts before incident routing",
+                "security": [{"admin_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "additionalProperties": True,
+                                "description": "External alert payload from monitoring, log, or webhook systems.",
+                            },
+                        }
+                    },
+                },
+                "responses": {"201": {"description": "Operational alert classification"}},
+            }
+        },
         "/api/v1/workflow_runs": {
             "get": {
                 "operationId": "list_workflow_runs",

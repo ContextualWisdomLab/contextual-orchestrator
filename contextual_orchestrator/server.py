@@ -21,6 +21,7 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .operational_alerts import classify_operational_alert
 
 
 ALLOWED_CHAT_KEYS = {"model", "messages", "orchestration", "orchestration_mode", "mode", "include_orchestration_trace", "stream"}
@@ -484,7 +485,8 @@ def build_server(
         def do_POST(self) -> None:  # noqa: N802
             try:
                 path = urllib.parse.urlparse(self.path).path
-                scope = "admin" if path == "/admin/simulate" else "inference"
+                admin_post_paths = {"/admin/simulate", "/api/v1/operational_alert_classifications"}
+                scope = "admin" if path in admin_post_paths else "inference"
                 self._authorize(scope)
                 body = self._read_json()
 
@@ -548,6 +550,22 @@ def build_server(
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
                     evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
+                    return
+                if path == "/api/v1/operational_alert_classifications":
+                    classification = classify_operational_alert(body)
+                    orchestrator.record_analytics_event(
+                        "operational_alert_classified",
+                        {
+                            "endpoint_path": "/api/v1/operational_alert_classifications",
+                            "actor_scope": "admin",
+                            "status_code": 201,
+                            "classification_status": classification["classification_status"],
+                            "reason_code": classification["reason_code"],
+                            "incident_routing": classification["incident_routing"],
+                            "page_required": classification["page_required"],
+                        },
+                    )
+                    self._send(classification, 201)
                     return
                 self._send_error(404, "route_not_found", "not found")
             except json.JSONDecodeError:

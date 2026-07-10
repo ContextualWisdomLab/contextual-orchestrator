@@ -100,6 +100,7 @@ One public interface:
 - `/api/v1/commercial_purchase_approval_packets/latest` exposes the KRW 2,000,000,000 commercial purchase approval packet across proposal, close, procurement, contract, value, security, onboarding, operations, analytics truthfulness, Figma review, review-process policy, packaging decision, and buyer signature/budget authority follow-ups.
 - `/api/v1/commercial_due_diligence_rooms/latest` exposes the KRW 2,000,000,000 commercial due diligence room across purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma review, review-process policy, packaging decision, and buyer/external missing artifacts.
 - `/api/v1/commercial_investment_committee_memos/latest` exposes the KRW 2,000,000,000 commercial investment committee memo across due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma review, review-process policy, packaging decision, and buyer/external approval conditions.
+- `/api/v1/operational_alert_classifications` classifies external gateway alerts before incident routing. The first production rule suppresses the complete LiteLLM Prisma P2028 non-blocking spend-log signature from outage/page routing while keeping inference health, latency, and 5xx alerts active.
 
 One fused orchestration loop:
 
@@ -150,6 +151,7 @@ See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 - [Commercial due diligence room](docs/commercial_due_diligence_room.md)
 - [Commercial investment committee memo](docs/commercial_investment_committee_memo.md)
 - [Commercial plugin operating model](docs/commercial_plugin_operating_model.md)
+- [Operational alert classification](docs/operational_alerts.md)
 - [Figma artifacts](docs/figma_artifacts.md)
 - [Plugin-driven implementation plan](docs/superpowers/plans/2026-07-02-plugin-driven-product-design.md)
 - [Commercial plugin readiness plan](docs/superpowers/plans/2026-07-02-commercial-plugin-readiness.md)

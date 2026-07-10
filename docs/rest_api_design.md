@@ -43,6 +43,7 @@
 | `GET` | `/api/v1/commercial_purchase_approval_packets/latest` | Read KRW 2,000,000,000 commercial purchase approval packet |
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Read KRW 2,000,000,000 commercial due diligence room |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Read KRW 2,000,000,000 commercial investment committee memo |
+| `POST` | `/api/v1/operational_alert_classifications` | Classify external gateway alerts before outage/page routing |
 | `POST` | `/api/v1/workflow_runs` | Create a route/conduct run |
 | `GET` | `/api/v1/workflow_runs` | List recent workflow runs |
 | `GET` | `/api/v1/workflow_runs?page_number=1&page_size=20` | Paginate workflow run history with deterministic page metadata |
@@ -90,6 +91,7 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_purchase_approval_packets/latest` | Produce the buyer purchase approval packet that ties proposal, close, procurement, contract, value, security, onboarding, operations, analytics, Figma, review-process policy, packaging decision, and buyer authority follow-ups into one runtime approval artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer finance, procurement, legal, security, and implementation approval. |
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
+| `POST` | `/api/v1/operational_alert_classifications` | Classify external gateway alerts into suppressed or normal-policy routing before they become outage tickets or pages. | Fugu-style hidden gateway operations need operator-visible evidence and safe routing controls; production operations readiness requires incident evidence to distinguish service impact from non-blocking persistence noise. |
 
 ## Production Library Target
 
