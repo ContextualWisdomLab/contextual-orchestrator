@@ -1,0 +1,31 @@
+{
+  "contract_version": "1",
+  "description": "Shared request/response contract for the batch embeddings endpoint. naruon's batch_embedding_service submits this request to contextual-orchestrator and parses this response. Both repositories keep a byte-identical copy of this fixture and assert their side against it so the cross-service contract cannot drift.",
+  "endpoint": {
+    "submit_method": "POST",
+    "submit_path": "/v1/batch/embeddings",
+    "poll_method": "GET",
+    "poll_path_template": "/v1/batch/embeddings/{batch_id}"
+  },
+  "request": {
+    "model": "text-embedding-test",
+    "endpoint": "primary_gateway",
+    "inputs": ["alpha body", "beta attachment", "gamma attachment"],
+    "metadata": {
+      "source": "naruon-email-import",
+      "organization_id": "org-acme",
+      "user_id": "user-1",
+      "service": "naruon-email-import",
+      "team": "growth",
+      "group": "workspace",
+      "company": "acme-corp"
+    }
+  },
+  "request_required_keys": ["model", "inputs", "metadata"],
+  "attribution_dimensions_in_metadata": ["service", "team", "group", "company"],
+  "response": {
+    "required_keys": ["batch_id", "status", "embeddings", "cost_micro_usd", "token_counts"],
+    "status_completed": "completed",
+    "embedding_item_keys": ["index", "embedding"]
+  }
+}
