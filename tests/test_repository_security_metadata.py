@@ -33,12 +33,13 @@ def test_security_workflow_covers_core_repository_security_process():
         "cron:",
         "workflow_dispatch:",
         "contents: read",
+        "ContextualWisdomLab/.github",
+        "Dependency review, Trivy filesystem, OSV, and OpenSSF Scorecard are covered",
+        "CodeQL and Python supply-chain evidence stay repo-local",
         "security-events: write",
-        "id-token: write",
         "actions/checkout@v7",
         "github/codeql-action/init@v4",
         "github/codeql-action/analyze@v4",
-        "actions/dependency-review-action@v5",
         "python_supply_chain:",
         "actions/setup-python@v6",
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
@@ -47,14 +48,20 @@ def test_security_workflow_covers_core_repository_security_process():
         "python -m pip_audit -r requirements.lock",
         "cyclonedx-py environment",
         "actions/upload-artifact@v5",
-        "aquasecurity/trivy-action@v0.36.0",
-        "github/codeql-action/upload-sarif@v4",
-        "ossf/scorecard-action@v2.4.3",
-        "publish_results: true",
     ]
 
     for expected_token in expected_tokens:
         assert expected_token in workflow_text
+
+    removed_duplicate_scanners = [
+        "actions/dependency-review-action@",
+        "aquasecurity/trivy-action@",
+        "ossf/scorecard-action@",
+        "github/codeql-action/upload-sarif@",
+        "id-token: write",
+    ]
+    for duplicate_scanner in removed_duplicate_scanners:
+        assert duplicate_scanner not in workflow_text
 
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
     assert uses_lines

@@ -2885,7 +2885,8 @@ class TaskOrchestrator:
                     "pyproject.toml",
                     "requirements.lock",
                     ".github/workflows/security.yml",
-                    ".github/workflows/scorecard-analysis.yml",
+                    ".github/dependabot.yml",
+                    "ContextualWisdomLab/.github central required security workflows",
                 ],
                 "repository_artifact",
                 "ready"
@@ -2897,11 +2898,11 @@ class TaskOrchestrator:
                         "pyproject.toml",
                         "requirements.lock",
                         ".github/workflows/security.yml",
-                        ".github/workflows/scorecard-analysis.yml",
+                        ".github/dependabot.yml",
                     )
                 )
                 else "blocked",
-                "License, security policy, package metadata, locked requirements, and security workflows are present.",
+                "License, security policy, package metadata, locked requirements, local supply-chain workflow, Dependabot metadata, and central required security workflows are present.",
                 "Restore missing security or package metadata before release-candidate handoff.",
             ),
             self._buyer_evidence_item(
@@ -3181,7 +3182,13 @@ class TaskOrchestrator:
                 "item_name": "security_package_metadata",
                 "label": "Security package metadata",
                 "owner": "Security reviewer",
-                "sources": ["SECURITY.md", "requirements.lock", ".github/workflows/security.yml", ".github/workflows/scorecard-analysis.yml"],
+                "sources": [
+                    "SECURITY.md",
+                    "requirements.lock",
+                    ".github/workflows/security.yml",
+                    ".github/dependabot.yml",
+                    "ContextualWisdomLab/.github central required security workflows",
+                ],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
                 if all(
@@ -3190,11 +3197,11 @@ class TaskOrchestrator:
                         "SECURITY.md",
                         "requirements.lock",
                         ".github/workflows/security.yml",
-                        ".github/workflows/scorecard-analysis.yml",
+                        ".github/dependabot.yml",
                     )
                 )
                 else "blocked",
-                "evidence": "Security policy, locked dependencies, and security workflows are present.",
+                "evidence": "Security policy, locked dependencies, local supply-chain workflow, Dependabot metadata, and central required security workflows are present.",
                 "required_input": "Restore missing security metadata before procurement review.",
             },
             {
@@ -3996,7 +4003,7 @@ class TaskOrchestrator:
                 "sources": [
                     ".github/dependabot.yml",
                     ".github/workflows/security.yml",
-                    ".github/workflows/scorecard-analysis.yml",
+                    "ContextualWisdomLab/.github central required security workflows",
                 ],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
@@ -4005,11 +4012,10 @@ class TaskOrchestrator:
                     for path in (
                         ".github/dependabot.yml",
                         ".github/workflows/security.yml",
-                        ".github/workflows/scorecard-analysis.yml",
                     )
                 )
                 else "blocked",
-                "evidence": "Dependabot, CodeQL, dependency review, pip-audit, SBOM, Trivy, and Scorecard workflow metadata are defined.",
+                "evidence": "Dependabot plus local CodeQL and pip-audit/SBOM workflows are defined; dependency review, Trivy, OSV, and Scorecard are delegated to central required workflows.",
                 "action": "Attach workflow definitions and latest passing run evidence when the buyer review requests hosted CI proof.",
                 "exit_criteria": "Buyer can inspect the configured security workflow controls and their latest run status separately.",
             },
@@ -4053,11 +4059,14 @@ class TaskOrchestrator:
                 "item_name": "vulnerability_scan_evidence",
                 "label": "Vulnerability scan evidence",
                 "owner": "Security owner",
-                "sources": [".github/workflows/security.yml", ".github/workflows/scorecard-analysis.yml"],
+                "sources": [
+                    ".github/workflows/security.yml",
+                    "ContextualWisdomLab/.github central required security workflows",
+                ],
                 "evidence_type": "external_attestation_required",
                 "completion_state": "warning",
                 "source_gap_status": "external_attestation_required",
-                "evidence": "Security scan workflow metadata exists, but the buyer packet still needs the latest hosted scan result or buyer-accepted equivalent.",
+                "evidence": "Local supply-chain workflow metadata and central security scan workflow metadata exist, but the buyer packet still needs the latest hosted scan result or buyer-accepted equivalent.",
                 "action": "Attach latest CodeQL, pip-audit, Trivy, SBOM, and Scorecard results when CI completes or the buyer requests evidence.",
                 "exit_criteria": "Hosted scan outputs are attached, or the buyer explicitly accepts workflow definitions as sufficient for this stage.",
             },
