@@ -3878,7 +3878,7 @@ class TaskOrchestrator:
                     )
                 )
                 else "blocked",
-                "evidence": "Dependabot and the local pip-audit/SBOM workflow are defined; CodeQL, dependency review, Trivy, OSV, and Scorecard are delegated to central required workflows.",
+                "evidence": "Dependabot plus local CodeQL and pip-audit/SBOM workflows are defined; dependency review, Trivy, OSV, and Scorecard are delegated to central required workflows.",
                 "action": "Attach workflow definitions and latest passing run evidence when the buyer review requests hosted CI proof.",
                 "exit_criteria": "Buyer can inspect the configured security workflow controls and their latest run status separately.",
             },

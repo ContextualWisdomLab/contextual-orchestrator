@@ -34,9 +34,12 @@ def test_security_workflow_covers_core_repository_security_process():
         "workflow_dispatch:",
         "contents: read",
         "ContextualWisdomLab/.github",
-        "CodeQL, dependency-review, Trivy filesystem, and OpenSSF Scorecard were",
-        "Security Scan = trivy-fs/osv-scan/scorecard",
+        "Dependency review, Trivy filesystem, OSV, and OpenSSF Scorecard are covered",
+        "CodeQL and Python supply-chain evidence stay repo-local",
+        "security-events: write",
         "actions/checkout@v7",
+        "github/codeql-action/init@v4",
+        "github/codeql-action/analyze@v4",
         "python_supply_chain:",
         "actions/setup-python@v6",
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
@@ -51,13 +54,10 @@ def test_security_workflow_covers_core_repository_security_process():
         assert expected_token in workflow_text
 
     removed_duplicate_scanners = [
-        "github/codeql-action/init@",
-        "github/codeql-action/analyze@",
         "actions/dependency-review-action@",
         "aquasecurity/trivy-action@",
         "ossf/scorecard-action@",
         "github/codeql-action/upload-sarif@",
-        "security-events: write",
         "id-token: write",
     ]
     for duplicate_scanner in removed_duplicate_scanners:

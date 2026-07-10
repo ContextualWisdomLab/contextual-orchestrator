@@ -28,7 +28,7 @@ creates an extraction trigger.
 | Commercial evidence export | `/api/v1/commercial_evidence_exports/latest` | Portable buyer evidence source. |
 | Security policy | `SECURITY.md` | Vulnerability reporting and support scope evidence. |
 | Dependency and package metadata | `requirements.lock`, `pyproject.toml` | Supply-chain review baseline. |
-| Security workflow metadata | `.github/workflows/security.yml`, `.github/dependabot.yml`, `ContextualWisdomLab/.github` central required security workflows | Local supply-chain controls, dependency update metadata, and centralized CodeQL, dependency review, Trivy, OSV, and Scorecard governance. |
+| Security workflow metadata | `.github/workflows/security.yml`, `.github/dependabot.yml`, `ContextualWisdomLab/.github` central required security workflows | Local CodeQL and supply-chain controls, dependency update metadata, and centralized dependency review, Trivy, OSV, and Scorecard governance. |
 | Runtime access controls | `contextual_orchestrator/server.py` | Admin/inference auth, trace exposure, rate limit, and concurrency evidence. |
 
 ## Runtime Shape
