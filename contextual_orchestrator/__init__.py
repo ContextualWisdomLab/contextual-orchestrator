@@ -29,6 +29,7 @@ from .cost_ledger import (
     dimension_catalog,
 )
 from .cost_router import CostRoutingCoordinator
+from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .token_counting import HeuristicTokenCounter, build_token_counter
@@ -38,6 +39,9 @@ __all__ = [
     "TaskOrchestrator",
     "WorkflowStep",
     "load_agents",
+    "get_credential",
+    "register_credential",
+    "NotConfigured",
     # cost review
     "ATTRIBUTION_DIMENSIONS",
     "AttributionDimensions",
