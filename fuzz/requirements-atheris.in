@@ -1,0 +1,3 @@
+# Atheris coverage-guided job deps (Python 3.11). Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.11 --universal -o fuzz/requirements-atheris.txt
+pip
+atheris==3.0.0

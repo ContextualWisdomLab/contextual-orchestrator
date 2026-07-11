@@ -9,3 +9,6 @@ tempcred.txt
 
 # local codegraph index
 .codegraph/
+
+# hypothesis fuzzing DB
+.hypothesis/
