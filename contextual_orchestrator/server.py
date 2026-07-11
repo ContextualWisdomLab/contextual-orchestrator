@@ -14,7 +14,11 @@ import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .api_contract import OPENAPI_SPEC
+from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
+from .cost_router import CostRoutingCoordinator
+from .batch_routing import BatchRequest
 from .orchestrator import (
+    BudgetExceededError,
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
@@ -22,15 +26,44 @@ from .orchestrator import (
     sse_stream_body,
 )
 
-
-ALLOWED_CHAT_KEYS = {"model", "messages", "orchestration", "orchestration_mode", "mode", "include_orchestration_trace", "stream"}
+# OpenAI request params forwarded verbatim to the provider on passthrough.
+OPENAI_PASSTHROUGH_PARAM_KEYS = {
+    "temperature", "top_p", "max_tokens", "max_completion_tokens", "n", "stop",
+    "seed", "presence_penalty", "frequency_penalty", "logit_bias", "logprobs",
+    "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
+    "response_format", "tools", "tool_choice", "functions", "function_call",
+    "modalities", "prediction", "store", "service_tier",
+}
+# Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
+PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
+ALLOWED_CHAT_KEYS = {
+    "model", "messages", "orchestration", "orchestration_mode", "mode",
+    "include_orchestration_trace", "stream", "attribution", "routing",
+} | OPENAI_PASSTHROUGH_PARAM_KEYS
+# Responses API body keys (`input` replaces `messages`).
+ALLOWED_RESPONSES_KEYS = {
+    "model", "input", "instructions", "stream", "metadata", "reasoning",
+} | OPENAI_PASSTHROUGH_PARAM_KEYS
+ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions"}
-ALLOWED_AGENT_CREATE_KEYS = {"id", "model", "base_url", "api_key_env", "tags", "priority", "disabled", "provider_name", "provider_exclusions"}
+ALLOWED_AGENT_CREATE_KEYS = {
+    "id",
+    "model",
+    "base_url",
+    "api_key_env",
+    "credential_key",
+    "tags",
+    "priority",
+    "disabled",
+    "provider_name",
+    "provider_exclusions",
+}
 
 
 class RequestError(Exception):
@@ -68,7 +101,7 @@ class SecurityConfig:
 
     def check_bind(self, host: str) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
-        if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:
+        if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:  # nosec B104 - comparison rejects public bind unless explicitly opted in.
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
@@ -161,10 +194,100 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
         content = message.get("content")
-        if role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
         validated.append({"role": role, "content": content})
     return validated
+
+
+def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
+    if attribution is None:
+        return None
+    if not isinstance(attribution, dict):
+        raise RequestError(400, "invalid_attribution", "attribution must be an object")
+    allowed = set(ATTRIBUTION_DIMENSIONS) | {"provider"}
+    unknown = sorted(set(attribution) - allowed)
+    if unknown:
+        raise RequestError(400, "invalid_attribution", "attribution contains unsupported dimensions", {"fields": unknown})
+    return {key: str(value) for key, value in attribution.items()}
+
+
+def _validate_routing(routing: Any) -> dict[str, Any] | None:
+    if routing is None:
+        return None
+    if not isinstance(routing, dict):
+        raise RequestError(400, "invalid_routing", "routing must be an object")
+    unknown = sorted(set(routing) - {"channel", "latency_tolerant", "priority"})
+    if unknown:
+        raise RequestError(400, "invalid_routing", "routing contains unsupported keys", {"fields": unknown})
+    channel = routing.get("channel")
+    if channel is not None and channel not in {"sync", "batch"}:
+        raise RequestError(400, "invalid_routing", "routing.channel must be sync or batch")
+    return routing
+
+
+def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[BatchRequest]:
+    raw_requests = body.get("requests")
+    if not isinstance(raw_requests, list) or not raw_requests:
+        raise RequestError(400, "invalid_request", "requests must be a non-empty array")
+    default_attribution = _validate_attribution(body.get("attribution")) or {}
+    default_model = str(body.get("model", "contextual-orchestrator"))
+    batch: list[BatchRequest] = []
+    for item in raw_requests:
+        if not isinstance(item, dict):
+            raise RequestError(400, "invalid_request", "each batch request must be an object")
+        messages = _validate_messages(item.get("messages"))
+        attribution = _validate_attribution(item.get("attribution"))
+        merged = {**default_attribution, **(attribution or {})}
+        mode = _validate_mode(item.get("mode", "auto"))
+        batch.append(BatchRequest(
+            messages=messages,
+            model=str(item.get("model", default_model)),
+            attribution=merged,
+            mode=mode,
+        ))
+    return batch
+
+
+def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
+    """Validate the embeddings batch inputs (accepts ``inputs`` or ``input``)."""
+    raw = body.get("inputs")
+    if raw is None:
+        raw = body.get("input")
+    if isinstance(raw, str):
+        raw = [raw]
+    if not isinstance(raw, list) or not raw:
+        raise RequestError(400, "invalid_request", "input/inputs must be a non-empty array of strings")
+    inputs: list[str] = []
+    for item in raw:
+        if not isinstance(item, str):
+            raise RequestError(400, "invalid_request", "each embedding input must be a string")
+        inputs.append(item)
+    return inputs
+
+
+def _embeddings_attribution(body: dict[str, Any]) -> dict[str, Any]:
+    """Build ledger attribution from the explicit ``attribution`` field merged
+    with any attribution dimensions carried inside ``metadata``.
+
+    naruon sends full cost attribution (service, team, group, company, plus the
+    provider alias) inside ``metadata`` alongside observability-only keys
+    (source, organization_id, user_id). Only recognised dimension keys feed the
+    ledger; the rest are ignored here but still accepted.
+    """
+    attribution = _validate_attribution(body.get("attribution")) or {}
+    metadata = body.get("metadata")
+    if metadata is not None and not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_request", "metadata must be an object")
+    known = set(ATTRIBUTION_DIMENSIONS) | {"provider"}
+    merged: dict[str, Any] = {}
+    if isinstance(metadata, dict):
+        for key, value in metadata.items():
+            if key in known and value not in (None, ""):
+                merged[key] = str(value)
+    # An explicit attribution field wins over metadata-derived dimensions.
+    merged.update(attribution)
+    return merged
 
 
 def _strip_trace(payload: Any) -> Any:
@@ -187,10 +310,17 @@ def build_server(
     host: str = "127.0.0.1",
     port: int = 8000,
     security: SecurityConfig | None = None,
+    coordinator: CostRoutingCoordinator | None = None,
 ) -> ThreadingHTTPServer:
-    """Build, but do not start, the orchestration HTTP server."""
+    """Build, but do not start, the orchestration HTTP server.
+
+    ``coordinator`` is the cost-review + routing hub. When omitted a default
+    one is built around ``orchestrator`` with an in-memory KV config store, so
+    every completion is priced, recorded, and sync/batch routed.
+    """
     security = security or SecurityConfig()
     security.check_bind(host)
+    coordinator = coordinator or CostRoutingCoordinator(orchestrator)
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
@@ -201,7 +331,60 @@ def build_server(
                 if path == "/openapi.json":
                     self._send(OPENAPI_SPEC)
                     return
+                if path == "/healthz":
+                    # Unauthenticated liveness probe for containers/orchestrators.
+                    self._send({
+                        "status": "ok",
+                        "service": "contextual-orchestrator",
+                        "agent_count": len(orchestrator.agents),
+                        "batch_backend": coordinator.batch_backend.name,
+                        "embedding_batch_backend": coordinator.embedding_batch_backend.name,
+                        "usage_record_count": len(coordinator.ledger.records()),
+                    })
+                    return
+                if path.startswith("/v1/batch/embeddings/"):
+                    # Embeddings batch polling is an inference-scope surface, so
+                    # it is authorized here before the admin gate below.
+                    self._authorize("inference")
+                    batch_id = path[len("/v1/batch/embeddings/"):]
+                    try:
+                        self._send(coordinator.embeddings_batch_document(batch_id))
+                    except KeyError:
+                        self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
+                    return
                 self._authorize("admin")
+                if path == "/api/v1/cost_attribution_dimensions":
+                    self._send({"items": dimension_catalog(), "total_count": len(ATTRIBUTION_DIMENSIONS)})
+                    return
+                if path == "/api/v1/cost_reports/rollup":
+                    dimension = (query.get("dimension") or ["model_name"])[0]
+                    start = self._parse_optional_int(query, "start")
+                    end = self._parse_optional_int(query, "end")
+                    try:
+                        self._send(coordinator.cost_report(dimension, start, end))
+                    except ValueError as exc:
+                        self._send_error(400, "invalid_dimension", str(exc))
+                    return
+                if path == "/api/v1/llm_usage_records":
+                    start = self._parse_optional_int(query, "start")
+                    end = self._parse_optional_int(query, "end")
+                    records = coordinator.ledger.records(start, end)
+                    page_number, page_size = self._parse_paging(query, default_size=50, max_size=500)
+                    window = records[(page_number - 1) * page_size : page_number * page_size]
+                    self._send({
+                        "items": window,
+                        "total_count": len(records),
+                        "page_number": page_number,
+                        "page_size": page_size,
+                    })
+                    return
+                if path.startswith("/api/v1/batch_routing_jobs/"):
+                    job_id = path.rsplit("/", 1)[-1]
+                    try:
+                        self._send(coordinator.poll_batch(job_id))
+                    except KeyError:
+                        self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
+                    return
                 if path in ("/", "/admin"):
                     self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
                     return
@@ -223,6 +406,9 @@ def build_server(
                     return
                 if path == "/api/v1/analytics_snapshots/latest":
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
+                    return
+                if path == "/api/v1/spend_analytics/latest":
+                    self._send(orchestrator.spend_analytics())
                     return
                 if path == "/api/v1/sales_readiness/latest":
                     self._send(orchestrator.sales_readiness_report(
@@ -519,15 +705,70 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    if PASSTHROUGH_TRIGGER_KEYS & set(body):
+                        # response_format / tools cannot be merged across agents;
+                        # proxy the full request to one agent and return it verbatim.
+                        started_at = time.perf_counter()
+                        proxied = self._run(
+                            lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
+                        )
+                        orchestrator.record_analytics_event(
+                            "chat_completion_passthrough",
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(proxied)
+                        return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
                     stream = body.get("stream", False)
                     if not isinstance(stream, bool):
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    attribution = _validate_attribution(body.get("attribution"))
+                    routing = _validate_routing(body.get("routing"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
-                    result = self._run(lambda: orchestrator.run(messages, mode=mode, workflow_run_id=f"run_{uuid.uuid4().hex}"))
+                    if stream and orchestrator.would_route(messages, mode):
+                        self._stream_route_completion(orchestrator, security, messages, model_name)
+                        orchestrator.record_analytics_event(
+                            "chat_completion_requested",
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "run_mode": "route",
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                "response_streamed": True,
+                            },
+                        )
+                        return
+                    result = self._run(lambda: coordinator.complete(
+                        messages,
+                        mode=mode,
+                        attribution=attribution,
+                        hints=routing,
+                        model_name=model_name,
+                        workflow_run_id=f"run_{uuid.uuid4().hex}",
+                    ))
+                    # Latency-tolerant requests get dispatched to the batch backend.
+                    if result.get("channel") == "batch":
+                        orchestrator.record_analytics_event(
+                            "chat_completion_batched",
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 202,
+                                "batch_job_id": result["job_id"],
+                                "batch_backend": result["backend"],
+                            },
+                        )
+                        self._send(result, 202)
+                        return
                     orchestrator.record_analytics_event(
                         "chat_completion_requested",
                         {
@@ -544,8 +785,91 @@ def build_server(
                         chunks = chat_completion_chunks(result, model=model_name, include_trace=include_trace)
                         self._send_sse(sse_stream_body(chunks))
                         return
-                    self._send(chat_completion_response(result, model=model_name, include_trace=include_trace))
+                    self._send(chat_completion_response(
+                        result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
+                    ))
                     return
+                if path == "/v1/batch/embeddings":
+                    _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
+                    inputs = _validate_embeddings_inputs(body)
+                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    attribution = _embeddings_attribution(body)
+                    submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
+                    endpoint_alias = body.get("endpoint")
+                    if endpoint_alias:
+                        submit_metadata["endpoint_alias"] = str(endpoint_alias)
+                    document = self._run(lambda: coordinator.complete_embeddings_batch(
+                        inputs,
+                        model=model_name,
+                        attribution=attribution,
+                        metadata=submit_metadata,
+                    ))
+                    is_complete = document.get("status") == "completed"
+                    orchestrator.record_analytics_event(
+                        "embeddings_batch_created",
+                        {
+                            "endpoint_path": "/v1/batch/embeddings",
+                            "actor_scope": "inference",
+                            "status_code": 200 if is_complete else 202,
+                            "batch_id": document.get("batch_id"),
+                            "batch_backend": document.get("backend"),
+                            "input_count": len(inputs),
+                        },
+                    )
+                    self._send(document, 200 if is_complete else 202)
+                    return
+                if path == "/api/v1/batch_routing_jobs":
+                    _reject_unknown_keys(body, ALLOWED_BATCH_KEYS)
+                    batch_requests = _validate_batch_requests(body, security.expose_trace_by_default)
+                    metadata = {"actor_scope": "inference"}
+                    job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
+                    orchestrator.record_analytics_event(
+                        "batch_routing_job_created",
+                        {
+                            "endpoint_path": "/api/v1/batch_routing_jobs",
+                            "actor_scope": "inference",
+                            "status_code": 201,
+                            "batch_job_id": job.job_id,
+                            "batch_backend": job.backend,
+                            "request_count": job.request_count,
+                        },
+                    )
+                    self._send({
+                        "job_id": job.job_id,
+                        "backend": job.backend,
+                        "status": job.status,
+                        "request_count": job.request_count,
+                    }, 201)
+                    return
+                if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):
+                    job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
+                    try:
+                        retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
+                    except KeyError:
+                        self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
+                        return
+                    self._send(_response_payload(retrieved, include_trace=True))
+                    return
+                if path == "/v1/responses":
+                    # The Responses API has no chat-completions verifier equivalent,
+                    # so every request is proxied to one agent verbatim.
+                    _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    started_at = time.perf_counter()
+                    proxied = self._run(
+                        lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                    )
+                    orchestrator.record_analytics_event(
+                        "responses_passthrough",
+                        {
+                            "endpoint_path": "/v1/responses",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(proxied)
+                    return
+
                 if path == "/admin/simulate":
                     _reject_unknown_keys(body, ALLOWED_SIMULATE_KEYS)
                     prompt = body.get("prompt", "")
@@ -581,6 +905,8 @@ def build_server(
                 self._send_error(404, "route_not_found", "not found")
             except json.JSONDecodeError:
                 self._send_error(400, "invalid_json", "request body is not valid JSON")
+            except BudgetExceededError as exc:
+                self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except RequestError as exc:
                 self._send_error(exc.status, exc.code, exc.message, exc.detail)
             except (TypeError, ValueError) as exc:
@@ -616,6 +942,12 @@ def build_server(
             page_number = self._parse_positive_int((query.get("page_number") or [None])[0], "page_number", 1)
             page_size = self._parse_positive_int((query.get("page_size") or [None])[0], "page_size", default_size, max_size)
             return page_number, page_size
+
+        def _parse_optional_int(self, query: dict[str, list[str]], field_name: str) -> int | None:
+            raw = (query.get(field_name) or [None])[0]
+            if raw is None or raw == "":
+                return None
+            return int(raw)
 
         def _read_json(self) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
@@ -665,6 +997,49 @@ def build_server(
             self._send_security_headers()
             self.end_headers()
             self.wfile.write(raw)
+
+        def _begin_sse(self) -> None:
+            # Incremental SSE: no content-length; the connection close delimits the body.
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream; charset=utf-8")
+            self.send_header("cache-control", "no-cache")
+            self.send_header("connection", "close")
+            self._send_security_headers()
+            self.end_headers()
+
+        def _write_sse(self, frame: str) -> None:
+            self.wfile.write(frame.encode("utf-8"))
+            self.wfile.flush()
+
+        def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
+            """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
+            run_id = f"run_{uuid.uuid4().hex}"
+            completion_id = f"chatcmpl-{int(time.time() * 1000)}"
+            created = int(time.time())
+
+            def frame(delta: dict[str, Any], finish: str | None = None) -> str:
+                payload = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model_name,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                }
+                return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            security.acquire_run_slot()
+            try:
+                self._begin_sse()
+                self._write_sse(frame({"role": "assistant"}))
+                try:
+                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                        self._write_sse(frame({"content": delta}))
+                    self._write_sse(frame({}, finish="stop"))
+                except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
+                    self._write_sse(frame({}, finish="error"))
+                self._write_sse("data: [DONE]\n\n")
+            finally:
+                security.release_run_slot()
 
         def _send_security_headers(self) -> None:
             self.send_header("x-content-type-options", "nosniff")

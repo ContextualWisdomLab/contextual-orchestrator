@@ -30,7 +30,7 @@ NEW_AGENT = {
     "id": "coding_agent",
     "model": "gpt-5.5",
     "base_url": "https://api.openai.com/v1",
-    "api_key_env": "OPENAI_API_KEY",
+    "credential_key": "OPENAI_API_KEY",
     "tags": ["coding", "reasoning"],
     "priority": 2,
 }
@@ -75,8 +75,8 @@ def test_add_agent_validations() -> None:
     for bad, why in [
         ({"model": "m"}, "missing id"),
         ({"id": "general_agent", "model": "m"}, "duplicate id"),
-        ({"id": "http_agent", "model": "m", "base_url": "http://x.example/v1", "api_key_env": "K"}, "http base_url"),
-        ({"id": "nokey_agent", "model": "m", "base_url": "https://x.example/v1"}, "missing api_key_env"),
+        ({"id": "http_agent", "model": "m", "base_url": "http://x.example/v1", "credential_key": "K"}, "http base_url"),
+        ({"id": "nokey_agent", "model": "m", "base_url": "https://x.example/v1", "credential_key": ""}, "missing credential name"),
     ]:
         raised = False
         try:
