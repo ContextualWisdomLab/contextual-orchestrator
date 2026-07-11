@@ -270,6 +270,58 @@ class ModelClient:
             self._local.usage = usage
         return data["choices"][0]["message"]["content"]
 
+    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+        """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
+
+        Real token streaming: the provider is called with stream=true and its SSE deltas
+        are yielded as they arrive (not computed-then-framed). The mock path yields its
+        answer in fixed chunks so behavior shape stays testable and unchanged.
+        """
+        if agent.base_url.startswith("mock://"):
+            answer = self._mock(agent, messages)
+            for start in range(0, len(answer), 24):
+                yield answer[start : start + 24]
+            return
+
+        self._validate_provider(agent)  # pragma: no cover
+        payload = {  # pragma: no cover
+            "model": agent.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+            "max_tokens": self.max_output_tokens,
+        }
+        yield from self._stream_send(agent, payload)  # pragma: no cover
+
+    def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
+        """Stream content deltas from a provider SSE response (real transport, testable)."""
+        api_key = get_credential(agent.credential_name) or ""
+        request = urllib.request.Request(
+            self._provider_url(agent, "/chat/completions"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+                "accept": "text/event-stream",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+            for raw in response:
+                line = raw.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                if delta:
+                    yield delta
+
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
     # (response_format / tools / the Responses API) are proxied to a single agent
@@ -304,9 +356,9 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
-        api_key = os.environ.get(agent.api_key_env, "")
+        api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
-            f"{agent.base_url.rstrip('/')}/{endpoint.lstrip('/')}",
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "authorization": f"Bearer {api_key}",
@@ -486,6 +538,7 @@ class ModelClient:
     def _batch_upload(self, agent: ModelAgent, payload: bytes) -> str:
         """Upload a JSONL batch input via multipart/form-data; returns the file id."""
         boundary = f"co-batch-{uuid.uuid4().hex}"
+        api_key = get_credential(agent.credential_name) or ""
         body = (
             f"--{boundary}\r\ncontent-disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n"
             f"--{boundary}\r\ncontent-disposition: form-data; name=\"file\"; filename=\"batch.jsonl\"\r\n"
@@ -495,7 +548,7 @@ class ModelClient:
             self._provider_url(agent, "/files"),
             data=body,
             headers={
-                "authorization": f"Bearer {os.environ.get(agent.api_key_env, '')}",
+                "authorization": f"Bearer {api_key}",
                 "content-type": f"multipart/form-data; boundary={boundary}",
             },
             method="POST",
@@ -504,11 +557,12 @@ class ModelClient:
             return json.loads(response.read().decode("utf-8"))["id"]
 
     def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             headers={
-                "authorization": f"Bearer {os.environ.get(agent.api_key_env, '')}",
+                "authorization": f"Bearer {api_key}",
                 "content-type": "application/json",
             },
             method=method,
@@ -517,9 +571,10 @@ class ModelClient:
             return json.loads(response.read().decode("utf-8"))
 
     def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
+        api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
-            headers={"authorization": f"Bearer {os.environ.get(agent.api_key_env, '')}"},
+            headers={"authorization": f"Bearer {api_key}"},
             method="GET",
         )
         with urllib.request.urlopen(request, timeout=self.timeout) as response:
@@ -777,6 +832,50 @@ class TaskOrchestrator:
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
             return self.route_once(messages)
         return self.conduct(messages)
+
+    def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
+        """True when this request takes the single-worker route path (vs the conduct workflow)."""
+        text = self._latest_user_text(messages)
+        return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
+
+    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+        """Stream a single worker's content deltas as they arrive, then persist the run.
+
+        True streaming for the route path. ponytail: no cross-agent failover here — bytes
+        already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
+        """
+        text = self._latest_user_text(messages)
+        agent = self._select_agent(text, "worker")
+        parts: list[str] = []
+        for delta in self.client.stream_chat(agent, messages):
+            parts.append(delta)
+            yield delta
+        answer = "".join(parts)
+        record = {
+            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+            "created_at": int(time.time()),
+            "mode": "route",
+            "policy_mode": "route",
+            "prompt_text": text,
+            "answer": answer,
+            "trace": [
+                {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
+                 "access": [], "output": answer}
+            ],
+            "policy_snapshot": self.policy.as_dict(),
+            "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+        }
+        self._workflow_runs[record["workflow_run_id"]] = record
+        self._run_order.appendleft(record["workflow_run_id"])
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
+             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
+        )
 
     def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
         payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
