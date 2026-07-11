@@ -89,7 +89,7 @@ class SecurityConfig:
 
     def check_bind(self, host: str) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
-        if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:
+        if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:  # nosec B104 - comparison rejects public bind unless explicitly opted in.
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:

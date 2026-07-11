@@ -215,9 +215,14 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
         if ca_bundle:
-            return ssl.create_default_context(cafile=ca_bundle)
+            if not os.path.isfile(ca_bundle):
+                raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
+            try:
+                return ssl.create_default_context(cafile=ca_bundle)
+            except OSError as exc:
+                raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
         return ssl.create_default_context()
 
     def take_usage(self) -> dict[str, Any] | None:
@@ -278,12 +283,20 @@ class ModelClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout, context=self._ssl_context) as response:
+        with self._open_provider(request) as response:
             data = json.loads(response.read().decode("utf-8"))
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
         return data["choices"][0]["message"]["content"]
+
+    def _open_provider(self, request: urllib.request.Request) -> Any:
+        """Open a provider request built from a validated provider URL."""
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+            request,
+            timeout=self.timeout,
+            context=self._ssl_context,
+        )
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
@@ -329,7 +342,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout, context=self._ssl_context) as response:
+        with self._open_provider(request) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _mock_raw(
@@ -515,7 +528,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout, context=self._ssl_context) as response:
+        with self._open_provider(request) as response:
             return json.loads(response.read().decode("utf-8"))["id"]
 
     def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -528,7 +541,7 @@ class ModelClient:
             },
             method=method,
         )
-        with urllib.request.urlopen(request, timeout=self.timeout, context=self._ssl_context) as response:
+        with self._open_provider(request) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
@@ -537,7 +550,7 @@ class ModelClient:
             headers={"authorization": f"Bearer {get_credential(agent.credential_name) or ''}"},
             method="GET",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout, context=self._ssl_context) as response:
+        with self._open_provider(request) as response:
             return response.read()
 
 

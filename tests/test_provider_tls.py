@@ -45,6 +45,18 @@ def test_ca_bundle_is_loaded() -> None:
     assert len(context.get_ca_certs()) >= 1  # the supplied CA(s) are in effect
 
 
+def test_missing_ca_bundle_fails_with_path_reason() -> None:
+    missing = str(Path(tempfile.gettempdir()) / "contextual-orchestrator-missing-ca.pem")
+
+    try:
+        ModelClient(ca_bundle=missing)
+    except ValueError as exc:
+        assert "provider CA bundle does not exist" in str(exc)
+        assert missing in str(exc)
+    else:
+        raise AssertionError("missing CA bundle should fail with a path-specific reason")
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
