@@ -83,6 +83,21 @@ class ModelAgent:
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
 
+    def to_config(self) -> dict[str, Any]:
+        """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
+        return {
+            "id": self.id,
+            "model": self.model,
+            "base_url": self.base_url,
+            "api_key_env": self.api_key_env,
+            "credential_key": self.credential_key,
+            "tags": list(self.tags),
+            "priority": self.priority,
+            "disabled": self.disabled,
+            "provider_name": self.provider_name,
+            "provider_exclusions": list(self.provider_exclusions),
+        }
+
     @property
     def credential_name(self) -> str:
         """KV credential name for this agent's provider secret.
@@ -636,6 +651,48 @@ def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
     return [ModelAgent.from_dict(item) for item in data["agents"]]
 
 
+class _AgentPoolStore:
+    """Durable agent-pool (model group) storage: operator changes survive restarts.
+
+    ponytail: one sqlite table keyed by agent id, JSON payloads, thread-safe. The
+    seed agents file stays the bootstrap; stored rows overlay it at startup.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._lock = threading.Lock()
+        self._path = path
+        conn = sqlite3.connect(self._path)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def save(self, agent: "ModelAgent") -> None:
+        with self._lock:
+            conn = sqlite3.connect(self._path)
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO agent_pool (agent_id, payload) VALUES (?, ?)",
+                    (agent.id, json.dumps(agent.to_config(), ensure_ascii=False)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def load_all(self) -> list["ModelAgent"]:
+        with self._lock:
+            conn = sqlite3.connect(self._path)
+            try:
+                rows = conn.execute("SELECT payload FROM agent_pool ORDER BY agent_id").fetchall()
+            finally:
+                conn.close()
+        return [ModelAgent.from_dict(json.loads(row[0])) for row in rows]
+
+    def close(self) -> None:
+        """Compatibility no-op: agent-pool operations use short-lived sqlite handles."""
+
+
 class _StateStore:
     """Minimal write-through sqlite persistence for orchestrator runtime state.
 
@@ -763,9 +820,16 @@ class TaskOrchestrator:
         budget_max_output_tokens: int | None = None,
         budget_max_cost_usd: float | None = None,
         state_db: str | None = None,
+        agents_db: str | None = None,
         cache_ttl: float = 0.0,
         cache_max_entries: int = 256,
     ) -> None:
+        # Optional durable model-group management: stored operator changes overlay the
+        # seed agents file at startup (stored rows win by id; stored-new rows append).
+        self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
+        if self._pool_store is not None:
+            stored = {agent.id: agent for agent in self._pool_store.load_all()}
+            agents = [stored.pop(agent.id, agent) for agent in agents] + list(stored.values())
         self.agents = [agent for agent in agents if not agent.disabled]
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
@@ -797,6 +861,8 @@ class TaskOrchestrator:
 
     def close(self) -> None:
         """Release optional durable resources owned by this orchestrator."""
+        if self._pool_store is not None:
+            self._pool_store.close()
         if self._store is not None:
             self._store.close()
 
@@ -1189,6 +1255,8 @@ class TaskOrchestrator:
             patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
 
         self.agents = [patched if agent.id == worker_agent_id else agent for agent in self.agents]
+        if self._pool_store is not None:
+            self._pool_store.save(patched)
         self._append_audit_event(
             "agent_patched",
             {
@@ -1216,6 +1284,57 @@ class TaskOrchestrator:
                 },
             )
         return self._agent_to_admin_payload(patched)
+
+    def add_agent(self, agent_pool_id: str, value: dict[str, Any]) -> dict[str, Any]:
+        """Register a new worker agent (model group member) at runtime; persists when agents_db is set."""
+        if agent_pool_id != "default":  # pragma: no cover
+            raise KeyError(agent_pool_id)
+        if "id" not in value or "model" not in value:
+            raise ValueError("agent requires id and model")
+        agent = ModelAgent.from_dict(value)
+        if any(existing.id == agent.id for existing in self.agents):
+            raise ValueError(f"agent {agent.id} already exists")
+        if not agent.base_url.startswith("mock://"):
+            parsed = urlparse(agent.base_url)
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ValueError("non-mock agents must use an https base_url")
+            if not agent.credential_name:
+                raise ValueError("non-mock agents require credential_key or legacy api_key_env")
+        self.agents = [*self.agents, agent]
+        if self._pool_store is not None:
+            self._pool_store.save(agent)
+        self._append_audit_event(
+            "agent_added",
+            {"agent_pool_id": agent_pool_id, "worker_agent_id": agent.id, "model": agent.model},
+        )
+        self.record_analytics_event(
+            "agent_added",
+            {"agent_pool_id": agent_pool_id, "agent_id": agent.id, "model": agent.model},
+        )
+        return self._agent_to_admin_payload(agent)
+
+    def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
+        """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
+        if agent_pool_id != "default":  # pragma: no cover
+            raise KeyError(agent_pool_id)
+        target = self._agent(worker_agent_id)
+        remaining_enabled = [agent for agent in self.agents if agent.id != worker_agent_id and not agent.disabled]
+        if not remaining_enabled:
+            raise ValueError("cannot remove the last enabled agent")
+        self.agents = [agent for agent in self.agents if agent.id != worker_agent_id]
+        if self._pool_store is not None:
+            # Disabled tombstone (not a row delete): it overlays the seed file on restart
+            # and startup drops disabled agents, so removal survives even for seed agents.
+            self._pool_store.save(replace(target, disabled=True))
+        self._append_audit_event(
+            "agent_removed",
+            {"agent_pool_id": agent_pool_id, "worker_agent_id": worker_agent_id, "model": target.model},
+        )
+        self.record_analytics_event(
+            "agent_removed",
+            {"agent_pool_id": agent_pool_id, "agent_id": worker_agent_id},
+        )
+        return {"removed": worker_agent_id}
 
     def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
