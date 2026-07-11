@@ -308,7 +308,7 @@ if __name__ == "__main__":
     test_concurrency_limit_rejects_when_slots_are_full()
     test_chat_completion_response_requires_explicit_trace()
     test_redaction_masks_common_sensitive_values()
-    test_external_provider_requires_explicit_key_env_and_public_https()
+    test_external_provider_requires_resolvable_credential_and_public_https()
     test_external_provider_rejects_insecure_or_unlisted_hosts()
     test_provider_transport_rejects_local_url_schemes_before_urllib()
     test_provider_transport_rejects_protocol_relative_batch_paths()

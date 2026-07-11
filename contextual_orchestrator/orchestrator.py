@@ -15,6 +15,7 @@ from pathlib import Path
 import random
 import re
 import socket
+import ssl
 import sqlite3
 import threading
 import time
@@ -194,6 +195,8 @@ class ModelClient:
         max_retries: int = 2,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
+        ca_bundle: str | None = None,
+        verify_tls: bool = True,
     ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
@@ -204,6 +207,23 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
+        # TLS trust for provider egress. Default verifies against the system trust store;
+        # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
+        # explicit dev-only opt-out (insecure) for self-signed endpoints.
+        self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+
+    @staticmethod
+    def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
+        if not verify_tls:
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+        if ca_bundle:
+            if not os.path.isfile(ca_bundle):
+                raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
+            try:
+                return ssl.create_default_context(cafile=ca_bundle)
+            except OSError as exc:
+                raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
+        return ssl.create_default_context()
 
     def take_usage(self) -> dict[str, Any] | None:
         """Return and clear provider-reported usage from the most recent chat() on this thread."""
@@ -263,12 +283,20 @@ class ModelClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with self._open_provider(request) as response:
             data = json.loads(response.read().decode("utf-8"))
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
         return data["choices"][0]["message"]["content"]
+
+    def _open_provider(self, request: urllib.request.Request) -> Any:
+        """Open a provider request built from a validated provider URL."""
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+            request,
+            timeout=self.timeout,
+            context=self._ssl_context,
+        )
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
@@ -306,7 +334,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with self._open_provider(request) as response:
             for raw in response:
                 line = raw.decode("utf-8").strip()
                 if not line.startswith("data:"):
@@ -366,7 +394,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with self._open_provider(request) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _mock_raw(
@@ -553,7 +581,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with self._open_provider(request) as response:
             return json.loads(response.read().decode("utf-8"))["id"]
 
     def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -567,7 +595,7 @@ class ModelClient:
             },
             method=method,
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with self._open_provider(request) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
@@ -577,7 +605,7 @@ class ModelClient:
             headers={"authorization": f"Bearer {api_key}"},
             method="GET",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with self._open_provider(request) as response:
             return response.read()
 
 
