@@ -612,7 +612,7 @@ class PgLlmBatchEmbeddingBackend:
         if not payload.get("success"):
             return []
         tracked = self._jobs.get(job.job_id, {})
-        requests = tracked.get("requests", {})
+        tracked_requests = tracked.get("requests", {})
         order = tracked.get("order", [])
         position_by_custom_id = {custom_id: pos for pos, custom_id in enumerate(order)}
         items: List[EmbeddingBatchResultItem] = []
@@ -621,14 +621,14 @@ class PgLlmBatchEmbeddingBackend:
             body = (entry.get("response") or {}).get("body", {})
             embedding = _extract_embedding(body)
             usage = body.get("usage", {}) or {}
-            request = requests.get(custom_id)
+            tracked_request = tracked_requests.get(custom_id)
             items.append(
                 EmbeddingBatchResultItem(
                     custom_id=custom_id,
                     index=position_by_custom_id.get(custom_id, len(items)),
                     embedding=embedding,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
-                    model=request.model if request else "contextual-orchestrator",
+                    model=tracked_request.model if tracked_request else "contextual-orchestrator",
                 )
             )
         items.sort(key=lambda item: item.index)

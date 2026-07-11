@@ -19,7 +19,7 @@ store, never ``os.getenv``.
 from __future__ import annotations
 
 import re
-from typing import Any, Callable, Dict, List, Optional
+from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
     BatchBackend,
@@ -34,7 +34,7 @@ from .batch_routing import (
     RoutingHints,
     RoutingPolicy,
 )
-from .cost_ledger import AttributionDimensions, CostLedger, PriceBook
+from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
 from .token_counting import HeuristicTokenCounter, build_token_counter
 

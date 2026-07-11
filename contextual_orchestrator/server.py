@@ -89,7 +89,7 @@ class SecurityConfig:
 
     def check_bind(self, host: str) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
-        if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:
+        if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:  # nosec B104 - comparison rejects public bind unless explicitly opted in.
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
@@ -693,6 +693,20 @@ def build_server(
                     routing = _validate_routing(body.get("routing"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
+                    if stream and orchestrator.would_route(messages, mode):
+                        self._stream_route_completion(orchestrator, security, messages, model_name)
+                        orchestrator.record_analytics_event(
+                            "chat_completion_requested",
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "run_mode": "route",
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                "response_streamed": True,
+                            },
+                        )
+                        return
                     result = self._run(lambda: coordinator.complete(
                         messages,
                         mode=mode,
@@ -943,6 +957,49 @@ def build_server(
             self._send_security_headers()
             self.end_headers()
             self.wfile.write(raw)
+
+        def _begin_sse(self) -> None:
+            # Incremental SSE: no content-length; the connection close delimits the body.
+            self.send_response(200)
+            self.send_header("content-type", "text/event-stream; charset=utf-8")
+            self.send_header("cache-control", "no-cache")
+            self.send_header("connection", "close")
+            self._send_security_headers()
+            self.end_headers()
+
+        def _write_sse(self, frame: str) -> None:
+            self.wfile.write(frame.encode("utf-8"))
+            self.wfile.flush()
+
+        def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
+            """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
+            run_id = f"run_{uuid.uuid4().hex}"
+            completion_id = f"chatcmpl-{int(time.time() * 1000)}"
+            created = int(time.time())
+
+            def frame(delta: dict[str, Any], finish: str | None = None) -> str:
+                payload = {
+                    "id": completion_id,
+                    "object": "chat.completion.chunk",
+                    "created": created,
+                    "model": model_name,
+                    "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+                }
+                return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+            security.acquire_run_slot()
+            try:
+                self._begin_sse()
+                self._write_sse(frame({"role": "assistant"}))
+                try:
+                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                        self._write_sse(frame({"content": delta}))
+                    self._write_sse(frame({}, finish="stop"))
+                except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
+                    self._write_sse(frame({}, finish="error"))
+                self._write_sse("data: [DONE]\n\n")
+            finally:
+                security.release_run_slot()
 
         def _send_security_headers(self) -> None:
             self.send_header("x-content-type-options", "nosniff")
