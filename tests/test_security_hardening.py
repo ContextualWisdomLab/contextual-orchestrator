@@ -11,6 +11,7 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, chat_completion_response, redact_text, redact_value  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
@@ -92,6 +93,23 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert inference_status == 200
     assert inference_body["orchestration"]["mode"] == "route"
     assert "trace" not in inference_body["orchestration"]
+
+
+def test_loopback_without_configured_token_is_rejected() -> None:
+    server = build_server(build(), port=0, security=SecurityConfig())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    payload = {"messages": [{"role": "user", "content": "hello"}]}
+
+    try:
+        status, body = post_json(f"http://127.0.0.1:{port}/v1/chat/completions", payload)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 401
+    assert body["error"]["code"] == "unauthorized"
 
 
 def test_http_api_validates_mode_and_request_shape() -> None:
@@ -204,24 +222,36 @@ def test_redaction_masks_common_sensitive_values() -> None:
     assert redact_text(text) == "api_key='[REDACTED]' sent by [REDACTED]"
 
 
-def test_external_provider_requires_explicit_key_env_and_public_https() -> None:
+def test_external_provider_requires_resolvable_credential_and_public_https() -> None:
     client = ModelClient()
-    no_key_agent = ModelAgent("remote_agent", "gpt-example", "https://api.openai.com/v1")
-    loopback_agent = ModelAgent("loopback_agent", "gpt-example", "https://127.0.0.1/v1", "MODEL_KEY")
-
+    # No credential registered in the KV: a non-mock agent must fail loudly and
+    # must NOT fall back to reading os.getenv. Default credential is OPENAI_API_KEY.
+    set_backend(InMemoryCredentialBackend())
     try:
-        client._validate_provider(no_key_agent)
-    except RuntimeError as exc:
-        assert "api_key_env" in str(exc)
-    else:
-        raise AssertionError("provider without api_key_env should fail")
+        no_key_agent = ModelAgent("remote_agent", "gpt-example", "https://api.openai.com/v1")
+        loopback_agent = ModelAgent("loopback_agent", "gpt-example", "https://127.0.0.1/v1", "MODEL_KEY")
 
-    try:
-        client._validate_provider(loopback_agent)
-    except RuntimeError as exc:
-        assert "non-public address" in str(exc)
-    else:
-        raise AssertionError("loopback provider should fail")
+        try:
+            client._validate_provider(no_key_agent)
+        except RuntimeError as exc:
+            # Unresolvable credential is reported (message references legacy api_key_env).
+            assert "credential" in str(exc)
+            assert "api_key_env" in str(exc)
+        else:
+            raise AssertionError("provider without a resolvable credential should fail")
+
+        # Register the credential so the host-safety checks are reached and exercised.
+        backend = InMemoryCredentialBackend()
+        backend.set("MODEL_KEY", "sk-loopback")
+        set_backend(backend)
+        try:
+            client._validate_provider(loopback_agent)
+        except RuntimeError as exc:
+            assert "non-public address" in str(exc)
+        else:
+            raise AssertionError("loopback provider should fail")
+    finally:
+        set_backend(None)
 
 
 def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
@@ -230,6 +260,10 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
     unlisted_agent = ModelAgent("unlisted_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY")
     previous = os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS")
     os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = "example.com"
+    # Register the credential so validation proceeds to the host-safety checks.
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
 
     try:
         try:
@@ -246,10 +280,35 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
         else:
             raise AssertionError("unlisted provider should fail")
     finally:
+        set_backend(None)
         if previous is None:
             os.environ.pop("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", None)
         else:
             os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
+
+
+def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:
+    client = ModelClient()
+    file_agent = ModelAgent("file_agent", "gpt-example", "file:///etc/passwd", "MODEL_KEY")
+
+    try:
+        client._send(file_agent, {"model": "gpt-example"})
+    except RuntimeError as exc:
+        assert "http(s)" in str(exc)
+    else:
+        raise AssertionError("file:// provider URL should fail before urllib opens it")
+
+
+def test_provider_transport_rejects_protocol_relative_batch_paths() -> None:
+    client = ModelClient()
+    remote_agent = ModelAgent("remote_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY")
+
+    try:
+        client._batch_raw(remote_agent, "//evil.example/files/leak")
+    except RuntimeError as exc:
+        assert "absolute URL path" in str(exc)
+    else:
+        raise AssertionError("protocol-relative provider path should fail before urllib opens it")
 
 
 def test_redact_value_preserves_non_string_scalars() -> None:
@@ -259,6 +318,7 @@ def test_redact_value_preserves_non_string_scalars() -> None:
 if __name__ == "__main__":
     test_http_api_requires_bearer_token_and_hides_trace_by_default()
     test_admin_and_inference_tokens_are_separate()
+    test_loopback_without_configured_token_is_rejected()
     test_http_api_validates_mode_and_request_shape()
     test_http_api_rejects_unknown_request_fields()
     test_rate_limit_returns_429_after_configured_budget()
@@ -266,7 +326,9 @@ if __name__ == "__main__":
     test_concurrency_limit_rejects_when_slots_are_full()
     test_chat_completion_response_requires_explicit_trace()
     test_redaction_masks_common_sensitive_values()
-    test_external_provider_requires_explicit_key_env_and_public_https()
+    test_external_provider_requires_resolvable_credential_and_public_https()
     test_external_provider_rejects_insecure_or_unlisted_hosts()
+    test_provider_transport_rejects_local_url_schemes_before_urllib()
+    test_provider_transport_rejects_protocol_relative_batch_paths()
     test_redact_value_preserves_non_string_scalars()
     print("ok")

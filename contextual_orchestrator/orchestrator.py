@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
-from collections import Counter, deque
+from collections import Counter, deque, OrderedDict
+from contextvars import ContextVar
+import copy
 from dataclasses import dataclass, replace
+from functools import wraps
+import hashlib
 import ipaddress
 import json
 import os
@@ -11,6 +15,9 @@ from pathlib import Path
 import random
 import re
 import socket
+import ssl
+import sqlite3
+import threading
 import time
 import uuid
 from typing import Any
@@ -19,9 +26,32 @@ import urllib.error
 import urllib.request
 
 from .conventions import require_object_name
+from .credentials import NotConfigured, get_credential
 
 
 ChatMessage = dict[str, str]
+
+class BudgetExceededError(RuntimeError):
+    """Raised when an operator-configured spend budget is already exhausted."""
+
+    def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
+        super().__init__(message)
+        self.detail = detail or {}
+
+
+def estimate_tokens(text: str) -> int:
+    """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
+
+    Honest floor for spend analytics on mock/runtime text; replace with provider-reported
+    usage when real workers return it.
+    """
+    return (len(text) + 3) // 4 if text else 0
+
+
+_COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
+    "commercial_report_cache",
+    default=None,
+)
 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
@@ -39,7 +69,11 @@ class ModelAgent:
     id: str
     model: str
     base_url: str = "mock://local"
+    # Legacy field: kept for back-compat. When set, its STRING is treated as the
+    # KV credential NAME (never read as an environment variable). Prefer
+    # ``credential_key``. See docs/kv-credentials.md.
     api_key_env: str = ""
+    credential_key: str = "OPENAI_API_KEY"
     tags: tuple[str, ...] = ()
     priority: int = 0
     disabled: bool = False
@@ -48,6 +82,31 @@ class ModelAgent:
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+
+    def to_config(self) -> dict[str, Any]:
+        """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
+        return {
+            "id": self.id,
+            "model": self.model,
+            "base_url": self.base_url,
+            "api_key_env": self.api_key_env,
+            "credential_key": self.credential_key,
+            "tags": list(self.tags),
+            "priority": self.priority,
+            "disabled": self.disabled,
+            "provider_name": self.provider_name,
+            "provider_exclusions": list(self.provider_exclusions),
+        }
+
+    @property
+    def credential_name(self) -> str:
+        """KV credential name for this agent's provider secret.
+
+        Back-compat: a legacy ``api_key_env`` value is treated as the credential
+        NAME (its string), not as an environment variable to read. Otherwise the
+        modern ``credential_key`` is used.
+        """
+        return self.api_key_env or self.credential_key
 
     @classmethod
     def from_dict(cls, value: dict[str, Any]) -> "ModelAgent":  # pragma: no cover
@@ -58,6 +117,7 @@ class ModelAgent:
             model=value["model"],
             base_url=value.get("base_url", "mock://local"),
             api_key_env=value.get("api_key_env", ""),
+            credential_key=value.get("credential_key", "OPENAI_API_KEY"),
             tags=tuple(value.get("tags", ())),
             priority=int(value.get("priority", 0)),
             disabled=bool(value.get("disabled", False)),
@@ -100,6 +160,15 @@ class OrchestrationPolicy:
     verifier_required: bool = True
     verifier_positive_terms: tuple[str, ...] = ("verified", "accepted", "confirmed", "pass", "good", "ok")
     verifier_negative_terms: tuple[str, ...] = ("reject", "disagree", "conflict", "unsafe", "fails", "error", "risky")
+    # Conductor-style planning (arXiv:2512.04388): "generated" asks the planner model to
+    # emit the workflow (subtasks, worker assignment, access lists); "template" keeps the
+    # fixed 4-step plan. Generated plans that fail validation fall back to the template.
+    workflow_planning: str = "template"
+    max_workflow_steps: int = 6
+    # Verifier verdict: "terms" (default) matches accept/reject vocabulary in the verifier
+    # report; "model" asks a verifier-selected model to reply ACCEPT/REJECT (fixes the
+    # known term-matching false negative on risk-vocabulary verifier outputs).
+    verifier_judge: str = "terms"
 
     def as_dict(self) -> dict[str, Any]:
         """Return the API-safe policy snapshot for workflow records."""
@@ -107,6 +176,9 @@ class OrchestrationPolicy:
             "route_p95_seconds": self.route_p95_seconds,
             "conduct_hint_threshold": self.conduct_hint_threshold,
             "verifier_required": self.verifier_required,
+            "workflow_planning": self.workflow_planning,
+            "verifier_judge": self.verifier_judge,
+            "max_workflow_steps": self.max_workflow_steps,
             "workflow_steps": ["thinker", "worker", "verifier", "synthesizer"],
             "supported_locales": ["en", "ko"],
         }
@@ -138,6 +210,8 @@ class ModelClient:
         max_retries: int = 2,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
+        ca_bundle: str | None = None,
+        verify_tls: bool = True,
     ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
@@ -146,16 +220,44 @@ class ModelClient:
         self.retry_backoff_cap = retry_backoff_cap
         # Seam so tests can observe/skip real sleeping during backoff.
         self._sleep = time.sleep
+        # Per-thread usage from the most recent chat() (the server is threaded).
+        self._local = threading.local()
+        # TLS trust for provider egress. Default verifies against the system trust store;
+        # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
+        # explicit dev-only opt-out (insecure) for self-signed endpoints.
+        self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+
+    @staticmethod
+    def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
+        if not verify_tls:
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+        if ca_bundle:
+            if not os.path.isfile(ca_bundle):
+                raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
+            try:
+                return ssl.create_default_context(cafile=ca_bundle)
+            except OSError as exc:
+                raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
+        return ssl.create_default_context()
+
+    def take_usage(self) -> dict[str, Any] | None:
+        """Return and clear provider-reported usage from the most recent chat() on this thread."""
+        usage = getattr(self._local, "usage", None)
+        self._local.usage = None
+        return usage
 
     def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
+        self._local.usage = None
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
         self._validate_provider(agent)  # pragma: no cover
-        api_key = os.environ.get(agent.api_key_env)  # pragma: no cover
+        api_key = get_credential(agent.credential_name)  # pragma: no cover
         if not api_key:  # pragma: no cover
-            raise RuntimeError(f"{agent.id} requires ${agent.api_key_env}")
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV"
+            )
 
         payload = {  # pragma: no cover
             "model": agent.model,
@@ -184,11 +286,11 @@ class ModelClient:
         ceiling = min(self.retry_backoff_cap, self.retry_backoff * (2 ** attempt))
         return random.uniform(0.0, ceiling)
 
-    def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:  # pragma: no cover
+    def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
-        api_key = os.environ.get(agent.api_key_env, "")
+        api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
-            f"{agent.base_url.rstrip('/')}/chat/completions",
+            self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
             headers={
                 "authorization": f"Bearer {api_key}",
@@ -196,14 +298,168 @@ class ModelClient:
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:
+        with self._open_provider(request) as response:
             data = json.loads(response.read().decode("utf-8"))
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            self._local.usage = usage
         return data["choices"][0]["message"]["content"]
+
+    def _open_provider(self, request: urllib.request.Request) -> Any:
+        """Open a provider request built from a validated provider URL."""
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+            request,
+            timeout=self.timeout,
+            context=self._ssl_context,
+        )
+
+    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+        """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
+
+        Real token streaming: the provider is called with stream=true and its SSE deltas
+        are yielded as they arrive (not computed-then-framed). The mock path yields its
+        answer in fixed chunks so behavior shape stays testable and unchanged.
+        """
+        if agent.base_url.startswith("mock://"):
+            answer = self._mock(agent, messages)
+            for start in range(0, len(answer), 24):
+                yield answer[start : start + 24]
+            return
+
+        self._validate_provider(agent)  # pragma: no cover
+        payload = {  # pragma: no cover
+            "model": agent.model,
+            "messages": messages,
+            "temperature": temperature,
+            "stream": True,
+            "max_tokens": self.max_output_tokens,
+        }
+        yield from self._stream_send(agent, payload)  # pragma: no cover
+
+    def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
+        """Stream content deltas from a provider SSE response (real transport, testable)."""
+        api_key = get_credential(agent.credential_name) or ""
+        request = urllib.request.Request(
+            self._provider_url(agent, "/chat/completions"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+                "accept": "text/event-stream",
+            },
+            method="POST",
+        )
+        with self._open_provider(request) as response:
+            for raw in response:
+                line = raw.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    chunk = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                if delta:
+                    yield delta
+
+    # -- Full OpenAI passthrough (transport) ------------------------------------
+    # Requests that carry provider features the multi-agent verifier cannot merge
+    # (response_format / tools / the Responses API) are proxied to a single agent
+    # so the full provider response shape (tool_calls, parsed structured output,
+    # Responses output items) survives verbatim. Agent selection lives on the
+    # orchestrator; this is the agent-level transport.
+    def proxy_send(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Passthrough a full request to one agent, returning the raw provider JSON."""
+        if agent.base_url.startswith("mock://"):
+            return self._mock_raw(agent, endpoint, payload)
+        self._validate_provider(agent)  # pragma: no cover
+        return self._send_raw_with_retry(agent, endpoint, payload)  # pragma: no cover
+
+    def _send_raw_with_retry(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:  # pragma: no cover
+        """Passthrough transport with the same transient-failure retry policy as _send."""
+        last_error: Exception | None = None
+        for attempt in range(self.max_retries + 1):
+            try:
+                return self._send_raw(agent, endpoint, payload)
+            except Exception as exc:  # noqa: BLE001 - classify then decide
+                last_error = exc
+                if attempt >= self.max_retries or not is_transient_error(exc):
+                    break
+                self._sleep(self._backoff_delay(attempt))
+        raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
+
+    def _send_raw(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:  # pragma: no cover
+        """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
+        api_key = get_credential(agent.credential_name) or ""
+        request = urllib.request.Request(
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        with self._open_provider(request) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _mock_raw(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
+        echoed = {
+            key: payload[key]
+            for key in ("model", "response_format", "tools", "tool_choice", "temperature", "max_tokens")
+            if key in payload
+        }
+        if endpoint.strip("/") == "responses":
+            return {
+                "id": f"resp_mock_{agent.id}",
+                "object": "response",
+                "model": agent.model,
+                "output": [
+                    {
+                        "type": "message",
+                        "role": "assistant",
+                        "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
+                    }
+                ],
+                "echo": echoed,
+            }
+        return {
+            "id": f"chatcmpl_mock_{agent.id}",
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [
+                {
+                    "index": 0,
+                    "message": {"role": "assistant", "content": f"[{agent.id}] chat-mock"},
+                    "finish_reason": "stop",
+                }
+            ],
+            "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+            "echo": echoed,
+        }
 
     def _validate_provider(self, agent: ModelAgent) -> None:
         """Reject unsafe remote model endpoints before any egress happens."""
-        if not agent.api_key_env:
-            raise RuntimeError(f"{agent.id} requires explicit api_key_env")
+        # Runtime secret must be resolvable from the KV — never an env var name,
+        # never a silent os.getenv fallback. (Legacy api_key_env, if set, is used
+        # only as the credential NAME; see ModelAgent.credential_name.)
+        if get_credential(agent.credential_name) is None:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
+                "(this replaces the legacy api_key_env environment pattern)"
+            )
         parsed = urlparse(agent.base_url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise RuntimeError(f"{agent.id} base_url must use https")
@@ -226,6 +482,15 @@ class ModelClient:
             ):
                 raise RuntimeError(f"{agent.id} provider resolves to non-public address")
 
+    def _provider_url(self, agent: ModelAgent, path: str) -> str:
+        """Build a provider URL while rejecting urllib-supported local schemes."""
+        parsed = urlparse(agent.base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise RuntimeError(f"{agent.id} base_url must be an http(s) provider URL")
+        if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
+            raise RuntimeError("provider path must be a single absolute URL path")
+        return f"{agent.base_url.rstrip('/')}{path}"
+
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         role = "worker"
@@ -235,12 +500,282 @@ class ModelClient:
             role = match.group(1)
         return f"[{agent.id}:{role}] {last[:220]}"
 
+    # --- OpenAI Batch API (async, ~50% provider discount; NOT for latency-sensitive chat) ---
+
+    def batch_chat(
+        self,
+        agent: ModelAgent,
+        requests: dict[str, list[ChatMessage]],
+        temperature: float = 0.2,
+        poll_interval: float = 5.0,
+        poll_timeout: float = 3600.0,
+    ) -> dict[str, dict[str, Any]]:
+        """Run many chat requests through the provider's Batch API and return results by id.
+
+        ``requests`` maps a caller custom_id to its messages. Suited to eval/benchmark
+        workloads (24h completion window, ~half the price); real-time chat should keep
+        using ``chat``. The mock path answers synchronously so tests and local runs work.
+        """
+        if agent.base_url.startswith("mock://"):
+            return {
+                custom_id: {"content": self._mock(agent, messages), "usage": None}
+                for custom_id, messages in requests.items()
+            }
+        self._validate_provider(agent)  # pragma: no cover
+        return self._batch_run(agent, requests, temperature, poll_interval, poll_timeout)  # pragma: no cover
+
+    def _batch_run(
+        self,
+        agent: ModelAgent,
+        requests: dict[str, list[ChatMessage]],
+        temperature: float,
+        poll_interval: float,
+        poll_timeout: float,
+    ) -> dict[str, dict[str, Any]]:
+        """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
+        lines = [
+            json.dumps({
+                "custom_id": custom_id,
+                "method": "POST",
+                "url": "/v1/chat/completions",
+                "body": {
+                    "model": agent.model,
+                    "messages": messages,
+                    "temperature": temperature,
+                    "max_tokens": self.max_output_tokens,
+                },
+            }, ensure_ascii=False)
+            for custom_id, messages in requests.items()
+        ]
+        input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"))
+        batch_id = self._batch_json(agent, "POST", "/batches", {
+            "input_file_id": input_file_id,
+            "endpoint": "/v1/chat/completions",
+            "completion_window": "24h",
+        })["id"]
+        deadline = time.monotonic() + poll_timeout
+        while True:
+            batch = self._batch_json(agent, "GET", f"/batches/{batch_id}")
+            status = batch.get("status")
+            if status == "completed":
+                break
+            if status in {"failed", "expired", "cancelled"}:
+                raise RuntimeError(f"batch {batch_id} ended with status {status}")
+            if time.monotonic() >= deadline:
+                raise TimeoutError(f"batch {batch_id} still {status} after {poll_timeout}s")
+            self._sleep(poll_interval)
+        raw = self._batch_raw(agent, f"/files/{batch['output_file_id']}/content")
+        results: dict[str, dict[str, Any]] = {}
+        for line in raw.decode("utf-8").splitlines():
+            if not line.strip():
+                continue
+            row = json.loads(line)
+            body = (row.get("response") or {}).get("body") or {}
+            choices = body.get("choices") or [{}]
+            results[row.get("custom_id", "")] = {
+                "content": (choices[0].get("message") or {}).get("content"),
+                "usage": body.get("usage"),
+            }
+        return results
+
+    def _batch_upload(self, agent: ModelAgent, payload: bytes) -> str:
+        """Upload a JSONL batch input via multipart/form-data; returns the file id."""
+        boundary = f"co-batch-{uuid.uuid4().hex}"
+        api_key = get_credential(agent.credential_name) or ""
+        body = (
+            f"--{boundary}\r\ncontent-disposition: form-data; name=\"purpose\"\r\n\r\nbatch\r\n"
+            f"--{boundary}\r\ncontent-disposition: form-data; name=\"file\"; filename=\"batch.jsonl\"\r\n"
+            "content-type: application/jsonl\r\n\r\n"
+        ).encode("utf-8") + payload + f"\r\n--{boundary}--\r\n".encode("utf-8")
+        request = urllib.request.Request(
+            self._provider_url(agent, "/files"),
+            data=body,
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": f"multipart/form-data; boundary={boundary}",
+            },
+            method="POST",
+        )
+        with self._open_provider(request) as response:
+            return json.loads(response.read().decode("utf-8"))["id"]
+
+    def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+        api_key = get_credential(agent.credential_name) or ""
+        request = urllib.request.Request(
+            self._provider_url(agent, path),
+            data=json.dumps(payload).encode("utf-8") if payload is not None else None,
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+            },
+            method=method,
+        )
+        with self._open_provider(request) as response:
+            return json.loads(response.read().decode("utf-8"))
+
+    def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
+        api_key = get_credential(agent.credential_name) or ""
+        request = urllib.request.Request(
+            self._provider_url(agent, path),
+            headers={"authorization": f"Bearer {api_key}"},
+            method="GET",
+        )
+        with self._open_provider(request) as response:
+            return response.read()
+
+
+def _coerce_input_text(value: Any) -> str:
+    """Best-effort text (for agent selection) from a Responses API ``input`` field."""
+    if isinstance(value, str):
+        return value
+    parts: list[str] = []
+    if isinstance(value, list):
+        for item in value:
+            if isinstance(item, str):
+                parts.append(item)
+            elif isinstance(item, dict):
+                content = item.get("content")
+                if isinstance(content, str):
+                    parts.append(content)
+                elif isinstance(content, list):
+                    for chunk in content:
+                        if isinstance(chunk, dict) and isinstance(chunk.get("text"), str):
+                            parts.append(chunk["text"])
+    return " ".join(parts)
+
 
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
     """Load model agent definitions from an agents JSON file."""
     with open(path, encoding="utf-8") as handle:
         data = json.load(handle)
     return [ModelAgent.from_dict(item) for item in data["agents"]]
+
+
+class _AgentPoolStore:
+    """Durable agent-pool (model group) storage: operator changes survive restarts.
+
+    ponytail: one sqlite table keyed by agent id, JSON payloads, thread-safe. The
+    seed agents file stays the bootstrap; stored rows overlay it at startup.
+    """
+
+    def __init__(self, path: str) -> None:
+        self._lock = threading.Lock()
+        self._path = path
+        conn = sqlite3.connect(self._path)
+        try:
+            conn.execute("CREATE TABLE IF NOT EXISTS agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.commit()
+        finally:
+            conn.close()
+
+    def save(self, agent: "ModelAgent") -> None:
+        with self._lock:
+            conn = sqlite3.connect(self._path)
+            try:
+                conn.execute(
+                    "INSERT OR REPLACE INTO agent_pool (agent_id, payload) VALUES (?, ?)",
+                    (agent.id, json.dumps(agent.to_config(), ensure_ascii=False)),
+                )
+                conn.commit()
+            finally:
+                conn.close()
+
+    def load_all(self) -> list["ModelAgent"]:
+        with self._lock:
+            conn = sqlite3.connect(self._path)
+            try:
+                rows = conn.execute("SELECT payload FROM agent_pool ORDER BY agent_id").fetchall()
+            finally:
+                conn.close()
+        return [ModelAgent.from_dict(json.loads(row[0])) for row in rows]
+
+    def close(self) -> None:
+        """Compatibility no-op: agent-pool operations use short-lived sqlite handles."""
+
+
+class _StateStore:
+    """Minimal write-through sqlite persistence for orchestrator runtime state.
+
+    ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
+    upsert by key; stream kinds (analytics, audit) append. Stream rows grow unbounded
+    on disk while the in-memory deques stay capped — add pruning if db size matters.
+    Runtime values (kind, key, payload, limit) are always bound through SQLite
+    placeholders so persisted prompts and identifiers cannot become SQL syntax.
+    """
+
+    _KEYED = {"workflow_run", "evaluation_run"}
+    _CREATE_RECORDS_SQL = (
+        "CREATE TABLE IF NOT EXISTS records ("
+        "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
+    )
+    _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = "CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)"
+    _DELETE_KEYED_SQL = "DELETE FROM records WHERE kind = ? AND key = ?"
+    _INSERT_SQL = "INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)"
+    _SELECT_ALL_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq"
+    _SELECT_LIMIT_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
+
+    def __init__(self, path: str) -> None:
+        self._lock = threading.Lock()
+        self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._conn.execute(self._CREATE_RECORDS_SQL)
+        self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
+        self._conn.commit()
+
+    def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
+        blob = json.dumps(payload, ensure_ascii=False)
+        with self._lock:
+            if kind in self._KEYED:
+                self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
+            self._conn.execute(self._INSERT_SQL, (kind, key, blob))
+            self._conn.commit()
+
+    def load(self, kind: str, limit: int | None = None) -> list[dict[str, Any]]:
+        with self._lock:
+            if limit is None:
+                rows = self._conn.execute(self._SELECT_ALL_SQL, (kind,)).fetchall()
+            else:
+                rows = self._conn.execute(self._SELECT_LIMIT_SQL, (kind, limit)).fetchall()
+                rows = list(reversed(rows))
+        return [json.loads(row[0]) for row in rows]
+
+    def close(self) -> None:
+        """Close the sqlite handle so Windows can release the database file."""
+        with self._lock:
+            self._conn.close()
+
+
+class _ResponseCache:
+    """Exact-match TTL + LRU cache for orchestration results.
+
+    ponytail: stdlib OrderedDict, no cache library. Deep-copies on the way in and out
+    so callers can never mutate a cached entry. Thread-safe (the HTTP server is threaded).
+    """
+
+    def __init__(self, ttl: float, max_entries: int = 256, clock: Any = time.monotonic) -> None:
+        self.ttl = ttl
+        self.max_entries = max_entries
+        self._clock = clock
+        self._lock = threading.Lock()
+        self._data: "OrderedDict[str, tuple[float, dict[str, Any]]]" = OrderedDict()
+
+    def get(self, key: str) -> dict[str, Any] | None:
+        with self._lock:
+            entry = self._data.get(key)
+            if entry is None:
+                return None
+            stored_at, value = entry
+            if self._clock() - stored_at >= self.ttl:
+                del self._data[key]
+                return None
+            self._data.move_to_end(key)  # LRU: most-recently used at the end
+            return copy.deepcopy(value)
+
+    def put(self, key: str, value: dict[str, Any]) -> None:
+        with self._lock:
+            self._data[key] = (self._clock(), copy.deepcopy(value))
+            self._data.move_to_end(key)
+            while len(self._data) > self.max_entries:
+                self._data.popitem(last=False)  # evict least-recently used
 
 
 class TaskOrchestrator:
@@ -277,12 +812,34 @@ class TaskOrchestrator:
         "논문",
     )
 
-    def __init__(self, agents: list[ModelAgent], client: ModelClient | None = None) -> None:
+    def __init__(
+        self,
+        agents: list[ModelAgent],
+        client: ModelClient | None = None,
+        price_per_million: dict[str, float] | None = None,
+        budget_max_output_tokens: int | None = None,
+        budget_max_cost_usd: float | None = None,
+        state_db: str | None = None,
+        agents_db: str | None = None,
+        cache_ttl: float = 0.0,
+        cache_max_entries: int = 256,
+    ) -> None:
+        # Optional durable model-group management: stored operator changes overlay the
+        # seed agents file at startup (stored rows win by id; stored-new rows append).
+        self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
+        if self._pool_store is not None:
+            stored = {agent.id: agent for agent in self._pool_store.load_all()}
+            agents = [stored.pop(agent.id, agent) for agent in agents] + list(stored.values())
         self.agents = [agent for agent in agents if not agent.disabled]
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
         self.client = client or ModelClient()
         self.policy = OrchestrationPolicy()
+        # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
+        self.price_per_million = dict(price_per_million or {})
+        # Operator spend caps; None => disabled (no behavior change). Enforced in run().
+        self.budget_max_output_tokens = budget_max_output_tokens
+        self.budget_max_cost_usd = budget_max_cost_usd
         self._workflow_runs: dict[str, dict[str, Any]] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
@@ -293,16 +850,137 @@ class TaskOrchestrator:
         self._circuit: dict[str, dict[str, float]] = {}
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
+        # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
+        self._cache = _ResponseCache(cache_ttl, cache_max_entries) if cache_ttl and cache_ttl > 0 else None
+        # Optional durable persistence: default None keeps all state purely in-memory
+        # (zero behavior change). When set, runs/audit/analytics survive restart.
+        self._store = _StateStore(state_db) if state_db else None
+        self._commercial_report_cache_local = threading.local()
+        if self._store is not None:
+            self._reload_state()
+
+    def close(self) -> None:
+        """Release optional durable resources owned by this orchestrator."""
+        if self._pool_store is not None:
+            self._pool_store.close()
+        if self._store is not None:
+            self._store.close()
+
+    def _reload_state(self) -> None:
+        for record in self._store.load("workflow_run"):
+            self._workflow_runs[record["workflow_run_id"]] = record
+            self._run_order.appendleft(record["workflow_run_id"])
+        for evaluation in self._store.load("evaluation_run"):
+            self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
+        for event in self._store.load("analytics", self._analytics_events.maxlen):
+            self._analytics_events.append(event)
+        for event in self._store.load("audit", self._audit_events.maxlen):
+            self._audit_events.append(event)
+
+    # Orchestration-only body keys that must not be forwarded to the provider.
+    _ORCHESTRATION_ONLY_KEYS = frozenset(
+        {"orchestration", "orchestration_mode", "mode", "include_orchestration_trace"}
+    )
+
+    def proxy_completion(
+        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
+    ) -> dict[str, Any]:
+        """Passthrough a full OpenAI request to the primary agent, returning its raw response.
+
+        Requests carrying provider features the multi-agent verifier cannot merge
+        (``response_format``, ``tools``, or the Responses API) are handled by a
+        single selected agent so the full provider response shape survives; the
+        orchestration path stays reserved for plain-text routing/verification.
+        """
+        messages = body.get("messages")
+        if isinstance(messages, list):
+            text = self._latest_user_text(messages)
+        else:
+            text = _coerce_input_text(body.get("input"))
+        agent = self._select_agent(text, "worker")
+        upstream = {
+            key: value
+            for key, value in body.items()
+            if key not in self._ORCHESTRATION_ONLY_KEYS
+        }
+        upstream["model"] = agent.model
+        # v1 passthrough returns the full JSON body; SSE stream passthrough is a
+        # follow-up, so force a non-streamed upstream response here.
+        upstream["stream"] = False
+        return self.client.proxy_send(agent, endpoint, upstream)
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
+        if self._cache is None:
+            return self._dispatch(messages, mode)
+        key = self._cache_key(messages, mode)
+        cached = self._cache.get(key)
+        if cached is not None:
+            return cached
+        result = self._dispatch(messages, mode)
+        self._cache.put(key, result)
+        return result
+
+    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
             return self.route_once(messages)
         return self.conduct(messages)
 
+    def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
+        """True when this request takes the single-worker route path (vs the conduct workflow)."""
+        text = self._latest_user_text(messages)
+        return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
+
+    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+        """Stream a single worker's content deltas as they arrive, then persist the run.
+
+        True streaming for the route path. ponytail: no cross-agent failover here — bytes
+        already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
+        """
+        text = self._latest_user_text(messages)
+        agent = self._select_agent(text, "worker")
+        parts: list[str] = []
+        for delta in self.client.stream_chat(agent, messages):
+            parts.append(delta)
+            yield delta
+        answer = "".join(parts)
+        record = {
+            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+            "created_at": int(time.time()),
+            "mode": "route",
+            "policy_mode": "route",
+            "prompt_text": text,
+            "answer": answer,
+            "trace": [
+                {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
+                 "access": [], "output": answer}
+            ],
+            "policy_snapshot": self.policy.as_dict(),
+            "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+        }
+        self._workflow_runs[record["workflow_run_id"]] = record
+        self._run_order.appendleft(record["workflow_run_id"])
+        self._append_audit_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
+             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
+        )
+
+    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
+        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
     def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
+        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+            budget = self.budget_status()
+            if budget["exceeded"]:
+                raise BudgetExceededError("spend budget exceeded", detail=budget)
         result = self.complete(messages, mode=mode)
         prompt = self._latest_user_text(messages)
         record = {
@@ -318,6 +996,8 @@ class TaskOrchestrator:
         }
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
             "workflow_run_created",
             {
@@ -350,6 +1030,65 @@ class TaskOrchestrator:
             )
         return record
 
+    def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
+        """Route many prompts through the provider's Batch API and persist each run.
+
+        The cheap lane for bulk/eval workloads (~50% provider discount, async window) —
+        not for latency-sensitive chat. Each prompt gets the same worker selection as
+        ``route_once``; results are persisted as normal route runs (with provider usage
+        when reported) so spend analytics and the admin console see them unchanged.
+        """
+        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
+            budget = self.budget_status()
+            if budget["exceeded"]:
+                raise BudgetExceededError("spend budget exceeded", detail=budget)
+        selected = [(prompt, self._select_agent(prompt, "worker")) for prompt in prompts]
+        agents_by_id = {agent.id: agent for _, agent in selected}
+        requests_by_agent: dict[str, dict[str, list[ChatMessage]]] = {}
+        for index, (prompt, agent) in enumerate(selected):
+            requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [{"role": "user", "content": prompt}]
+
+        answers: dict[int, dict[str, Any]] = {}
+        for agent_id, requests in requests_by_agent.items():
+            for custom_id, result in self.client.batch_chat(agents_by_id[agent_id], requests).items():
+                answers[int(custom_id.rsplit("_", 1)[1])] = result
+
+        records: list[dict[str, Any]] = []
+        for index, (prompt, agent) in enumerate(selected):
+            result = answers.get(index, {"content": None, "usage": None})
+            row: dict[str, Any] = {
+                "id": 0, "role": "worker", "agent_id": agent.id,
+                "subtask": "Direct route (batched)", "access": [], "output": result["content"],
+            }
+            if result.get("usage") is not None:
+                row["usage"] = result["usage"]
+            record = {
+                "workflow_run_id": f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": prompt,
+                "answer": result["content"],
+                "trace": [row],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
+            }
+            self._workflow_runs[record["workflow_run_id"]] = record
+            self._run_order.appendleft(record["workflow_run_id"])
+            if self._store is not None:
+                self._store.save("workflow_run", record["workflow_run_id"], record)
+            self._append_audit_event(
+                "workflow_run_created",
+                {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
+            )
+            self.record_analytics_event(
+                "workflow_run_created",
+                {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
+                 "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
+            )
+            records.append(record)
+        return records
+
     def run_evaluation(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
         """Replay prompts through the runtime and persist an evaluation record."""
         if not prompts:  # pragma: no cover
@@ -375,6 +1114,8 @@ class TaskOrchestrator:
             "success_count": len([r for r in results if r["answer"]]),
         }
         self._evaluation_runs[evaluation_run_id] = evaluation
+        if self._store is not None:
+            self._store.save("evaluation_run", evaluation_run_id, evaluation)
         self._append_audit_event(
             "evaluation_run_created",
             {
@@ -393,6 +1134,75 @@ class TaskOrchestrator:
             },
         )
         return evaluation
+
+    def compare_to_baseline(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
+        """Measure the orchestration engine against a single-worker baseline.
+
+        For each prompt: run the full orchestration (route/conduct per mode) and a
+        single-agent baseline (one worker call, no verifier/synthesizer), then report
+        latency and a structural coverage proxy plus the delta.
+
+        This is a MEASURED report, not a quality claim: the proxy is structural
+        (contributing steps + verifier-pass presence, computable from mock/runtime
+        outputs), NOT human-judged answer quality. Read-only — it does not persist runs.
+        """
+        results: list[dict[str, Any]] = []
+        for prompt in prompts:
+            messages = [{"role": "user", "content": prompt}]
+
+            start = time.perf_counter()
+            orchestrated = self.complete(messages, mode=mode)
+            orchestrated_latency = round((time.perf_counter() - start) * 1000, 2)
+
+            start = time.perf_counter()
+            baseline = self.route_once(messages)
+            baseline_latency = round((time.perf_counter() - start) * 1000, 2)
+
+            orchestrated_steps = len(orchestrated["trace"])
+            baseline_steps = len(baseline["trace"])
+            results.append({
+                "prompt": prompt[:120],
+                "orchestrated": {
+                    "mode": orchestrated["mode"],
+                    "latency_ms": orchestrated_latency,
+                    "steps": orchestrated_steps,
+                    "verified": bool(orchestrated.get("verification", {}).get("accepted")),
+                    "answer_length": len(orchestrated["answer"]),
+                },
+                "baseline": {
+                    "mode": baseline["mode"],
+                    "latency_ms": baseline_latency,
+                    "steps": baseline_steps,
+                    "answer_length": len(baseline["answer"]),
+                },
+                "latency_overhead_ms": round(orchestrated_latency - baseline_latency, 2),
+                "structural_coverage_delta": orchestrated_steps - baseline_steps,
+            })
+
+        count = len(results)
+
+        def avg(select: Any) -> float:
+            return round(sum(select(row) for row in results) / count, 2) if count else 0.0
+
+        aggregate = {
+            "orchestrated_avg_latency_ms": avg(lambda row: row["orchestrated"]["latency_ms"]),
+            "baseline_avg_latency_ms": avg(lambda row: row["baseline"]["latency_ms"]),
+            "avg_latency_overhead_ms": avg(lambda row: row["latency_overhead_ms"]),
+            "orchestrated_avg_steps": avg(lambda row: row["orchestrated"]["steps"]),
+            "baseline_avg_steps": avg(lambda row: row["baseline"]["steps"]),
+            "avg_structural_coverage_delta": avg(lambda row: row["structural_coverage_delta"]),
+            "verified_share": round(sum(1 for row in results if row["orchestrated"]["verified"]) / count, 2) if count else 0.0,
+        }
+        return {
+            "mode": mode,
+            "prompt_count": count,
+            "results": results,
+            "aggregate": aggregate,
+            "quality_proxy": (
+                "structural proxy from mock/runtime outputs (contributing steps + verifier-pass presence); "
+                "measures the latency-for-verification tradeoff, NOT human-judged quality"
+            ),
+        }
 
     def get_workflow_run(self, workflow_run_id: str) -> dict[str, Any]:
         """Return a persisted workflow run by identifier."""
@@ -445,6 +1255,8 @@ class TaskOrchestrator:
             patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
 
         self.agents = [patched if agent.id == worker_agent_id else agent for agent in self.agents]
+        if self._pool_store is not None:
+            self._pool_store.save(patched)
         self._append_audit_event(
             "agent_patched",
             {
@@ -473,12 +1285,63 @@ class TaskOrchestrator:
             )
         return self._agent_to_admin_payload(patched)
 
+    def add_agent(self, agent_pool_id: str, value: dict[str, Any]) -> dict[str, Any]:
+        """Register a new worker agent (model group member) at runtime; persists when agents_db is set."""
+        if agent_pool_id != "default":  # pragma: no cover
+            raise KeyError(agent_pool_id)
+        if "id" not in value or "model" not in value:
+            raise ValueError("agent requires id and model")
+        agent = ModelAgent.from_dict(value)
+        if any(existing.id == agent.id for existing in self.agents):
+            raise ValueError(f"agent {agent.id} already exists")
+        if not agent.base_url.startswith("mock://"):
+            parsed = urlparse(agent.base_url)
+            if parsed.scheme != "https" or not parsed.hostname:
+                raise ValueError("non-mock agents must use an https base_url")
+            if not agent.credential_name:
+                raise ValueError("non-mock agents require credential_key or legacy api_key_env")
+        self.agents = [*self.agents, agent]
+        if self._pool_store is not None:
+            self._pool_store.save(agent)
+        self._append_audit_event(
+            "agent_added",
+            {"agent_pool_id": agent_pool_id, "worker_agent_id": agent.id, "model": agent.model},
+        )
+        self.record_analytics_event(
+            "agent_added",
+            {"agent_pool_id": agent_pool_id, "agent_id": agent.id, "model": agent.model},
+        )
+        return self._agent_to_admin_payload(agent)
+
+    def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
+        """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
+        if agent_pool_id != "default":  # pragma: no cover
+            raise KeyError(agent_pool_id)
+        target = self._agent(worker_agent_id)
+        remaining_enabled = [agent for agent in self.agents if agent.id != worker_agent_id and not agent.disabled]
+        if not remaining_enabled:
+            raise ValueError("cannot remove the last enabled agent")
+        self.agents = [agent for agent in self.agents if agent.id != worker_agent_id]
+        if self._pool_store is not None:
+            # Disabled tombstone (not a row delete): it overlays the seed file on restart
+            # and startup drops disabled agents, so removal survives even for seed agents.
+            self._pool_store.save(replace(target, disabled=True))
+        self._append_audit_event(
+            "agent_removed",
+            {"agent_pool_id": agent_pool_id, "worker_agent_id": worker_agent_id, "model": target.model},
+        )
+        self.record_analytics_event(
+            "agent_removed",
+            {"agent_pool_id": agent_pool_id, "agent_id": worker_agent_id},
+        )
+        return {"removed": worker_agent_id}
+
     def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         start = time.perf_counter()
-        answer, served_id = self._invoke(agent, messages, text=text, role="worker")
+        answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
             "id": 0,
@@ -489,6 +1352,8 @@ class TaskOrchestrator:
             "latency_ms": round(latency_ms, 2),
             "output": answer,
         }
+        if usage is not None:
+            row["usage"] = usage
         if served_id != agent.id:  # pragma: no cover
             row["served_agent_id"] = served_id
             row["failover_from"] = agent.id
@@ -500,9 +1365,18 @@ class TaskOrchestrator:
         }
 
     def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
-        """Run the thinker-worker-verifier-synthesizer workflow for complex prompts."""
+        """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
-        steps = self._plan(task)
+        plan_source = "template"
+        if self.policy.workflow_planning == "generated":
+            try:
+                steps = self._plan_generated(task)
+                plan_source = "generated"
+            except Exception:  # noqa: BLE001 - invalid plans must not break the request
+                steps = self._plan(task)
+                plan_source = "template_fallback"
+        else:
+            steps = self._plan(task)
         outputs: dict[int, str] = {}
         trace: list[dict[str, Any]] = []
 
@@ -524,28 +1398,107 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
-            output, served_id = self._invoke(agent, step_messages, text=task, role=step.role)
+            output, served_id, usage = self._invoke(agent, step_messages, text=task, role=step.role)
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
             row["latency_ms"] = round(elapsed, 2)
             row["output"] = output
+            if usage is not None:
+                row["usage"] = usage
             if served_id != agent.id:  # pragma: no cover
                 row["served_agent_id"] = served_id
                 row["failover_from"] = agent.id
             trace.append(row)
 
-        verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
-        answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
-        if not verification["accepted"] and self.policy.verifier_required:  # pragma: no cover
-            answer = outputs[steps[1].id]
+        if plan_source == "generated":
+            # Generated plans have variable shape: locate roles instead of fixed indices.
+            def last_output(role: str) -> str:
+                ids = [step.id for step in steps if step.role == role]
+                return outputs.get(ids[-1], "") if ids else ""
+
+            # Generated plans may omit a thinker; the first step's output is the upstream evidence.
+            upstream = last_output("thinker") or outputs.get(steps[0].id, "")
+            verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
+            if self.policy.verifier_judge == "model":
+                verification = self._model_judge_verification(task, verification)
+            answer = outputs[steps[-1].id]
+            if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
+                answer = last_output("worker")
+        else:
+            verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
+            if self.policy.verifier_judge == "model":
+                verification = self._model_judge_verification(task, verification)
+            answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
+            if not verification["accepted"] and self.policy.verifier_required:
+                answer = outputs[steps[1].id]
 
         return {
             "mode": "conduct",
             "answer": answer,
             "trace": trace,
             "verification": verification,
+            "plan_source": plan_source,
         }
+
+    def _plan_generated(self, task: str) -> list[WorkflowStep]:
+        """Ask the planner model to generate the workflow (Conductor, arXiv:2512.04388).
+
+        The plan is JSON: natural-language subtasks, a worker assignment, and an access
+        list of prior step outputs per step. Anything invalid raises so conduct() falls
+        back to the fixed template — a bad plan must never break the request.
+        """
+        planner = self._select_agent(task, "thinker")
+        pool = "\n".join(
+            f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
+            for agent in self.agents
+        )
+        system = (
+            "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
+            'Return ONLY a JSON object, no prose: {"steps": [{"id": 0, "role": "thinker|worker|verifier|synthesizer", '
+            '"agent_id": "<agent id>", "subtask": "natural-language instruction", "access": [prior step ids]}]}\n'
+            f"Rules: 2 to {self.policy.max_workflow_steps} steps; ids sequential from 0; access may list only earlier "
+            "step ids (each step sees ONLY the outputs it lists); the final step must produce the answer; include a "
+            "verifier step when correctness matters.\n"
+            f"Available agents:\n{pool}"
+        )
+        raw = self.client.chat(planner, [
+            {"role": "system", "content": system},
+            {"role": "user", "content": task},
+        ])
+        return self._parse_workflow_plan(raw)
+
+    def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
+        """Validate a generated plan strictly; raise ValueError on any structural problem."""
+        start, end = raw.find("{"), raw.rfind("}")
+        if start < 0 or end <= start:
+            raise ValueError("plan contains no JSON object")
+        data = json.loads(raw[start : end + 1])
+        raw_steps = data.get("steps")
+        if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
+            raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
+        known_agents = {agent.id for agent in self.agents}
+        steps: list[WorkflowStep] = []
+        for index, item in enumerate(raw_steps):
+            if int(item.get("id", -1)) != index:
+                raise ValueError("step ids must be sequential from 0")
+            role = str(item.get("role", ""))
+            if role not in {"thinker", "worker", "verifier", "synthesizer"}:
+                raise ValueError(f"unknown role {role!r}")
+            subtask = str(item.get("subtask", "")).strip()
+            if not subtask:
+                raise ValueError("step subtask must be non-empty")
+            access = tuple(sorted({int(value) for value in item.get("access", [])}))
+            if any(value < 0 or value >= index for value in access):
+                raise ValueError("access may reference only earlier steps")
+            agent_id = item.get("agent_id")
+            if agent_id not in known_agents:
+                # The planner named an unknown agent: reselect honestly instead of failing the plan.
+                agent_id = self._select_agent(subtask, role).id
+            steps.append(WorkflowStep(index, role, agent_id, subtask, access))
+        if steps[-1].role not in {"synthesizer", "worker"}:
+            raise ValueError("final step must produce the answer")
+        return steps
 
     def _plan(self, task: str) -> list[WorkflowStep]:
         thinker = self._select_agent(task, "thinker").id
@@ -584,12 +1537,15 @@ class TaskOrchestrator:
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
 
-    def _invoke(self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str) -> tuple[str, str]:
+    def _invoke(
+        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+    ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
         Transient retry/backoff happens inside ``ModelClient``; this layer adds
         cross-agent failover plus a per-agent circuit breaker, and returns
-        ``(output, served_agent_id)`` so the trace can record who actually answered.
+        ``(output, served_agent_id, usage)`` — usage is the provider-reported token
+        usage when available (else None), so spend analytics can prefer it.
         """
         candidates = self._failover_candidates(primary, text, role)
         last_error: Exception | None = None
@@ -601,7 +1557,8 @@ class TaskOrchestrator:
                 self._record_failure(agent.id)
                 continue
             self._record_success(agent.id)
-            return output, agent.id
+            usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+            return output, agent.id, usage
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
@@ -645,6 +1602,36 @@ class TaskOrchestrator:
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
 
+    def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
+        """Ask a model to judge the verifier report (fixes term-matching false negatives).
+
+        The judge must answer ACCEPT or REJECT; an ambiguous reply or a judge failure
+        keeps the term-based fallback verdict — the judge can only refine, never break.
+        """
+        verifier_output = fallback.get("verifier_output", "")
+        if not verifier_output:
+            return fallback
+        judge = self._select_agent(task, "verifier")
+        try:
+            reply = self.client.chat(judge, [
+                {"role": "system", "content": (
+                    "You are the verification judge. Read the verifier report about the task. "
+                    "Reply with exactly one word: ACCEPT if the verified work is sound, "
+                    "REJECT if it has disqualifying problems."
+                )},
+                {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
+            ])
+        except Exception:  # noqa: BLE001 - judge failure must not break the request
+            return fallback
+        upper = (reply or "").strip().upper()
+        if "ACCEPT" in upper and "REJECT" not in upper:
+            return {"accepted": True, "reason": "model judge accepted the verifier report",
+                    "verifier_output": verifier_output, "judge": "model"}
+        if "REJECT" in upper and "ACCEPT" not in upper:
+            return {"accepted": False, "reason": "model judge rejected the verifier report",
+                    "verifier_output": verifier_output, "judge": "model"}
+        return fallback
+
     def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
         lowered = verifier_output.lower()
         if any(term in lowered for term in self.policy.verifier_negative_terms):  # pragma: no cover
@@ -672,11 +1659,14 @@ class TaskOrchestrator:
         }
 
     def _append_audit_event(self, event_type: str, detail: dict[str, Any]) -> None:
-        self._audit_events.append({
+        event = {
             "created_at": int(time.time()),
             "event_type": event_type,
             "event_detail": detail,
-        })
+        }
+        self._audit_events.append(event)
+        if self._store is not None:
+            self._store.save("audit", None, event)
 
     def _infer_provider_name(self, base_url: str) -> str:
         if base_url.startswith("mock://"):
@@ -729,11 +1719,126 @@ class TaskOrchestrator:
     def record_analytics_event(self, event_name: str, detail: dict[str, Any]) -> None:
         """Record a compact in-memory analytics event without prompt or output text."""
         require_object_name(event_name, "analytics.event_name")
-        self._analytics_events.append({
+        event = {
             "event_time": int(time.time()),
             "event_name": event_name,
             "event_detail": redact_value(detail),
-        })
+        }
+        self._analytics_events.append(event)
+        if self._store is not None:
+            self._store.save("analytics", None, event)
+
+    def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
+        """Estimated token and cost spend per model, aggregated from workflow runs.
+
+        Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
+        usage. Cost is computed only for models with an operator-supplied price; models without
+        one are reported under ``unpriced_models`` with a null cost. This is the honest local
+        floor for spend observability, not a billing system.
+        """
+        prices = {**self.price_per_million, **(price_per_million or {})}
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        by_model: dict[str, dict[str, Any]] = {}
+        total_output_tokens = 0
+        total_prompt_tokens = 0
+        reported_prompt_tokens = 0
+        any_reported_prompt = False
+
+        for run in self._workflow_runs.values():
+            total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
+            for step in run["trace"]:
+                model = model_by_agent.get(step.get("agent_id"), "unknown")
+                estimated = estimate_tokens(step.get("output", ""))
+                usage = step.get("usage")
+                reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
+                if isinstance(reported_prompt, int):
+                    reported_prompt_tokens += reported_prompt
+                    any_reported_prompt = True
+                reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
+                if isinstance(reported, int):
+                    effective, is_reported = reported, True
+                else:
+                    effective, is_reported = estimated, False
+                bucket = by_model.setdefault(
+                    model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
+                )
+                bucket["estimated_output_tokens"] += estimated
+                bucket["output_tokens"] += effective
+                bucket["step_count"] += 1
+                bucket["reported_steps"] += 1 if is_reported else 0
+                total_output_tokens += effective
+
+        rows: list[dict[str, Any]] = []
+        unpriced: list[str] = []
+        total_cost = 0.0
+        for model, bucket in sorted(by_model.items()):
+            price = prices.get(model)
+            cost = round(bucket["output_tokens"] / 1_000_000 * price, 6) if price is not None else None
+            if price is None:
+                unpriced.append(model)
+            else:
+                total_cost += cost
+            if bucket["reported_steps"] == 0:
+                usage_source = "estimated"
+            elif bucket["reported_steps"] == bucket["step_count"]:
+                usage_source = "reported"
+            else:
+                usage_source = "mixed"
+            rows.append({
+                "model": model,
+                "estimated_output_tokens": bucket["estimated_output_tokens"],
+                "output_tokens": bucket["output_tokens"],
+                "usage_source": usage_source,
+                "step_count": bucket["step_count"],
+                "price_per_million_usd": price,
+                "estimated_cost_usd": cost,
+            })
+
+        return {
+            "measurement_status": "local_runtime_estimate",
+            "source_note": (
+                "output_tokens use provider-reported usage when available (usage_source=reported/mixed) and "
+                "fall back to a ~4 chars/token estimate otherwise; cost = output_tokens x operator-supplied price only."
+            ),
+            "pricing_configured": bool(prices),
+            "totals": {
+                "run_count": len(self._workflow_runs),
+                "estimated_output_tokens": total_output_tokens,
+                "estimated_prompt_tokens": total_prompt_tokens,
+                "reported_prompt_tokens": reported_prompt_tokens,
+                "prompt_tokens_source": "reported" if any_reported_prompt else "estimated",
+                "estimated_cost_usd": round(total_cost, 6) if prices else None,
+                "currency": "USD",
+            },
+            "by_model": rows,
+            "unpriced_models": unpriced,
+            "budget": self._budget_block(total_output_tokens, round(total_cost, 6) if prices else None),
+        }
+
+    def _budget_block(self, spent_tokens: int, spent_cost: float | None) -> dict[str, Any]:
+        token_limit = self.budget_max_output_tokens
+        cost_limit = self.budget_max_cost_usd
+        exceeded = bool(
+            (token_limit is not None and spent_tokens >= token_limit)
+            or (cost_limit is not None and spent_cost is not None and spent_cost >= cost_limit)
+        )
+        return {
+            "enabled": token_limit is not None or cost_limit is not None,
+            "max_output_tokens": token_limit,
+            "max_cost_usd": cost_limit,
+            "spent_output_tokens": spent_tokens,
+            "spent_cost_usd": spent_cost,
+            "remaining_output_tokens": max(0, token_limit - spent_tokens) if token_limit is not None else None,
+            "remaining_cost_usd": (
+                round(max(0.0, cost_limit - spent_cost), 6)
+                if cost_limit is not None and spent_cost is not None else None
+            ),
+            "exceeded": exceeded,
+        }
+
+    def budget_status(self) -> dict[str, Any]:
+        """Current spend-budget state (limits, spent, remaining, exceeded)."""
+        return self.spend_analytics()["budget"]
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
@@ -2026,7 +3131,8 @@ class TaskOrchestrator:
                     "pyproject.toml",
                     "requirements.lock",
                     ".github/workflows/security.yml",
-                    ".github/workflows/scorecard-analysis.yml",
+                    ".github/dependabot.yml",
+                    "ContextualWisdomLab/.github central required security workflows",
                 ],
                 "repository_artifact",
                 "ready"
@@ -2038,11 +3144,11 @@ class TaskOrchestrator:
                         "pyproject.toml",
                         "requirements.lock",
                         ".github/workflows/security.yml",
-                        ".github/workflows/scorecard-analysis.yml",
+                        ".github/dependabot.yml",
                     )
                 )
                 else "blocked",
-                "License, security policy, package metadata, locked requirements, and security workflows are present.",
+                "License, security policy, package metadata, locked requirements, local supply-chain workflow, Dependabot metadata, and central required security workflows are present.",
                 "Restore missing security or package metadata before release-candidate handoff.",
             ),
             self._buyer_evidence_item(
@@ -2322,7 +3428,13 @@ class TaskOrchestrator:
                 "item_name": "security_package_metadata",
                 "label": "Security package metadata",
                 "owner": "Security reviewer",
-                "sources": ["SECURITY.md", "requirements.lock", ".github/workflows/security.yml", ".github/workflows/scorecard-analysis.yml"],
+                "sources": [
+                    "SECURITY.md",
+                    "requirements.lock",
+                    ".github/workflows/security.yml",
+                    ".github/dependabot.yml",
+                    "ContextualWisdomLab/.github central required security workflows",
+                ],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
                 if all(
@@ -2331,11 +3443,11 @@ class TaskOrchestrator:
                         "SECURITY.md",
                         "requirements.lock",
                         ".github/workflows/security.yml",
-                        ".github/workflows/scorecard-analysis.yml",
+                        ".github/dependabot.yml",
                     )
                 )
                 else "blocked",
-                "evidence": "Security policy, locked dependencies, and security workflows are present.",
+                "evidence": "Security policy, locked dependencies, local supply-chain workflow, Dependabot metadata, and central required security workflows are present.",
                 "required_input": "Restore missing security metadata before procurement review.",
             },
             {
@@ -3137,7 +4249,7 @@ class TaskOrchestrator:
                 "sources": [
                     ".github/dependabot.yml",
                     ".github/workflows/security.yml",
-                    ".github/workflows/scorecard-analysis.yml",
+                    "ContextualWisdomLab/.github central required security workflows",
                 ],
                 "evidence_type": "repository_artifact",
                 "completion_state": "ready"
@@ -3146,11 +4258,10 @@ class TaskOrchestrator:
                     for path in (
                         ".github/dependabot.yml",
                         ".github/workflows/security.yml",
-                        ".github/workflows/scorecard-analysis.yml",
                     )
                 )
                 else "blocked",
-                "evidence": "Dependabot, CodeQL, dependency review, pip-audit, SBOM, Trivy, and Scorecard workflow metadata are defined.",
+                "evidence": "Dependabot plus local CodeQL and pip-audit/SBOM workflows are defined; dependency review, Trivy, OSV, and Scorecard are delegated to central required workflows.",
                 "action": "Attach workflow definitions and latest passing run evidence when the buyer review requests hosted CI proof.",
                 "exit_criteria": "Buyer can inspect the configured security workflow controls and their latest run status separately.",
             },
@@ -3194,11 +4305,14 @@ class TaskOrchestrator:
                 "item_name": "vulnerability_scan_evidence",
                 "label": "Vulnerability scan evidence",
                 "owner": "Security owner",
-                "sources": [".github/workflows/security.yml", ".github/workflows/scorecard-analysis.yml"],
+                "sources": [
+                    ".github/workflows/security.yml",
+                    "ContextualWisdomLab/.github central required security workflows",
+                ],
                 "evidence_type": "external_attestation_required",
                 "completion_state": "warning",
                 "source_gap_status": "external_attestation_required",
-                "evidence": "Security scan workflow metadata exists, but the buyer packet still needs the latest hosted scan result or buyer-accepted equivalent.",
+                "evidence": "Local supply-chain workflow metadata and central security scan workflow metadata exist, but the buyer packet still needs the latest hosted scan result or buyer-accepted equivalent.",
                 "action": "Attach latest CodeQL, pip-audit, Trivy, SBOM, and Scorecard results when CI completes or the buyer requests evidence.",
                 "exit_criteria": "Hosted scan outputs are attached, or the buyer explicitly accepts workflow definitions as sufficient for this stage.",
             },
@@ -6803,6 +7917,7 @@ class TaskOrchestrator:
             },
             "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
             "recent_audit_events": self.list_recent_audit_events(),
+            "spend": self.spend_analytics(),
         }
 
     def _shorten_run(self, run: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
@@ -6940,11 +8055,9 @@ class TaskOrchestrator:
         auth_mode = security_profile.get("auth_mode", "loopback_no_auth")
         issues: list[str] = []
         warnings: list[str] = []
-        if auth_mode == "split_token":
-            pass
-        elif auth_mode == "single_token":
+        if auth_mode == "single_token":
             warnings.append("single bearer token shared by admin and inference scopes")
-        else:
+        elif auth_mode != "split_token":
             issues.append("no bearer token configured outside loopback-only development")
         if security_profile.get("allow_public_bind"):
             issues.append("public bind is enabled")
@@ -6994,18 +8107,18 @@ class TaskOrchestrator:
                 continue
             remote.append(agent.id)
             parsed = urlparse(agent.base_url)
-            if parsed.scheme != "https" or not agent.api_key_env:
+            if parsed.scheme != "https" or not agent.credential_name:
                 unsafe.append(agent.id)
         if unsafe:
             status = "fail"
             evidence = f"unsafe provider egress config for agents: {', '.join(sorted(unsafe))}"
-            remediation = "Use https provider endpoints with explicit api_key_env before enabling remote egress."
+            remediation = "Use https provider endpoints with a named KV credential before enabling remote egress."
         else:
             status = "pass"
             evidence = (
                 "mock providers only"
                 if not remote
-                else f"{len(remote)} remote providers use https and explicit api_key_env"
+                else f"{len(remote)} remote providers use https and a named KV credential"
             )
             remediation = "Keep provider allow-list enforcement enabled for non-mock providers."
         return self._criterion("provider_egress_safety", "Provider egress safety", status, evidence, remediation)
@@ -7049,6 +8162,44 @@ class TaskOrchestrator:
         }
 
 
+def _report_cache_token(value: Any) -> Any:
+    if isinstance(value, (str, int, float, bool, type(None))):
+        return value
+    if isinstance(value, tuple):
+        return tuple(_report_cache_token(item) for item in value)
+    return ("id", id(value))
+
+
+def _commercial_report_cached(method: Any) -> Any:
+    @wraps(method)
+    def wrapper(self: TaskOrchestrator, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        local = self._commercial_report_cache_local
+        depth = getattr(local, "depth", 0)
+        if depth == 0:
+            local.cache = {}
+        local.depth = depth + 1
+        try:
+            key = (
+                method.__name__,
+                _report_cache_token(args),
+                tuple(sorted((name, _report_cache_token(value)) for name, value in kwargs.items())),
+            )
+            if key not in local.cache:
+                local.cache[key] = method(self, *args, **kwargs)
+            return local.cache[key]
+        finally:
+            local.depth -= 1
+            if depth == 0:
+                local.cache = {}
+
+    return wrapper
+
+
+for _report_name, _report_method in list(TaskOrchestrator.__dict__.items()):
+    if _report_name.startswith("commercial_") and _report_name.endswith("_report"):
+        setattr(TaskOrchestrator, _report_name, _commercial_report_cached(_report_method))
+
+
 def redact_text(text: str) -> str:
     """Mask common secret and personal-data shapes from traces."""
     redacted = text
@@ -7072,17 +8223,280 @@ def redact_value(value: Any) -> Any:
         return {key: redact_value(item) for key, item in value.items()}
     return value
 
+def _freeze_report_cache_value(value: Any) -> Any:
+    if isinstance(value, dict):
+        return tuple(
+            sorted(
+                (str(key), _freeze_report_cache_value(item))
+                for key, item in value.items()
+            )
+        )
+    if isinstance(value, (list, tuple)):
+        return tuple(_freeze_report_cache_value(item) for item in value)
+    if isinstance(value, set):
+        return tuple(sorted(_freeze_report_cache_value(item) for item in value))
+    try:
+        hash(value)
+    except TypeError:
+        return repr(value)
+    return value
+
+
+def _cached_commercial_report(method: Any) -> Any:
+    @wraps(method)
+    def wrapper(self: TaskOrchestrator, *args: Any, **kwargs: Any) -> dict[str, Any]:
+        cache = _COMMERCIAL_REPORT_CACHE.get()
+        token = None
+        if cache is None:
+            cache = {}
+            token = _COMMERCIAL_REPORT_CACHE.set(cache)
+        try:
+            key = (
+                method.__name__,
+                _freeze_report_cache_value(args),
+                _freeze_report_cache_value(kwargs),
+            )
+            if key not in cache:
+                cache[key] = method(self, *args, **kwargs)
+            return cache[key]
+        finally:
+            if token is not None:
+                _COMMERCIAL_REPORT_CACHE.reset(token)
+
+    return wrapper
+
+
+for _commercial_report_name, _commercial_report_method in list(TaskOrchestrator.__dict__.items()):
+    if (
+        _commercial_report_name.startswith("commercial_")
+        and _commercial_report_name.endswith("_report")
+        and callable(_commercial_report_method)
+    ):
+        setattr(
+            TaskOrchestrator,
+            _commercial_report_name,
+            _cached_commercial_report(_commercial_report_method),
+        )
+
+
+def _pareto_front(results: list[dict[str, Any]]) -> list[dict[str, Any]]:
+    """Configs not dominated on (quality up, cost down)."""
+    front: list[dict[str, Any]] = []
+    for a in results:
+        dominated = any(
+            b is not a
+            and b["quality"] >= a["quality"]
+            and b["cost_usd"] <= a["cost_usd"]
+            and (b["quality"] > a["quality"] or b["cost_usd"] < a["cost_usd"])
+            for b in results
+        )
+        if not dominated:
+            front.append(a)
+    return front
+
+
+def _recommend_config(results: list[dict[str, Any]], cost_budget_usd: float | None) -> dict[str, Any] | None:
+    if not results:
+        return None
+    if cost_budget_usd is not None:
+        affordable = [r for r in results if r["cost_usd"] <= cost_budget_usd]
+        if affordable:
+            best = max(affordable, key=lambda r: (r["quality"], -r["cost_usd"]))
+            reason = "highest quality within cost budget"
+        else:
+            best = min(results, key=lambda r: r["cost_usd"])
+            reason = "no config within budget; cheapest instead"
+    else:
+        # Maximize performance first, minimize cost as the tie-break (cheapest among the
+        # best-quality configs) — the honest reading of "max quality while min cost".
+        best = max(results, key=lambda r: (r["quality"], -r["cost_usd"]))
+        reason = "highest quality; cheapest among equal-quality configs"
+    return {"name": best["name"], "quality": best["quality"], "cost_usd": best["cost_usd"], "reason": reason}
+
+
+def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: Any, mode: str, use_batch: bool) -> float:
+    """Mean quality of one config over the task set; route configs may evaluate via Batch."""
+    if use_batch and mode == "route":
+        records = orchestrator.batch_route([task["prompt"] for task in tasks])
+        scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
+    else:
+        scores = [
+            float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
+            for task in tasks
+        ]
+    return sum(scores) / len(scores) if scores else 0.0
+
+
+def optimize_orchestration(
+    candidates: list[dict[str, Any]],
+    tasks: list[dict[str, Any]],
+    quality_fn: Any,
+    cost_budget_usd: float | None = None,
+    use_batch: bool = False,
+) -> dict[str, Any]:
+    """Search orchestration configs for maximum quality at minimum cost (the Fugu tradeoff).
+
+    - ``candidates``: ``[{"name": str, "orchestrator": TaskOrchestrator, "mode": str}]``.
+      Each orchestrator should be fresh so its spend reflects only this search.
+    - ``tasks``: ``[{"prompt": str, ...}]`` — the eval set; each task + the produced
+      answer is passed to ``quality_fn``.
+    - ``quality_fn(task, answer_text) -> float`` in [0, 1] — the caller's real quality
+      signal (e.g. checkable answers or a judge). This function does not fabricate quality.
+    - ``cost_budget_usd``: optional cap. Recommendation = highest-quality config within
+      budget, else the cheapest; with no budget, the best quality-per-USD.
+
+    Returns per-config measured quality + real cost, the Pareto front, and a recommendation.
+    """
+    results: list[dict[str, Any]] = []
+    for candidate in candidates:
+        orchestrator = candidate["orchestrator"]
+        mode = candidate.get("mode", "auto")
+        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
+        cost = orchestrator.spend_analytics()["totals"]["estimated_cost_usd"] or 0.0
+        results.append({
+            "name": candidate["name"],
+            "mode": mode,
+            "quality": round(quality, 4),
+            "cost_usd": round(cost, 6),
+            "quality_per_usd": round(quality / cost, 2) if cost > 0 else None,
+            "task_count": len(tasks),
+        })
+
+    return {
+        "objective": "maximize quality, minimize cost",
+        "cost_budget_usd": cost_budget_usd,
+        "results": sorted(results, key=lambda r: (-r["quality"], r["cost_usd"])),
+        "pareto_front": [r["name"] for r in _pareto_front(results)],
+        "recommended": _recommend_config(results, cost_budget_usd),
+    }
+
+
+def evolve_orchestration(
+    build_orchestrator: Any,
+    search_space: dict[str, list[Any]],
+    tasks: list[dict[str, Any]],
+    quality_fn: Any,
+    generations: int = 4,
+    population: int = 6,
+    cost_budget_usd: float | None = None,
+    seed: int = 7,
+    use_batch: bool = False,
+) -> dict[str, Any]:
+    """Evolve orchestration configs toward max quality at min cost (TRINITY-style search).
+
+    For search spaces too large to enumerate: a seeded mutation+selection loop over
+    ``search_space`` (param -> candidate values). ``build_orchestrator(config)`` returns a
+    fresh TaskOrchestrator for a config (the caller owns provider wiring); each config is
+    evaluated ONCE and cached — critical when evaluation costs real API money.
+
+    Fitness maximizes measured quality, then minimizes measured cost; configs whose cost
+    exceeds ``cost_budget_usd`` rank below all affordable ones. Quality comes from the
+    caller's ``quality_fn(task, answer) -> [0,1]`` — never fabricated.
+    """
+    rng = random.Random(seed)
+    params = sorted(search_space)
+
+    def random_config() -> dict[str, Any]:
+        return {p: rng.choice(search_space[p]) for p in params}
+
+    def mutate(config: dict[str, Any]) -> dict[str, Any]:
+        child = dict(config)
+        gene = rng.choice(params)
+        choices = [v for v in search_space[gene] if v != config[gene]] or search_space[gene]
+        child[gene] = rng.choice(choices)
+        return child
+
+    def key(config: dict[str, Any]) -> str:
+        return json.dumps({p: config[p] for p in params}, sort_keys=True, ensure_ascii=False)
+
+    evaluated: dict[str, dict[str, Any]] = {}
+
+    def evaluate(config: dict[str, Any]) -> dict[str, Any]:
+        config_key = key(config)
+        if config_key in evaluated:
+            return evaluated[config_key]
+        orchestrator = build_orchestrator(config)
+        mode = config.get("mode", "auto")
+        quality = _score_config(orchestrator, tasks, quality_fn, mode, use_batch)
+        cost = orchestrator.spend_analytics()["totals"]["estimated_cost_usd"] or 0.0
+        result = {
+            "name": config_key,
+            "config": dict(config),
+            "quality": round(quality, 4),
+            "cost_usd": round(cost, 6),
+            "quality_per_usd": round(quality / cost, 2) if cost > 0 else None,
+            "task_count": len(tasks),
+        }
+        evaluated[config_key] = result
+        return result
+
+    def fitness(row: dict[str, Any]) -> tuple[int, float, float]:
+        affordable = 1 if cost_budget_usd is None or row["cost_usd"] <= cost_budget_usd else 0
+        return (affordable, row["quality"], -row["cost_usd"])
+
+    # Seed population (dedup keys so a tiny space doesn't waste evaluations).
+    pool: list[dict[str, Any]] = []
+    seen: set[str] = set()
+    while len(pool) < population and len(seen) < min(population * 4, _space_size(search_space)):
+        config = random_config()
+        if key(config) not in seen:
+            seen.add(key(config))
+            pool.append(config)
+
+    history: list[dict[str, Any]] = []
+    for generation in range(generations):
+        rows = [evaluate(config) for config in pool]
+        rows.sort(key=fitness, reverse=True)
+        survivors = rows[: max(1, len(rows) // 2)]
+        history.append({
+            "generation": generation,
+            "best": {"config": survivors[0]["config"], "quality": survivors[0]["quality"], "cost_usd": survivors[0]["cost_usd"]},
+            "evaluated_total": len(evaluated),
+        })
+        pool = [dict(row["config"]) for row in survivors]
+        while len(pool) < population:
+            pool.append(mutate(rng.choice(survivors)["config"]))
+
+    results = sorted(evaluated.values(), key=fitness, reverse=True)
+    return {
+        "objective": "maximize quality, minimize cost (evolutionary search)",
+        "cost_budget_usd": cost_budget_usd,
+        "generations": generations,
+        "evaluations": len(evaluated),
+        "space_size": _space_size(search_space),
+        "results": results,
+        "pareto_front": [row["name"] for row in _pareto_front(results)],
+        "recommended": _recommend_config(results, cost_budget_usd),
+        "history": history,
+    }
+
+
+def _space_size(search_space: dict[str, list[Any]]) -> int:
+    size = 1
+    for values in search_space.values():
+        size *= max(1, len(values))
+    return size
+
 
 def chat_completion_response(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
     include_trace: bool = False,
+    usage: dict[str, int] | None = None,
 ) -> dict[str, Any]:  # pragma: no cover
-    """Wrap orchestration output in an OpenAI-compatible chat completion response."""
+    """Wrap orchestration output in an OpenAI-compatible chat completion response.
+
+    ``usage`` carries the token counts recorded by the cost ledger; when absent
+    the response reports zeros (the count could not be computed).
+    """
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result["mode"],
         "verification": result.get("verification"),
+        "channel": result.get("channel"),
+        "routing_reason": result.get("routing_reason"),
+        "usage_record_id": result.get("usage_record_id"),
+        "cost": result.get("cost"),
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
@@ -7098,7 +8512,7 @@ def chat_completion_response(
                 "finish_reason": "stop",
             }
         ],
-        "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
     }
 
