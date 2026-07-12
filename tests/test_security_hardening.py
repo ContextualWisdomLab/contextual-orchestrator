@@ -95,6 +95,23 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert "trace" not in inference_body["orchestration"]
 
 
+def test_loopback_without_configured_token_is_rejected() -> None:
+    server = build_server(build(), port=0, security=SecurityConfig())
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    payload = {"messages": [{"role": "user", "content": "hello"}]}
+
+    try:
+        status, body = post_json(f"http://127.0.0.1:{port}/v1/chat/completions", payload)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 401
+    assert body["error"]["code"] == "unauthorized"
+
+
 def test_http_api_validates_mode_and_request_shape() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -301,6 +318,7 @@ def test_redact_value_preserves_non_string_scalars() -> None:
 if __name__ == "__main__":
     test_http_api_requires_bearer_token_and_hides_trace_by_default()
     test_admin_and_inference_tokens_are_separate()
+    test_loopback_without_configured_token_is_rejected()
     test_http_api_validates_mode_and_request_shape()
     test_http_api_rejects_unknown_request_fields()
     test_rate_limit_returns_429_after_configured_budget()

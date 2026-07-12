@@ -74,8 +74,10 @@ def main() -> None:
     parser.add_argument("--admin-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN", ""))
     parser.add_argument("--inference-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN", ""))
     parser.add_argument("--allow-public-bind", action="store_true")
-    parser.add_argument("--insecure-disable-auth", action="store_true", help="Only allowed for loopback local development.")
+    parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
+    parser.add_argument("--clearfolio-url", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL") or None,
+                        help="Base URL of a Clearfolio deployment to use as the admin document viewer (default: disabled).")
     parser.add_argument("--agents-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None,
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
@@ -108,7 +110,7 @@ def main() -> None:
         return
 
     if args.serve:
-        if not (args.auth_token or args.admin_token or args.inference_token) and not args.insecure_disable_auth:
+        if not (args.auth_token or args.admin_token or args.inference_token):
             parser.error(
                 "--serve requires --auth-token, split --admin-token/--inference-token, "
                 "or matching CONTEXTUAL_ORCHESTRATOR_* environment variables"
@@ -128,6 +130,7 @@ def main() -> None:
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
             ),
+            clearfolio_url=args.clearfolio_url,
         )
         return
 

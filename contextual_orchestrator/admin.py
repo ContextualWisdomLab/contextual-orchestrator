@@ -36,6 +36,13 @@ ADMIN_TRANSLATIONS = {
         "datasets_title": "Datasets",
         "access_control_title": "Access Control",
         "integrations_title": "Integrations",
+        "doc_viewer_title": "Document Viewer",
+        "doc_viewer_desc": "Clearfolio integrated document viewer: upload, async conversion, and PDF preview for admin document review.",
+        "doc_viewer_unset": "Not configured",
+        "doc_viewer_open": "Open viewer",
+        "doc_viewer_open_doc": "Open document",
+        "doc_viewer_docid": "docId",
+        "doc_viewer_hint": "Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.",
         "observability_title": "Observability",
         "spend_title": "Spend",
         "spend_model": "Model",
@@ -263,6 +270,13 @@ ADMIN_TRANSLATIONS = {
         "datasets_title": "데이터셋",
         "access_control_title": "접근 제어",
         "integrations_title": "연동",
+        "doc_viewer_title": "문서 뷰어",
+        "doc_viewer_desc": "Clearfolio 통합 문서 뷰어: 업로드, 비동기 변환, PDF 미리보기를 통한 관리자 문서 검토.",
+        "doc_viewer_unset": "미설정",
+        "doc_viewer_open": "뷰어 열기",
+        "doc_viewer_open_doc": "문서 열기",
+        "doc_viewer_docid": "docId",
+        "doc_viewer_hint": "--clearfolio-url (또는 CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) 설정 시 활성화됩니다.",
         "observability_title": "관측",
         "spend_title": "비용",
         "spend_model": "모델",
@@ -945,6 +959,16 @@ Summarize this research thread and verify claims.</textarea>
           <div class="panel-header"><h1 data-i18n="integrations_title">Integrations</h1><span class="chip green" data-i18n="single_api_status">OpenAI-compatible endpoint active</span></div>
           <table><thead><tr><th data-i18n="provider_header">Provider</th><th data-i18n="endpoint_header">Endpoint</th><th data-i18n="policy_header">Policy</th></tr></thead><tbody id="integrationRows"></tbody></table>
         </section>
+        <section class="panel wide">
+          <div class="panel-header"><h1 data-i18n="doc_viewer_title">Document Viewer</h1><span class="chip" id="docViewerStatus" data-i18n="doc_viewer_unset">Not configured</span></div>
+          <p class="muted" data-i18n="doc_viewer_desc">Clearfolio integrated document viewer: upload, async conversion, and PDF preview for admin document review.</p>
+          <div id="docViewerActions" hidden>
+            <a id="docViewerOpen" class="btn primary" target="_blank" rel="noopener" data-i18n="doc_viewer_open">Open viewer</a>
+            <input id="docViewerDocId" type="text" data-i18n-placeholder="doc_viewer_docid" placeholder="docId" />
+            <button id="docViewerOpenDoc" class="btn" data-i18n="doc_viewer_open_doc">Open document</button>
+          </div>
+          <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.</p>
+        </section>
       </section>
       <section class="detail-grid view" data-view="observability" hidden>
         <section class="panel wide">
@@ -1095,6 +1119,35 @@ Summarize this research thread and verify claims.</textarea>
       els.integrationRows.innerHTML = state.agents.map(agent => `
         <tr><td>${escapeHtml(agent.provider_name || agent.id)}</td><td>${escapeHtml(agent.base_url)}</td><td>${(agent.provider_exclusions || []).map(escapeHtml).join(", ") || "Allowed"}</td></tr>
       `).join("") || `<tr><td colspan="3" class="empty" data-i18n="no_agents_configured">${t("no_agents_configured")}</td></tr>`;
+      renderDocumentViewer();
+    }
+    function renderDocumentViewer() {
+      const viewer = state.document_viewer;
+      const status = document.getElementById("docViewerStatus");
+      const actions = document.getElementById("docViewerActions");
+      const hint = document.getElementById("docViewerHint");
+      const open = document.getElementById("docViewerOpen");
+      if (!status || !actions) return;
+      if (viewer && viewer.url) {
+        status.textContent = viewer.provider + " · " + viewer.url;
+        status.classList.add("green");
+        actions.hidden = false;
+        if (hint) hint.hidden = true;
+        open.href = viewer.url;
+        const openDoc = document.getElementById("docViewerOpenDoc");
+        const docIdInput = document.getElementById("docViewerDocId");
+        if (openDoc && !openDoc.dataset.bound) {
+          openDoc.dataset.bound = "1";
+          openDoc.addEventListener("click", () => {
+            const docId = (docIdInput.value || "").trim();
+            if (docId) window.open(viewer.url + "/viewer/" + encodeURIComponent(docId), "_blank", "noopener");
+          });
+        }
+      } else {
+        status.textContent = t("doc_viewer_unset");
+        actions.hidden = true;
+        if (hint) hint.hidden = false;
+      }
     }
     function renderObservability() {
       const runs = state.recent_workflow_runs || [];
