@@ -583,8 +583,8 @@ class SqlLedgerStore:
         ph = self._placeholder()
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
-                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            cur.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
                 (name,),
             )
             if cur.fetchone() is None:
@@ -602,8 +602,8 @@ class SqlLedgerStore:
         placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(
-            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        cur.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
         self._conn.commit()
