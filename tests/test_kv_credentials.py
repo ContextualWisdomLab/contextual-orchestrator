@@ -5,6 +5,7 @@ These run entirely on the in-memory backend — no Postgres or KV service needed
 
 from __future__ import annotations
 
+import io
 import os
 from pathlib import Path
 import sys
@@ -109,3 +110,33 @@ def test_unknown_backend_selector_raises(monkeypatch) -> None:
     with pytest.raises(NotConfigured):
         credentials.get_backend()
     set_backend(None)
+
+
+def test_serve_can_seed_in_memory_credential_from_stdin(monkeypatch) -> None:
+    from contextual_orchestrator import __main__ as cli
+
+    observed: dict[str, str | None] = {}
+
+    def fake_serve(*_args, **_kwargs) -> None:
+        observed["credential"] = get_credential("OPENAI_API_KEY")
+
+    monkeypatch.setattr(cli, "serve", fake_serve)
+    monkeypatch.setattr(sys, "stdin", io.StringIO("sk-stdin-bootstrap\n"))
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "contextual-orchestrator",
+            "--serve",
+            "--agents",
+            "examples/agents.mock.json",
+            "--auth-token",
+            "pilot-token",
+            "--bootstrap-credential-stdin",
+            "OPENAI_API_KEY",
+        ],
+    )
+
+    cli.main()
+
+    assert observed == {"credential": "sk-stdin-bootstrap"}

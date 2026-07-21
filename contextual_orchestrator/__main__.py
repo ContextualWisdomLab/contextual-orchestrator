@@ -73,6 +73,11 @@ def main() -> None:
     parser.add_argument("--auth-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_TOKEN", ""))
     parser.add_argument("--admin-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN", ""))
     parser.add_argument("--inference-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN", ""))
+    parser.add_argument(
+        "--bootstrap-credential-stdin",
+        metavar="NAME",
+        help="Read one provider secret from stdin into the KV before serving.",
+    )
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
@@ -93,6 +98,15 @@ def main() -> None:
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
+
+    if args.bootstrap_credential_stdin:
+        if not args.serve:
+            parser.error("--bootstrap-credential-stdin requires --serve")
+        value = sys.stdin.read().strip()
+        if not value:
+            parser.error("empty credential value on stdin")
+        register_credential(args.bootstrap_credential_stdin, value)
+        del value
 
     client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
     orchestrator = TaskOrchestrator(

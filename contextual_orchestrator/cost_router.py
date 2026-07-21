@@ -18,6 +18,7 @@ store, never ``os.getenv``.
 
 from __future__ import annotations
 
+import math
 import re
 import time
 from typing import Any, Dict, List, Optional
@@ -30,6 +31,7 @@ from .batch_routing import (
     EmbeddingBatchBackend,
     EmbeddingBatchRequest,
     EmbeddingBatchResultItem,
+    EmbeddingSubmissionTimeout,
     LocalBatchBackend,
     LocalEmbeddingBatchBackend,
     RoutingHints,
@@ -42,6 +44,7 @@ from .token_counting import HeuristicTokenCounter, build_token_counter
 _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
 _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
+_DEFAULT_EMBEDDING_MAX_DIMENSIONS = 3_072
 _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
 
@@ -74,7 +77,10 @@ class CostRoutingCoordinator:
         )
         self.embedding_batch_backend: EmbeddingBatchBackend = (
             embedding_batch_backend
-            or LocalEmbeddingBatchBackend(token_counter=self.token_counter)
+            or LocalEmbeddingBatchBackend(
+                token_counter=self.token_counter,
+                dimension=min(128, self.embedding_dimension_limit()),
+            )
         )
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs: Dict[str, BatchJob] = {}
@@ -85,6 +91,7 @@ class CostRoutingCoordinator:
         self._embedding_input_counts: Dict[str, int] = {}
         self._embedding_part_counts: Dict[str, List[int]] = {}
         self._embedding_part_limits: Dict[str, Dict[str, int]] = {}
+        self._embedding_request_channels: Dict[str, str] = {}
         self._embedding_documents: Dict[str, Dict[str, Any]] = {}
 
     # ------------------------------------------------------------------
@@ -273,8 +280,11 @@ class CostRoutingCoordinator:
         inputs: List[str],
         *,
         model: str = "contextual-orchestrator",
+        dimensions: Optional[int] = None,
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        request_channel: str = "batch",
+        timeout_seconds: Optional[float] = None,
     ) -> BatchJob:
         """Submit a bulk embeddings batch to the configured embeddings backend.
 
@@ -285,14 +295,29 @@ class CostRoutingCoordinator:
         """
         shared_attribution = dict(attribution or {})
         requests, part_counts, part_limits = self._build_embedding_requests(
-            inputs, model=model, attribution=shared_attribution
+            inputs,
+            model=model,
+            dimensions=dimensions,
+            attribution=shared_attribution,
         )
-        job = self.embedding_batch_backend.submit(requests, metadata=metadata)
+        job = self._call_embedding_backend(
+            lambda: (
+                self.embedding_batch_backend.submit(requests, metadata=metadata)
+                if timeout_seconds is None
+                else self.embedding_batch_backend.submit(
+                    requests,
+                    metadata=metadata,
+                    timeout_seconds=timeout_seconds,
+                )
+            ),
+            timeout_seconds,
+        )
         self._embedding_jobs[job.job_id] = job
         self._embedding_requests[job.job_id] = requests
         self._embedding_input_counts[job.job_id] = len(inputs)
         self._embedding_part_counts[job.job_id] = part_counts
         self._embedding_part_limits[job.job_id] = part_limits
+        self._embedding_request_channels[job.job_id] = request_channel
         return job
 
     def _build_embedding_requests(
@@ -300,9 +325,14 @@ class CostRoutingCoordinator:
         inputs: List[str],
         *,
         model: str,
+        dimensions: Optional[int],
         attribution: Dict[str, Any],
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
+        if dimensions is not None and dimensions > self.embedding_dimension_limit():
+            raise ValueError(
+                f"embedding dimensions must not exceed {self.embedding_dimension_limit()}"
+            )
         max_tokens, max_chars = self._embedding_request_limits()
         requests: List[EmbeddingBatchRequest] = []
         part_counts: List[int] = []
@@ -323,12 +353,28 @@ class CostRoutingCoordinator:
                         part_index=part_index,
                         part_count=part_count,
                         token_count=token_count,
+                        dimensions=dimensions,
                     )
                 )
         return requests, part_counts, {
             "max_tokens_per_part": max_tokens,
             "max_chars_per_part": max_chars,
         }
+
+    def embedding_dimension_limit(self) -> int:
+        """Return the KV-governed trust-boundary limit for vector allocation."""
+
+        return min(
+            _DEFAULT_EMBEDDING_MAX_DIMENSIONS,
+            _positive_int(
+                self.config.get(
+                    _EMBEDDING_CONFIG_CATEGORY,
+                    "embedding_max_dimensions",
+                    _DEFAULT_EMBEDDING_MAX_DIMENSIONS,
+                ),
+                _DEFAULT_EMBEDDING_MAX_DIMENSIONS,
+            ),
+        )
 
     def _embedding_request_limits(self) -> tuple[int, int]:
         """Return configured per-provider-call embedding ceilings.
@@ -456,7 +502,29 @@ class CostRoutingCoordinator:
             return 1
         return max(0, value)
 
-    def embeddings_batch_document(self, batch_id: str) -> Dict[str, Any]:
+    @staticmethod
+    def _call_embedding_backend(callback: Any, timeout_seconds: Optional[float]) -> Any:
+        """Invoke the deadline-aware backend contract without orphan worker threads."""
+
+        if timeout_seconds is not None and timeout_seconds <= 0:
+            raise TimeoutError("embeddings backend deadline exceeded")
+        return callback()
+
+    @staticmethod
+    def _remaining_seconds(deadline: Optional[float]) -> Optional[float]:
+        if deadline is None:
+            return None
+        remaining = deadline - time.monotonic()
+        if remaining <= 0:
+            raise TimeoutError("embeddings backend deadline exceeded")
+        return remaining
+
+    def embeddings_batch_document(
+        self,
+        batch_id: str,
+        *,
+        deadline: Optional[float] = None,
+    ) -> Dict[str, Any]:
         """Return the naruon-shaped batch document for ``batch_id``.
 
         Polls the backend; once complete, retrieves the vectors, records one
@@ -470,7 +538,18 @@ class CostRoutingCoordinator:
             return cached
 
         job = self._require_embedding_job(batch_id)
-        status = self.embedding_batch_backend.poll(job)
+        poll_timeout = self._remaining_seconds(deadline)
+        status = self._call_embedding_backend(
+            lambda: (
+                self.embedding_batch_backend.poll(job)
+                if poll_timeout is None
+                else self.embedding_batch_backend.poll(
+                    job,
+                    timeout_seconds=poll_timeout,
+                )
+            ),
+            poll_timeout,
+        )
         if not status.get("is_complete"):
             return {
                 "batch_id": batch_id,
@@ -479,8 +558,55 @@ class CostRoutingCoordinator:
                 "embeddings": None,
             }
 
-        items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
+        retrieve_timeout = self._remaining_seconds(deadline)
+        items: List[EmbeddingBatchResultItem] = self._call_embedding_backend(
+            lambda: (
+                self.embedding_batch_backend.retrieve(job)
+                if retrieve_timeout is None
+                else self.embedding_batch_backend.retrieve(
+                    job,
+                    timeout_seconds=retrieve_timeout,
+                )
+            ),
+            retrieve_timeout,
+        )
         requests = self._embedding_requests.get(batch_id, [])
+        expected_ids = [request.custom_id for request in requests]
+        actual_ids = [item.custom_id for item in items]
+        item_by_id = {item.custom_id: item for item in items}
+        vector_lengths = {len(item.embedding) for item in items if item.embedding}
+        invalid_vectors = [
+            request.custom_id
+            for request in requests
+            if request.custom_id not in item_by_id
+            or not item_by_id[request.custom_id].embedding
+            or not all(
+                isinstance(component, (int, float)) and math.isfinite(float(component))
+                for component in item_by_id[request.custom_id].embedding
+            )
+            or (
+                request.dimensions is not None
+                and len(item_by_id[request.custom_id].embedding) != request.dimensions
+            )
+        ]
+        if (
+            len(actual_ids) != len(expected_ids)
+            or len(set(actual_ids)) != len(actual_ids)
+            or set(actual_ids) != set(expected_ids)
+            or invalid_vectors
+            or len(vector_lengths) != 1
+        ):
+            document = {
+                "batch_id": batch_id,
+                "status": "failed",
+                "backend": job.backend,
+                "embeddings": None,
+                "error_code": "incomplete_embeddings_result",
+                "expected_result_count": len(expected_ids),
+                "result_count": len(actual_ids),
+            }
+            self._embedding_documents[batch_id] = document
+            return document
         request_by_custom_id = {request.custom_id: request for request in requests}
         input_count = self._embedding_input_counts.get(batch_id, len(requests))
         part_counts = self._embedding_part_counts.get(batch_id, [1] * input_count)
@@ -527,7 +653,7 @@ class CostRoutingCoordinator:
                 model=model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
-                request_channel="batch",
+                request_channel=self._embedding_request_channels.get(batch_id, "batch"),
                 route_mode="embedding",
                 workflow_run_id=batch_id,
                 attribution=attribution,
@@ -570,6 +696,7 @@ class CostRoutingCoordinator:
         inputs: List[str],
         *,
         model: str = "contextual-orchestrator",
+        dimensions: Optional[int] = None,
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
@@ -581,7 +708,11 @@ class CostRoutingCoordinator:
         envelope the caller then polls via :meth:`embeddings_batch_document`.
         """
         job = self.submit_embeddings_batch(
-            inputs, model=model, attribution=attribution, metadata=metadata
+            inputs,
+            model=model,
+            dimensions=dimensions,
+            attribution=attribution,
+            metadata=metadata,
         )
         return self.embeddings_batch_document(job.job_id)
 
@@ -590,6 +721,7 @@ class CostRoutingCoordinator:
         inputs: List[str],
         *,
         model: str = "contextual-orchestrator",
+        dimensions: Optional[int] = None,
         attribution: Optional[Dict[str, Any]] = None,
         metadata: Optional[Dict[str, Any]] = None,
         timeout_seconds: float = 30.0,
@@ -599,17 +731,49 @@ class CostRoutingCoordinator:
 
         if timeout_seconds <= 0 or poll_interval_seconds <= 0:
             raise ValueError("embedding sync wait settings must be positive")
-        document = self.complete_embeddings_batch(
-            inputs,
-            model=model,
-            attribution=attribution,
-            metadata=metadata,
-        )
         deadline = time.monotonic() + timeout_seconds
-        while document.get("status") != "completed" and time.monotonic() < deadline:
-            time.sleep(min(poll_interval_seconds, max(0.0, deadline - time.monotonic())))
-            document = self.embeddings_batch_document(document["batch_id"])
-        return document
+        job: Optional[BatchJob] = None
+        try:
+            job = self.submit_embeddings_batch(
+                inputs,
+                model=model,
+                dimensions=dimensions,
+                attribution=attribution,
+                metadata=metadata,
+                request_channel="sync",
+                timeout_seconds=self._remaining_seconds(deadline),
+            )
+            while True:
+                document = self.embeddings_batch_document(job.job_id, deadline=deadline)
+                if document.get("status") in {"completed", "failed"}:
+                    return document
+                time.sleep(
+                    min(
+                        poll_interval_seconds,
+                        self._remaining_seconds(deadline) or poll_interval_seconds,
+                    )
+                )
+        except EmbeddingSubmissionTimeout as exc:
+            return {
+                "batch_id": None,
+                "submission_id": exc.submission_id,
+                "status": "timed_out",
+                "backend": getattr(self.embedding_batch_backend, "name", "unknown"),
+                "embeddings": None,
+                "reconciliation_required": True,
+            }
+        except TimeoutError:
+            return {
+                "batch_id": job.job_id if job else None,
+                "status": "timed_out",
+                "backend": (
+                    job.backend
+                    if job
+                    else getattr(self.embedding_batch_backend, "name", "unknown")
+                ),
+                "embeddings": None,
+                "reconciliation_required": job is not None,
+            }
 
     def _require_embedding_job(self, batch_id: str) -> BatchJob:
         job = self._embedding_jobs.get(batch_id)

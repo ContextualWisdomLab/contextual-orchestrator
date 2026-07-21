@@ -68,6 +68,9 @@ Seed the credential into the KV once at bootstrap:
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
 ```
 
+For an ephemeral in-memory server, seed the same process instead of a separate
+bootstrap process: `printf %s "$OPENAI_API_KEY" | python -m contextual_orchestrator --serve --agents examples/agents.openai.json --auth-token "$CONTEXTUAL_ORCHESTRATOR_TOKEN" --bootstrap-credential-stdin OPENAI_API_KEY`.
+
 Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
 
 > The legacy `api_key_env` field is still accepted for back-compat, but its value is now treated as the **credential name** in the KV, not as an environment variable to read. This supersedes the old `api_key_env` env pattern.
@@ -179,11 +182,17 @@ is read from a **KV config store**, never `os.getenv`.
   `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
 - **Sync + batch embeddings.** Interactive callers use the OpenAI-compatible
   `POST /v1/embeddings` response shape (`object`, `data`, `model`, `usage`). The
-  endpoint waits up to 30 seconds on the governed embedding batch core and
-  returns an explicit 503 if an asynchronous backend is still unfinished. Bulk,
+  optional positive `dimensions` field is forwarded through the shared batch
+  request and validated against every returned vector. The KV setting
+  `routing.embedding_max_dimensions` bounds allocation at the trust boundary
+  (hard safety ceiling 3,072). The endpoint applies one
+  30-second deadline before submission, polling, and retrieval; it returns 503
+  when unfinished/timed out and 502 when custom-ID coverage or vectors are
+  empty, partial, duplicated, or dimensionally invalid. Only complete coverage
+  is cost-recorded, with `request_channel=sync`. Bulk,
   latency-tolerant embedding work (e.g. naruon's
   email-import backfill) submits to `POST /v1/batch/embeddings`
-  (`{model, input|inputs:[...], endpoint, metadata|attribution}`) and polls
+  (`{model, input|inputs:[...], dimensions?, endpoint, metadata|attribution}`) and polls
   `GET /v1/batch/embeddings/{batch_id}`. The response is
   `{batch_id, status, embeddings:[{index, embedding}], cost_micro_usd,
   token_counts, total_tokens, part_count, input_part_counts, map_reduce}`. Before
@@ -196,6 +205,13 @@ is read from a **KV config store**, never `os.getenv`.
   backend (local in-process backend standalone), and records one usage-ledger row
   per original vector with the full attribution dimensions (service, team,
   group, company, provider) carried in `metadata`.
+  A pg-llm-batch submission receives a generated `orchestrator_submission_id`
+  in provider metadata before job creation. If the provider accepts the job but
+  its response misses the synchronous deadline, the 503 detail returns that
+  ID with `reconciliation_required=true`; operators can find the remote job by
+  durable provider metadata without submitting a duplicate paid job. Custom
+  in-process embedders are accepted on the synchronous path only when their
+  callable explicitly accepts and cooperatively enforces `timeout_seconds`.
 - **Health.** `GET /healthz` is an unauthenticated liveness probe.
 - **Standalone + optional pg-llm-batch integration.** The hub runs standalone
   with the in-memory config store and local batch backend; wiring a Postgres DSN

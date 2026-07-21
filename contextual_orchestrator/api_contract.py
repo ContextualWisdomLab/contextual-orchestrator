@@ -440,6 +440,7 @@ OPENAPI_SPEC = {
                                         "type": "array",
                                         "items": {"type": "string"},
                                     },
+                                    "dimensions": {"type": "integer", "minimum": 1, "maximum": 3072},
                                     "metadata": {"type": "object"},
                                     "attribution": {"type": "object"},
                                 },
@@ -449,6 +450,8 @@ OPENAPI_SPEC = {
                 },
                 "responses": {
                     "200": {"description": "OpenAI-compatible embedding list"},
+                    "400": {"description": "Invalid input or dimensions"},
+                    "502": {"description": "Backend returned incomplete or invalid vectors"},
                     "503": {"description": "Configured batch backend did not complete within the synchronous wait window"},
                 },
             }
@@ -474,6 +477,7 @@ OPENAPI_SPEC = {
                                         ]
                                     },
                                     "inputs": {"type": "array", "items": {"type": "string"}},
+                                    "dimensions": {"type": "integer", "minimum": 1, "maximum": 3072},
                                     "endpoint": {"type": "string", "description": "batch endpoint alias"},
                                     "metadata": {
                                         "type": "object",
