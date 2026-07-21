@@ -1,10 +1,10 @@
 # KV credential resolution
 
-Runtime provider secrets (model provider API keys) are resolved from a
-**pluggable key/value credential registry**, never from `os.getenv` at request
-time. This document describes the `get_credential` seam, the KV backends, the
-bootstrap flow, and why the previous `api_key_env` environment pattern is
-superseded.
+Application secrets (model provider keys and API-auth tokens) are resolved from
+a **pluggable key/value credential registry**, never from argv or `os.getenv` at
+runtime. Secret values enter the application over stdin only. This document
+describes the `get_credential` seam, the KV backends, the bootstrap flow, and
+why the previous environment pattern is superseded.
 
 ## The `get_credential` seam
 
@@ -93,13 +93,9 @@ These open the KV. They are not provider API keys.
 A one-shot CLI subcommand writes a deploy-time secret into the KV:
 
 ```bash
-# Preferred: pipe the secret over stdin (keeps it out of argv and the app env)
+# The only supported value transport: stdin (keeps it out of argv/app env)
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator \
     register-credential --name OPENAI_API_KEY --value-stdin
-
-# Or use bootstrap transport: read the value from a named env var at bootstrap
-python -m contextual_orchestrator \
-    register-credential --name OPENAI_API_KEY --from-env OPENAI_API_KEY
 ```
 
 Run this against the `postgres` backend so the value persists:
@@ -133,6 +129,25 @@ environment:
 
 The application test workflow must **not** receive `OPENAI_API_KEY`: tests run on
 the mock pool and the in-memory backend and stay green without any secret.
+
+### Ephemeral in-memory bootstrap and API authentication
+
+An in-memory server can receive multiple named secrets as one JSON object on
+stdin. Provider and API-auth values are registered before serving; CLI options
+contain only their KV names:
+
+```bash
+printf '{"OPENAI_API_KEY":"%s","ORCHESTRATOR_AUTH_TOKEN":"%s"}' \
+  "$OPENAI_API_KEY" "$CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+  | python -m contextual_orchestrator --serve \
+      --agents examples/agents.openai.json \
+      --auth-token-credential ORCHESTRATOR_AUTH_TOKEN \
+      --bootstrap-credentials-stdin
+```
+
+Split access uses `--admin-token-credential NAME` together with
+`--inference-token-credential NAME`. Both values must already be present in the
+KV or be included in the stdin JSON object.
 
 ## Why this supersedes `api_key_env`
 

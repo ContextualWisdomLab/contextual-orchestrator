@@ -23,6 +23,7 @@ from __future__ import annotations
 import asyncio
 from dataclasses import dataclass, field
 import hashlib
+import inspect
 import json
 import time
 from typing import Any, Callable, Dict, List, Optional, Protocol
@@ -30,6 +31,7 @@ import uuid
 
 
 _ROUTING_CATEGORY = "routing"
+_MAX_EMBEDDING_DIMENSION = 3_072
 
 
 # ---------------------------------------------------------------------------
@@ -407,14 +409,18 @@ class EmbeddingBatchRequest:
     part_index: int = 0
     part_count: int = 1
     token_count: int = 0
+    dimensions: Optional[int] = None
 
     def to_jsonl_line(self, endpoint: str = "/v1/embeddings") -> Dict[str, Any]:
         """Render this request as an OpenAI Batch API embeddings JSONL line."""
+        body: Dict[str, Any] = {"model": self.model, "input": self.input_text}
+        if self.dimensions is not None:
+            body["dimensions"] = self.dimensions
         return {
             "custom_id": self.custom_id,
             "method": "POST",
             "url": endpoint,
-            "body": {"model": self.model, "input": self.input_text},
+            "body": body,
         }
 
 
@@ -429,27 +435,50 @@ class EmbeddingBatchResultItem:
     model: str = "contextual-orchestrator"
 
 
+class EmbeddingSubmissionTimeout(TimeoutError):
+    """A remote batch may exist and is recoverable by its submission metadata."""
+
+    def __init__(self, submission_id: str) -> None:
+        super().__init__(f"embedding submission {submission_id} timed out after acceptance")
+        self.submission_id = submission_id
+
+
 class EmbeddingBatchBackend(Protocol):
-    """Submit/poll/retrieve contract shared by every embeddings batch backend."""
+    """Deadline-aware contract shared by every embeddings batch backend.
+
+    Implementations must stop or cancel underlying I/O and raise
+    :class:`TimeoutError` when ``timeout_seconds`` expires. The coordinator does
+    not create detached worker threads because they can orphan paid jobs.
+    """
 
     name: str
 
     def submit(
-        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+        self,
+        requests: List[EmbeddingBatchRequest],
+        metadata: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> BatchJob:
         """Submit a batch of embedding requests and return a job handle."""
         ...
 
-    def poll(self, job: BatchJob) -> Dict[str, Any]:
+    def poll(self, job: BatchJob, timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
         """Return the current status of an embeddings batch job."""
         ...
 
-    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+    def retrieve(
+        self, job: BatchJob, timeout_seconds: Optional[float] = None
+    ) -> List[EmbeddingBatchResultItem]:
         """Retrieve completed embeddings for a batch job."""
         ...
 
 
-def heuristic_embedding(text: str, dimension: int = _DEFAULT_EMBEDDING_DIMENSION) -> List[float]:
+def heuristic_embedding(
+    text: str,
+    dimension: int = _DEFAULT_EMBEDDING_DIMENSION,
+    *,
+    deadline: Optional[float] = None,
+) -> List[float]:
     """Deterministic, dependency-free embedding for the local/standalone path.
 
     Derives a stable unit-range vector from a SHA-256 digest of ``text`` so the
@@ -459,9 +488,15 @@ def heuristic_embedding(text: str, dimension: int = _DEFAULT_EMBEDDING_DIMENSION
     """
     if dimension <= 0:
         raise ValueError("dimension must be positive")
+    if dimension > _MAX_EMBEDDING_DIMENSION:
+        raise ValueError(
+            f"dimension must not exceed the local safety limit {_MAX_EMBEDDING_DIMENSION}"
+        )
     digest = hashlib.sha256(text.encode("utf-8")).digest()
     vector: List[float] = []
     for index in range(dimension):
+        if index % 128 == 0 and deadline is not None and time.monotonic() > deadline:
+            raise TimeoutError("local embedding deadline exceeded")
         byte_value = digest[index % len(digest)]
         vector.append(round((byte_value / 255.0) * 2.0 - 1.0, 6))
     return vector
@@ -486,9 +521,20 @@ class LocalEmbeddingBatchBackend:
         token_counter: Any = None,
         dimension: int = _DEFAULT_EMBEDDING_DIMENSION,
     ) -> None:
-        self._embedder = embedder or (lambda text: heuristic_embedding(text, dimension))
+        self._embedder = embedder
+        self._dimension = dimension
         self._token_counter = token_counter
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = {}
+        self._embedder_accepts_timeout = False
+        if embedder is not None:
+            try:
+                signature = inspect.signature(embedder)
+                self._embedder_accepts_timeout = "timeout_seconds" in signature.parameters or any(
+                    parameter.kind == inspect.Parameter.VAR_KEYWORD
+                    for parameter in signature.parameters.values()
+                )
+            except (TypeError, ValueError):
+                self._embedder_accepts_timeout = False
 
     def _count_tokens(self, text: str, model: str) -> int:
         if self._token_counter is not None:
@@ -497,17 +543,49 @@ class LocalEmbeddingBatchBackend:
         return len(text.split())
 
     def submit(
-        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+        self,
+        requests: List[EmbeddingBatchRequest],
+        metadata: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> BatchJob:
         """Embed every input in-process and stash the results under a job id."""
+        if timeout_seconds is not None and self._embedder is not None and not self._embedder_accepts_timeout:
+            raise TypeError(
+                "a custom local embedder used by the synchronous endpoint must accept "
+                "timeout_seconds and cooperatively enforce that deadline"
+            )
+        deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
         job_id = f"localembed_{uuid.uuid4().hex}"
         items: List[EmbeddingBatchResultItem] = []
         for index, request in enumerate(requests):
+            remaining = None if deadline is None else deadline - time.monotonic()
+            if remaining is not None and remaining <= 0:
+                raise TimeoutError("local embedding deadline exceeded")
+            embedding = (
+                (
+                    self._embedder(request.input_text)
+                    if remaining is None
+                    else self._embedder(request.input_text, timeout_seconds=remaining)
+                )
+                if self._embedder is not None
+                else heuristic_embedding(
+                    request.input_text,
+                    request.dimensions or self._dimension,
+                    deadline=deadline,
+                )
+            )
+            if deadline is not None and time.monotonic() > deadline:
+                raise TimeoutError("local embedding deadline exceeded")
+            if request.dimensions is not None and len(embedding) != request.dimensions:
+                raise ValueError(
+                    f"embedding backend returned {len(embedding)} dimensions; "
+                    f"expected {request.dimensions}"
+                )
             items.append(
                 EmbeddingBatchResultItem(
                     custom_id=request.custom_id,
                     index=index,
-                    embedding=list(self._embedder(request.input_text)),
+                    embedding=list(embedding),
                     prompt_tokens=self._count_tokens(request.input_text, request.model),
                     model=request.model,
                 )
@@ -515,11 +593,13 @@ class LocalEmbeddingBatchBackend:
         self._results[job_id] = items
         return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
 
-    def poll(self, job: BatchJob) -> Dict[str, Any]:
+    def poll(self, job: BatchJob, timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
         """Local batches complete synchronously, so always report completed."""
         return {"job_id": job.job_id, "status": "completed", "is_complete": True}
 
-    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+    def retrieve(
+        self, job: BatchJob, timeout_seconds: Optional[float] = None
+    ) -> List[EmbeddingBatchResultItem]:
         """Return the embeddings computed at submit time."""
         return self._results.get(job.job_id, [])
 
@@ -548,6 +628,7 @@ class PgLlmBatchEmbeddingBackend:
         self._endpoint = endpoint
         self._assembler = payload_assembler
         self._jobs: Dict[str, Dict[str, Any]] = {}
+        self._submissions: Dict[str, Dict[str, Any]] = {}
 
     def _assemble_payload(self, requests: List[EmbeddingBatchRequest]) -> str:
         if self._assembler is not None:
@@ -561,23 +642,62 @@ class PgLlmBatchEmbeddingBackend:
         return asyncio.run(coro)
 
     def submit(
-        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+        self,
+        requests: List[EmbeddingBatchRequest],
+        metadata: Optional[Dict[str, Any]] = None,
+        timeout_seconds: Optional[float] = None,
     ) -> BatchJob:
         """Upload embeddings JSONL + create a batch job via the pg-llm-batch client."""
         file_path = self._assemble_payload(requests)
+        submission_id = f"embsub_{uuid.uuid4().hex}"
+        deadline = time.monotonic() + timeout_seconds if timeout_seconds is not None else None
+
+        def remaining() -> Optional[float]:
+            if deadline is None:
+                return None
+            value = deadline - time.monotonic()
+            if value <= 0:
+                raise TimeoutError("embedding submission deadline exceeded")
+            return value
+
+        async def _upload() -> Dict[str, Any]:
+            return await self._client.upload_jsonl(file_path, self._endpoint_alias)
+
+        upload_timeout = remaining()
+        uploaded = self._run(
+            asyncio.wait_for(_upload(), upload_timeout) if upload_timeout else _upload()
+        )
+        input_file_id = uploaded["id"]
+        submit_metadata = dict(metadata or {})
+        submit_metadata["orchestrator_submission_id"] = submission_id
+        self._submissions[submission_id] = {
+            "submission_id": submission_id,
+            "input_file_id": input_file_id,
+            "endpoint_alias": self._endpoint_alias,
+            "status": "creating",
+            "batch_id": None,
+        }
 
         async def _submit() -> Dict[str, Any]:
-            uploaded = await self._client.upload_jsonl(file_path, self._endpoint_alias)
-            input_file_id = uploaded["id"]
             return await self._client.create_batch_job(
                 input_file_id,
                 self._endpoint_alias,
                 endpoint=self._endpoint,
-                metadata=metadata,
+                metadata=submit_metadata,
             )
 
-        job_payload = self._run(_submit())
+        submit_timeout = remaining()
+        try:
+            job_payload = self._run(
+                asyncio.wait_for(_submit(), submit_timeout) if submit_timeout else _submit()
+            )
+        except (asyncio.TimeoutError, TimeoutError) as exc:
+            self._submissions[submission_id]["status"] = "uncertain"
+            raise EmbeddingSubmissionTimeout(submission_id) from exc
         batch_id = job_payload["id"]
+        self._submissions[submission_id].update(
+            {"status": "accepted", "batch_id": batch_id}
+        )
         self._jobs[batch_id] = {
             "endpoint_alias": self._endpoint_alias,
             "requests": {request.custom_id: request for request in requests},
@@ -590,12 +710,22 @@ class PgLlmBatchEmbeddingBackend:
             request_count=len(requests),
         )
 
-    def poll(self, job: BatchJob) -> Dict[str, Any]:
+    def submission_status(self, submission_id: str) -> Dict[str, Any]:
+        """Return pre-recorded recovery metadata for an ambiguous submission."""
+
+        status = self._submissions.get(submission_id)
+        if status is None:
+            raise KeyError(f"embedding submission {submission_id!r} not found")
+        return dict(status)
+
+    def poll(self, job: BatchJob, timeout_seconds: Optional[float] = None) -> Dict[str, Any]:
         """Poll embeddings batch status via the pg-llm-batch client."""
         async def _poll() -> Dict[str, Any]:
             return await self._client.get_batch_status(job.job_id, self._endpoint_alias)
 
-        status = self._run(_poll())
+        status = self._run(
+            asyncio.wait_for(_poll(), timeout_seconds) if timeout_seconds else _poll()
+        )
         return {
             "job_id": job.job_id,
             "status": status.get("status"),
@@ -603,12 +733,16 @@ class PgLlmBatchEmbeddingBackend:
             "progress_percentage": status.get("progress_percentage", 0),
         }
 
-    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+    def retrieve(
+        self, job: BatchJob, timeout_seconds: Optional[float] = None
+    ) -> List[EmbeddingBatchResultItem]:
         """Download + parse embedding results, mapping them back to input order."""
         async def _download() -> Dict[str, Any]:
             return await self._client.download_results(job.job_id, self._endpoint_alias)
 
-        payload = self._run(_download())
+        payload = self._run(
+            asyncio.wait_for(_download(), timeout_seconds) if timeout_seconds else _download()
+        )
         if not payload.get("success"):
             return []
         tracked = self._jobs.get(job.job_id, {})

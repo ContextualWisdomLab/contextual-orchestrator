@@ -15,6 +15,7 @@
 |---|---|---|
 | `GET` | `/openapi.json` | API contract |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
+| `POST` | `/v1/embeddings` | OpenAI-compatible synchronous embeddings with optional KV-bounded `dimensions` (hard ceiling 3,072); one 30-second submit/poll/retrieve deadline, 503 on timeout, 502 on incomplete backend results; ambiguous remote acceptance returns a provider-metadata `submission_id` for reconciliation |
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |

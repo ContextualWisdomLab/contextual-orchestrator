@@ -14,12 +14,16 @@ services cannot drift out of contract.
 
 from __future__ import annotations
 
+import asyncio
 from pathlib import Path
 import json
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -35,6 +39,10 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
     BatchJob,
     EmbeddingBatchRequest,
     EmbeddingBatchResultItem,
+    EmbeddingSubmissionTimeout,
+    LocalEmbeddingBatchBackend,
+    PgLlmBatchEmbeddingBackend,
+    heuristic_embedding,
 )
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa: E402
@@ -97,7 +105,7 @@ class _RecordingEmbeddingBackend:
         self.requests: list[EmbeddingBatchRequest] = []
         self._results: list[EmbeddingBatchResultItem] = []
 
-    def submit(self, requests, metadata=None):
+    def submit(self, requests, metadata=None, timeout_seconds=None):
         self.requests = list(requests)
         self._results = [
             EmbeddingBatchResultItem(
@@ -120,11 +128,62 @@ class _RecordingEmbeddingBackend:
             request_count=len(self.requests),
         )
 
-    def poll(self, job):
+    def poll(self, job, timeout_seconds=None):
         return {"job_id": job.job_id, "status": "completed", "is_complete": True}
 
-    def retrieve(self, job):
+    def retrieve(self, job, timeout_seconds=None):
         return list(self._results)
+
+
+class _DelayedEmbeddingBackend(_RecordingEmbeddingBackend):
+    """Fake async backend that becomes complete on its second poll."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.poll_count = 0
+
+    def submit(self, requests, metadata=None, timeout_seconds=None):
+        job = super().submit(requests, metadata, timeout_seconds)
+        job.status = "submitted"
+        return job
+
+    def poll(self, job, timeout_seconds=None):
+        self.poll_count += 1
+        complete = self.poll_count >= 2
+        return {
+            "job_id": job.job_id,
+            "status": "completed" if complete else "in_progress",
+            "is_complete": complete,
+        }
+
+
+class _IncompleteEmbeddingBackend(_RecordingEmbeddingBackend):
+    def retrieve(self, job, timeout_seconds=None):
+        return super().retrieve(job, timeout_seconds)[:-1]
+
+
+class _SlowSubmitEmbeddingBackend(_RecordingEmbeddingBackend):
+    def submit(self, requests, metadata=None, timeout_seconds=None):
+        if timeout_seconds is not None and timeout_seconds < 0.2:
+            time.sleep(min(timeout_seconds / 10, 0.001))
+            raise TimeoutError("submission deadline exceeded")
+        time.sleep(0.2)
+        return super().submit(requests, metadata, timeout_seconds)
+
+
+class _NeverCompletesEmbeddingBackend(_RecordingEmbeddingBackend):
+    def submit(self, requests, metadata=None, timeout_seconds=None):
+        job = super().submit(requests, metadata, timeout_seconds)
+        job.status = "submitted"
+        return job
+
+    def poll(self, job, timeout_seconds=None):
+        return {"job_id": job.job_id, "status": "in_progress", "is_complete": False}
+
+
+class _AmbiguousSubmitEmbeddingBackend(_RecordingEmbeddingBackend):
+    def submit(self, requests, metadata=None, timeout_seconds=None):
+        raise EmbeddingSubmissionTimeout("embsub_recoverable")
 
 
 def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
@@ -209,6 +268,248 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         assert status == 200, document
         assert len(document["embeddings"]) == 1
         assert document["status"] == "completed"
+    finally:
+        server.shutdown()
+
+
+def test_sync_embeddings_endpoint_returns_openai_compatible_document() -> None:
+    """Interactive callers receive vectors without understanding batch jobs."""
+    server, port, token, coordinator = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, document = _request(
+            "POST",
+            f"{base}/v1/embeddings",
+            token,
+            {
+                "model": "text-embedding-test",
+                "input": ["first semantic chunk", "second semantic chunk"],
+                "dimensions": 128,
+                "metadata": {
+                    "service": "semantic-data-portal",
+                    "provider": "acme-provider",
+                },
+            },
+        )
+
+        assert status == 200, document
+        assert document["object"] == "list"
+        assert document["model"] == "text-embedding-test"
+        assert [item["index"] for item in document["data"]] == [0, 1]
+        assert all(item["object"] == "embedding" for item in document["data"])
+        assert all(len(item["embedding"]) == 128 for item in document["data"])
+        assert document["usage"]["prompt_tokens"] > 0
+        assert document["usage"]["total_tokens"] == document["usage"]["prompt_tokens"]
+        assert document["orchestration"]["batch_id"]
+        assert document["orchestration"]["cost_micro_usd"] > 0
+        records = coordinator.ledger.records()
+        assert len(records) == 2
+        assert all(record["request_channel"] == "sync" for record in records)
+    finally:
+        server.shutdown()
+
+
+def test_sync_embeddings_waits_for_an_async_batch_backend() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    )
+    backend = _DelayedEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        embedding_batch_backend=backend,
+    )
+
+    document = coordinator.complete_embeddings_sync(
+        ["semantic chunk"],
+        model="text-embedding-test",
+        timeout_seconds=1,
+        poll_interval_seconds=0.001,
+    )
+
+    assert document["status"] == "completed"
+    assert document["embeddings"][0]["embedding"]
+    assert backend.poll_count == 2
+
+
+def test_sync_embeddings_rejects_partial_backend_results_without_recording_cost() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    )
+    backend = _IncompleteEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(orchestrator, embedding_batch_backend=backend)
+
+    document = coordinator.complete_embeddings_sync(
+        ["first", "second"],
+        model="text-embedding-test",
+        timeout_seconds=1,
+        poll_interval_seconds=0.001,
+    )
+
+    assert document["status"] == "failed"
+    assert document["error_code"] == "incomplete_embeddings_result"
+    assert coordinator.ledger.records() == []
+
+
+def test_sync_embeddings_timeout_starts_before_submission_and_returns_promptly() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        embedding_batch_backend=_SlowSubmitEmbeddingBackend(),
+    )
+
+    started = time.monotonic()
+    document = coordinator.complete_embeddings_sync(
+        ["semantic chunk"],
+        timeout_seconds=0.02,
+        poll_interval_seconds=0.001,
+    )
+
+    assert time.monotonic() - started < 0.15
+    assert document["status"] == "timed_out"
+    assert document["batch_id"] is None
+    assert document["reconciliation_required"] is False
+
+
+def test_local_custom_embedder_must_accept_cooperative_deadline() -> None:
+    backend = LocalEmbeddingBatchBackend(embedder=lambda text: [1.0, 0.0])
+
+    with pytest.raises(TypeError, match="timeout_seconds"):
+        backend.submit(
+            [EmbeddingBatchRequest(input_text="semantic chunk")],
+            timeout_seconds=0.1,
+        )
+
+
+def test_pg_embedding_submit_timeout_returns_recoverable_submission_id() -> None:
+    class AcceptedButResponseLostClient:
+        def __init__(self):
+            self.metadata = None
+
+        async def upload_jsonl(self, file_path, endpoint_alias):
+            return {"id": "file-accepted"}
+
+        async def create_batch_job(
+            self,
+            input_file_id,
+            endpoint_alias,
+            endpoint="/v1/embeddings",
+            metadata=None,
+        ):
+            self.metadata = metadata
+            await asyncio.sleep(1)
+            return {"id": "batch-late", "status": "validating"}
+
+    client = AcceptedButResponseLostClient()
+    backend = PgLlmBatchEmbeddingBackend(client)
+
+    with pytest.raises(EmbeddingSubmissionTimeout) as caught:
+        backend.submit(
+            [EmbeddingBatchRequest(input_text="semantic chunk")],
+            timeout_seconds=0.01,
+        )
+
+    assert caught.value.submission_id
+    assert client.metadata["orchestrator_submission_id"] == caught.value.submission_id
+    assert backend.submission_status(caught.value.submission_id)["status"] == "uncertain"
+
+
+def test_sync_embeddings_surfaces_ambiguous_submission_for_reconciliation() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        embedding_batch_backend=_AmbiguousSubmitEmbeddingBackend(),
+    )
+
+    document = coordinator.complete_embeddings_sync(["semantic chunk"])
+
+    assert document["status"] == "timed_out"
+    assert document["submission_id"] == "embsub_recoverable"
+    assert document["reconciliation_required"] is True
+
+
+def test_sync_embeddings_preserves_submitted_job_for_batch_reconciliation() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    )
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        embedding_batch_backend=_NeverCompletesEmbeddingBackend(),
+    )
+
+    document = coordinator.complete_embeddings_sync(
+        ["semantic chunk"],
+        timeout_seconds=0.01,
+        poll_interval_seconds=0.001,
+    )
+
+    assert document["status"] == "timed_out"
+    assert document["batch_id"]
+    assert document["reconciliation_required"] is True
+    assert coordinator.embeddings_batch_document(document["batch_id"])["status"] == "in_progress"
+
+
+def test_embedding_request_jsonl_forwards_requested_dimensions() -> None:
+    request = EmbeddingBatchRequest(
+        input_text="semantic chunk",
+        model="text-embedding-test",
+        dimensions=128,
+    )
+
+    assert request.to_jsonl_line()["body"]["dimensions"] == 128
+
+
+def test_sync_embeddings_rejects_invalid_dimensions() -> None:
+    server, port, token, _coordinator = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, document = _request(
+            "POST",
+            f"{base}/v1/embeddings",
+            token,
+            {"input": "semantic chunk", "dimensions": 0},
+        )
+        assert status == 400
+        assert document["error"]["code"] == "invalid_dimensions"
+    finally:
+        server.shutdown()
+
+
+def test_sync_embeddings_rejects_dimensions_above_configured_limit() -> None:
+    server, port, token, _coordinator = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, document = _request(
+            "POST",
+            f"{base}/v1/embeddings",
+            token,
+            {"input": "semantic chunk", "dimensions": 3073},
+        )
+        assert status == 400
+        assert document["error"]["code"] == "invalid_dimensions"
+    finally:
+        server.shutdown()
+
+
+def test_heuristic_embedding_checks_deadline_during_generation() -> None:
+    with pytest.raises(TimeoutError, match="deadline"):
+        heuristic_embedding("semantic chunk", 128, deadline=time.monotonic() - 1)
+
+
+def test_sync_embeddings_requires_inference_bearer_token() -> None:
+    server, port, _token, _coordinator = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, document = _request(
+            "POST",
+            f"{base}/v1/embeddings",
+            body={"input": "semantic chunk"},
+        )
+        assert status == 401
+        assert document["error"]["code"] == "unauthorized"
     finally:
         server.shutdown()
 

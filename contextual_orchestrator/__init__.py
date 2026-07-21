@@ -6,6 +6,7 @@ from .batch_routing import (
     BatchResultItem,
     EmbeddingBatchRequest,
     EmbeddingBatchResultItem,
+    EmbeddingSubmissionTimeout,
     LocalBatchBackend,
     LocalEmbeddingBatchBackend,
     PgLlmBatchBackend,
@@ -81,6 +82,7 @@ __all__ = [
     # embeddings batch
     "EmbeddingBatchRequest",
     "EmbeddingBatchResultItem",
+    "EmbeddingSubmissionTimeout",
     "LocalEmbeddingBatchBackend",
     "PgLlmBatchEmbeddingBackend",
     "heuristic_embedding",

@@ -17,8 +17,11 @@ python -m contextual_orchestrator "Summarize why model orchestration helps long 
 Run the OpenAI-compatible subset:
 
 ```bash
-export CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000
+CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+printf '{"ORCHESTRATOR_AUTH_TOKEN":"%s"}' "$CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+  | python -m contextual_orchestrator --serve --agents examples/agents.mock.json \
+      --port 8000 --auth-token-credential ORCHESTRATOR_AUTH_TOKEN \
+      --bootstrap-credentials-stdin
 ```
 
 Admin console:
@@ -36,7 +39,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 
 HTTP serving is hardened for local lab use:
 
-- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
+- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Pass KV names with `--admin-token-credential` and `--inference-token-credential` to separate operator and runtime access, or use `--auth-token-credential` for one local-development token. Secret values are accepted only over stdin and resolved from the KV.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
@@ -66,6 +69,19 @@ Seed the credential into the KV once at bootstrap:
 
 ```bash
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
+```
+
+For an ephemeral in-memory server, seed the provider and API-auth credentials in
+the same process. The JSON object travels over stdin; argv contains only KV
+names:
+
+```bash
+printf '{"OPENAI_API_KEY":"%s","ORCHESTRATOR_AUTH_TOKEN":"%s"}' \
+  "$OPENAI_API_KEY" "$CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+  | python -m contextual_orchestrator --serve \
+      --agents examples/agents.openai.json \
+      --auth-token-credential ORCHESTRATOR_AUTH_TOKEN \
+      --bootstrap-credentials-stdin
 ```
 
 Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
@@ -177,9 +193,19 @@ is read from a **KV config store**, never `os.getenv`.
   Submit via `POST /api/v1/batch_routing_jobs`, poll
   `GET /api/v1/batch_routing_jobs/{id}`, retrieve
   `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
-- **Batch embeddings.** Bulk, latency-tolerant embedding work (e.g. naruon's
+- **Sync + batch embeddings.** Interactive callers use the OpenAI-compatible
+  `POST /v1/embeddings` response shape (`object`, `data`, `model`, `usage`). The
+  optional positive `dimensions` field is forwarded through the shared batch
+  request and validated against every returned vector. The KV setting
+  `routing.embedding_max_dimensions` bounds allocation at the trust boundary
+  (hard safety ceiling 3,072). The endpoint applies one
+  30-second deadline before submission, polling, and retrieval; it returns 503
+  when unfinished/timed out and 502 when custom-ID coverage or vectors are
+  empty, partial, duplicated, or dimensionally invalid. Only complete coverage
+  is cost-recorded, with `request_channel=sync`. Bulk,
+  latency-tolerant embedding work (e.g. naruon's
   email-import backfill) submits to `POST /v1/batch/embeddings`
-  (`{model, input|inputs:[...], endpoint, metadata|attribution}`) and polls
+  (`{model, input|inputs:[...], dimensions?, endpoint, metadata|attribution}`) and polls
   `GET /v1/batch/embeddings/{batch_id}`. The response is
   `{batch_id, status, embeddings:[{index, embedding}], cost_micro_usd,
   token_counts, total_tokens, part_count, input_part_counts, map_reduce}`. Before
@@ -192,6 +218,13 @@ is read from a **KV config store**, never `os.getenv`.
   backend (local in-process backend standalone), and records one usage-ledger row
   per original vector with the full attribution dimensions (service, team,
   group, company, provider) carried in `metadata`.
+  A pg-llm-batch submission receives a generated `orchestrator_submission_id`
+  in provider metadata before job creation. If the provider accepts the job but
+  its response misses the synchronous deadline, the 503 detail returns that
+  ID with `reconciliation_required=true`; operators can find the remote job by
+  durable provider metadata without submitting a duplicate paid job. Custom
+  in-process embedders are accepted on the synchronous path only when their
+  callable explicitly accepts and cooperatively enforces `timeout_seconds`.
 - **Health.** `GET /healthz` is an unauthenticated liveness probe.
 - **Standalone + optional pg-llm-batch integration.** The hub runs standalone
   with the in-memory config store and local batch backend; wiring a Postgres DSN

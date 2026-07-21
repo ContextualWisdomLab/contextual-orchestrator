@@ -413,6 +413,49 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Batch results with recorded usage"}},
             }
         },
+        "/v1/embeddings": {
+            "post": {
+                "operationId": "create_embedding_vector",
+                "summary": "Create embeddings synchronously through the configured orchestrator backend",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "anyOf": [
+                                    {"required": ["input"]},
+                                    {"required": ["inputs"]},
+                                ],
+                                "properties": {
+                                    "model": {"type": "string"},
+                                    "input": {
+                                        "oneOf": [
+                                            {"type": "string"},
+                                            {"type": "array", "items": {"type": "string"}},
+                                        ]
+                                    },
+                                    "inputs": {
+                                        "type": "array",
+                                        "items": {"type": "string"},
+                                    },
+                                    "dimensions": {"type": "integer", "minimum": 1, "maximum": 3072},
+                                    "metadata": {"type": "object"},
+                                    "attribution": {"type": "object"},
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {"description": "OpenAI-compatible embedding list"},
+                    "400": {"description": "Invalid input or dimensions"},
+                    "502": {"description": "Backend returned incomplete or invalid vectors"},
+                    "503": {"description": "Configured batch backend did not complete within the synchronous wait window"},
+                },
+            }
+        },
         "/v1/batch/embeddings": {
             "post": {
                 "operationId": "create_batch_embeddings_job",
@@ -434,6 +477,7 @@ OPENAPI_SPEC = {
                                         ]
                                     },
                                     "inputs": {"type": "array", "items": {"type": "string"}},
+                                    "dimensions": {"type": "integer", "minimum": 1, "maximum": 3072},
                                     "endpoint": {"type": "string", "description": "batch endpoint alias"},
                                     "metadata": {
                                         "type": "object",

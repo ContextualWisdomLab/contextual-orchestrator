@@ -45,7 +45,12 @@ ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
-ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
+ALLOWED_EMBEDDINGS_KEYS = {
+    "model", "input", "inputs", "dimensions", "metadata", "attribution",
+}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {
+    "model", "input", "inputs", "dimensions", "endpoint", "metadata", "attribution",
+}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -262,6 +267,27 @@ def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
             raise RequestError(400, "invalid_request", "each embedding input must be a string")
         inputs.append(item)
     return inputs
+
+
+def _validate_embedding_dimensions(
+    body: dict[str, Any], *, max_dimensions: int = 3_072
+) -> int | None:
+    value = body.get("dimensions")
+    if value is None:
+        return None
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise RequestError(
+            400,
+            "invalid_dimensions",
+            "dimensions must be a positive integer",
+        )
+    if value > max_dimensions:
+        raise RequestError(
+            400,
+            "invalid_dimensions",
+            f"dimensions must not exceed the configured limit {max_dimensions}",
+        )
+    return value
 
 
 def _embeddings_attribution(body: dict[str, Any]) -> dict[str, Any]:
@@ -797,9 +823,84 @@ def build_server(
                         result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
                     ))
                     return
+                if path == "/v1/embeddings":
+                    _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
+                    inputs = _validate_embeddings_inputs(body)
+                    dimensions = _validate_embedding_dimensions(
+                        body, max_dimensions=coordinator.embedding_dimension_limit()
+                    )
+                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    attribution = _embeddings_attribution(body)
+                    document = self._run(lambda: coordinator.complete_embeddings_sync(
+                        inputs,
+                        model=model_name,
+                        dimensions=dimensions,
+                        attribution=attribution,
+                        metadata={"actor_scope": "inference", "request_channel": "sync"},
+                    ))
+                    if document.get("status") == "failed":
+                        raise RequestError(
+                            502,
+                            "embeddings_backend_failed",
+                            "the embeddings backend returned incomplete or invalid results",
+                            {
+                                "batch_id": document.get("batch_id"),
+                                "backend_error": document.get("error_code"),
+                            },
+                        )
+                    if document.get("status") != "completed":
+                        raise RequestError(
+                            503,
+                            "embeddings_not_ready",
+                            "the configured embeddings backend did not complete synchronously",
+                            {
+                                "batch_id": document.get("batch_id"),
+                                "submission_id": document.get("submission_id"),
+                                "reconciliation_required": document.get(
+                                    "reconciliation_required", False
+                                ),
+                            },
+                        )
+                    response = {
+                        "object": "list",
+                        "data": [
+                            {
+                                "object": "embedding",
+                                "index": item["index"],
+                                "embedding": item["embedding"],
+                            }
+                            for item in document["embeddings"]
+                        ],
+                        "model": model_name,
+                        "usage": {
+                            "prompt_tokens": document["total_tokens"],
+                            "total_tokens": document["total_tokens"],
+                        },
+                        "orchestration": {
+                            "batch_id": document["batch_id"],
+                            "backend": document["backend"],
+                            "cost_micro_usd": document["cost_micro_usd"],
+                        },
+                    }
+                    orchestrator.record_analytics_event(
+                        "embeddings_requested",
+                        {
+                            "endpoint_path": "/v1/embeddings",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "batch_id": document["batch_id"],
+                            "batch_backend": document["backend"],
+                            "input_count": len(inputs),
+                        },
+                    )
+                    self._send(response)
+                    return
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
+                    dimensions = _validate_embedding_dimensions(
+                        body, max_dimensions=coordinator.embedding_dimension_limit()
+                    )
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     attribution = _embeddings_attribution(body)
                     submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
@@ -809,10 +910,21 @@ def build_server(
                     document = self._run(lambda: coordinator.complete_embeddings_batch(
                         inputs,
                         model=model_name,
+                        dimensions=dimensions,
                         attribution=attribution,
                         metadata=submit_metadata,
                     ))
                     is_complete = document.get("status") == "completed"
+                    if document.get("status") == "failed":
+                        raise RequestError(
+                            502,
+                            "embeddings_backend_failed",
+                            "the embeddings backend returned incomplete or invalid results",
+                            {
+                                "batch_id": document.get("batch_id"),
+                                "backend_error": document.get("error_code"),
+                            },
+                        )
                     orchestrator.record_analytics_event(
                         "embeddings_batch_created",
                         {
