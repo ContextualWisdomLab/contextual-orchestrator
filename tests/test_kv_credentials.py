@@ -112,16 +112,23 @@ def test_unknown_backend_selector_raises(monkeypatch) -> None:
     set_backend(None)
 
 
-def test_serve_can_seed_in_memory_credential_from_stdin(monkeypatch) -> None:
+def test_register_credential_rejects_environment_secret_transport(monkeypatch) -> None:
     from contextual_orchestrator import __main__ as cli
 
-    observed: dict[str, str | None] = {}
+    monkeypatch.setenv("OPENAI_API_KEY", "provider-key-from-env")
 
-    def fake_serve(*_args, **_kwargs) -> None:
-        observed["credential"] = get_credential("OPENAI_API_KEY")
+    with pytest.raises(SystemExit):
+        cli._register_credential_command(
+            ["--name", "OPENAI_API_KEY", "--from-env", "OPENAI_API_KEY"]
+        )
 
-    monkeypatch.setattr(cli, "serve", fake_serve)
-    monkeypatch.setattr(sys, "stdin", io.StringIO("\ufeffsk-stdin-bootstrap\n"))
+    assert get_credential("OPENAI_API_KEY") is None
+
+
+def test_serve_rejects_runtime_secret_value_flags(monkeypatch) -> None:
+    from contextual_orchestrator import __main__ as cli
+
+    monkeypatch.setattr(cli, "serve", lambda *_args, **_kwargs: None)
     monkeypatch.setattr(
         sys,
         "argv",
@@ -131,12 +138,99 @@ def test_serve_can_seed_in_memory_credential_from_stdin(monkeypatch) -> None:
             "--agents",
             "examples/agents.mock.json",
             "--auth-token",
-            "pilot-token",
-            "--bootstrap-credential-stdin",
-            "OPENAI_API_KEY",
+            "secret-must-not-be-an-argv-value",
+        ],
+    )
+
+    with pytest.raises(SystemExit):
+        cli.main()
+
+
+def test_serve_ignores_runtime_secret_environment_variables(monkeypatch) -> None:
+    from contextual_orchestrator import __main__ as cli
+
+    monkeypatch.setattr(cli, "serve", lambda *_args, **_kwargs: None)
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_TOKEN", "env-secret-must-not-be-used")
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        ["contextual-orchestrator", "--serve", "--agents", "examples/agents.mock.json"],
+    )
+
+    with pytest.raises(SystemExit):
+        cli.main()
+
+
+def test_serve_resolves_split_runtime_tokens_from_kv(monkeypatch) -> None:
+    from contextual_orchestrator import __main__ as cli
+
+    observed: dict[str, str] = {}
+
+    def fake_serve(*_args, **kwargs) -> None:
+        observed["admin_token"] = kwargs["security"].admin_token
+        observed["inference_token"] = kwargs["security"].inference_token
+
+    register_credential("ORCHESTRATOR_ADMIN_TOKEN", "admin-from-kv")
+    register_credential("ORCHESTRATOR_INFERENCE_TOKEN", "inference-from-kv")
+    monkeypatch.setattr(cli, "serve", fake_serve)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "contextual-orchestrator",
+            "--serve",
+            "--agents",
+            "examples/agents.mock.json",
+            "--admin-token-credential",
+            "ORCHESTRATOR_ADMIN_TOKEN",
+            "--inference-token-credential",
+            "ORCHESTRATOR_INFERENCE_TOKEN",
         ],
     )
 
     cli.main()
 
-    assert observed == {"credential": "sk-stdin-bootstrap"}
+    assert observed == {
+        "admin_token": "admin-from-kv",
+        "inference_token": "inference-from-kv",
+    }
+
+
+def test_serve_bootstraps_secrets_from_stdin_and_resolves_runtime_token_from_kv(monkeypatch) -> None:
+    from contextual_orchestrator import __main__ as cli
+
+    observed: dict[str, str | None] = {}
+
+    def fake_serve(*_args, **kwargs) -> None:
+        observed["credential"] = get_credential("OPENAI_API_KEY")
+        observed["auth_token"] = kwargs["security"].auth_token
+
+    monkeypatch.setattr(cli, "serve", fake_serve)
+    monkeypatch.setattr(
+        sys,
+        "stdin",
+        io.StringIO(
+            '\ufeff{"OPENAI_API_KEY":"sk-stdin-bootstrap",'
+            '"ORCHESTRATOR_AUTH_TOKEN":"pilot-token"}\n'
+        ),
+    )
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "contextual-orchestrator",
+            "--serve",
+            "--agents",
+            "examples/agents.mock.json",
+            "--auth-token-credential",
+            "ORCHESTRATOR_AUTH_TOKEN",
+            "--bootstrap-credentials-stdin",
+        ],
+    )
+
+    cli.main()
+
+    assert observed == {
+        "credential": "sk-stdin-bootstrap",
+        "auth_token": "pilot-token",
+    }

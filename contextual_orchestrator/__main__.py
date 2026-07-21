@@ -7,7 +7,7 @@ import json
 import os
 import sys
 
-from .credentials import register_credential
+from .credentials import get_credential, register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
@@ -18,41 +18,57 @@ def _read_stdin_credential() -> str:
     return sys.stdin.read().lstrip("\ufeff").strip()
 
 
+def _read_stdin_credentials() -> dict[str, str]:
+    """Read a JSON object of named secrets from stdin."""
+
+    raw = _read_stdin_credential()
+    try:
+        values = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise ValueError("stdin must contain a JSON object of named secrets") from exc
+    if not isinstance(values, dict) or not values:
+        raise ValueError("stdin must contain a non-empty JSON object of named secrets")
+    if any(
+        not isinstance(name, str)
+        or not name
+        or not isinstance(value, str)
+        or not value
+        for name, value in values.items()
+    ):
+        raise ValueError("credential names and values must be non-empty strings")
+    return values
+
+
+def _resolve_credential(parser: argparse.ArgumentParser, name: str | None) -> str:
+    """Resolve a runtime secret by KV name, never by argv or environment value."""
+
+    if not name:
+        return ""
+    value = get_credential(name)
+    if not value:
+        parser.error(f"credential {name!r} is not registered in the KV")
+    return value
+
+
 def _register_credential_command(argv: list[str]) -> None:
     """Bootstrap: read a deploy-time secret and store it in the KV credential registry.
 
-    Environment is used ONLY as bootstrap transport here (to select/connect to
-    the KV, and optionally to carry the secret value in from the deploy step).
-    The running orchestrator never reads the provider key from os.getenv — it
-    resolves it from the KV via get_credential(). See docs/kv-credentials.md.
+    Secret values enter through stdin only. The running orchestrator resolves
+    them from the KV via get_credential(). See docs/kv-credentials.md.
     """
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator register-credential",
         description="Store a provider credential into the KV registry at bootstrap.",
     )
     parser.add_argument("--name", required=True, help="Credential name, e.g. OPENAI_API_KEY.")
-    source = parser.add_mutually_exclusive_group()
-    source.add_argument(
+    parser.add_argument(
         "--value-stdin",
         action="store_true",
-        help="Read the secret value from stdin (preferred; keeps it out of argv/env).",
-    )
-    source.add_argument(
-        "--from-env",
-        metavar="VAR",
-        help="Bootstrap transport: read the secret value from this env var (e.g. --from-env OPENAI_API_KEY).",
+        help="Read the secret value from stdin (the only supported secret transport).",
     )
     args = parser.parse_args(argv)
 
-    if args.from_env:
-        # Bootstrap transport only: the deploy step injects secrets.OPENAI_API_KEY
-        # into this one-shot process; it is never read at request time.
-        if args.from_env not in os.environ:
-            parser.error(f"env var {args.from_env} is not set for bootstrap transport")
-        value = os.environ[args.from_env]
-    else:
-        # Default: read from stdin so the secret never touches argv or the app env.
-        value = _read_stdin_credential()
+    value = _read_stdin_credential()
 
     if not value:
         parser.error("empty credential value; provide a non-empty secret")
@@ -76,13 +92,19 @@ def main() -> None:
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--auth-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_TOKEN", ""))
-    parser.add_argument("--admin-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN", ""))
-    parser.add_argument("--inference-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN", ""))
-    parser.add_argument(
+    parser.add_argument("--auth-token-credential", metavar="NAME", help="KV name for the shared API token.")
+    parser.add_argument("--admin-token-credential", metavar="NAME", help="KV name for the admin API token.")
+    parser.add_argument("--inference-token-credential", metavar="NAME", help="KV name for the inference API token.")
+    bootstrap = parser.add_mutually_exclusive_group()
+    bootstrap.add_argument(
         "--bootstrap-credential-stdin",
         metavar="NAME",
         help="Read one provider secret from stdin into the KV before serving.",
+    )
+    bootstrap.add_argument(
+        "--bootstrap-credentials-stdin",
+        action="store_true",
+        help="Read a JSON object of named secrets from stdin into the KV before serving.",
     )
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
@@ -113,6 +135,16 @@ def main() -> None:
             parser.error("empty credential value on stdin")
         register_credential(args.bootstrap_credential_stdin, value)
         del value
+    elif args.bootstrap_credentials_stdin:
+        if not args.serve:
+            parser.error("--bootstrap-credentials-stdin requires --serve")
+        try:
+            values = _read_stdin_credentials()
+        except ValueError as exc:
+            parser.error(str(exc))
+        for name, value in values.items():
+            register_credential(name, value)
+        del values, value
 
     client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
     orchestrator = TaskOrchestrator(
@@ -130,23 +162,27 @@ def main() -> None:
         return
 
     if args.serve:
-        if not (args.auth_token or args.admin_token or args.inference_token):
+        auth_token = _resolve_credential(parser, args.auth_token_credential)
+        admin_token = _resolve_credential(parser, args.admin_token_credential)
+        inference_token = _resolve_credential(parser, args.inference_token_credential)
+        if not (auth_token or admin_token or inference_token):
             parser.error(
-                "--serve requires --auth-token, split --admin-token/--inference-token, "
-                "or matching CONTEXTUAL_ORCHESTRATOR_* environment variables"
+                "--serve requires --auth-token-credential or split "
+                "--admin-token-credential/--inference-token-credential"
             )
-        if not args.auth_token and (args.admin_token or args.inference_token) and not (
-            args.admin_token and args.inference_token
-        ):
-            parser.error("split token mode requires both --admin-token and --inference-token")
+        if not auth_token and (admin_token or inference_token) and not (admin_token and inference_token):
+            parser.error(
+                "split token mode requires both --admin-token-credential and "
+                "--inference-token-credential"
+            )
         serve(
             orchestrator,
             host=args.host,
             port=args.port,
             security=SecurityConfig(
-                auth_token=args.auth_token,
-                admin_token=args.admin_token,
-                inference_token=args.inference_token,
+                auth_token=auth_token,
+                admin_token=admin_token,
+                inference_token=inference_token,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
             ),

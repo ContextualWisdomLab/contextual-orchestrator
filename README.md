@@ -17,8 +17,11 @@ python -m contextual_orchestrator "Summarize why model orchestration helps long 
 Run the OpenAI-compatible subset:
 
 ```bash
-export CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000
+CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+printf '{"ORCHESTRATOR_AUTH_TOKEN":"%s"}' "$CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+  | python -m contextual_orchestrator --serve --agents examples/agents.mock.json \
+      --port 8000 --auth-token-credential ORCHESTRATOR_AUTH_TOKEN \
+      --bootstrap-credentials-stdin
 ```
 
 Admin console:
@@ -36,7 +39,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 
 HTTP serving is hardened for local lab use:
 
-- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
+- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Pass KV names with `--admin-token-credential` and `--inference-token-credential` to separate operator and runtime access, or use `--auth-token-credential` for one local-development token. Secret values are accepted only over stdin and resolved from the KV.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
@@ -68,8 +71,18 @@ Seed the credential into the KV once at bootstrap:
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
 ```
 
-For an ephemeral in-memory server, seed the same process instead of a separate
-bootstrap process: `printf %s "$OPENAI_API_KEY" | python -m contextual_orchestrator --serve --agents examples/agents.openai.json --auth-token "$CONTEXTUAL_ORCHESTRATOR_TOKEN" --bootstrap-credential-stdin OPENAI_API_KEY`.
+For an ephemeral in-memory server, seed the provider and API-auth credentials in
+the same process. The JSON object travels over stdin; argv contains only KV
+names:
+
+```bash
+printf '{"OPENAI_API_KEY":"%s","ORCHESTRATOR_AUTH_TOKEN":"%s"}' \
+  "$OPENAI_API_KEY" "$CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+  | python -m contextual_orchestrator --serve \
+      --agents examples/agents.openai.json \
+      --auth-token-credential ORCHESTRATOR_AUTH_TOKEN \
+      --bootstrap-credentials-stdin
+```
 
 Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
 
