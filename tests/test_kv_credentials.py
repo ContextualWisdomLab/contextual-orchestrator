@@ -121,7 +121,7 @@ def test_serve_can_seed_in_memory_credential_from_stdin(monkeypatch) -> None:
         observed["credential"] = get_credential("OPENAI_API_KEY")
 
     monkeypatch.setattr(cli, "serve", fake_serve)
-    monkeypatch.setattr(sys, "stdin", io.StringIO("sk-stdin-bootstrap\n"))
+    monkeypatch.setattr(sys, "stdin", io.StringIO("\ufeffsk-stdin-bootstrap\n"))
     monkeypatch.setattr(
         sys,
         "argv",

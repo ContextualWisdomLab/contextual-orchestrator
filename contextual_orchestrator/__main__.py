@@ -12,6 +12,12 @@ from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
 
+def _read_stdin_credential() -> str:
+    """Read a piped secret, tolerating the UTF-8 BOM emitted by Windows tools."""
+
+    return sys.stdin.read().lstrip("\ufeff").strip()
+
+
 def _register_credential_command(argv: list[str]) -> None:
     """Bootstrap: read a deploy-time secret and store it in the KV credential registry.
 
@@ -46,7 +52,7 @@ def _register_credential_command(argv: list[str]) -> None:
         value = os.environ[args.from_env]
     else:
         # Default: read from stdin so the secret never touches argv or the app env.
-        value = sys.stdin.read().strip()
+        value = _read_stdin_credential()
 
     if not value:
         parser.error("empty credential value; provide a non-empty secret")
@@ -102,7 +108,7 @@ def main() -> None:
     if args.bootstrap_credential_stdin:
         if not args.serve:
             parser.error("--bootstrap-credential-stdin requires --serve")
-        value = sys.stdin.read().strip()
+        value = _read_stdin_credential()
         if not value:
             parser.error("empty credential value on stdin")
         register_credential(args.bootstrap_credential_stdin, value)
