@@ -45,6 +45,7 @@ ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
+ALLOWED_EMBEDDINGS_KEYS = {"model", "input", "inputs", "metadata", "attribution"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
@@ -796,6 +797,58 @@ def build_server(
                     self._send(chat_completion_response(
                         result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
                     ))
+                    return
+                if path == "/v1/embeddings":
+                    _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
+                    inputs = _validate_embeddings_inputs(body)
+                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    attribution = _embeddings_attribution(body)
+                    document = self._run(lambda: coordinator.complete_embeddings_sync(
+                        inputs,
+                        model=model_name,
+                        attribution=attribution,
+                        metadata={"actor_scope": "inference", "request_channel": "sync"},
+                    ))
+                    if document.get("status") != "completed":
+                        raise RequestError(
+                            503,
+                            "embeddings_not_ready",
+                            "the configured embeddings backend did not complete synchronously",
+                            {"batch_id": document.get("batch_id")},
+                        )
+                    response = {
+                        "object": "list",
+                        "data": [
+                            {
+                                "object": "embedding",
+                                "index": item["index"],
+                                "embedding": item["embedding"],
+                            }
+                            for item in document["embeddings"]
+                        ],
+                        "model": model_name,
+                        "usage": {
+                            "prompt_tokens": document["total_tokens"],
+                            "total_tokens": document["total_tokens"],
+                        },
+                        "orchestration": {
+                            "batch_id": document["batch_id"],
+                            "backend": document["backend"],
+                            "cost_micro_usd": document["cost_micro_usd"],
+                        },
+                    }
+                    orchestrator.record_analytics_event(
+                        "embeddings_requested",
+                        {
+                            "endpoint_path": "/v1/embeddings",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "batch_id": document["batch_id"],
+                            "batch_backend": document["backend"],
+                            "input_count": len(inputs),
+                        },
+                    )
+                    self._send(response)
                     return
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)

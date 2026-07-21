@@ -127,6 +127,28 @@ class _RecordingEmbeddingBackend:
         return list(self._results)
 
 
+class _DelayedEmbeddingBackend(_RecordingEmbeddingBackend):
+    """Fake async backend that becomes complete on its second poll."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.poll_count = 0
+
+    def submit(self, requests, metadata=None):
+        job = super().submit(requests, metadata)
+        job.status = "submitted"
+        return job
+
+    def poll(self, job):
+        self.poll_count += 1
+        complete = self.poll_count >= 2
+        return {
+            "job_id": job.job_id,
+            "status": "completed" if complete else "in_progress",
+            "is_complete": complete,
+        }
+
+
 def test_batch_embeddings_endpoint_matches_naruon_contract() -> None:
     server, port, token, coordinator = _serve()
     base = f"http://127.0.0.1:{port}"
@@ -211,6 +233,62 @@ def test_batch_embeddings_accepts_openai_style_input_field() -> None:
         assert document["status"] == "completed"
     finally:
         server.shutdown()
+
+
+def test_sync_embeddings_endpoint_returns_openai_compatible_document() -> None:
+    """Interactive callers receive vectors without understanding batch jobs."""
+    server, port, token, coordinator = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, document = _request(
+            "POST",
+            f"{base}/v1/embeddings",
+            token,
+            {
+                "model": "text-embedding-test",
+                "input": ["first semantic chunk", "second semantic chunk"],
+                "metadata": {
+                    "service": "semantic-data-portal",
+                    "provider": "acme-provider",
+                },
+            },
+        )
+
+        assert status == 200, document
+        assert document["object"] == "list"
+        assert document["model"] == "text-embedding-test"
+        assert [item["index"] for item in document["data"]] == [0, 1]
+        assert all(item["object"] == "embedding" for item in document["data"])
+        assert all(item["embedding"] for item in document["data"])
+        assert document["usage"]["prompt_tokens"] > 0
+        assert document["usage"]["total_tokens"] == document["usage"]["prompt_tokens"]
+        assert document["orchestration"]["batch_id"]
+        assert document["orchestration"]["cost_micro_usd"] > 0
+        assert len(coordinator.ledger.records()) == 2
+    finally:
+        server.shutdown()
+
+
+def test_sync_embeddings_waits_for_an_async_batch_backend() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    )
+    backend = _DelayedEmbeddingBackend()
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        embedding_batch_backend=backend,
+    )
+
+    document = coordinator.complete_embeddings_sync(
+        ["semantic chunk"],
+        model="text-embedding-test",
+        timeout_seconds=1,
+        poll_interval_seconds=0.001,
+    )
+
+    assert document["status"] == "completed"
+    assert document["embeddings"][0]["embedding"]
+    assert backend.poll_count == 2
 
 
 def test_batch_embeddings_split_oversized_inputs_before_backend() -> None:

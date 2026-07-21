@@ -177,7 +177,11 @@ is read from a **KV config store**, never `os.getenv`.
   Submit via `POST /api/v1/batch_routing_jobs`, poll
   `GET /api/v1/batch_routing_jobs/{id}`, retrieve
   `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
-- **Batch embeddings.** Bulk, latency-tolerant embedding work (e.g. naruon's
+- **Sync + batch embeddings.** Interactive callers use the OpenAI-compatible
+  `POST /v1/embeddings` response shape (`object`, `data`, `model`, `usage`). The
+  endpoint waits up to 30 seconds on the governed embedding batch core and
+  returns an explicit 503 if an asynchronous backend is still unfinished. Bulk,
+  latency-tolerant embedding work (e.g. naruon's
   email-import backfill) submits to `POST /v1/batch/embeddings`
   (`{model, input|inputs:[...], endpoint, metadata|attribution}`) and polls
   `GET /v1/batch/embeddings/{batch_id}`. The response is

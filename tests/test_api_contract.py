@@ -32,6 +32,14 @@ def test_openapi_uses_resource_oriented_operation_ids() -> None:
     assert all(is_two_word_snake_case(operation_id) for operation_id in operation_ids)
 
 
+def test_openapi_exposes_sync_embeddings_with_inference_auth() -> None:
+    operation = OPENAPI_SPEC["paths"]["/v1/embeddings"]["post"]
+
+    assert operation["operationId"] == "create_embedding_vector"
+    assert operation["security"] == [{"inference_bearer_auth": []}]
+    assert "200" in operation["responses"]
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_rest_resource_paths_use_two_word_snake_case()
     test_openapi_uses_resource_oriented_operation_ids()

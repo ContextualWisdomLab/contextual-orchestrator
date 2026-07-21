@@ -19,6 +19,7 @@ store, never ``os.getenv``.
 from __future__ import annotations
 
 import re
+import time
 from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
@@ -583,6 +584,32 @@ class CostRoutingCoordinator:
             inputs, model=model, attribution=attribution, metadata=metadata
         )
         return self.embeddings_batch_document(job.job_id)
+
+    def complete_embeddings_sync(
+        self,
+        inputs: List[str],
+        *,
+        model: str = "contextual-orchestrator",
+        attribution: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+        timeout_seconds: float = 30.0,
+        poll_interval_seconds: float = 0.25,
+    ) -> Dict[str, Any]:
+        """Wait for the shared embeddings batch core and return its final document."""
+
+        if timeout_seconds <= 0 or poll_interval_seconds <= 0:
+            raise ValueError("embedding sync wait settings must be positive")
+        document = self.complete_embeddings_batch(
+            inputs,
+            model=model,
+            attribution=attribution,
+            metadata=metadata,
+        )
+        deadline = time.monotonic() + timeout_seconds
+        while document.get("status") != "completed" and time.monotonic() < deadline:
+            time.sleep(min(poll_interval_seconds, max(0.0, deadline - time.monotonic())))
+            document = self.embeddings_batch_document(document["batch_id"])
+        return document
 
     def _require_embedding_job(self, batch_id: str) -> BatchJob:
         job = self._embedding_jobs.get(batch_id)
