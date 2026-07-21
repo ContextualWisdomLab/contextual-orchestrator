@@ -234,3 +234,12 @@ def test_serve_bootstraps_secrets_from_stdin_and_resolves_runtime_token_from_kv(
         "credential": "sk-stdin-bootstrap",
         "auth_token": "pilot-token",
     }
+
+
+def test_docker_default_bootstraps_api_auth_from_stdin_kv() -> None:
+    dockerfile = (Path(__file__).resolve().parents[1] / "Dockerfile").read_text(encoding="utf-8")
+
+    assert "--auth-token-credential ORCHESTRATOR_AUTH_TOKEN" in dockerfile
+    assert "--bootstrap-credentials-stdin" in dockerfile
+    assert "-e CONTEXTUAL_ORCHESTRATOR_TOKEN" not in dockerfile
+    assert "-e OPENAI_API_KEY" not in dockerfile
