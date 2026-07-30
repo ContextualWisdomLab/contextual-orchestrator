@@ -272,3 +272,101 @@ def test_count_embedding_tokens_tolerates_counter_failure_and_zero() -> None:
     coordinator.token_counter = _Zero()
     assert coordinator._count_embedding_tokens("abc", "m") == 1  # non-empty but 0 -> 1
     assert coordinator._count_embedding_tokens("", "m") == 0  # empty -> 0
+
+
+# --- remaining branch coverage: provider resolution + embeddings document ---
+
+
+def test_served_provider_model_falls_back_when_agent_lookup_raises() -> None:
+    """A trace naming an agent the orchestrator cannot resolve falls back to
+    ``('unknown', fallback_model)`` instead of raising."""
+    coordinator = _coordinator()
+    provider, model = coordinator._served_provider_model(
+        {"trace": [{"served_agent_id": "__no_such_agent__"}]}, "fallback-model"
+    )
+    assert (provider, model) == ("unknown", "fallback-model")
+
+
+class _FakeJob:
+    """Minimal BatchJob-shaped handle a fake embedding backend can return."""
+
+
+def _embedding_coordinator(backend):
+    """A coordinator wired to an explicit embeddings backend."""
+    agents = [
+        ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
+                   tags=("reasoning", "coding", "writing"), priority=1),
+    ]
+    orchestrator = TaskOrchestrator(agents)
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
+    return CostRoutingCoordinator(
+        orchestrator, config, price_book=price_book, embedding_batch_backend=backend
+    )
+
+
+def test_embeddings_batch_document_returns_pending_while_incomplete() -> None:
+    """A backend whose poll is not complete yields the pending document
+    (``embeddings is None``) and does not record any cost."""
+    from contextual_orchestrator.batch_routing import BatchJob
+
+    class _Pending:
+        def submit(self, requests, metadata=None):
+            return BatchJob(job_id="emb-pending", backend="fake", status="processing",
+                            request_count=len(requests))
+
+        def poll(self, job):
+            return {"is_complete": False, "status": "processing"}
+
+        def retrieve(self, job):  # pragma: no cover - not reached while pending
+            return []
+
+    coordinator = _embedding_coordinator(_Pending())
+    job = coordinator.submit_embeddings_batch(["hello world"], attribution={"team": "a"})
+    doc = coordinator.embeddings_batch_document(job.job_id)
+    assert doc["embeddings"] is None
+    assert doc["status"] == "processing"
+    assert doc["backend"] == "fake"
+    assert coordinator.ledger.records() == []
+
+
+def test_embeddings_batch_document_token_fallback_and_empty_source() -> None:
+    """An item with non-positive prompt_tokens whose request has a zero
+    token_count triggers the count_text fallback, and a source input that
+    receives no returned item yields an empty embedding entry."""
+    from contextual_orchestrator.batch_routing import BatchJob, EmbeddingBatchResultItem
+
+    class _CompleteSourceZeroOnly:
+        def __init__(self):
+            self._requests = []
+
+        def submit(self, requests, metadata=None):
+            self._requests = list(requests)
+            return BatchJob(job_id="emb-done", backend="fake", status="completed",
+                            request_count=len(requests))
+
+        def poll(self, job):
+            return {"is_complete": True, "status": "completed"}
+
+        def retrieve(self, job):
+            # Return an item only for source 0 (the "" input -> token_count 0),
+            # with prompt_tokens 0 so the count_text fallback runs. Source 1
+            # gets no item, so its parts list stays empty.
+            return [
+                EmbeddingBatchResultItem(
+                    custom_id=r.custom_id, index=i, embedding=[1.0, 2.0],
+                    prompt_tokens=0, model=r.model,
+                )
+                for i, r in enumerate(self._requests)
+                if r.source_index == 0
+            ]
+
+    coordinator = _embedding_coordinator(_CompleteSourceZeroOnly())
+    job = coordinator.submit_embeddings_batch(["", "world"], attribution={"team": "a"})
+    doc = coordinator.embeddings_batch_document(job.job_id)
+    # Two source inputs -> two embedding entries; source 1 received no item.
+    by_index = {entry["index"]: entry for entry in doc["embeddings"]}
+    assert by_index[1]["embedding"] == []  # empty-source branch
+    assert by_index[0]["embedding"]  # source 0 produced a reduced vector
+    assert doc["token_counts"][1] == 0

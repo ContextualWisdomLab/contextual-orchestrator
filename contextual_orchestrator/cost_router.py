@@ -632,7 +632,7 @@ def _weighted_average_embedding(parts: List[tuple[List[float], int]]) -> List[fl
         return []
     dimension = max(len(vector) for vector in vectors)
     total_weight = sum(max(1, int(weight)) for _vector, weight in parts)
-    if total_weight <= 0:
+    if total_weight <= 0:  # pragma: no cover - unreachable: each term is max(1, ...) over a guaranteed-non-empty parts list
         total_weight = len(parts)
     reduced: List[float] = []
     for offset in range(dimension):
