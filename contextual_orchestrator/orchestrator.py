@@ -200,6 +200,47 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+def _assert_public_redirect_host(hostname: str, port: int) -> None:
+    """Reject a redirect target whose host resolves to a non-public address.
+
+    Mirrors the resolved-IP policy of ``ModelClient._validate_provider`` (plus a
+    ``not is_global`` catch for CGNAT / IPv4-mapped forms) so a 3xx target is
+    held to the same egress guard as the first hop.
+    """
+    for address in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM):
+        ip_address = ipaddress.ip_address(address[4][0])
+        if (
+            ip_address.is_private
+            or ip_address.is_loopback
+            or ip_address.is_link_local
+            or ip_address.is_multicast
+            or ip_address.is_reserved
+            or not ip_address.is_global
+        ):
+            raise RuntimeError("provider redirect resolves to a non-public address")
+
+
+class _EgressGuardedRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Re-apply the egress guard to every 3xx redirect target.
+
+    urllib's default opener follows redirects to any http(s) URL, which would
+    let a provider bounce the request to a loopback/private/reserved address
+    (e.g. cloud metadata) that ``_validate_provider`` blocked on the first hop.
+    Reject non-http(s) schemes and hold each redirect host to the same
+    resolved-IP policy before following.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):
+        """Validate the redirect target host, then defer to the default handler."""
+        parsed = urlparse(newurl)
+        host = (parsed.hostname or "").lower()
+        if parsed.scheme not in {"http", "https"} or not host:
+            raise RuntimeError("provider redirect to a non-http(s) URL is refused")
+        default_port = 443 if parsed.scheme == "https" else 80
+        _assert_public_redirect_host(host, parsed.port or default_port)
+        return super().redirect_request(req, fp, code, msg, headers, newurl)
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -226,6 +267,14 @@ class ModelClient:
         # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
         # explicit dev-only opt-out (insecure) for self-signed endpoints.
         self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+        # Private opener whose redirect handler re-applies the egress guard to
+        # every 3xx target; urllib's default global opener would follow a
+        # provider's redirect to an internal address that _validate_provider
+        # blocked on the first hop (SSRF pivot to cloud metadata / loopback).
+        self._opener = urllib.request.build_opener(
+            _EgressGuardedRedirectHandler(),
+            urllib.request.HTTPSHandler(context=self._ssl_context),
+        )
 
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
@@ -307,12 +356,17 @@ class ModelClient:
         return data["choices"][0]["message"]["content"]
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
+        """Open a provider request through the redirect-guarded private opener.
+
+        The opener re-validates every 3xx target against the egress guard, so a
+        provider cannot bounce the request to an internal address that the
+        first-hop ``_validate_provider`` check blocked. TLS trust is carried by
+        the opener's HTTPSHandler context.
+        """
         # nosemgrep: dynamic-urllib-use-detected
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return self._opener.open(  # nosec B310 - opener re-validates redirect targets against the egress guard.
             request,
             timeout=self.timeout,
-            context=self._ssl_context,
         )
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
