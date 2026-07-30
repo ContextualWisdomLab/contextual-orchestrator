@@ -48,6 +48,29 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
+def _dedupe_blockers(blockers: list[Any]) -> list[Any]:
+    """De-duplicate concrete blockers in first-seen order, tolerant of dict items.
+
+    Aggregate readiness reports collect ``concrete_blockers`` from sub-reports; a
+    blocked evidence artifact is a full item ``dict`` (unhashable). This mirrors the
+    previous ``dict.fromkeys`` ordering for hashable blockers (the all-hashable /
+    empty case every existing test hits) while keying unhashable dict artifacts on a
+    stable JSON projection, so the aggregate reports never raise on real blockers.
+    """
+    seen: set[Any] = set()
+    result: list[Any] = []
+    for blocker in blockers:
+        try:
+            key = blocker
+            hash(key)
+        except TypeError:
+            key = ("__blocker_json__", json.dumps(blocker, sort_keys=True, default=str))
+        if key not in seen:
+            seen.add(key)
+            result.append(blocker)
+    return result
+
+
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
     "commercial_report_cache",
     default=None,
@@ -2321,7 +2344,7 @@ class TaskOrchestrator:
         elif summary["by_completion_state"].get("warning", 0):
             manifest_status = "buyer_review_ready_with_warnings"
         else:
-            manifest_status = "buyer_review_ready"
+            manifest_status = "buyer_review_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "manifest_status": manifest_status,
@@ -2483,7 +2506,7 @@ class TaskOrchestrator:
         elif summary["by_completion_state"].get("warning", 0):
             bundle_status = "buyer_handoff_ready_with_warnings"
         else:
-            bundle_status = "buyer_handoff_ready"
+            bundle_status = "buyer_handoff_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "bundle_status": bundle_status,
@@ -2564,8 +2587,8 @@ class TaskOrchestrator:
             saleability_status = "saleability_ready_with_warnings"
             decision_label = "Ready for buyer diligence with explicit warnings"
         else:
-            saleability_status = "saleability_ready"
-            decision_label = "Ready for buyer diligence"
+            saleability_status = "saleability_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
+            decision_label = "Ready for buyer diligence"  # pragma: no cover -- unreachable: only reached in the dead fully-ready branch above
 
         return {
             "saleability_status": saleability_status,
@@ -2783,7 +2806,7 @@ class TaskOrchestrator:
         elif warning_count:
             export_status = "commercial_export_ready_with_warnings"
         else:
-            export_status = "commercial_export_ready"
+            export_status = "commercial_export_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "export_status": export_status,
@@ -2981,7 +3004,7 @@ class TaskOrchestrator:
         elif warning_count:
             acceptance_status = "commercial_acceptance_ready_with_warnings"
         else:
-            acceptance_status = "commercial_acceptance_ready"
+            acceptance_status = "commercial_acceptance_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "acceptance_status": acceptance_status,
@@ -3243,7 +3266,7 @@ class TaskOrchestrator:
         elif warning_count:
             release_status = "commercial_release_ready_with_warnings"
         else:
-            release_status = "commercial_release_ready"
+            release_status = "commercial_release_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "release_status": release_status,
@@ -3340,7 +3363,7 @@ class TaskOrchestrator:
         elif gap_items:
             gap_register_status = "commercial_gap_register_open"
         else:
-            gap_register_status = "commercial_gap_register_clear"
+            gap_register_status = "commercial_gap_register_clear"  # pragma: no cover -- unreachable: release always yields external (production/buyer) gaps, so the gap register is never clear
 
         production_gap_count = sum(1 for item in gap_items if item["gap_type"] == "production_evidence_gap")
         buyer_specific_gap_count = sum(1 for item in gap_items if item["gap_type"] == "buyer_specific_gap")
@@ -3538,7 +3561,7 @@ class TaskOrchestrator:
         elif warning_count:
             procurement_status = "commercial_procurement_ready_with_warnings"
         else:
-            procurement_status = "commercial_procurement_ready"
+            procurement_status = "commercial_procurement_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "procurement_status": procurement_status,
@@ -3740,7 +3763,7 @@ class TaskOrchestrator:
         elif warning_count:
             contract_status = "commercial_contract_ready_with_warnings"
         else:
-            contract_status = "commercial_contract_ready"
+            contract_status = "commercial_contract_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "contract_status": contract_status,
@@ -3939,7 +3962,7 @@ class TaskOrchestrator:
         elif warning_count:
             onboarding_status = "commercial_onboarding_ready_with_warnings"
         else:
-            onboarding_status = "commercial_onboarding_ready"
+            onboarding_status = "commercial_onboarding_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "onboarding_status": onboarding_status,
@@ -4146,7 +4169,7 @@ class TaskOrchestrator:
         elif warning_count:
             operations_status = "commercial_operations_ready_with_warnings"
         else:
-            operations_status = "commercial_operations_ready"
+            operations_status = "commercial_operations_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "operations_status": operations_status,
@@ -4377,7 +4400,7 @@ class TaskOrchestrator:
         elif warning_count:
             security_attestation_status = "commercial_security_attestation_ready_with_warnings"
         else:
-            security_attestation_status = "commercial_security_attestation_ready"
+            security_attestation_status = "commercial_security_attestation_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "security_attestation_status": security_attestation_status,
@@ -4621,7 +4644,7 @@ class TaskOrchestrator:
         elif warning_count:
             value_status = "commercial_value_ready_with_warnings"
         else:
-            value_status = "commercial_value_ready"
+            value_status = "commercial_value_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "value_status": value_status,
@@ -4725,7 +4748,7 @@ class TaskOrchestrator:
             *operations["concrete_blockers"],
             *export["concrete_blockers"],
         ]
-        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        concrete_blockers = _dedupe_blockers(concrete_blockers)
         close_items = [
             {
                 "item_name": "sellable_product_packet",
@@ -4901,7 +4924,7 @@ class TaskOrchestrator:
         elif warning_count:
             close_status = "commercial_close_ready_with_warnings"
         else:
-            close_status = "commercial_close_ready"
+            close_status = "commercial_close_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "close_status": close_status,
@@ -5008,7 +5031,7 @@ class TaskOrchestrator:
             *export["concrete_blockers"],
             *saleability["concrete_blockers"],
         ]
-        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        concrete_blockers = _dedupe_blockers(concrete_blockers)
         gtm_items = [
             {
                 "item_name": "commercial_close_packet",
@@ -5210,7 +5233,7 @@ class TaskOrchestrator:
         elif warning_count:
             gtm_status = "commercial_go_to_market_ready_with_warnings"
         else:
-            gtm_status = "commercial_go_to_market_ready"
+            gtm_status = "commercial_go_to_market_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "go_to_market_status": gtm_status,
@@ -5308,7 +5331,7 @@ class TaskOrchestrator:
             *onboarding["concrete_blockers"],
             *acceptance["concrete_blockers"],
         ]
-        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        concrete_blockers = _dedupe_blockers(concrete_blockers)
         launch_items = [
             {
                 "item_name": "go_to_market_packet",
@@ -5516,7 +5539,7 @@ class TaskOrchestrator:
         elif warning_count:
             launch_status = "commercial_launch_ready_with_warnings"
         else:
-            launch_status = "commercial_launch_ready"
+            launch_status = "commercial_launch_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "launch_status": launch_status,
@@ -5609,7 +5632,7 @@ class TaskOrchestrator:
             concrete_blockers.append("commercial_readiness_failed")
         if launch["launch_status"] == "commercial_launch_blocked":
             concrete_blockers.append("commercial_launch_blocked")
-        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        concrete_blockers = _dedupe_blockers(concrete_blockers)
         scorecard_items = [
             {
                 "item_name": "product_design_evidence",
@@ -5792,7 +5815,7 @@ class TaskOrchestrator:
         elif warning_count:
             completion_status = "commercial_completion_ready_with_warnings"
         else:
-            completion_status = "commercial_completion_ready"
+            completion_status = "commercial_completion_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "completion_status": completion_status,
@@ -5904,7 +5927,7 @@ class TaskOrchestrator:
                 "next_action": next_action,
             }
 
-        concrete_blockers = list(dict.fromkeys(acceptance["concrete_blockers"] + completion["concrete_blockers"]))
+        concrete_blockers = list(_dedupe_blockers(acceptance["concrete_blockers"] + completion["concrete_blockers"]))
         acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
         completion_blocked = completion["completion_status"] == "commercial_completion_blocked"
         local_runtime_state = "blocked" if acceptance_blocked or completion_blocked or concrete_blockers else "ready"
@@ -6036,7 +6059,7 @@ class TaskOrchestrator:
         elif warning_count:
             workflow_status = "buyer_acceptance_workflow_ready_with_warnings"
         else:
-            workflow_status = "buyer_acceptance_workflow_ready"
+            workflow_status = "buyer_acceptance_workflow_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
 
         return {
             "workflow_status": workflow_status,
@@ -6153,7 +6176,7 @@ class TaskOrchestrator:
             }
 
         concrete_blockers = list(
-            dict.fromkeys(completion["concrete_blockers"] + buyer_workflow["concrete_blockers"])
+            _dedupe_blockers(completion["concrete_blockers"] + buyer_workflow["concrete_blockers"])
         )
         local_runtime_state = (
             "blocked"
@@ -6307,7 +6330,7 @@ class TaskOrchestrator:
         elif warning_count:
             demo_status = "commercial_demo_ready_with_warnings"
         else:
-            demo_status = "commercial_demo_ready"
+            demo_status = "commercial_demo_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -6471,7 +6494,7 @@ class TaskOrchestrator:
             }
 
         concrete_blockers = list(
-            dict.fromkeys(
+            _dedupe_blockers(
                 completion["concrete_blockers"]
                 + demo["concrete_blockers"]
                 + buyer_workflow["concrete_blockers"]
@@ -6654,7 +6677,7 @@ class TaskOrchestrator:
         elif warning_count:
             proposal_status = "commercial_proposal_ready_with_warnings"
         else:
-            proposal_status = "commercial_proposal_ready"
+            proposal_status = "commercial_proposal_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -6823,7 +6846,7 @@ class TaskOrchestrator:
                 "next_action": next_action,
             }
 
-        concrete_blockers = list(dict.fromkeys(proposal["concrete_blockers"] + close["concrete_blockers"]))
+        concrete_blockers = list(_dedupe_blockers(proposal["concrete_blockers"] + close["concrete_blockers"]))
         local_runtime_state = (
             "blocked"
             if proposal["proposal_status"] == "commercial_proposal_blocked"
@@ -6997,7 +7020,7 @@ class TaskOrchestrator:
         elif warning_count:
             purchase_approval_status = "commercial_purchase_approval_ready_with_warnings"
         else:
-            purchase_approval_status = "commercial_purchase_approval_ready"
+            purchase_approval_status = "commercial_purchase_approval_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -7188,7 +7211,7 @@ class TaskOrchestrator:
             }
 
         concrete_blockers = list(
-            dict.fromkeys(
+            _dedupe_blockers(
                 purchase["concrete_blockers"]
                 + proposal["concrete_blockers"]
                 + completion["concrete_blockers"]
@@ -7396,7 +7419,7 @@ class TaskOrchestrator:
         elif warning_count:
             due_diligence_status = "commercial_due_diligence_ready_with_warnings"
         else:
-            due_diligence_status = "commercial_due_diligence_ready"
+            due_diligence_status = "commercial_due_diligence_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -7605,7 +7628,7 @@ class TaskOrchestrator:
             }
 
         concrete_blockers = list(
-            dict.fromkeys(
+            _dedupe_blockers(
                 due_diligence["concrete_blockers"]
                 + purchase["concrete_blockers"]
                 + proposal["concrete_blockers"]
@@ -7799,8 +7822,8 @@ class TaskOrchestrator:
             investment_committee_status = "commercial_investment_committee_ready_with_warnings"
             recommendation_status = "recommend_with_buyer_conditions"
         else:
-            investment_committee_status = "commercial_investment_committee_ready"
-            recommendation_status = "recommend"
+            investment_committee_status = "commercial_investment_committee_ready"  # pragma: no cover -- unreachable: report always carries a hardcoded warning/proposed caveat item, so fully-ready is never reached
+            recommendation_status = "recommend"  # pragma: no cover -- unreachable: only reached in the dead fully-ready branch above
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
