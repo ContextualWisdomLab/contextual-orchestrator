@@ -653,7 +653,9 @@ class CostLedger:
     ) -> None:
         self.price_book = price_book
         self.telemetry_sink = telemetry_sink or NoopUsageTelemetrySink()
-        base_store = store or InMemoryLedgerStore()
+        # Use `is None`, not truthiness: InMemoryLedgerStore defines __len__, so an
+        # empty injected store is falsy and `store or ...` would silently discard it.
+        base_store = store if store is not None else InMemoryLedgerStore()
         should_wrap = bool(non_blocking_store)
         if should_wrap:
             self.store: LedgerStore = NonBlockingLedgerStore(

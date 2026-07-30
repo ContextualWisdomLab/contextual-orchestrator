@@ -114,36 +114,43 @@ def test_unknown_backend_selector_raises(monkeypatch) -> None:
 
 
 def test_postgres_backend_requires_bootstrap_dsn() -> None:
+    """A missing bootstrap DSN fails closed with NotConfigured."""
     with pytest.raises(NotConfigured):
         PostgresCredentialBackend("", "boot-passphrase")
 
 
 def test_postgres_backend_requires_bootstrap_passphrase() -> None:
+    """A missing bootstrap passphrase fails closed with NotConfigured."""
     with pytest.raises(NotConfigured):
         PostgresCredentialBackend("postgresql://host/db", "")
 
 
 def test_postgres_backend_stores_bootstrap_transport() -> None:
+    """A valid dsn+passphrase is stored as bootstrap transport, schema not yet ensured."""
     backend = PostgresCredentialBackend("postgresql://host/db", "boot-passphrase")
     assert backend._dsn == "postgresql://host/db"
-    assert backend._passphrase == "boot-passphrase"
+    assert backend._passphrase == "boot-passphrase"  # noqa: S105 - test-only fixture
     assert backend._ensured is False
 
 
 def test_postgres_backend_from_env_reads_bootstrap_vars(monkeypatch) -> None:
+    """from_env reads both the DSN and passphrase bootstrap env vars."""
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_DSN", "postgresql://host/db")
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE", "boot-passphrase")
     backend = PostgresCredentialBackend.from_env()
     assert isinstance(backend, PostgresCredentialBackend)
     assert backend._dsn == "postgresql://host/db"
+    assert backend._passphrase == "boot-passphrase"  # noqa: S105 - test-only fixture
 
 
 def test_select_backend_memory_default_is_in_memory(monkeypatch) -> None:
+    """The default (unset) backend selector yields the in-memory backend."""
     monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_KV_BACKEND", raising=False)
     assert isinstance(_select_backend(), InMemoryCredentialBackend)
 
 
 def test_select_backend_postgres_builds_from_env(monkeypatch) -> None:
+    """Selecting 'postgres' builds the Postgres backend from bootstrap env vars."""
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_BACKEND", "postgres")
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_DSN", "postgresql://host/db")
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE", "boot-passphrase")
