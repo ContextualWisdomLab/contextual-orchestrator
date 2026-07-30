@@ -1,3 +1,8 @@
-# Atheris coverage-guided job deps (Python 3.11). Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.11 --universal -o fuzz/requirements-atheris.txt
+# Atheris coverage-guided job deps. Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.11 --universal -o fuzz/requirements-atheris.txt
+# atheris ships distributions for CPython <= 3.11 up to 3.0.0 and adds newer-interpreter
+# support from 3.1.0 (dropping the cp311 build). The cp3.11 fuzz.yml runner therefore
+# resolves only 3.0.0 while the central coverage-evidence image (newer interpreter)
+# resolves only 3.1.0, so pin by interpreter marker to keep both resolvable.
 pip
-atheris==3.1.0
+atheris==3.0.0 ; python_full_version < "3.12"
+atheris==3.1.0 ; python_full_version >= "3.12"
