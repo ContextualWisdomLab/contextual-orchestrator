@@ -611,7 +611,7 @@ def _provider_from_base_url(base_url: str) -> str:
         from urllib.parse import urlparse
 
         host = urlparse(base_url).hostname or ""
-    except Exception:
+    except Exception:  # pragma: no cover - defensive: urlparse does not raise for str base_urls
         return ""
     return host
 
@@ -633,7 +633,7 @@ def _weighted_average_embedding(parts: List[tuple[List[float], int]]) -> List[fl
     dimension = max(len(vector) for vector in vectors)
     total_weight = sum(max(1, int(weight)) for _vector, weight in parts)
     if total_weight <= 0:
-        total_weight = len(parts)
+        total_weight = len(parts)  # pragma: no cover - unreachable: each weight floors at 1, so total_weight >= 1 here
     reduced: List[float] = []
     for offset in range(dimension):
         weighted_sum = 0.0

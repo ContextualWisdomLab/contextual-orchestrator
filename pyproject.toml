@@ -34,6 +34,7 @@ omit = ["contextual_orchestrator/__main__.py", "contextual_orchestrator/server.p
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 100
 
 [tool.interrogate]
 exclude = ["tests"]
