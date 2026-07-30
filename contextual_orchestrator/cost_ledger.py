@@ -583,8 +583,9 @@ class SqlLedgerStore:
         ph = self._placeholder()
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query - parameterized DB-API bind; only the placeholder token is interpolated, the value is bound.
             cur.execute(
-                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder. nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query - parameterized DB-API bind; only the placeholder token is interpolated, the value is bound.
+                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
                 (name,),
             )
             if cur.fetchone() is None:
@@ -602,8 +603,9 @@ class SqlLedgerStore:
         placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query - columns/placeholders derive from the fixed _USAGE_COLUMNS constant; values are bound.
         cur.execute(
-            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS. nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query - columns/placeholders derive from the fixed _USAGE_COLUMNS constant; values are bound.
+            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
         self._conn.commit()
