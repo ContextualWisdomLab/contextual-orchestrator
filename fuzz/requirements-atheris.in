@@ -1,10 +1,10 @@
-# Atheris coverage-guided job deps. Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.11 --universal -o fuzz/requirements-atheris.txt
-# atheris 3.1.0 dropped the CPython 3.11 wheel and ships no sdist, so the cp311
-# fuzz.yml runner can only install 3.0.0; atheris 3.0.0 in turn ships no CPython
-# 3.14 wheel, so the wheel-only central coverage-evidence image (a newer
-# interpreter, currently CPython 3.14) can only install 3.1.0. cp312/cp313 have
-# wheels for both versions. Pin by interpreter marker (boundary 3.12) so each
-# environment resolves a compatible wheel: cp311 -> 3.0.0, >=3.12 -> 3.1.0.
+# Atheris coverage-guided job deps. Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.12 --universal -o fuzz/requirements-atheris.txt
+# Pin atheris==3.1.0 (single version, no interpreter marker). The central
+# coverage-evidence image preflights this lock on CPython 3.14 and validates
+# every pinned version regardless of environment markers, so a marker-gated
+# atheris==3.0.0 line still fails there (3.0.0 has no cp314 wheel). 3.1.0 ships
+# cp312/cp313/cp314 wheels, so both the cp312 fuzz job above and the cp314
+# preflight resolve it; 3.1.0 dropped the cp311 wheel, which is why the fuzz
+# job runs on 3.12 rather than 3.11.
 pip
-atheris==3.0.0 ; python_full_version < "3.12"
-atheris==3.1.0 ; python_full_version >= "3.12"
+atheris==3.1.0
