@@ -17,6 +17,8 @@ from contextual_orchestrator import ModelAgent  # noqa: E402
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     NotConfigured,
+    PostgresCredentialBackend,
+    _select_backend,
     get_credential,
     register_credential,
     set_backend,
@@ -109,3 +111,41 @@ def test_unknown_backend_selector_raises(monkeypatch) -> None:
     with pytest.raises(NotConfigured):
         credentials.get_backend()
     set_backend(None)
+
+
+def test_postgres_backend_requires_bootstrap_dsn() -> None:
+    with pytest.raises(NotConfigured):
+        PostgresCredentialBackend("", "boot-passphrase")
+
+
+def test_postgres_backend_requires_bootstrap_passphrase() -> None:
+    with pytest.raises(NotConfigured):
+        PostgresCredentialBackend("postgresql://host/db", "")
+
+
+def test_postgres_backend_stores_bootstrap_transport() -> None:
+    backend = PostgresCredentialBackend("postgresql://host/db", "boot-passphrase")
+    assert backend._dsn == "postgresql://host/db"
+    assert backend._passphrase == "boot-passphrase"
+    assert backend._ensured is False
+
+
+def test_postgres_backend_from_env_reads_bootstrap_vars(monkeypatch) -> None:
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_DSN", "postgresql://host/db")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE", "boot-passphrase")
+    backend = PostgresCredentialBackend.from_env()
+    assert isinstance(backend, PostgresCredentialBackend)
+    assert backend._dsn == "postgresql://host/db"
+
+
+def test_select_backend_memory_default_is_in_memory(monkeypatch) -> None:
+    monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_KV_BACKEND", raising=False)
+    assert isinstance(_select_backend(), InMemoryCredentialBackend)
+
+
+def test_select_backend_postgres_builds_from_env(monkeypatch) -> None:
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_BACKEND", "postgres")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_DSN", "postgresql://host/db")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE", "boot-passphrase")
+    backend = _select_backend()
+    assert isinstance(backend, PostgresCredentialBackend)
