@@ -308,7 +308,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected - request URL is validated/allowlisted by _provider_url; egress to private/reserved addresses is blocked.
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected - the request is built from _provider_url (http(s)-only, rejects local urllib schemes) after _validate_provider enforces https and blocks egress to private/loopback/link-local/multicast/reserved addresses (and the host allowlist when CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS is set).
         return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
             request,
             timeout=self.timeout,
