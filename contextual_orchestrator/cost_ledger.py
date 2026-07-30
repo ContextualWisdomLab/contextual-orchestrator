@@ -622,7 +622,8 @@ class SqlLedgerStore:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed. nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query - columns and WHERE clause templates are fixed; window bounds are bound params.
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query - columns and WHERE-clause templates are fixed constants; window bounds are bound params, so no user input reaches the SQL text.
+        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 
