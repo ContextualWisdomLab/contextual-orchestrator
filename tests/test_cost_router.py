@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
@@ -19,6 +21,11 @@ from contextual_orchestrator import (  # noqa: E402
     TaskOrchestrator,
 )
 from contextual_orchestrator.batch_routing import PgLlmBatchBackend  # noqa: E402
+from contextual_orchestrator.cost_router import (  # noqa: E402
+    _positive_int,
+    _provider_from_base_url,
+    _weighted_average_embedding,
+)
 
 
 class _FailingLedgerStore:
@@ -189,3 +196,79 @@ if __name__ == "__main__":  # pragma: no cover
             _fn()
             print(f"ok {_name}")
     print("ok")
+
+
+# --- module helpers + defensive edge branches --------------------------------
+
+
+def test_provider_from_base_url_variants() -> None:
+    """mock scheme, real host extraction, empty input, and a malformed URL that
+    must fall through the guarded parse to an empty string (never raise)."""
+    assert _provider_from_base_url("mock://a") == "mock"
+    assert _provider_from_base_url("https://api.openai.com/v1") == "api.openai.com"
+    assert _provider_from_base_url("") == ""
+    assert _provider_from_base_url("http://[::1") == ""  # malformed -> guarded fallback
+
+
+def test_positive_int_parses_and_falls_back_to_default() -> None:
+    assert _positive_int("5", 1) == 5
+    assert _positive_int("x", 7) == 7  # ValueError -> default
+    assert _positive_int(None, 7) == 7  # TypeError -> default
+    assert _positive_int("-3", 9) == 9  # non-positive -> default
+    assert _positive_int("0", 9) == 9
+
+
+def test_weighted_average_embedding_edges_and_mean() -> None:
+    assert _weighted_average_embedding([]) == []
+    assert _weighted_average_embedding([([], 3), ([], 2)]) == []  # no non-empty vectors
+    # (1*[1,0] + 3*[3,4]) / 4 == [2.5, 3.0]
+    assert _weighted_average_embedding([([1.0, 0.0], 1), ([3.0, 4.0], 3)]) == [2.5, 3.0]
+
+
+def test_batch_and_embedding_lookups_raise_keyerror_for_unknown_ids() -> None:
+    coordinator = _coordinator()
+    with pytest.raises(KeyError):
+        coordinator.poll_batch("nope")
+    with pytest.raises(KeyError):
+        coordinator.retrieve_batch("nope")
+    with pytest.raises(KeyError):
+        coordinator.embeddings_batch_document("nope")
+
+
+def test_split_embedding_input_handles_empty_and_oversize_no_whitespace() -> None:
+    coordinator = _coordinator()
+    assert coordinator._split_embedding_input("", model="m", max_tokens=8, max_chars=8) == [("", 0)]
+    assert coordinator._force_token_safe_chunks("", model="m", max_tokens=8, max_chars=8) == [("", 0)]
+    # Over max_chars -> fixed-width char split.
+    chunks = coordinator._force_token_safe_chunks("x" * 40, model="m", max_tokens=1000, max_chars=8)
+    assert len(chunks) > 1
+    assert all(len(text) <= 8 for text, _ in chunks)
+
+    # Within max_chars but token-dense and a single unit (no unit split helps) ->
+    # the midpoint-recursion fallback keeps splitting until each chunk fits.
+    class _PerCharCounter:
+        def count_text(self, text, model):
+            return len(text)  # one token per character
+
+    coordinator.token_counter = _PerCharCounter()
+    dense = coordinator._force_token_safe_chunks("abcdefgh", model="m", max_tokens=1, max_chars=8)
+    assert len(dense) == 8
+    assert all(len(text) <= 1 for text, _ in dense)
+
+
+def test_count_embedding_tokens_tolerates_counter_failure_and_zero() -> None:
+    coordinator = _coordinator()
+
+    class _Raising:
+        def count_text(self, text, model):
+            raise RuntimeError("counter down")
+
+    class _Zero:
+        def count_text(self, text, model):
+            return 0
+
+    coordinator.token_counter = _Raising()
+    assert coordinator._count_embedding_tokens("a b c", "m") == 3  # word-count fallback
+    coordinator.token_counter = _Zero()
+    assert coordinator._count_embedding_tokens("abc", "m") == 1  # non-empty but 0 -> 1
+    assert coordinator._count_embedding_tokens("", "m") == 0  # empty -> 0
