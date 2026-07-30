@@ -66,7 +66,7 @@ pip-compile --extra=api --extra=db --generate-hashes --output-file=requirements.
 # --generate-hashes ...` command in each file's header comment
 ```
 
-CI gates: `.github/workflows/security.yml` (CodeQL + pip-audit on `requirements.lock` + CycloneDX SBOM; dependency review, Trivy, OSV, and Scorecard run org-centrally), `.github/workflows/fuzz.yml` (Hypothesis property tests + bounded Atheris runs), and the org-central OpenCode review pipeline (its pinned tools live in `requirements-opencode-review-ci.txt`: pytest, coverage, and `interrogate` docstring coverage with `fail-under = 80` from `pyproject.toml`).
+CI gates: `.github/workflows/security.yml` (CodeQL + pip-audit on `requirements.lock` + CycloneDX SBOM; dependency review, Trivy, OSV, and Scorecard run org-centrally), `.github/workflows/fuzz.yml` (Hypothesis property tests + bounded Atheris runs), and the org-central OpenCode review pipeline (its pinned tools live in `requirements-opencode-review-ci.txt`: pytest, coverage, and `interrogate` docstring coverage with `fail-under = 100` from `pyproject.toml`).
 
 ## What this is
 
