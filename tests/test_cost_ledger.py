@@ -5,17 +5,22 @@ from __future__ import annotations
 from pathlib import Path
 import sqlite3
 import sys
+import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.cost_ledger import (  # noqa: E402
     ATTRIBUTION_DIMENSIONS,
+    AttributionDimensions,
     CostLedger,
+    InMemoryLedgerStore,
     InMemoryUsageTelemetrySink,
     NonBlockingLedgerStore,
     PriceBook,
     PriceEntry,
     SqlLedgerStore,
+    UsageRecord,
+    UsageTelemetryEvent,
     dimension_catalog,
 )
 from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: E402
@@ -251,6 +256,229 @@ def test_ledger_table_names_follow_two_word_snake_case() -> None:
 def test_dimension_catalog_covers_all_required_dimensions() -> None:
     names = {entry["dimension_name"] for entry in dimension_catalog()}
     assert names == {"account", "service", "upstream_api", "model_name", "team", "group", "company"}
+
+
+class _RecordingBackend:
+    """Working ledger backend that records appends and returns fixed query rows."""
+
+    def __init__(self, rows=None) -> None:
+        self.rows = rows if rows is not None else []
+        self.appended = []
+
+    def append(self, record) -> None:
+        self.appended.append(record)
+
+    def query(self, start=None, end=None):
+        return self.rows
+
+
+class _BlockingBackend:
+    """Ledger backend whose ``append`` blocks until ``release`` is set."""
+
+    def __init__(self) -> None:
+        self.started = threading.Event()
+        self.release = threading.Event()
+        self.appended = []
+
+    def append(self, record) -> None:
+        self.started.set()
+        self.release.wait(timeout=5.0)
+        self.appended.append(record)
+
+    def query(self, start=None, end=None):
+        return []
+
+
+class _RaisingTelemetrySink:
+    """Telemetry sink that always raises, to exercise best-effort swallowing."""
+
+    def emit_usage(self, event) -> None:
+        raise RuntimeError("telemetry backend is down")
+
+
+def _sample_record(usage_record_id: str = "usage_sample") -> UsageRecord:
+    return UsageRecord(
+        usage_record_id=usage_record_id,
+        created_at=100,
+        workflow_run_id=None,
+        request_channel="sync",
+        route_mode=None,
+        provider_name="openai",
+        model_name="gpt-x",
+        prompt_tokens=10,
+        completion_tokens=5,
+        total_tokens=15,
+        cost_amount=1.0,
+        currency_code="USD",
+    )
+
+
+def test_in_memory_telemetry_sink_trims_to_max_events() -> None:
+    # Covers cost_ledger.py:346 (event-list trimming when over capacity).
+    sink = InMemoryUsageTelemetrySink(max_events=2)
+    for index in range(3):
+        sink.emit_usage(
+            UsageTelemetryEvent(name=f"event-{index}", attributes={}, metrics={})
+        )
+    kept = [event.name for event in sink.events()]
+    assert kept == ["event-1", "event-2"]
+
+
+def test_emit_usage_event_swallows_sink_failure() -> None:
+    # Covers cost_ledger.py:379-381 (best-effort telemetry export swallow).
+    ledger = _priced_ledger(telemetry_sink=_RaisingTelemetrySink())
+    record = ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=10, completion_tokens=5
+    )
+    # The completion still succeeds even though the telemetry sink raised.
+    assert record.usage_record_id.startswith("usage_")
+    assert len(ledger.records()) == 1
+
+
+def test_non_blocking_store_rejects_zero_queue_size() -> None:
+    # Covers cost_ledger.py:395 (queue_size validation).
+    try:
+        NonBlockingLedgerStore(_RecordingBackend(), queue_size=0)
+    except ValueError as exc:
+        assert "queue_size must be at least 1" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("expected ValueError for queue_size < 1")
+
+
+def test_non_blocking_store_drops_record_when_queue_full() -> None:
+    # Covers cost_ledger.py:412-422 (queue.Full drop path).
+    backend = _BlockingBackend()
+    sink = InMemoryUsageTelemetrySink()
+    store = NonBlockingLedgerStore(backend, queue_size=1, telemetry_sink=sink)
+    store.append(_sample_record("usage_a"))
+    # Worker has dequeued A and is now blocked inside append(A): the queue is empty.
+    assert backend.started.wait(timeout=5.0)
+    store.append(_sample_record("usage_b"))  # fills the single queue slot
+    store.append(_sample_record("usage_c"))  # overflows -> dropped
+    health = store.telemetry_health()
+    assert health["records_dropped"] == 1
+    dropped_states = [
+        event.attributes["contextual_orchestrator.usage.export_state"]
+        for event in sink.events()
+    ]
+    assert "dropped" in dropped_states
+    backend.release.set()
+    assert store.flush(timeout=5.0)
+
+
+def test_non_blocking_store_query_delegates_to_backend() -> None:
+    # Covers cost_ledger.py:431 (query delegates to backend store).
+    backend = _RecordingBackend(rows=[{"created_at": 42}])
+    store = NonBlockingLedgerStore(backend, queue_size=4)
+    assert store.query(start=0, end=100) == [{"created_at": 42}]
+
+
+def test_non_blocking_store_flush_times_out_while_worker_busy() -> None:
+    # Covers cost_ledger.py:438 (flush returns False on timeout).
+    backend = _BlockingBackend()
+    store = NonBlockingLedgerStore(backend, queue_size=4)
+    store.append(_sample_record())
+    assert backend.started.wait(timeout=5.0)  # worker blocked; unfinished_tasks > 0
+    assert store.flush(timeout=0.0) is False
+    backend.release.set()
+    assert store.flush(timeout=5.0) is True
+
+
+def test_non_blocking_store_marks_stored_on_success() -> None:
+    # Covers cost_ledger.py:463-464 (worker success path marks stored + emits).
+    backend = _RecordingBackend()
+    sink = InMemoryUsageTelemetrySink()
+    store = NonBlockingLedgerStore(backend, queue_size=4, telemetry_sink=sink)
+    store.append(_sample_record())
+    assert store.flush(timeout=5.0)
+    assert store.telemetry_health()["records_stored"] == 1
+    stored_states = [
+        event.attributes["contextual_orchestrator.usage.export_state"]
+        for event in sink.events()
+    ]
+    assert "stored" in stored_states
+    assert len(backend.appended) == 1
+
+
+def test_in_memory_ledger_store_len_reports_row_count() -> None:
+    # Covers cost_ledger.py:493 (InMemoryLedgerStore.__len__). Appends are made
+    # directly because an empty store is falsy (``store or ...`` in CostLedger).
+    store = InMemoryLedgerStore()
+    assert len(store) == 0
+    store.append(_sample_record("usage_1"))
+    store.append(_sample_record("usage_2"))
+    assert len(store) == 2
+
+
+def test_sql_ledger_store_query_filters_by_time_window() -> None:
+    # Covers cost_ledger.py:617-618, 620-621 (start/end WHERE-clause builder).
+    conn = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(conn, paramstyle="qmark")
+    ledger = _priced_ledger(store=store)
+    for created_at in (100, 200, 300):
+        ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=1,
+            completion_tokens=1,
+            created_at=created_at,
+        )
+    windowed = store.query(start=150, end=300)  # half-open: only created_at == 200
+    assert len(windowed) == 1
+    assert windowed[0]["created_at"] == 200
+
+
+def test_non_blocking_store_wrapping_via_flag() -> None:
+    # Covers cost_ledger.py:659 (CostLedger wraps store when non_blocking_store=True).
+    ledger = _priced_ledger(non_blocking_store=True)
+    assert isinstance(ledger.store, NonBlockingLedgerStore)
+    ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=0)
+    assert ledger.flush(timeout=5.0)
+    assert ledger.total()["cost_amount"] == 2.0
+
+
+def test_record_usage_accepts_attribution_dimensions_instance() -> None:
+    # Covers cost_ledger.py:686 (attribution passed as AttributionDimensions).
+    ledger = _priced_ledger()
+    record = ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=10,
+        completion_tokens=10,
+        attribution=AttributionDimensions(team="alpha", company="acme"),
+    )
+    row = record.as_dict()
+    assert row["team_name"] == "alpha"
+    assert row["company_name"] == "acme"
+
+
+def test_inline_store_failure_marks_health_and_emits_error() -> None:
+    # Covers cost_ledger.py:714-716 (inline append failure) and 837-839
+    # (_mark_inline_failure counters).
+    sink = InMemoryUsageTelemetrySink()
+    ledger = _priced_ledger(store=_FailingLedgerStore(), telemetry_sink=sink)
+    record = ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=10, completion_tokens=5
+    )
+    assert record.usage_record_id.startswith("usage_")
+    health = ledger.telemetry_health()
+    assert health["records_accepted"] == 1
+    assert health["store_failures"] == 1
+    assert health["last_error_type"] == "RuntimeError"
+    error_states = [
+        event.attributes["contextual_orchestrator.usage.export_state"]
+        for event in sink.events()
+    ]
+    assert "export_error" in error_states
+    # The DB/client message must never leak into telemetry payload.
+    assert "secret prompt" not in repr(sink.events())
+
+
+def test_flush_returns_true_for_store_without_flush_method() -> None:
+    # Covers cost_ledger.py:738 (flush no-op when the store has no flush()).
+    ledger = _priced_ledger()  # default InMemoryLedgerStore has no flush()
+    assert ledger.flush() is True
+    assert ledger.flush(timeout=1.0) is True
 
 
 if __name__ == "__main__":  # pragma: no cover
