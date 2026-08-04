@@ -43,6 +43,18 @@ from .token_counting import HeuristicTokenCounter, build_token_counter
 
 _install_provider_transport(_ModelClient)
 
+# The NVIDIA NIM benchmark is an optional evaluation adapter rather than a
+# runtime dependency.  Importing the module does not perform network I/O.  Its
+# installer reuses the same reviewed provider-egress boundary as the standalone
+# runtime and adds evidence/budget contracts to the benchmark functions before
+# callers import the adapter from this package.
+from . import nim_benchmark as _nim_benchmark  # noqa: E402
+from .nim_benchmark_hardening import (  # noqa: E402
+    install_nim_benchmark_hardening as _install_nim_benchmark_hardening,
+)
+
+_install_nim_benchmark_hardening(_nim_benchmark)
+
 __all__ = [
     "ModelAgent",
     "TaskOrchestrator",
