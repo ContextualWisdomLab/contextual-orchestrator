@@ -86,7 +86,7 @@ def test_agent_image_contains_hash_locked_test_and_quality_toolchains() -> None:
     """Offline agent execution can prove tests, coverage, and docstrings itself."""
 
     workflow = _workflow_text()
-    flattened = " ".join(workflow.replace("\\\n", " ").split())
+    flattened = " ".join(workflow.replace("\\", " ").split())
 
     assert "requirements-opencode-review-ci.txt" in workflow
     assert "fuzz/requirements-property.txt" in workflow
