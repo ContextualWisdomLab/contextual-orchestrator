@@ -83,7 +83,7 @@ push or open a PR.
   email/PIM that DOM-decomposes emails/files into a persisted knowledge graph).
   Each component below is a **standalone program that must ALSO work as a git
   submodule**, grown separately and together:
-  - **waf-ids-ai-soc** — WAF / IDS / AI SOC / LB / APIM.
+  - **wardnet** — WAF / IDS / AI SOC / LB / APIM.
   - **clearfolio** — document viewer.
   - **pg-erd-cloud** — ERD tool.
   - **contextual-orchestrator** — this repo: LLM cost/perf/upstream-LB gateway
