@@ -73,8 +73,8 @@ def test_hourly_loop_brokers_nim_without_exposing_the_secret_to_opencode() -> No
     assert "GITHUB_TOKEN" not in agent_step
     assert "ACTIONS_ID_TOKEN_REQUEST_TOKEN" not in agent_step
 
-    assert "contents: write" in workflow
-    assert "pull-requests: write" in workflow
+    assert "contents: write" not in workflow
+    assert "pull-requests: write" not in workflow
     assert "gh pr create" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "/agents/repos" not in workflow
@@ -104,6 +104,7 @@ def test_hourly_loop_separates_agent_execution_from_privileged_publication() -> 
     assert "publish-product-gap:" in workflow
     assert "needs: develop-product-gap" in workflow
     assert "actions: read" in workflow
+    assert "id-token: write" in workflow
     assert "actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4" in workflow
     assert 'gh run download "$GITHUB_RUN_ID"' in workflow
     assert "candidate.patch" in workflow
@@ -116,6 +117,27 @@ def test_hourly_loop_separates_agent_execution_from_privileged_publication() -> 
         workflow.index("publish-product-gap:") :
     ]
     assert workflow.index("opencode run") < workflow.index("publish-product-gap:")
+
+
+def test_publication_uses_an_app_token_so_created_prs_trigger_required_checks() -> None:
+    """The trusted publisher fails closed unless it obtains a workflow-triggering app token."""
+
+    workflow = _workflow_text()
+    publisher = workflow[workflow.index("publish-product-gap:") :]
+
+    assert "Exchange OpenCode app token for autonomous PR publication" in publisher
+    assert "OIDC_AUDIENCE: opencode-github-action" in publisher
+    assert "/exchange_github_app_token" in publisher
+    assert "available=false" in publisher
+    assert "available=true" in publisher
+    assert "token=$app_token" in publisher
+    assert "steps.publisher_app_token.outputs.available != 'true'" in publisher
+    assert "GH_TOKEN: ${{ steps.publisher_app_token.outputs.token }}" in publisher
+    assert "GH_TOKEN: ${{ github.token }}" in publisher
+    assert "contents: read" in publisher
+    assert "pull-requests: read" in publisher
+    assert "contents: write" not in publisher
+    assert "pull-requests: write" not in publisher
 
 
 def test_hourly_loop_prompt_preserves_commercial_and_architecture_contracts() -> None:
