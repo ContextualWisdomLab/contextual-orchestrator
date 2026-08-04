@@ -1,0 +1,1195 @@
+name: Bounded NIM source integration
+
+on:
+  push:
+    branches:
+      - claude/nim-all-models-support-fecb0b
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: bounded-nim-source-integration
+  cancel-in-progress: false
+
+jobs:
+  integrate-reviewed-source:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact triggering head without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Integrate transport, budget, and evidence contracts directly
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          root = Path.cwd()
+          module_path = root / "contextual_orchestrator" / "nim_benchmark.py"
+          module_text = module_path.read_text(encoding="utf-8")
+
+          def replace_between(text: str, start: str, end: str, replacement: str) -> str:
+              start_index = text.index(start)
+              end_index = text.index(end, start_index)
+              return text[:start_index] + replacement + text[end_index:]
+
+          module_text = module_text.replace(
+              "import hashlib\nimport io\nimport ipaddress\n",
+              "import datetime as datetime_module\nimport hashlib\nimport http.client\nimport io\n",
+              1,
+          )
+          orchestrator_import = """from .orchestrator import (
+              ModelAgent,
+              ModelClient,
+              OrchestrationPolicy,
+              TaskOrchestrator,
+              estimate_tokens,
+          )
+          """
+          provider_import = orchestrator_import + """from .provider_transport import (
+              _PinnedHTTPSConnection,
+              _validated_public_addresses,
+          )
+          """
+          if orchestrator_import not in module_text:
+              raise SystemExit("orchestrator import anchor not found")
+          module_text = module_text.replace(orchestrator_import, provider_import, 1)
+
+          constant_anchor = "MAX_WORKFLOW_DEPTH = 5\n"
+          cost_evidence = '''MAX_WORKFLOW_DEPTH = 5
+
+ACTUAL_COST_EVIDENCE: dict[str, Any] = {
+    "evidence_schema_version": "1.0.0",
+    "source_title": "NVIDIA NIM General FAQ",
+    "source_url": "https://docs.api.nvidia.com/nim/docs/product",
+    "reviewed_at_date": "2026-08-04",
+    "valid_until_date": "2026-09-03",
+    "access_program": "NVIDIA Developer Program API Catalog hosted endpoints",
+    "access_scope": "free API endpoint access for prototyping",
+    "production_access_note": (
+        "Production support and licensing require NVIDIA AI Enterprise."
+    ),
+    "actual_cost_usd": 0.0,
+    "uncertainty": (
+        "Hosted-endpoint terms can change. Live runs fail closed after the validity "
+        "date until the official source is reviewed again."
+    ),
+}
+'''
+          if constant_anchor not in module_text:
+              raise SystemExit("workflow-depth constant anchor not found")
+          module_text = module_text.replace(constant_anchor, cost_evidence, 1)
+
+          transport_replacement = '''def require_public_https_endpoint(url: str) -> tuple[str, ...]:
+              """Return validation-time public addresses for one HTTPS endpoint.
+
+              The caller must dial only the returned addresses. Resolving and
+              validating in the same operation closes the DNS time-of-check/time-of-
+              use gap created when a generic URL opener resolves the host again.
+
+              Args:
+                  url: Complete provider URL whose origin will receive credentials.
+
+              Returns:
+                  Globally routable IPv4 or IPv6 addresses approved for this request.
+
+              Raises:
+                  BenchmarkContractError: If the URL is not HTTPS or any resolved
+                      address is not globally routable.
+              """
+              parsed = urllib.parse.urlparse(url)
+              if parsed.scheme != "https" or not parsed.hostname:
+                  raise BenchmarkContractError(f"benchmark endpoint must use https: {url!r}")
+              try:
+                  return _validated_public_addresses(
+                      parsed.hostname.lower(),
+                      parsed.port or 443,
+                      "NIM benchmark",
+                  )
+              except RuntimeError as exc:
+                  raise BenchmarkContractError(str(exc)) from exc
+
+
+          def build_default_transport(timeout_seconds: float) -> ProviderTransport:
+              """Return a direct, redirect-free HTTPS transport pinned to DNS evidence.
+
+              Every request resolves exactly once, validates every answer as global,
+              and connects only to those validation-time addresses. The original
+              hostname remains the HTTP authority and TLS SNI/certificate name.
+              Environment proxies and redirect handlers are never consulted.
+
+              Args:
+                  timeout_seconds: Maximum socket/TLS/read duration for each address.
+
+              Returns:
+                  Provider transport returning raw status and body without following
+                  redirects.
+              """
+              ssl_context = ssl.create_default_context()
+
+              def transport(
+                  method: str,
+                  url: str,
+                  headers: dict[str, str],
+                  body: bytes | None,
+              ) -> tuple[int, bytes]:
+                  """Perform one provider round trip using only approved addresses."""
+                  parsed = urllib.parse.urlparse(url)
+                  approved_addresses = require_public_https_endpoint(url)
+                  assert parsed.hostname is not None
+                  port = parsed.port or 443
+                  target = parsed.path or "/"
+                  if parsed.params:
+                      target = f"{target};{parsed.params}"
+                  if parsed.query:
+                      target = f"{target}?{parsed.query}"
+                  request_headers = dict(headers)
+                  request_headers["Connection"] = "close"
+
+                  last_error: BaseException | None = None
+                  for pinned_ip in approved_addresses:
+                      connection = _PinnedHTTPSConnection(
+                          parsed.hostname,
+                          pinned_ip,
+                          port,
+                          timeout_seconds,
+                          ssl_context,
+                      )
+                      response = None
+                      try:
+                          connection.request(
+                              method,
+                              target,
+                              body=body,
+                              headers=request_headers,
+                          )
+                          response = connection.getresponse()
+                          return int(response.status), response.read()
+                      except (OSError, http.client.HTTPException) as exc:
+                          last_error = exc
+                      finally:
+                          if response is not None:
+                              response.close()
+                          connection.close()
+                  assert last_error is not None
+                  raise urllib.error.URLError(last_error)
+
+              return transport
+
+
+          '''
+          module_text = replace_between(
+              module_text,
+              "def require_public_https_endpoint",
+              "# --------------------------------------------------------------------------\n# Request budget",
+              transport_replacement,
+          )
+
+          budget_classes = '''class PolicyTokenBudgetExceeded(RuntimeError):
+              """A policy cell exhausted its shared token or call allowance."""
+
+
+          class EqualBudgetModelClient:
+              """Delegate model calls while enforcing one equal per-cell budget.
+
+              Direct, route-once, conduct, and cheapest-worker cells all receive the
+              same total prompt-plus-completion token allowance and the same declared
+              maximum-call envelope. The wrapper lowers each provider call's output
+              cap to the remaining allowance and reconciles estimates with provider-
+              reported usage when available.
+              """
+
+              def __init__(
+                  self,
+                  delegate: ModelClient,
+                  total_token_budget: int,
+                  maximum_calls: int,
+              ) -> None:
+                  """Create a cell-local limiter around an existing model client.
+
+                  Args:
+                      delegate: Existing request-budgeted provider client.
+                      total_token_budget: Cell-wide prompt-plus-completion allowance.
+                      maximum_calls: Maximum calls available to every compared arm.
+
+                  Raises:
+                      ValueError: If either allowance is not a positive integer.
+                  """
+                  if isinstance(total_token_budget, bool) or total_token_budget < 1:
+                      raise ValueError("total_token_budget must be a positive integer")
+                  if isinstance(maximum_calls, bool) or maximum_calls < 1:
+                      raise ValueError("maximum_calls must be a positive integer")
+                  self._delegate = delegate
+                  self.total_token_budget = int(total_token_budget)
+                  self.maximum_calls = int(maximum_calls)
+                  self.observed_calls = 0
+                  self.observed_tokens = 0
+                  self._pending_estimated_tokens: int | None = None
+                  self._exceeded = False
+
+              @property
+              def remaining_tokens(self) -> int:
+                  """Return the non-negative token allowance remaining in this cell."""
+                  return max(0, self.total_token_budget - self.observed_tokens)
+
+              @property
+              def exceeded(self) -> bool:
+                  """Return whether observed usage crossed the configured allowance."""
+                  return self._exceeded
+
+              @staticmethod
+              def _coerce_usage_count(value: Any) -> int | None:
+                  """Return one valid non-negative provider count, otherwise ``None``."""
+                  if isinstance(value, bool) or not isinstance(value, (int, float)):
+                      return None
+                  if not math.isfinite(value) or value < 0:
+                      return None
+                  return int(value)
+
+              def chat(
+                  self,
+                  agent: ModelAgent,
+                  messages: list[dict[str, Any]],
+                  temperature: float = 0.2,
+              ) -> str:
+                  """Perform one delegated call within the remaining cell allowance.
+
+                  Raises:
+                      PolicyTokenBudgetExceeded: If the call or token allowance has
+                          already been exhausted or the prompt cannot fit.
+                  """
+                  if self._exceeded or self.observed_calls >= self.maximum_calls:
+                      raise PolicyTokenBudgetExceeded(
+                          "policy cell maximum-call allowance exhausted"
+                      )
+                  prompt_text = json.dumps(messages, ensure_ascii=False, sort_keys=True)
+                  prompt_tokens = estimate_tokens(prompt_text)
+                  output_allowance = self.remaining_tokens - prompt_tokens
+                  if output_allowance < 1:
+                      raise PolicyTokenBudgetExceeded(
+                          "policy cell total-token allowance exhausted"
+                      )
+
+                  original_max_output_tokens = int(self._delegate.max_output_tokens)
+                  self._delegate.max_output_tokens = min(
+                      original_max_output_tokens,
+                      output_allowance,
+                  )
+                  self.observed_calls += 1
+                  try:
+                      answer = self._delegate.chat(agent, messages, temperature)
+                  finally:
+                      self._delegate.max_output_tokens = original_max_output_tokens
+
+                  estimated_total = prompt_tokens + estimate_tokens(answer)
+                  self.observed_tokens += estimated_total
+                  self._pending_estimated_tokens = estimated_total
+                  self._exceeded = self.observed_tokens > self.total_token_budget
+                  return answer
+
+              def take_usage(self) -> dict[str, Any] | None:
+                  """Return delegated usage and replace the latest estimate if valid."""
+                  usage = self._delegate.take_usage()
+                  pending_estimate = self._pending_estimated_tokens
+                  self._pending_estimated_tokens = None
+                  if pending_estimate is None or not isinstance(usage, dict):
+                      return usage
+                  prompt_tokens = self._coerce_usage_count(usage.get("prompt_tokens"))
+                  completion_tokens = self._coerce_usage_count(
+                      usage.get("completion_tokens")
+                  )
+                  if prompt_tokens is None or completion_tokens is None:
+                      return usage
+                  self.observed_tokens += (
+                      prompt_tokens + completion_tokens - pending_estimate
+                  )
+                  self._exceeded = self.observed_tokens > self.total_token_budget
+                  return usage
+
+
+          '''
+          catalog_marker = "# --------------------------------------------------------------------------\n# Catalog discovery"
+          if catalog_marker not in module_text:
+              raise SystemExit("catalog section marker not found")
+          module_text = module_text.replace(catalog_marker, budget_classes + catalog_marker, 1)
+
+          evaluate_replacement = '''def evaluate_policies(
+              agents: list[ModelAgent],
+              manifest: dict[str, Any],
+              pricing_scenario: dict[str, Any] | None,
+              client: ModelClient,
+              request_budget: RequestBudget,
+              timer: Callable[[], float] = time.perf_counter,
+              total_token_budget: int = 256,
+              maximum_calls: int = MAX_WORKFLOW_DEPTH,
+          ) -> dict[str, Any]:
+              """Run every policy over the locked split with equal cell budgets.
+
+              Every policy/task cell receives a fresh orchestrator and limiter, so
+              traces, usage, call counts, and token allowances never bleed across
+              tasks or policy arms.
+              """
+              if not agents:
+                  raise BenchmarkContractError(
+                      "policy evaluation requires at least one chat-eligible worker"
+                  )
+              tasks = locked_evaluation_tasks(manifest)
+              if not tasks:
+                  raise BenchmarkContractError(
+                      "task manifest has no locked evaluation tasks"
+                  )
+              planned = planned_evaluation_requests(len(agents), len(tasks))
+              remaining = (
+                  request_budget.max_total_requests - request_budget.requests_spent
+              )
+              if planned > remaining:
+                  raise BenchmarkBudgetError(
+                      f"planned evaluation needs up to {planned} requests but only "
+                      f"{remaining} remain in the budget"
+                  )
+
+              agents_by_id = {agent.id: agent.model for agent in agents}
+              depth_policy = dataclasses.replace(
+                  OrchestrationPolicy(),
+                  max_workflow_steps=MAX_WORKFLOW_DEPTH,
+              )
+
+              def run_cell(
+                  policy_name: str,
+                  task: dict[str, Any],
+                  pool: list[ModelAgent],
+                  mode: str,
+              ) -> dict[str, Any]:
+                  """Run one cell and append configured versus observed budgets."""
+                  cell_client = EqualBudgetModelClient(
+                      client,
+                      total_token_budget,
+                      maximum_calls,
+                  )
+                  orchestrator = TaskOrchestrator(pool, client=cell_client)
+                  orchestrator.policy = depth_policy
+                  cell = run_policy_cell(
+                      policy_name,
+                      task,
+                      lambda: orchestrator.complete(
+                          [{"role": "user", "content": task["prompt"]}],
+                          mode=mode,
+                      ),
+                      agents_by_id,
+                      pricing_scenario,
+                      timer,
+                  )
+                  cell.update(
+                      {
+                          "configured_total_token_budget": total_token_budget,
+                          "configured_maximum_calls": maximum_calls,
+                          "observed_budget_tokens": cell_client.observed_tokens,
+                          "observed_budget_calls": cell_client.observed_calls,
+                          "remaining_budget_tokens": cell_client.remaining_tokens,
+                      }
+                  )
+                  if cell_client.exceeded:
+                      cell["run_outcome"] = "failure"
+                      cell["outcome_reason"] = (
+                          "observed_usage_exceeded_equal_token_budget"
+                      )
+                      cell["task_score"] = None
+                  return cell
+
+              cells: list[dict[str, Any]] = []
+              for agent in agents:
+                  for task in tasks:
+                      cells.append(
+                          run_cell(
+                              f"direct_single_worker:{agent.model}",
+                              task,
+                              [agent],
+                              "route",
+                          )
+                      )
+              for task in tasks:
+                  cells.append(run_cell("route_once", task, agents, "route"))
+                  cells.append(
+                      run_cell("conduct_bounded", task, agents, "conduct")
+                  )
+
+              cheapest_skip_reason = None
+              cheapest = cheapest_priced_agent(agents, pricing_scenario)
+              if cheapest is None:
+                  cheapest_skip_reason = (
+                      "no_pricing_scenario_supplied"
+                      if pricing_scenario is None
+                      else "no_worker_priced_by_scenario"
+                  )
+              else:
+                  for task in tasks:
+                      cells.append(
+                          run_cell(
+                              "cheapest_eligible_worker",
+                              task,
+                              [cheapest],
+                              "route",
+                          )
+                      )
+              cells.sort(key=lambda cell: (cell["policy_name"], cell["task_id"]))
+              return {
+                  "evaluation_cells": cells,
+                  "cheapest_worker_skip_reason": cheapest_skip_reason,
+                  "locked_task_count": len(tasks),
+                  "worker_count": len(agents),
+              }
+
+
+          '''
+          module_text = replace_between(
+              module_text,
+              "def evaluate_policies(",
+              "# --------------------------------------------------------------------------\n# Statistics:",
+              evaluate_replacement,
+          )
+
+          evidence_functions = '''def _validate_actual_cost_evidence(report: dict[str, Any]) -> None:
+              """Require complete official provenance for the zero actual-cost claim."""
+              evidence = report.get("actual_cost_evidence")
+              if not isinstance(evidence, dict):
+                  raise BenchmarkContractError(
+                      "benchmark report is missing actual_cost_evidence"
+                  )
+              required_fields = (
+                  "evidence_schema_version",
+                  "source_title",
+                  "source_url",
+                  "reviewed_at_date",
+                  "valid_until_date",
+                  "access_program",
+                  "access_scope",
+                  "production_access_note",
+                  "actual_cost_usd",
+                  "uncertainty",
+              )
+              missing = [field for field in required_fields if field not in evidence]
+              if missing:
+                  raise BenchmarkContractError(
+                      f"actual cost evidence is missing fields: {missing}"
+                  )
+              if evidence["actual_cost_usd"] != 0.0:
+                  raise BenchmarkContractError(
+                      "actual cost evidence must preserve the reviewed zero-cost value"
+                  )
+              if evidence["source_url"] != "https://docs.api.nvidia.com/nim/docs/product":
+                  raise BenchmarkContractError(
+                      "actual cost evidence must cite the reviewed NVIDIA NIM General FAQ"
+                  )
+
+
+          def _require_current_actual_cost_evidence(
+              today: datetime_module.date | None = None,
+          ) -> None:
+              """Fail closed after the reviewed access evidence validity horizon."""
+              observed_date = today or datetime_module.date.today()
+              valid_until = datetime_module.date.fromisoformat(
+                  str(ACTUAL_COST_EVIDENCE["valid_until_date"])
+              )
+              if observed_date > valid_until:
+                  raise BenchmarkContractError(
+                      "reviewed NVIDIA hosted-endpoint cost evidence expired; "
+                      "re-review official terms"
+                  )
+
+
+          '''
+          provenance_marker = "# --------------------------------------------------------------------------\n# Provenance, report schema, artifacts"
+          if provenance_marker not in module_text:
+              raise SystemExit("provenance section marker not found")
+          module_text = module_text.replace(
+              provenance_marker,
+              evidence_functions + provenance_marker,
+              1,
+          )
+
+          module_text = module_text.replace(
+              '    "honesty_labels.actual_cost_basis",\n',
+              '    "actual_cost_evidence",\n'
+              '    "honesty_labels.actual_cost_basis",\n',
+              1,
+          )
+          module_text = module_text.replace(
+              '    "token_usage_source",\n    "actual_cost_usd",\n',
+              '    "token_usage_source",\n'
+              '    "configured_total_token_budget",\n'
+              '    "configured_maximum_calls",\n'
+              '    "observed_budget_tokens",\n'
+              '    "observed_budget_calls",\n'
+              '    "remaining_budget_tokens",\n'
+              '    "actual_cost_usd",\n',
+              1,
+          )
+          module_text = module_text.replace(
+              '    return "\\n".join(lines)\n\n\ndef write_benchmark_artifacts',
+              '''    evidence = report["actual_cost_evidence"]
+              lines += [
+                  "",
+                  "## Actual API cost evidence",
+                  "",
+                  f"- source: {evidence['source_title']}",
+                  f"- reviewed: {evidence['reviewed_at_date']}",
+                  f"- valid until: {evidence['valid_until_date']}",
+                  f"- access context: {evidence['access_program']} — {evidence['access_scope']}",
+                  f"- production distinction: {evidence['production_access_note']}",
+                  f"- uncertainty: {evidence['uncertainty']}",
+                  "",
+              ]
+              return "\\n".join(lines)
+
+
+          def write_benchmark_artifacts''',
+              1,
+          )
+          module_text = module_text.replace(
+              '''def write_benchmark_artifacts(report: dict[str, Any], output_dir: str) -> dict[str, str]:
+              """Validate the report schema, then write the JSON/CSV/Markdown artifacts."""
+              validate_report_schema(report)
+          ''',
+              '''def write_benchmark_artifacts(report: dict[str, Any], output_dir: str) -> dict[str, str]:
+              """Validate cost evidence and schema, then write all artifacts."""
+              _validate_actual_cost_evidence(report)
+              validate_report_schema(report)
+          ''',
+              1,
+          )
+          module_text = module_text.replace(
+              '        "honesty_labels": {\n'
+              '            "actual_cost_basis": "hosted_nim_catalog_free_to_caller_actual_cost_zero",\n',
+              '        "actual_cost_evidence": dict(ACTUAL_COST_EVIDENCE),\n'
+              '        "honesty_labels": {\n'
+              '            "actual_cost_basis": "reviewed_nvidia_developer_program_hosted_endpoint_access",\n',
+              1,
+          )
+          module_text = module_text.replace(
+              "    validate_report_schema(report)\n    return report\n",
+              "    _validate_actual_cost_evidence(report)\n"
+              "    validate_report_schema(report)\n"
+              "    return report\n",
+              1,
+          )
+
+          run_mode_anchor = '''    if run_mode not in ("dry_run", "live"):
+              raise BenchmarkContractError(f"run_mode must be 'dry_run' or 'live', not {run_mode!r}")
+          '''
+          run_mode_replacement = run_mode_anchor + '''    if run_mode == "live":
+              _require_current_actual_cost_evidence()
+          '''
+          if run_mode_anchor not in module_text:
+              raise SystemExit("run-mode validation anchor not found")
+          module_text = module_text.replace(run_mode_anchor, run_mode_replacement, 1)
+          module_text = module_text.replace(
+              '        "max_workflow_depth": MAX_WORKFLOW_DEPTH,\n',
+              '        "max_workflow_depth": MAX_WORKFLOW_DEPTH,\n'
+              '        "policy_total_token_budget": max_output_tokens,\n'
+              '        "policy_maximum_calls": MAX_WORKFLOW_DEPTH,\n',
+              1,
+          )
+          module_text = module_text.replace(
+              "    evaluation = evaluate_policies(agents, manifest, pricing_scenario, eval_client, request_budget, timer)\n",
+              '''    evaluation = evaluate_policies(
+              agents,
+              manifest,
+              pricing_scenario,
+              eval_client,
+              request_budget,
+              timer,
+              total_token_budget=max_output_tokens,
+              maximum_calls=MAX_WORKFLOW_DEPTH,
+          )
+          ''',
+              1,
+          )
+          module_path.write_text(module_text, encoding="utf-8")
+
+          init_path = root / "contextual_orchestrator" / "__init__.py"
+          init_text = init_path.read_text(encoding="utf-8")
+          optional_start = init_text.find("# The NVIDIA NIM benchmark is an optional")
+          if optional_start != -1:
+              all_start = init_text.index("__all__ =", optional_start)
+              init_text = init_text[:optional_start] + init_text[all_start:]
+          init_path.write_text(init_text, encoding="utf-8")
+
+          hardening_path = root / "contextual_orchestrator" / "nim_benchmark_hardening.py"
+          hardening_test_path = root / "tests" / "test_nim_benchmark_hardening.py"
+          hardening_path.unlink(missing_ok=True)
+          hardening_test_path.unlink(missing_ok=True)
+
+          test_path = root / "tests" / "test_nim_benchmark.py"
+          test_text = test_path.read_text(encoding="utf-8")
+          test_text = test_text.replace(
+              "import contextlib\nimport io\n",
+              "import contextlib\nimport datetime as datetime_module\n",
+              1,
+          )
+          test_text = test_text.replace(
+              "import urllib.error\nimport urllib.request\n",
+              "import urllib.error\n",
+              1,
+          )
+
+          public_guard = '''def test_endpoint_guard_accepts_public_address() -> None:
+              original = socket.getaddrinfo
+              socket.getaddrinfo = _patched_getaddrinfo("93.184.216.34")
+              try:
+                  nb.require_public_https_endpoint(FAKE_ENDPOINT)
+              finally:
+                  socket.getaddrinfo = original
+          '''
+          guard_with_cgnat = public_guard + '''
+
+          def test_endpoint_guard_rejects_non_global_shared_address() -> None:
+              original = socket.getaddrinfo
+              socket.getaddrinfo = _patched_getaddrinfo("100.64.0.1")
+              try:
+                  with pytest.raises(nb.BenchmarkContractError):
+                      nb.require_public_https_endpoint(FAKE_ENDPOINT)
+              finally:
+                  socket.getaddrinfo = original
+          '''
+          if public_guard not in test_text:
+              raise SystemExit("public endpoint guard test anchor not found")
+          test_text = test_text.replace(public_guard, guard_with_cgnat, 1)
+
+          transport_tests_start = test_text.index("class _FakeResponse:")
+          transport_tests_end = test_text.index(
+              "# --------------------------------------------------------------------------\n# Request budget",
+              transport_tests_start,
+          )
+          hardened_transport_tests = '''class _FakePinnedResponse:
+              """Minimal response object for the direct pinned-connection seam."""
+
+              def __init__(self, status: int, body: bytes, read_error: OSError | None = None) -> None:
+                  self.status = status
+                  self._body = body
+                  self._read_error = read_error
+                  self.closed = False
+
+              def read(self) -> bytes:
+                  if self._read_error is not None:
+                      raise self._read_error
+                  return self._body
+
+              def close(self) -> None:
+                  self.closed = True
+
+
+          class _FakePinnedConnection:
+              """Scripted replacement for the package's pinned HTTPS connection."""
+
+              plans: list[object] = []
+              instances: list["_FakePinnedConnection"] = []
+
+              def __init__(self, server_hostname, pinned_ip, port, timeout, context) -> None:
+                  self.server_hostname = server_hostname
+                  self.pinned_ip = pinned_ip
+                  self.port = port
+                  self.timeout = timeout
+                  self.context = context
+                  self.request_args = None
+                  self.closed = False
+                  self._plan = self.plans.pop(0)
+                  self.instances.append(self)
+
+              def request(self, method, target, body=None, headers=None) -> None:
+                  self.request_args = (method, target, body, headers)
+                  if isinstance(self._plan, BaseException):
+                      raise self._plan
+
+              def getresponse(self):
+                  return self._plan
+
+              def close(self) -> None:
+                  self.closed = True
+
+
+          def _install_fake_pinned_transport(monkeypatch, addresses, plans):
+              dns_calls = []
+
+              def getaddrinfo(hostname, port, type):
+                  dns_calls.append((hostname, port, type))
+                  return [
+                      (
+                          socket.AF_INET6 if ":" in address else socket.AF_INET,
+                          socket.SOCK_STREAM,
+                          6,
+                          "",
+                          (address, port),
+                      )
+                      for address in addresses
+                  ]
+
+              _FakePinnedConnection.plans = list(plans)
+              _FakePinnedConnection.instances = []
+              monkeypatch.setattr(socket, "getaddrinfo", getaddrinfo)
+              monkeypatch.setattr(nb, "_PinnedHTTPSConnection", _FakePinnedConnection)
+              return dns_calls
+
+
+          def test_default_transport_pins_address_preserves_hostname_and_closes(monkeypatch) -> None:
+              response = _FakePinnedResponse(200, b"body-bytes")
+              dns_calls = _install_fake_pinned_transport(
+                  monkeypatch,
+                  ["93.184.216.34"],
+                  [response],
+              )
+              transport = nb.build_default_transport(timeout_seconds=5.0)
+              result = transport(
+                  "POST",
+                  f"{FAKE_ENDPOINT}/models;rev=1?limit=2",
+                  {"authorization": "Bearer test-value"},
+                  b"payload",
+              )
+
+              assert result == (200, b"body-bytes")
+              assert dns_calls == [("nim.example.test", 443, socket.SOCK_STREAM)]
+              connection = _FakePinnedConnection.instances[0]
+              assert connection.server_hostname == "nim.example.test"
+              assert connection.pinned_ip == "93.184.216.34"
+              assert connection.port == 443 and connection.timeout == 5.0
+              method, target, body, headers = connection.request_args
+              assert (method, target, body) == (
+                  "POST",
+                  "/v1/models;rev=1?limit=2",
+                  b"payload",
+              )
+              assert headers["Connection"] == "close"
+              assert headers["authorization"] == "Bearer test-value"
+              assert response.closed and connection.closed
+
+
+          def test_default_transport_returns_redirect_without_following(monkeypatch) -> None:
+              response = _FakePinnedResponse(302, b"redirect refused")
+              _install_fake_pinned_transport(
+                  monkeypatch,
+                  ["93.184.216.34"],
+                  [response],
+              )
+              transport = nb.build_default_transport(timeout_seconds=3.0)
+
+              assert transport("GET", "https://nim.example.test", {}, None) == (
+                  302,
+                  b"redirect refused",
+              )
+              assert _FakePinnedConnection.instances[0].request_args[1] == "/"
+              assert len(_FakePinnedConnection.instances) == 1
+
+
+          def test_default_transport_falls_back_only_across_validated_addresses(monkeypatch) -> None:
+              response = _FakePinnedResponse(429, b"slow down")
+              _install_fake_pinned_transport(
+                  monkeypatch,
+                  ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"],
+                  [OSError("first address failed"), response],
+              )
+              transport = nb.build_default_transport(timeout_seconds=5.0)
+
+              assert transport("GET", f"{FAKE_ENDPOINT}/models", {}, None) == (
+                  429,
+                  b"slow down",
+              )
+              assert [item.pinned_ip for item in _FakePinnedConnection.instances] == [
+                  "93.184.216.34",
+                  "2606:2800:220:1:248:1893:25c8:1946",
+              ]
+              assert all(item.closed for item in _FakePinnedConnection.instances)
+              assert response.closed
+
+
+          def test_default_transport_closes_failed_response_and_raises(monkeypatch) -> None:
+              response = _FakePinnedResponse(200, b"", OSError("read failed"))
+              _install_fake_pinned_transport(
+                  monkeypatch,
+                  ["93.184.216.34"],
+                  [response],
+              )
+              transport = nb.build_default_transport(timeout_seconds=5.0)
+
+              with pytest.raises(urllib.error.URLError):
+                  transport("GET", f"{FAKE_ENDPOINT}/models", {}, None)
+              assert response.closed
+              assert _FakePinnedConnection.instances[0].closed
+
+
+          '''
+          test_text = (
+              test_text[:transport_tests_start]
+              + hardened_transport_tests
+              + test_text[transport_tests_end:]
+          )
+
+          additional_tests = r'''
+
+          class _BudgetDelegate:
+              """Model-client stand-in exposing output caps and provider usage."""
+
+              def __init__(self, answer="short answer", usage=None, error=None):
+                  self.max_output_tokens = 256
+                  self.answer = answer
+                  self.usage = usage
+                  self.error = error
+                  self.observed_caps = []
+
+              def chat(self, agent, messages, temperature=0.2):
+                  self.observed_caps.append(self.max_output_tokens)
+                  if self.error is not None:
+                      raise self.error
+                  return self.answer
+
+              def take_usage(self):
+                  return self.usage
+
+
+          def _budget_agent():
+              return ModelAgent(
+                  id="budget_test_worker",
+                  model="dryrun/chat-basic",
+                  base_url="mock://budget-test",
+                  credential_key=nb.NIM_CREDENTIAL_NAME,
+                  tags=("reasoning", "writing"),
+              )
+
+
+          def test_equal_budget_client_validates_allowances_and_counts():
+              with pytest.raises(ValueError, match="total_token_budget"):
+                  nb.EqualBudgetModelClient(_BudgetDelegate(), False, 5)
+              with pytest.raises(ValueError, match="total_token_budget"):
+                  nb.EqualBudgetModelClient(_BudgetDelegate(), 0, 5)
+              with pytest.raises(ValueError, match="maximum_calls"):
+                  nb.EqualBudgetModelClient(_BudgetDelegate(), 10, True)
+              with pytest.raises(ValueError, match="maximum_calls"):
+                  nb.EqualBudgetModelClient(_BudgetDelegate(), 10, 0)
+              assert nb.EqualBudgetModelClient._coerce_usage_count(True) is None
+              assert nb.EqualBudgetModelClient._coerce_usage_count("1") is None
+              assert nb.EqualBudgetModelClient._coerce_usage_count(float("nan")) is None
+              assert nb.EqualBudgetModelClient._coerce_usage_count(float("inf")) is None
+              assert nb.EqualBudgetModelClient._coerce_usage_count(-1) is None
+              assert nb.EqualBudgetModelClient._coerce_usage_count(3.9) == 3
+
+
+          def test_equal_budget_client_caps_restores_reconciles_and_exhausts():
+              delegate = _BudgetDelegate(
+                  answer="ok",
+                  usage={"prompt_tokens": 2, "completion_tokens": 3},
+              )
+              client = nb.EqualBudgetModelClient(delegate, 80, 1)
+              assert client.exceeded is False
+              assert client.chat(
+                  _budget_agent(),
+                  [{"role": "user", "content": "hi"}],
+                  0.0,
+              ) == "ok"
+              assert 0 < delegate.observed_caps[0] <= 80
+              assert delegate.max_output_tokens == 256
+              assert client.take_usage() == delegate.usage
+              assert client.observed_tokens == 5
+              assert client.remaining_tokens == 75
+              with pytest.raises(nb.PolicyTokenBudgetExceeded, match="maximum-call"):
+                  client.chat(
+                      _budget_agent(),
+                      [{"role": "user", "content": "again"}],
+                      0.0,
+                  )
+              assert client.take_usage() is delegate.usage
+
+
+          def test_equal_budget_client_handles_invalid_usage_prompt_and_delegate_error():
+              invalid_delegate = _BudgetDelegate(
+                  answer="ok",
+                  usage={"prompt_tokens": True, "completion_tokens": "bad"},
+              )
+              client = nb.EqualBudgetModelClient(invalid_delegate, 100, 5)
+              client.chat(
+                  _budget_agent(),
+                  [{"role": "user", "content": "hi"}],
+                  0.0,
+              )
+              estimated = client.observed_tokens
+              assert client.take_usage() == invalid_delegate.usage
+              assert client.observed_tokens == estimated
+
+              non_dict_delegate = _BudgetDelegate(answer="ok", usage=None)
+              non_dict_client = nb.EqualBudgetModelClient(non_dict_delegate, 100, 5)
+              non_dict_client.chat(
+                  _budget_agent(),
+                  [{"role": "user", "content": "hi"}],
+                  0.0,
+              )
+              assert non_dict_client.take_usage() is None
+
+              tiny = nb.EqualBudgetModelClient(_BudgetDelegate(), 1, 5)
+              with pytest.raises(nb.PolicyTokenBudgetExceeded, match="total-token"):
+                  tiny.chat(
+                      _budget_agent(),
+                      [{"role": "user", "content": "cannot fit"}],
+                      0.0,
+                  )
+
+              failing_delegate = _BudgetDelegate(error=RuntimeError("provider failed"))
+              failing = nb.EqualBudgetModelClient(failing_delegate, 100, 5)
+              with pytest.raises(RuntimeError, match="provider failed"):
+                  failing.chat(
+                      _budget_agent(),
+                      [{"role": "user", "content": "hi"}],
+                      0.0,
+                  )
+              assert failing_delegate.max_output_tokens == 256
+
+
+          def test_equal_budget_client_marks_reported_overage():
+              delegate = _BudgetDelegate(
+                  answer="ok",
+                  usage={"prompt_tokens": 90, "completion_tokens": 90},
+              )
+              client = nb.EqualBudgetModelClient(delegate, 100, 5)
+              client.chat(
+                  _budget_agent(),
+                  [{"role": "user", "content": "hi"}],
+                  0.0,
+              )
+              client.take_usage()
+              assert client.exceeded is True
+              assert client.remaining_tokens == 0
+              with pytest.raises(nb.PolicyTokenBudgetExceeded):
+                  client.chat(
+                      _budget_agent(),
+                      [{"role": "user", "content": "again"}],
+                      0.0,
+                  )
+
+
+          def test_actual_cost_evidence_is_complete_authoritative_and_expiring():
+              report = {"actual_cost_evidence": dict(nb.ACTUAL_COST_EVIDENCE)}
+              nb._validate_actual_cost_evidence(report)
+              nb._require_current_actual_cost_evidence(
+                  datetime_module.date(2026, 9, 3)
+              )
+              with pytest.raises(nb.BenchmarkContractError, match="expired"):
+                  nb._require_current_actual_cost_evidence(
+                      datetime_module.date(2026, 9, 4)
+                  )
+              with pytest.raises(nb.BenchmarkContractError, match="missing"):
+                  nb._validate_actual_cost_evidence({})
+              missing = {"actual_cost_evidence": dict(nb.ACTUAL_COST_EVIDENCE)}
+              del missing["actual_cost_evidence"]["source_title"]
+              with pytest.raises(nb.BenchmarkContractError, match="missing fields"):
+                  nb._validate_actual_cost_evidence(missing)
+              wrong_cost = {"actual_cost_evidence": dict(nb.ACTUAL_COST_EVIDENCE)}
+              wrong_cost["actual_cost_evidence"]["actual_cost_usd"] = 1.0
+              with pytest.raises(nb.BenchmarkContractError, match="zero-cost"):
+                  nb._validate_actual_cost_evidence(wrong_cost)
+              wrong_source = {"actual_cost_evidence": dict(nb.ACTUAL_COST_EVIDENCE)}
+              wrong_source["actual_cost_evidence"]["source_url"] = "https://example.test"
+              with pytest.raises(nb.BenchmarkContractError, match="General FAQ"):
+                  nb._validate_actual_cost_evidence(wrong_source)
+
+
+          def test_dry_run_records_equal_policy_budgets_and_cost_evidence(tmp_path):
+              report = nb.run_benchmark(
+                  "dry_run",
+                  TASK_MANIFEST_PATH,
+                  PRICING_SCENARIO_PATH,
+                  str(tmp_path),
+                  max_total_requests=500,
+                  max_output_tokens=256,
+                  max_eval_models=3,
+              )
+              cells = report["evaluation"]["evaluation_cells"]
+              assert cells
+              assert {cell["configured_total_token_budget"] for cell in cells} == {256}
+              assert {cell["configured_maximum_calls"] for cell in cells} == {
+                  nb.MAX_WORKFLOW_DEPTH
+              }
+              assert all(
+                  cell["observed_budget_calls"] <= nb.MAX_WORKFLOW_DEPTH
+                  for cell in cells
+              )
+              assert report["actual_cost_evidence"]["source_url"] == (
+                  "https://docs.api.nvidia.com/nim/docs/product"
+              )
+              assert report["actual_cost_evidence"]["actual_cost_usd"] == 0.0
+              markdown = Path(report["artifact_paths"]["markdown_path"]).read_text(
+                  encoding="utf-8"
+              )
+              assert "Actual API cost evidence" in markdown
+              assert report["actual_cost_evidence"]["valid_until_date"] in markdown
+              csv_text = Path(report["artifact_paths"]["csv_path"]).read_text(
+                  encoding="utf-8"
+              )
+              assert "configured_total_token_budget" in csv_text
+              assert report["provenance"]["benchmark_parameters"][
+                  "policy_total_token_budget"
+              ] == 256
+
+
+          def test_live_run_fails_before_egress_when_cost_evidence_expired(
+              monkeypatch,
+              tmp_path,
+          ):
+              monkeypatch.setitem(
+                  nb.ACTUAL_COST_EVIDENCE,
+                  "valid_until_date",
+                  "2000-01-01",
+              )
+              with pytest.raises(nb.BenchmarkContractError, match="expired"):
+                  nb.run_benchmark(
+                      "live",
+                      TASK_MANIFEST_PATH,
+                      None,
+                      str(tmp_path),
+                      git_sha="a" * 40,
+                      workflow_run_id="123",
+                  )
+          '''
+          test_text += additional_tests
+          test_path.write_text(test_text, encoding="utf-8")
+
+          tests_workflow_path = root / ".github" / "workflows" / "tests.yml"
+          tests_workflow = tests_workflow_path.read_text(encoding="utf-8")
+          tests_workflow = tests_workflow.replace(
+              "        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt\n",
+              '''        run: |
+                  python -m pip install --require-hashes -r fuzz/requirements-property.txt
+                  python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
+          ''',
+              1,
+          )
+          tests_workflow = tests_workflow.replace(
+              "      - name: Run full test suite\n        run: python -m pytest -q\n",
+              '''      - name: Enforce NIM production statement and branch coverage
+                  run: |
+                    python -m coverage run --branch \\
+                      --source=contextual_orchestrator.nim_benchmark \\
+                      -m pytest tests/test_nim_benchmark.py -q
+                    python -m coverage report --fail-under=100 \\
+                      --include=contextual_orchestrator/nim_benchmark.py
+
+                - name: Enforce beginner-readable public docstrings
+                  run: python -m interrogate -f 100 contextual_orchestrator/nim_benchmark.py
+
+                - name: Run full test suite
+                  run: python -m pytest -q
+          ''',
+              1,
+          )
+          tests_workflow_path.write_text(tests_workflow, encoding="utf-8")
+
+          workflow_path = root / ".github" / "workflows" / "nim-source-repair.yml"
+          workflow_path.unlink()
+          PY
+
+      - name: Install hash-locked verification dependencies
+        run: |
+          python -m pip install --require-hashes -r fuzz/requirements-property.txt
+          python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
+
+      - name: Verify transformed source and exact coverage gates
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --check
+          python -m compileall -q contextual_orchestrator tests
+          python -m pytest tests/test_nim_benchmark.py -q
+          python -m coverage erase
+          python -m coverage run --branch \
+            --source=contextual_orchestrator.nim_benchmark \
+            -m pytest tests/test_nim_benchmark.py -q
+          python -m coverage report --fail-under=100 \
+            --include=contextual_orchestrator/nim_benchmark.py
+          python -m interrogate -f 100 contextual_orchestrator/nim_benchmark.py
+          python -m pytest -q
+
+      - name: Validate bounded changed paths
+        shell: bash
+        run: |
+          set -euo pipefail
+          mapfile -t changed_paths < <(git diff --name-only --diff-filter=ACDMRTUXB)
+          printf '%s\n' "${changed_paths[@]}"
+          expected_paths=(
+            ".github/workflows/nim-source-repair.yml"
+            ".github/workflows/tests.yml"
+            "contextual_orchestrator/__init__.py"
+            "contextual_orchestrator/nim_benchmark.py"
+            "contextual_orchestrator/nim_benchmark_hardening.py"
+            "tests/test_nim_benchmark.py"
+            "tests/test_nim_benchmark_hardening.py"
+          )
+          if [ "${#changed_paths[@]}" -ne "${#expected_paths[@]}" ]; then
+            echo "::error::Unexpected changed-path count."
+            exit 1
+          fi
+          for index in "${!expected_paths[@]}"; do
+            if [ "${changed_paths[$index]}" != "${expected_paths[$index]}" ]; then
+              echo "::error::Unexpected changed path: ${changed_paths[$index]}"
+              exit 1
+            fi
+          done
+
+      - name: Exchange a workflow-triggering GitHub App token
+        id: publisher_app_token
+        shell: bash
+        env:
+          OIDC_AUDIENCE: opencode-github-action
+          OPENCODE_API_BASE_URL: https://api.opencode.ai
+        run: |
+          set -euo pipefail
+          if [ -z "${ACTIONS_ID_TOKEN_REQUEST_TOKEN:-}" ] || \
+             [ -z "${ACTIONS_ID_TOKEN_REQUEST_URL:-}" ]; then
+            echo "available=false" >>"$GITHUB_OUTPUT"
+            exit 0
+          fi
+          request_url="${ACTIONS_ID_TOKEN_REQUEST_URL}"
+          separator="?"
+          case "$request_url" in *\?*) separator="&" ;; esac
+          oidc_response="$(curl -fsS \
+            -H "Authorization: Bearer ${ACTIONS_ID_TOKEN_REQUEST_TOKEN}" \
+            "${request_url}${separator}audience=${OIDC_AUDIENCE}")"
+          oidc_token="$(jq -r '.value // empty' <<<"$oidc_response")"
+          [ -n "$oidc_token" ] || { echo "available=false" >>"$GITHUB_OUTPUT"; exit 0; }
+          token_response="$(curl -fsS -X POST \
+            -H "Authorization: Bearer ${oidc_token}" \
+            "${OPENCODE_API_BASE_URL}/exchange_github_app_token")"
+          app_token="$(jq -r '.token // empty' <<<"$token_response")"
+          [ -n "$app_token" ] || { echo "available=false" >>"$GITHUB_OUTPUT"; exit 0; }
+          echo "::add-mask::$app_token"
+          {
+            echo "available=true"
+            echo "token=$app_token"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Fail closed without publication credential
+        if: steps.publisher_app_token.outputs.available != 'true'
+        run: |
+          echo "::error::GitHub App token exchange unavailable; refusing to publish."
+          exit 1
+
+      - name: Commit and fast-forward the exact source branch
+        if: steps.publisher_app_token.outputs.available == 'true'
+        shell: bash
+        env:
+          GH_TOKEN: ${{ steps.publisher_app_token.outputs.token }}
+        run: |
+          set -euo pipefail
+          git config user.name "opencode-agent[bot]"
+          git config user.email "219766164+opencode-agent[bot]@users.noreply.github.com"
+          git add -A
+          git commit -m "fix(nim): integrate pinned egress and equal evidence budgets"
+          gh auth setup-git
+          git push origin HEAD:refs/heads/claude/nim-all-models-support-fecb0b
