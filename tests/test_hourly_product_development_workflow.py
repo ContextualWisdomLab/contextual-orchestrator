@@ -38,7 +38,7 @@ def test_hourly_loop_is_pull_request_first_and_fails_closed() -> None:
     assert "reason=pull_request_inventory_unavailable" in workflow
     assert "reason=open_pull_request" in workflow
     assert "reason=nim_api_key_unavailable" in workflow
-    assert 'steps.gate.outputs.dispatch == \'true\'' in workflow
+    assert "steps.gate.outputs.dispatch == 'true'" in workflow
 
 
 def test_hourly_loop_uses_nvidia_nim_and_keeps_credentials_from_the_agent() -> None:
@@ -60,6 +60,28 @@ def test_hourly_loop_uses_nvidia_nim_and_keeps_credentials_from_the_agent() -> N
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "/agents/repos" not in workflow
     assert "gh pr merge" not in workflow
+
+
+def test_hourly_loop_separates_agent_execution_from_privileged_publication() -> None:
+    """Untrusted agent output crosses a validated artifact boundary to a fresh job."""
+
+    workflow = _workflow_text()
+
+    assert "develop-product-gap:" in workflow
+    assert "publish-product-gap:" in workflow
+    assert "needs: develop-product-gap" in workflow
+    assert "actions: read" in workflow
+    assert "actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4" in workflow
+    assert 'gh run download "$GITHUB_RUN_ID"' in workflow
+    assert "candidate.patch" in workflow
+    assert "git apply --check --binary --whitespace=error" in workflow
+    assert "core.hooksPath" in workflow
+    assert "new file mode 120000" in workflow
+    assert "new file mode 160000" in workflow
+    assert "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" not in workflow[
+        workflow.index("publish-product-gap:") :
+    ]
+    assert workflow.index("opencode run") < workflow.index("publish-product-gap:")
 
 
 def test_hourly_loop_prompt_preserves_commercial_and_architecture_contracts() -> None:
