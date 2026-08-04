@@ -43,7 +43,7 @@ def test_security_workflow_covers_core_repository_security_process():
         "python_supply_chain:",
         "actions/setup-python@v6",
         "python -m pip install --require-hashes -r requirements-pip-bootstrap.txt",
-        'python -m pip --version | grep -F "pip 26.2"',
+        "from importlib.metadata import version; assert version(\"pip\") == \"26.2\"",
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
         "python -m pip install --require-hashes -r requirements.lock",
         "python -m pip install --no-deps -e .",
