@@ -41,7 +41,7 @@ def test_security_workflow_covers_core_repository_security_process():
         "github/codeql-action/init@v4",
         "github/codeql-action/analyze@v4",
         "python_supply_chain:",
-        "actions/setup-python@v6",
+        "actions/setup-python@v7",
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
         "python -m pip install --require-hashes -r requirements.lock",
         "python -m pip install --no-deps -e .",
