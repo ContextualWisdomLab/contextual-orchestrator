@@ -1,3 +1,4 @@
-# Atheris coverage-guided job deps (Python 3.11). Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.11 --universal -o fuzz/requirements-atheris.txt
-pip
+# Atheris coverage-guided job deps (Python 3.11). Compile:
+# uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.11 --universal -o fuzz/requirements-atheris.txt
+# pip itself is hash-pinned separately in ../requirements-pip-bootstrap.txt.
 atheris==3.0.0
