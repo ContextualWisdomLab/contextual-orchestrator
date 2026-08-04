@@ -48,7 +48,7 @@ def test_hourly_loop_brokers_nim_without_exposing_the_secret_to_opencode() -> No
 
     assert "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
     assert "REPOSITORY_TOKEN: ${{ github.token }}" in workflow
-    assert 'UPSTREAM_HOST = "integrate.api.nvidia.com"' in workflow
+    assert 'UPSTREAM_HOST: Final = "integrate.api.nvidia.com"' in workflow
     assert '"baseURL": "http://nim-proxy:8001/v1"' in workflow
     assert '"apiKey": "brokered-by-local-proxy"' in workflow
     assert "ALLOWED_PATHS =" in workflow
@@ -66,6 +66,9 @@ def test_hourly_loop_brokers_nim_without_exposing_the_secret_to_opencode() -> No
     assert "$GITHUB_WORKSPACE/.git:/workspace/.git:ro" in workflow
     assert "OPENCODE_DISABLE_PROJECT_CONFIG=1" in workflow
     assert "OPENCODE_DISABLE_CLAUDE_CODE=1" in workflow
+    assert "OPENCODE_DISABLE_AUTOUPDATE=1" in workflow
+    assert "OPENCODE_DISABLE_MODELS_FETCH=1" in workflow
+    assert "OPENCODE_PURE=1" in workflow
     assert "persist-credentials: false" in workflow
     assert 'OPENCODE_VERSION: "1.17.13"' in workflow
     assert "sha256sum -c -" in workflow
@@ -117,6 +120,7 @@ def test_hourly_loop_separates_agent_execution_from_privileged_publication() -> 
     assert "core.hooksPath" in workflow
     assert "new file mode 120000" in workflow
     assert "new file mode 160000" in workflow
+    assert 'left.parts[0] == ".github"' in workflow
     assert "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" not in workflow[
         workflow.index("publish-product-gap:") :
     ]
