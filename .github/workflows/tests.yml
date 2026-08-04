@@ -41,6 +41,7 @@ jobs:
         run: |
           python - <<'PY'
           from pathlib import Path
+          import textwrap
 
           def replace_once(text: str, old: str, new: str, label: str) -> str:
               count = text.count(old)
@@ -76,18 +77,16 @@ jobs:
               estimate_tokens,
           )
           '''
-          provider_import = orchestrator_import + '''from .provider_transport import (
-              _PinnedHTTPSConnection,
-              _validated_public_addresses,
-          )
-          '''
           module_text = replace_once(
               module_text,
               orchestrator_import,
-              provider_import,
+              orchestrator_import + '''from .provider_transport import (
+              _PinnedHTTPSConnection,
+              _validated_public_addresses,
+          )
+          ''',
               "provider transport import",
           )
-
           transport_start = module_text.index("def require_public_https_endpoint")
           transport_end = module_text.index(
               "# --------------------------------------------------------------------------\n# Request budget",
@@ -196,7 +195,6 @@ jobs:
 
           '''
           module_text = module_text[:transport_start] + secure_transport + module_text[transport_end:]
-
           install_block = '''
 
           # Install benchmark-only budget and evidence contracts lazily. Importing the
@@ -210,11 +208,16 @@ jobs:
           '''
           if "_install_nim_benchmark_hardening(sys.modules[__name__])" in module_text:
               raise SystemExit("lazy hardening installer already present unexpectedly")
-          module_text = module_text.rstrip() + install_block + "\n"
-          module_path.write_text(module_text, encoding="utf-8")
+          module_path.write_text(module_text.rstrip() + install_block + "\n", encoding="utf-8")
 
           hardening_path = Path("contextual_orchestrator/nim_benchmark_hardening.py")
           hardening_text = hardening_path.read_text(encoding="utf-8")
+          hardening_text = replace_once(
+              hardening_text,
+              "``install_nim_benchmark_hardening`` is intentionally an explicit compatibility\ninstaller.  It lets this stacked pull request reuse the already reviewed\nprovider-transport implementation from its #76 parent without duplicating that\nsecurity-sensitive arithmetic or changing the standalone runtime API.\n",
+              "``install_nim_benchmark_hardening`` is loaded only by the optional\nbenchmark module. It installs equal-budget and evidence contracts without\nchanging provider transport or the standalone runtime package API.\n",
+              "hardening module contract",
+          )
           hardening_text = replace_once(
               hardening_text,
               "import datetime as datetime_module\nimport http.client\nimport json\nimport socket\nimport ssl\nimport urllib.error\nimport urllib.parse\nimport urllib.request\n",
@@ -228,8 +231,16 @@ jobs:
               "hardening provider import",
           )
           hardening_text = hardening_text.replace(
-              "https://docs.nvidia.com/nim/large-language-models/latest/faq.html",
-              "https://docs.api.nvidia.com/nim/docs/product",
+              '"source_url": "https://docs.nvidia.com/nim/large-language-models/latest/faq.html",',
+              '"source_url": "https://docs.api.nvidia.com/nim/docs/product",',
+          )
+          hardening_text = hardening_text.replace(
+              '"access_program": "NVIDIA Developer Program API Catalog hosted endpoints",',
+              '"access_program": "NVIDIA Developer Program NIM API endpoint access",',
+          )
+          hardening_text = hardening_text.replace(
+              '"access_scope": "prototyping, research, and testing",',
+              '"access_scope": "free access for prototyping through NVIDIA-hosted endpoints",',
           )
           helper_start = hardening_text.index("def _validated_endpoint_addresses")
           helper_end = hardening_text.index("def _validate_actual_cost_evidence", helper_start)
@@ -266,41 +277,66 @@ jobs:
           _install_nim_benchmark_hardening(_nim_benchmark)
 
           '''
-          init_text = replace_once(init_text, eager_block, "", "remove eager benchmark import")
-          init_path.write_text(init_text, encoding="utf-8")
-
-          test_path = Path("tests/test_nim_benchmark.py")
-          test_text = test_path.read_text(encoding="utf-8")
-          old_section_start = test_text.index("class _FakeResponse:")
-          old_section_end = test_text.index(
-              "# --------------------------------------------------------------------------\n# Request budget",
-              old_section_start,
+          init_path.write_text(
+              replace_once(init_text, eager_block, "", "remove eager benchmark import"),
+              encoding="utf-8",
           )
-          direct_transport_tests = '''class _FakePinnedResponse:
-              """Minimal direct-connection response with deterministic cleanup evidence."""
+
+          legacy_test_path = Path("tests/test_nim_benchmark.py")
+          legacy_test_text = legacy_test_path.read_text(encoding="utf-8")
+          obsolete_start = legacy_test_text.index("class _FakeResponse:")
+          obsolete_end = legacy_test_text.index(
+              "# --------------------------------------------------------------------------\n# Request budget",
+              obsolete_start,
+          )
+          legacy_test_path.write_text(
+              legacy_test_text[:obsolete_start] + legacy_test_text[obsolete_end:],
+              encoding="utf-8",
+          )
+
+          source_transport_tests = '''"""Source-level security contracts for the optional NIM HTTPS transport."""
+
+          from __future__ import annotations
+
+          import urllib.error
+
+          import pytest
+
+          from contextual_orchestrator import nim_benchmark as nb
+
+
+          PUBLIC_ENDPOINT = "https://nim.example.test/v1"
+
+
+          class _FakePinnedResponse:
+              """Minimal response object with deterministic cleanup evidence."""
 
               def __init__(self, status: int, body: bytes, read_error: OSError | None = None) -> None:
+                  """Store one response plan and an optional read failure."""
                   self.status = status
                   self._body = body
                   self._read_error = read_error
                   self.closed = False
 
               def read(self) -> bytes:
+                  """Return bytes or raise the configured network failure."""
                   if self._read_error is not None:
                       raise self._read_error
                   return self._body
 
               def close(self) -> None:
+                  """Record deterministic response cleanup."""
                   self.closed = True
 
 
           class _FakePinnedConnection:
-              """Scripted pinned HTTPS connection exposing authority and dial evidence."""
+              """Scripted pinned HTTPS connection exposing dial and authority evidence."""
 
               plans: list[object] = []
               instances: list["_FakePinnedConnection"] = []
 
               def __init__(self, server_hostname, pinned_ip, port, timeout, context) -> None:
+                  """Capture original host, validated address, TLS context, and timeout."""
                   self.server_hostname = server_hostname
                   self.pinned_ip = pinned_ip
                   self.port = port
@@ -308,22 +344,26 @@ jobs:
                   self.context = context
                   self.request_args = None
                   self.closed = False
-                  self._plan = self.plans.pop(0)
+                  self._plan = type(self).plans.pop(0)
                   type(self).instances.append(self)
 
               def request(self, method, target, body=None, headers=None) -> None:
+                  """Record one request or emulate a failed approved address."""
                   self.request_args = (method, target, body, headers)
                   if isinstance(self._plan, BaseException):
                       raise self._plan
 
               def getresponse(self):
+                  """Return the response configured for this approved address."""
                   return self._plan
 
               def close(self) -> None:
+                  """Record deterministic connection cleanup."""
                   self.closed = True
 
 
-          def _install_direct_transport_fakes(monkeypatch, addresses, plans):
+          def _install_transport_fakes(monkeypatch, addresses, plans):
+              """Install one resolver result and ordered direct-connection plans."""
               resolution_calls = []
 
               def resolve(hostname, port, label):
@@ -337,35 +377,36 @@ jobs:
               return resolution_calls
 
 
-          def test_default_transport_pins_each_request_and_preserves_original_host(monkeypatch) -> None:
+          def test_transport_pins_each_request_preserves_host_and_rejects_redirect_following(monkeypatch) -> None:
+              """Each call resolves once, dials the approved IP, and returns redirects."""
               first_response = _FakePinnedResponse(200, b"body-bytes")
-              second_response = _FakePinnedResponse(302, b"redirect refused")
-              resolution_calls = _install_direct_transport_fakes(
+              redirect_response = _FakePinnedResponse(302, b"redirect refused")
+              resolution_calls = _install_transport_fakes(
                   monkeypatch,
                   ["93.184.216.34"],
-                  [first_response, second_response],
+                  [first_response, redirect_response],
               )
               transport = nb.build_default_transport(timeout_seconds=5.0)
 
               first = transport(
                   "POST",
-                  f"{FAKE_ENDPOINT}/models;rev=1?limit=2",
+                  f"{PUBLIC_ENDPOINT}/models;rev=1?limit=2",
                   {"authorization": "Bearer redacted"},
                   b"payload",
               )
-              second = transport("GET", "https://nim.example.test", {}, None)
+              redirect = transport("GET", "https://nim.example.test", {}, None)
 
               assert first == (200, b"body-bytes")
-              assert second == (302, b"redirect refused")
+              assert redirect == (302, b"redirect refused")
               assert resolution_calls == [
                   ("nim.example.test", 443, "NIM benchmark"),
                   ("nim.example.test", 443, "NIM benchmark"),
               ]
-              first_connection = _FakePinnedConnection.instances[0]
-              assert first_connection.server_hostname == "nim.example.test"
-              assert first_connection.pinned_ip == "93.184.216.34"
-              assert first_connection.port == 443 and first_connection.timeout == 5.0
-              method, target, body, headers = first_connection.request_args
+              connection = _FakePinnedConnection.instances[0]
+              assert connection.server_hostname == "nim.example.test"
+              assert connection.pinned_ip == "93.184.216.34"
+              assert connection.port == 443 and connection.timeout == 5.0
+              method, target, body, headers = connection.request_args
               assert (method, target, body) == (
                   "POST",
                   "/v1/models;rev=1?limit=2",
@@ -374,20 +415,22 @@ jobs:
               assert headers["Connection"] == "close"
               assert headers["authorization"] == "Bearer redacted"
               assert _FakePinnedConnection.instances[1].request_args[1] == "/"
-              assert first_response.closed and second_response.closed
+              assert first_response.closed and redirect_response.closed
               assert all(item.closed for item in _FakePinnedConnection.instances)
 
 
-          def test_default_transport_falls_back_only_across_validated_addresses(monkeypatch) -> None:
+          def test_transport_falls_back_only_across_validation_time_addresses(monkeypatch) -> None:
+              """A failed pin can fall back only within the same validated DNS answer."""
               response = _FakePinnedResponse(429, b"slow down")
-              _install_direct_transport_fakes(
+              _install_transport_fakes(
                   monkeypatch,
                   ["93.184.216.34", "2606:2800:220:1:248:1893:25c8:1946"],
                   [OSError("first address failed"), response],
               )
-              transport = nb.build_default_transport(timeout_seconds=5.0)
 
-              assert transport("GET", f"{FAKE_ENDPOINT}/models", {}, None) == (429, b"slow down")
+              assert nb.build_default_transport(5.0)(
+                  "GET", f"{PUBLIC_ENDPOINT}/models", {}, None
+              ) == (429, b"slow down")
               assert [item.pinned_ip for item in _FakePinnedConnection.instances] == [
                   "93.184.216.34",
                   "2606:2800:220:1:248:1893:25c8:1946",
@@ -396,24 +439,22 @@ jobs:
               assert response.closed
 
 
-          def test_default_transport_closes_failed_response_and_raises(monkeypatch) -> None:
+          def test_transport_closes_failed_response_and_raises(monkeypatch) -> None:
+              """Read failures close every resource and surface as a network error."""
               response = _FakePinnedResponse(200, b"", OSError("read failed"))
-              _install_direct_transport_fakes(
-                  monkeypatch,
-                  ["93.184.216.34"],
-                  [response],
-              )
-              transport = nb.build_default_transport(timeout_seconds=5.0)
+              _install_transport_fakes(monkeypatch, ["93.184.216.34"], [response])
 
               with pytest.raises(urllib.error.URLError, match="read failed"):
-                  transport("GET", f"{FAKE_ENDPOINT}/models", {}, None)
+                  nb.build_default_transport(5.0)(
+                      "GET", f"{PUBLIC_ENDPOINT}/models", {}, None
+                  )
               assert response.closed
               assert _FakePinnedConnection.instances[0].closed
-
-
           '''
-          test_text = test_text[:old_section_start] + direct_transport_tests + test_text[old_section_end:]
-          test_path.write_text(test_text, encoding="utf-8")
+          Path("tests/test_nim_source_transport.py").write_text(
+              textwrap.dedent(source_transport_tests).lstrip(),
+              encoding="utf-8",
+          )
 
           hardening_test_path = Path("tests/test_nim_benchmark_hardening.py")
           hardening_test_text = hardening_test_path.read_text(encoding="utf-8")
@@ -426,77 +467,67 @@ jobs:
               'monkeypatch.setattr(nb, "_PinnedHTTPSConnection"',
           )
           hardening_test_text = hardening_test_text.replace(
+              '        hardening,\n        "_validated_public_addresses",',
+              '        nb,\n        "_validated_public_addresses",',
+          )
+          hardening_test_text = hardening_test_text.replace(
+              '        hardening,\n        "_PinnedHTTPSConnection",',
+              '        nb,\n        "_PinnedHTTPSConnection",',
+          )
+          hardening_test_text = hardening_test_text.replace(
               'evidence["source_url"].startswith("https://docs.nvidia.com/")',
               'evidence["source_url"] == "https://docs.api.nvidia.com/nim/docs/product"',
           )
           hardening_test_path.write_text(hardening_test_text, encoding="utf-8")
 
-          for documentation_path in (
-              Path("README.md"),
-              Path("docs/nim_benchmark.md"),
-              Path("CHANGELOG.md"),
-          ):
-              documentation_text = documentation_path.read_text(encoding="utf-8")
-              documentation_text = documentation_text.replace(
-                  "https://docs.nvidia.com/nim/large-language-models/latest/faq.html",
-                  "https://docs.api.nvidia.com/nim/docs/product",
-              )
-              documentation_path.write_text(documentation_text, encoding="utf-8")
+          canonical_workflow = textwrap.dedent('''
+              name: Tests
 
-          canonical_workflow = '''name: Tests
+              on:
+                push:
+                  branches: [main]
+                pull_request:
+                  branches: [main]
 
-          on:
-            push:
-              branches: [main]
-            pull_request:
-              branches: [main]
+              permissions:
+                contents: read
 
-          permissions:
-            contents: read
+              concurrency:
+                group: tests-${{ github.ref }}
+                cancel-in-progress: true
 
-          concurrency:
-            group: tests-${{ github.ref }}
-            cancel-in-progress: true
+              jobs:
+                pytest:
+                  name: Full unit and contract suite
+                  runs-on: ubuntu-latest
+                  steps:
+                    - name: Checkout repository
+                      uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+                      with:
+                        persist-credentials: false
 
-          jobs:
-            pytest:
-              name: Full unit and contract suite
-              runs-on: ubuntu-latest
-              steps:
-                - name: Checkout repository
-                  uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
-                  with:
-                    persist-credentials: false
+                    - name: Set up Python
+                      uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+                      with:
+                        python-version: "3.12"
 
-                - name: Set up Python
-                  uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
-                  with:
-                    python-version: "3.12"
+                    - name: Install test dependencies
+                      # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Reuses the
+                      # property-test lockfile (pytest + hypothesis), which covers the full
+                      # suite's requirements: the package itself is stdlib-only.
+                      run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
 
-                - name: Install test dependencies
-                  # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Reuses the
-                  # property-test lockfile (pytest + hypothesis), which covers the full
-                  # suite's requirements: the package itself is stdlib-only.
-                  run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
-
-                - name: Run full test suite
-                  run: python -m pytest -q
-          '''
+                    - name: Run full test suite
+                      run: python -m pytest -q
+          ''').lstrip()
           Path(".github/workflows/tests.yml").write_text(canonical_workflow, encoding="utf-8")
 
-          forbidden = (
-              "urllib.request.urlopen",
-              "docs.nvidia.com/nim/large-language-models/latest/faq.html",
-          )
-          for source_path in (
-              module_path,
-              hardening_path,
-              hardening_test_path,
-          ):
-              source_text = source_path.read_text(encoding="utf-8")
-              for token in forbidden:
-                  if token in source_text:
-                      raise SystemExit(f"{source_path}: forbidden token remains: {token}")
+          for path in (module_path, hardening_path):
+              text = path.read_text(encoding="utf-8")
+              if "urllib.request.urlopen" in text:
+                  raise SystemExit(f"{path}: generic URL opener remains")
+              if "docs.nvidia.com/nim/large-language-models/latest/faq.html" in text:
+                  raise SystemExit(f"{path}: obsolete evidence URL remains")
           PY
 
       - name: Install hash-locked test dependencies
@@ -507,10 +538,23 @@ jobs:
         run: |
           git diff --check
           python -m compileall -q contextual_orchestrator tests
-          python -m pytest tests/test_nim_benchmark.py tests/test_nim_benchmark_hardening.py -q
+          python -m pytest tests/test_nim_benchmark.py tests/test_nim_benchmark_hardening.py tests/test_nim_source_transport.py -q
           python -m pytest -q
-          git diff --name-only | sort
-          test "$(git diff --name-only | sort | tr '\n' ' ')" = ".github/workflows/tests.yml CHANGELOG.md README.md contextual_orchestrator/__init__.py contextual_orchestrator/nim_benchmark.py contextual_orchestrator/nim_benchmark_hardening.py docs/nim_benchmark.md tests/test_nim_benchmark.py tests/test_nim_benchmark_hardening.py "
+          python - <<'PY'
+          import subprocess
+          changed = set(subprocess.check_output(["git", "diff", "--name-only"], text=True).splitlines())
+          required = {
+              ".github/workflows/tests.yml",
+              "contextual_orchestrator/__init__.py",
+              "contextual_orchestrator/nim_benchmark.py",
+              "contextual_orchestrator/nim_benchmark_hardening.py",
+              "tests/test_nim_benchmark.py",
+              "tests/test_nim_benchmark_hardening.py",
+              "tests/test_nim_source_transport.py",
+          }
+          if changed != required:
+              raise SystemExit(f"unexpected repair paths: {sorted(changed)}")
+          PY
 
       - name: Commit and publish only the verified repair
         shell: bash
@@ -520,7 +564,7 @@ jobs:
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           git config user.name "contextual-orchestrator-maintainer[bot]"
           git config user.email "contextual-orchestrator-maintainer[bot]@users.noreply.github.com"
-          git add .github/workflows/tests.yml CHANGELOG.md README.md contextual_orchestrator/__init__.py contextual_orchestrator/nim_benchmark.py contextual_orchestrator/nim_benchmark_hardening.py docs/nim_benchmark.md tests/test_nim_benchmark.py tests/test_nim_benchmark_hardening.py
+          git add .github/workflows/tests.yml contextual_orchestrator/__init__.py contextual_orchestrator/nim_benchmark.py contextual_orchestrator/nim_benchmark_hardening.py tests/test_nim_benchmark.py tests/test_nim_benchmark_hardening.py tests/test_nim_source_transport.py
           git commit -m "fix(nim): integrate pinned transport and reviewed evidence"
           cat > /tmp/git-askpass <<'SH'
           #!/bin/sh
