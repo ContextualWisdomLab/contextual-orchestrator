@@ -15,30 +15,25 @@ concurrency:
   group: hourly-product-development-${{ github.repository }}
   cancel-in-progress: false
 
-# The default token is read-only; only the single job that pushes the agent's
-# branch and opens the pull request elevates to write. The coding agent itself
-# runs inside that job as an OpenCode session against NVIDIA NIM,
-# authenticated only by the NVIDIA_NIM_API_KEY organization secret. No Copilot
-# subscription, Agent Tasks API, or fine-grained user token is involved.
+# Default to read-only. The model-bearing job can inspect PRs but cannot write to
+# GitHub. A separate fresh-runner job receives the write token only after the
+# model output crosses a bounded, validated patch-artifact boundary.
 permissions:
   contents: read
 
 jobs:
-  dispatch-product-gap:
+  develop-product-gap:
     if: github.repository == 'ContextualWisdomLab/contextual-orchestrator'
     runs-on: ubuntu-latest
-    timeout-minutes: 55
+    timeout-minutes: 50
     permissions:
-      contents: write
-      pull-requests: write
+      contents: read
+      pull-requests: read
+    outputs:
+      candidate_ready: ${{ steps.package.outputs.candidate_ready }}
     env:
-      # The scoped NVIDIA_NIM_API_KEY organization secret is the only NIM
-      # credential source. opencode.json expects that same value in
-      # NVIDIA_API_KEY.
-      NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
       DEFAULT_BRANCH: main
       DRY_RUN: ${{ inputs.dry_run || false }}
-      REPOSITORY_TOKEN: ${{ github.token }}
       OPENCODE_VERSION: "1.17.13"
       OPENCODE_SHA256: 157afa289d1a8d9372de0ce19ac726119b937a1f6b201808d46f06e4e59bb348
       OPENCODE_MODEL_CANDIDATES: >-
@@ -50,6 +45,9 @@ jobs:
       - name: Enforce pull-request-first single-flight gate
         id: gate
         shell: bash
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          REPOSITORY_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
 
@@ -86,7 +84,7 @@ jobs:
             } >>"$GITHUB_OUTPUT"
             cat >>"$GITHUB_STEP_SUMMARY" <<'SUMMARY'
           Autonomous development is disabled because `NVIDIA_NIM_API_KEY` is not configured.
-          Configure the organization secret so the in-workflow OpenCode agent can reach
+          Configure the organization secret so the isolated OpenCode session can reach
           NVIDIA NIM. No Copilot subscription or user token is required.
           SUMMARY
             exit 0
@@ -238,9 +236,11 @@ jobs:
           CONFIG
           echo "/opencode.json" >>"$GITHUB_WORKSPACE/.git/info/exclude"
 
-      - name: Run the NVIDIA NIM development agent
+      - name: Run the NVIDIA NIM development agent without GitHub credentials
         if: steps.gate.outputs.dispatch == 'true' && env.DRY_RUN != 'true'
         shell: bash
+        env:
+          NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
         run: |
           set -euo pipefail
 
@@ -251,6 +251,8 @@ jobs:
             if timeout --kill-after=30s "${OPENCODE_RUN_TIMEOUT_SECONDS}s" \
               env -u GH_TOKEN -u GITHUB_TOKEN -u REPOSITORY_TOKEN \
               -u ACTIONS_ID_TOKEN_REQUEST_TOKEN -u ACTIONS_ID_TOKEN_REQUEST_URL \
+              -u GITHUB_ENV -u GITHUB_OUTPUT -u GITHUB_PATH -u GITHUB_STATE \
+              -u GITHUB_STEP_SUMMARY \
               opencode run "$prompt" --model "$model"; then
               status=0
               echo "::endgroup::"
@@ -267,50 +269,242 @@ jobs:
             exit 1
           fi
 
-      - name: Open exactly one bounded pull request
+      - name: Package untrusted candidate as a bounded patch
+        id: package
         if: steps.gate.outputs.dispatch == 'true' && env.DRY_RUN != 'true'
         shell: bash
-        env:
-          GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          unset NVIDIA_API_KEY GH_TOKEN GITHUB_TOKEN REPOSITORY_TOKEN
           cd "$GITHUB_WORKSPACE"
 
+          artifact_dir="$RUNNER_TEMP/autonomous-product-candidate"
+          rm -rf "$artifact_dir"
+          install -d -m 0700 "$artifact_dir"
           rm -f opencode.json
+
+          python - "$artifact_dir/pr.json" <<'PY'
+          import json
+          import pathlib
+          import sys
+
+          output_path = pathlib.Path(sys.argv[1])
+          message_path = pathlib.Path("PR_MESSAGE.md")
+          title = "contextual-orchestrator autonomous product increment"
+          body = "Autonomous NVIDIA NIM increment; see the diff and CHANGELOG.md."
+          if message_path.exists():
+              if not message_path.is_file() or message_path.stat().st_size > 65536:
+                  raise SystemExit("PR_MESSAGE.md must be a regular UTF-8 file no larger than 64 KiB")
+              text = message_path.read_text(encoding="utf-8")
+              lines = text.splitlines()
+              if lines:
+                  candidate = lines[0].lstrip("#").strip()
+                  if candidate:
+                      title = candidate
+                  body = "\n".join(lines[1:]).strip() or body
+              message_path.unlink()
+
+          if not 1 <= len(title) <= 120 or any(ord(char) < 32 for char in title):
+              raise SystemExit("PR title must be one printable line of at most 120 characters")
+          if len(body.encode("utf-8")) > 65536:
+              raise SystemExit("PR body exceeds 64 KiB")
+          output_path.write_text(
+              json.dumps({"title": title, "body": body}, ensure_ascii=False),
+              encoding="utf-8",
+          )
+          PY
+
           if [ -z "$(git status --porcelain)" ]; then
+            echo "candidate_ready=false" >>"$GITHUB_OUTPUT"
             echo "The agent made no changes; nothing to propose this hour." \
               >>"$GITHUB_STEP_SUMMARY"
             exit 0
           fi
 
-          title="contextual-orchestrator autonomous product increment"
-          body_file="$RUNNER_TEMP/pr-body.md"
-          if [ -f PR_MESSAGE.md ]; then
-            candidate_title="$(head -n 1 PR_MESSAGE.md | sed 's/^#\+ *//')"
-            [ -n "$candidate_title" ] && title="$candidate_title"
-            tail -n +2 PR_MESSAGE.md >"$body_file"
-            rm -f PR_MESSAGE.md
-          else
-            echo "Autonomous NVIDIA NIM increment; see the diff and CHANGELOG.md." \
-              >"$body_file"
+          git \
+            -c core.hooksPath=/dev/null \
+            -c core.fsmonitor=false \
+            -c diff.external= \
+            -c core.attributesFile=/dev/null \
+            add -N -- .
+          git \
+            -c core.hooksPath=/dev/null \
+            -c core.fsmonitor=false \
+            -c diff.external= \
+            -c core.attributesFile=/dev/null \
+            --no-pager diff \
+            --binary --full-index --no-ext-diff --no-textconv HEAD -- . \
+            >"$artifact_dir/candidate.patch"
+
+          if [ ! -s "$artifact_dir/candidate.patch" ]; then
+            echo "candidate_ready=false" >>"$GITHUB_OUTPUT"
+            echo "The candidate produced no applicable patch." >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+          if [ "$(stat -c '%s' "$artifact_dir/candidate.patch")" -gt 5242880 ]; then
+            echo "::error::Candidate patch exceeds the 5 MiB publication boundary."
+            exit 1
           fi
 
+          echo "candidate_ready=true" >>"$GITHUB_OUTPUT"
+
+      - name: Upload the untrusted candidate boundary
+        if: steps.package.outputs.candidate_ready == 'true'
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4
+        with:
+          name: autonomous-product-candidate
+          path: ${{ runner.temp }}/autonomous-product-candidate
+          if-no-files-found: error
+          retention-days: 1
+
+  publish-product-gap:
+    needs: develop-product-gap
+    if: >-
+      needs.develop-product-gap.result == 'success' &&
+      needs.develop-product-gap.outputs.candidate_ready == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      actions: read
+      contents: write
+      pull-requests: write
+    env:
+      DEFAULT_BRANCH: main
+    steps:
+      - name: Check out a fresh trusted publication workspace
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262
+        with:
+          ref: main
+          persist-credentials: false
+
+      - name: Download the untrusted candidate artifact
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          artifact_dir="$RUNNER_TEMP/autonomous-product-candidate"
+          rm -rf "$artifact_dir"
+          install -d -m 0700 "$artifact_dir"
+          gh run download "$GITHUB_RUN_ID" \
+            --repo "$GITHUB_REPOSITORY" \
+            --name autonomous-product-candidate \
+            --dir "$artifact_dir"
+
+      - name: Validate and apply the bounded patch
+        id: validate
+        shell: bash
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+          artifact_dir="$RUNNER_TEMP/autonomous-product-candidate"
+          patch_file="$artifact_dir/candidate.patch"
+          metadata_file="$artifact_dir/pr.json"
+
+          python - "$patch_file" "$metadata_file" "$artifact_dir" <<'PY'
+          import json
+          import pathlib
+          import shlex
+          import sys
+
+          patch_path = pathlib.Path(sys.argv[1])
+          metadata_path = pathlib.Path(sys.argv[2])
+          output_dir = pathlib.Path(sys.argv[3])
+          if not patch_path.is_file() or not metadata_path.is_file():
+              raise SystemExit("candidate artifact is incomplete")
+          if not 1 <= patch_path.stat().st_size <= 5 * 1024 * 1024:
+              raise SystemExit("candidate patch is empty or exceeds 5 MiB")
+
+          patch = patch_path.read_text(encoding="utf-8")
+          if "\x00" in patch:
+              raise SystemExit("candidate patch contains a NUL byte")
+          if "new file mode 120000" in patch or "old mode 120000" in patch:
+              raise SystemExit("candidate patch may not create or modify symbolic links")
+          if "new file mode 160000" in patch or "old mode 160000" in patch:
+              raise SystemExit("candidate patch may not create or modify submodules")
+
+          changed_paths = []
+          for line in patch.splitlines():
+              if not line.startswith("diff --git "):
+                  continue
+              if '"' in line:
+                  raise SystemExit("quoted or ambiguous patch paths are not supported")
+              parts = shlex.split(line)
+              if len(parts) != 4 or not parts[2].startswith("a/") or not parts[3].startswith("b/"):
+                  raise SystemExit("malformed patch path header")
+              left = pathlib.PurePosixPath(parts[2][2:])
+              right = pathlib.PurePosixPath(parts[3][2:])
+              if left != right:
+                  raise SystemExit("renames must be proposed in a separately reviewed PR")
+              if (
+                  left.is_absolute()
+                  or ".." in left.parts
+                  or not left.parts
+                  or left.parts[0] == ".git"
+                  or str(left) in {"opencode.json", "PR_MESSAGE.md", ".gitmodules"}
+              ):
+                  raise SystemExit(f"forbidden candidate path: {left}")
+              changed_paths.append(str(left))
+          if not changed_paths or len(changed_paths) > 200:
+              raise SystemExit("candidate must change between 1 and 200 files")
+
+          metadata = json.loads(metadata_path.read_text(encoding="utf-8"))
+          title = metadata.get("title")
+          body = metadata.get("body")
+          if not isinstance(title, str) or not 1 <= len(title) <= 120:
+              raise SystemExit("candidate title is invalid")
+          if any(ord(char) < 32 for char in title):
+              raise SystemExit("candidate title contains control characters")
+          if not isinstance(body, str) or len(body.encode("utf-8")) > 65536:
+              raise SystemExit("candidate body is invalid")
+
+          (output_dir / "title.txt").write_text(title, encoding="utf-8")
+          (output_dir / "body.md").write_text(body, encoding="utf-8")
+          PY
+
+          hooks_dir="$RUNNER_TEMP/empty-git-hooks"
+          rm -rf "$hooks_dir"
+          install -d -m 0700 "$hooks_dir"
+          git apply --check --binary --whitespace=error "$patch_file"
+          git -c core.hooksPath="$hooks_dir" apply \
+            --index --binary --whitespace=error "$patch_file"
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo "::error::Validated candidate produced an empty staged diff."
+            exit 1
+          fi
+
+          echo "title_file=$artifact_dir/title.txt" >>"$GITHUB_OUTPUT"
+          echo "body_file=$artifact_dir/body.md" >>"$GITHUB_OUTPUT"
+          echo "hooks_dir=$hooks_dir" >>"$GITHUB_OUTPUT"
+
+      - name: Commit, push, and open exactly one pull request
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TITLE_FILE: ${{ steps.validate.outputs.title_file }}
+          BODY_FILE: ${{ steps.validate.outputs.body_file }}
+          HOOKS_DIR: ${{ steps.validate.outputs.hooks_dir }}
+        run: |
+          set -euo pipefail
+          cd "$GITHUB_WORKSPACE"
+
+          title="$(cat "$TITLE_FILE")"
           branch="nim-agent/product-dev-${GITHUB_RUN_ID}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git checkout -b "$branch"
-          git add -A
-          git commit -m "$title"
-          git push \
-            "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" \
-            "HEAD:refs/heads/${branch}"
+          git -c core.hooksPath="$HOOKS_DIR" commit -m "$title"
+          gh auth setup-git
+          git -c core.hooksPath="$HOOKS_DIR" push \
+            origin "HEAD:refs/heads/${branch}"
           pr_url="$(
             gh pr create \
               --repo "$GITHUB_REPOSITORY" \
               --base "$DEFAULT_BRANCH" \
               --head "$branch" \
               --title "$title" \
-              --body-file "$body_file"
+              --body-file "$BODY_FILE"
           )"
           {
             echo "Opened bounded pull request: $pr_url"
