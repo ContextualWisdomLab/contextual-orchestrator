@@ -36,3 +36,29 @@ jobs:
 
       - name: Run full test suite
         run: python -m pytest -q
+
+  export_review_workspace:
+    name: Export read-only review workspace
+    if: >-
+      github.event_name == 'pull_request' &&
+      github.event.pull_request.head.ref == 'claude/nim-all-models-support-fecb0b'
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - name: Checkout exact pull-request head without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+          persist-credentials: false
+
+      - name: Upload source-only review workspace
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
+        with:
+          name: nim-review-workspace-${{ github.event.pull_request.head.sha }}
+          path: |
+            .
+            !.git/**
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
