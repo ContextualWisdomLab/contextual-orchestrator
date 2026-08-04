@@ -17,7 +17,8 @@ The gate evaluates these conditions in order:
 3. Stop when `NVIDIA_NIM_API_KEY` is absent.
 4. Run exactly one bounded agent session in a credential-free, network-isolated container.
 5. Validate the candidate filesystem and package it as a bounded patch artifact.
-6. On a fresh runner with no NVIDIA credential, validate the artifact and open exactly one pull request.
+6. On a fresh runner with no NVIDIA credential, validate the artifact.
+7. Exchange a short-lived OpenCode GitHub App token through OIDC and use that app identity to open exactly one pull request.
 
 Because the agent runs synchronously inside the gated job, the concurrency group is the task inventory: there is no external Agent Task queue to poll, and a finished run leaves either nothing or an open pull request that closes the gate for the next hour.
 
@@ -55,6 +56,7 @@ The container runs with:
 - no Docker socket;
 - no GitHub token, OIDC token, NVIDIA key, or GitHub command-file mount;
 - project OpenCode configuration and Claude compatibility disabled;
+- automatic OpenCode updates and remote model-catalog fetching disabled;
 - an explicit read-only OpenCode configuration mounted from trusted workflow code.
 
 OpenCode points to `http://nim-proxy:8001/v1` with a non-secret placeholder key. Tool permissions also deny push, commit, GitHub CLI, Docker, web-fetch, and external-directory operations. These permissions are defense in depth only; the container and network boundaries are the security controls.
@@ -91,13 +93,14 @@ The remaining candidate is reduced to a binary Git patch no larger than 5 MiB pl
 
 ## Trusted publication job
 
-The `publish-product-gap` job runs on a fresh runner and receives no NVIDIA credential. It has the minimum write permissions needed to publish the proposal:
+The `publish-product-gap` job runs on a fresh runner and receives no NVIDIA credential. Its built-in `GITHUB_TOKEN` remains read-only:
 
-- `actions: read` to download the current run's candidate artifact;
-- `contents: write` to push one generated branch;
-- `pull-requests: write` to open one pull request.
+- `actions: read` downloads the current run's candidate artifact;
+- `contents: read` checks out the current default branch;
+- `pull-requests: read` permits live repository context checks;
+- `id-token: write` requests an OIDC identity for a short-lived OpenCode GitHub App token.
 
-Before applying the patch, the job enforces the artifact size and file-count boundaries, validates UTF-8 metadata, and rejects:
+Before requesting the app token, the job enforces the artifact size and file-count boundaries, validates UTF-8 metadata, and rejects:
 
 - quoted or ambiguous patch paths;
 - path traversal and any `.git` component;
@@ -105,7 +108,9 @@ Before applying the patch, the job enforces the artifact size and file-count bou
 - `.gitattributes`, `.gitmodules`, transient OpenCode configuration, and the PR-message control file;
 - renames, symbolic-link modes, and submodule modes.
 
-The patch must pass `git apply --check` and `git diff --cached --check`. It is then applied, committed, and pushed with an empty trusted `core.hooksPath`. The publisher opens exactly one pull request and does not merge it.
+The patch must pass `git apply --check` and `git diff --cached --check`. It is applied with an empty trusted `core.hooksPath` before any write-capable token exists.
+
+The job then exchanges its OIDC token for a short-lived OpenCode GitHub App token using the same organization-reviewed contract as the central PR automation. It fails closed when that exchange is unavailable; it does not fall back to the built-in token. This distinction is operationally required because a pull request created with `GITHUB_TOKEN` does not trigger ordinary downstream workflow events. The GitHub App identity pushes one generated branch and opens exactly one pull request, causing repository Tests, Fuzz, Security, Security Scan, SAST, OpenCode, Strix, and merge-governance workflows to evaluate the new head normally. The publisher does not merge the PR.
 
 ## Delegated product contract
 
@@ -128,13 +133,13 @@ Issue #86 still requires a separately reviewed benchmark workflow for full catal
 
 ## Dry run
 
-A manual run with `dry_run: true` executes the queue and credential gates. When dispatch is permitted, it prints the exact bounded agent prompt to the workflow summary but does not build containers, start the broker, run OpenCode, upload an artifact, create a branch, or open a pull request.
+A manual run with `dry_run: true` executes the queue and credential gates. When dispatch is permitted, it prints the exact bounded agent prompt to the workflow summary but does not build containers, start the broker, run OpenCode, upload an artifact, request a publication token, create a branch, or open a pull request.
 
 ## Failure semantics
 
 A missing pull-request inventory, missing NIM secret, or open pull request produces a non-dispatch reason in the workflow summary. These states are safe no-ops, not successful evidence that development occurred.
 
-When the broker cannot become ready or every model candidate fails, the workflow discards partial work and fails. An agent session that completes without changing the tree is reported as a no-op. An oversized, malformed, ambiguous, path-unsafe, policy-mutating, link-bearing, submodule-bearing, special-file-bearing, or otherwise invalid candidate fails closed before the publication token is used.
+When the broker cannot become ready or every model candidate fails, the workflow discards partial work and fails. An agent session that completes without changing the tree is reported as a no-op. An oversized, malformed, ambiguous, path-unsafe, policy-mutating, link-bearing, submodule-bearing, special-file-bearing, or otherwise invalid candidate fails closed before any publication token is requested. A failed OIDC or GitHub App exchange also fails closed so the workflow cannot create a PR whose required workflows would be suppressed.
 
 The cleanup step removes the broker, isolated networks, temporary agent image, provider configuration, and downloaded OpenCode archive even after failure.
 
@@ -144,6 +149,7 @@ For a proposed workflow change, run:
 
 ```bash
 python -m pytest -q tests/test_hourly_product_development_workflow.py
+python -m pytest -q tests/test_nim_credential_broker.py
 python -m pytest -q
 ```
 
@@ -151,4 +157,4 @@ Then require the current pull-request head to pass repository Tests, Fuzz, Secur
 
 ## Disabling the loop
 
-Disable the scheduled workflow in GitHub Actions or remove only the `schedule` trigger through a reviewed pull request. Do not weaken the PR-first gate, container isolation, credential broker, candidate validation, fresh-runner publication, or independent-review requirements as a shortcut. Manual dry runs may remain available while scheduled dispatch is disabled.
+Disable the scheduled workflow in GitHub Actions or remove only the `schedule` trigger through a reviewed pull request. Do not weaken the PR-first gate, container isolation, credential broker, candidate validation, fresh-runner publication, app-token requirement, or independent-review requirements as a shortcut. Manual dry runs may remain available while scheduled dispatch is disabled.
