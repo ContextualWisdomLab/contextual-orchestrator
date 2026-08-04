@@ -50,7 +50,17 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
           ref: ${{ github.event.pull_request.head.sha }}
+          fetch-depth: 0
           persist-credentials: false
+
+      - name: Recover reviewed transformation source as inert evidence
+        shell: bash
+        run: |
+          set -euo pipefail
+          mkdir -p .review-evidence
+          git show \
+            18d3fe7e8f64ec0a7ec959365765789f887624e3:.github/workflows/nim-source-repair.yml \
+            > .review-evidence/nim-source-repair.yml
 
       - name: Upload source-only review workspace
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
