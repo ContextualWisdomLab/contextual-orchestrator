@@ -1,3 +1,9 @@
-# Atheris coverage-guided job deps (Python 3.11). Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.11 --universal -o fuzz/requirements-atheris.txt
+# Atheris coverage-guided job deps. atheris is published per-interpreter: the
+# repo fuzz job runs CPython 3.11, where the newest published wheel is 3.0.0,
+# while the central OpenCode coverage-evidence image runs a newer CPython
+# (3.13+) where only 3.1.0 is published. Pin per interpreter with environment
+# markers so a single hash lock satisfies both --require-hashes installs.
+# Compile: uv pip compile fuzz/requirements-atheris.in --generate-hashes --python-version 3.11 --universal -o fuzz/requirements-atheris.txt
 pip
-atheris==3.1.0
+atheris==3.0.0; python_version < "3.13"
+atheris==3.1.0; python_version >= "3.13"
