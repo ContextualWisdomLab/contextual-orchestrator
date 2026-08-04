@@ -581,7 +581,9 @@ class CostRoutingCoordinator:
             if request.custom_id not in item_by_id
             or not item_by_id[request.custom_id].embedding
             or not all(
-                isinstance(component, (int, float)) and math.isfinite(float(component))
+                not isinstance(component, bool)
+                and isinstance(component, (int, float))
+                and math.isfinite(float(component))
                 for component in item_by_id[request.custom_id].embedding
             )
             or (

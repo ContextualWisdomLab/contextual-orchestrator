@@ -68,6 +68,11 @@ def _register_credential_command(argv: list[str]) -> None:
     )
     args = parser.parse_args(argv)
 
+    if not args.value_stdin:
+        parser.error(
+            "--value-stdin is required; stdin is the only supported secret transport"
+        )
+
     value = _read_stdin_credential()
 
     if not value:

@@ -836,7 +836,7 @@ def build_server(
                         model=model_name,
                         dimensions=dimensions,
                         attribution=attribution,
-                        metadata={"actor_scope": "inference", "request_channel": "sync"},
+                        metadata={"actor_scope": "inference"},
                     ))
                     if document.get("status") == "failed":
                         raise RequestError(
@@ -871,7 +871,7 @@ def build_server(
                             }
                             for item in document["embeddings"]
                         ],
-                        "model": model_name,
+                        "model": str(document.get("model") or model_name),
                         "usage": {
                             "prompt_tokens": document["total_tokens"],
                             "total_tokens": document["total_tokens"],
