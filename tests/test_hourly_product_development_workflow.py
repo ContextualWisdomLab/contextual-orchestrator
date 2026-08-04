@@ -48,15 +48,9 @@ def test_hourly_loop_brokers_nim_without_exposing_the_secret_to_opencode() -> No
 
     assert "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
     assert "REPOSITORY_TOKEN: ${{ github.token }}" in workflow
-    assert 'UPSTREAM_HOST: Final = "integrate.api.nvidia.com"' in workflow
+    assert "scripts/ci/nim_credential_broker.py" in workflow
     assert '"baseURL": "http://nim-proxy:8001/v1"' in workflow
     assert '"apiKey": "brokered-by-local-proxy"' in workflow
-    assert "ALLOWED_PATHS =" in workflow
-    assert '"/v1/chat/completions"' in workflow
-    assert '"/v1/models"' in workflow
-    assert "MAX_REQUESTS = 128" in workflow
-    assert "MAX_REQUEST_BYTES = 2 * 1024 * 1024" in workflow
-    assert "MAX_RESPONSE_BYTES = 32 * 1024 * 1024" in workflow
     assert "docker network create --internal" in workflow
     assert "docker network connect --alias nim-proxy" in workflow
     assert "--read-only" in workflow
