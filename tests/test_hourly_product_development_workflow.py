@@ -82,6 +82,26 @@ def test_hourly_loop_brokers_nim_without_exposing_the_secret_to_opencode() -> No
     assert "gh pr merge" not in workflow
 
 
+def test_agent_image_contains_hash_locked_test_and_quality_toolchains() -> None:
+    """Offline agent execution can prove tests, coverage, and docstrings itself."""
+
+    workflow = _workflow_text()
+    flattened = workflow.replace("\\\n", " ")
+
+    assert "requirements-opencode-review-ci.txt" in workflow
+    assert "fuzz/requirements-property.txt" in workflow
+    assert "COPY requirements-opencode-review-ci.txt" in workflow
+    assert "COPY requirements-property.txt" in workflow
+    assert (
+        "python -m pip install --require-hashes "
+        "-r /tmp/requirements-opencode-review-ci.txt"
+    ) in flattened
+    assert (
+        "python -m pip install --require-hashes "
+        "-r /tmp/requirements-property.txt"
+    ) in flattened
+
+
 def test_hourly_loop_rejects_special_files_before_patch_packaging() -> None:
     """Agent-created links, devices, sockets, and oversized trees fail closed."""
 
