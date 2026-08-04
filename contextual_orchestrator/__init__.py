@@ -49,8 +49,11 @@ from .model_fallback import (
     build_fallback_plan,
     load_fallback_manifest,
 )
-from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .orchestrator import ModelAgent, ModelClient as _ModelClient, TaskOrchestrator, WorkflowStep, load_agents
+from .provider_transport import install_provider_transport as _install_provider_transport
 from .token_counting import HeuristicTokenCounter, build_token_counter
+
+_install_provider_transport(_ModelClient)
 
 __all__ = [
     "ModelAgent",
