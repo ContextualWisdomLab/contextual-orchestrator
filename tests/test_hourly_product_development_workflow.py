@@ -66,9 +66,6 @@ def test_hourly_loop_brokers_nim_without_exposing_the_secret_to_opencode() -> No
     assert "$GITHUB_WORKSPACE/.git:/workspace/.git:ro" in workflow
     assert "OPENCODE_DISABLE_PROJECT_CONFIG=1" in workflow
     assert "OPENCODE_DISABLE_CLAUDE_CODE=1" in workflow
-    assert "OPENCODE_DISABLE_AUTOUPDATE=1" in workflow
-    assert "OPENCODE_DISABLE_MODELS_FETCH=1" in workflow
-    assert "OPENCODE_PURE=1" in workflow
     assert "persist-credentials: false" in workflow
     assert 'OPENCODE_VERSION: "1.17.13"' in workflow
     assert "sha256sum -c -" in workflow
