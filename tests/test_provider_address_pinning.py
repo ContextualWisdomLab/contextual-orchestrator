@@ -182,15 +182,11 @@ def test_validate_then_open_uses_same_dns_answer_without_reresolution() -> None:
     """The connected addresses come only from the validation-time DNS answer."""
     client, agent = _configured_client()
     with mock.patch(
-        "contextual_orchestrator.orchestrator.socket.getaddrinfo",
-        return_value=_public_dns_answers(),
-    ) as policy_resolver, mock.patch(
         "contextual_orchestrator.provider_transport.socket.getaddrinfo",
         return_value=_public_dns_answers(),
-    ) as pin_resolver:
+    ) as resolver:
         client._validate_provider(agent)
-    assert policy_resolver.call_count == 1
-    assert pin_resolver.call_count == 1
+    assert resolver.call_count == 2
 
     _FakeConnection.failing_ips = {"93.184.216.34"}
     _FakeConnection.responses = {"93.184.216.35": _FakeResponse(body=b"success")}
@@ -201,11 +197,8 @@ def test_validate_then_open_uses_same_dns_answer_without_reresolution() -> None:
         method="POST",
     )
     with mock.patch(
-        "contextual_orchestrator.orchestrator.socket.getaddrinfo",
-        side_effect=AssertionError("transport must not resolve policy DNS again"),
-    ), mock.patch(
         "contextual_orchestrator.provider_transport.socket.getaddrinfo",
-        side_effect=AssertionError("transport must not resolve pin DNS again"),
+        side_effect=AssertionError("transport must not resolve DNS again"),
     ):
         with client._open_provider(request) as response:
             assert response.read() == b"success"
@@ -228,9 +221,6 @@ def test_failed_revalidation_clears_existing_pin() -> None:
     """A later unsafe DNS answer cannot reuse a formerly valid cached address."""
     client, agent = _configured_client()
     with mock.patch(
-        "contextual_orchestrator.orchestrator.socket.getaddrinfo",
-        return_value=_public_dns_answers(),
-    ), mock.patch(
         "contextual_orchestrator.provider_transport.socket.getaddrinfo",
         return_value=_public_dns_answers(),
     ):
@@ -238,7 +228,7 @@ def test_failed_revalidation_clears_existing_pin() -> None:
 
     unsafe = [(2, 1, 6, "", ("127.0.0.1", 8443))]
     with mock.patch(
-        "contextual_orchestrator.orchestrator.socket.getaddrinfo",
+        "contextual_orchestrator.provider_transport.socket.getaddrinfo",
         return_value=unsafe,
     ):
         with pytest.raises(RuntimeError, match="non-public address"):
@@ -254,9 +244,6 @@ def test_redirect_response_is_rejected_without_following_location() -> None:
     client, agent = _configured_client()
     answers = [(2, 1, 6, "", ("93.184.216.34", 8443))]
     with mock.patch(
-        "contextual_orchestrator.orchestrator.socket.getaddrinfo",
-        return_value=answers,
-    ), mock.patch(
         "contextual_orchestrator.provider_transport.socket.getaddrinfo",
         return_value=answers,
     ):
@@ -278,9 +265,6 @@ def test_all_pinned_addresses_failing_returns_network_error() -> None:
     """Exhausting all approved addresses yields one urllib-compatible error."""
     client, agent = _configured_client()
     with mock.patch(
-        "contextual_orchestrator.orchestrator.socket.getaddrinfo",
-        return_value=_public_dns_answers(),
-    ), mock.patch(
         "contextual_orchestrator.provider_transport.socket.getaddrinfo",
         return_value=_public_dns_answers(),
     ):
