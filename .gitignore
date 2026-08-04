@@ -12,3 +12,9 @@ tempcred.txt
 
 # hypothesis fuzzing DB
 .hypothesis/
+
+# coverage measurement data
+.coverage
+
+# local benchmark artifacts (uploaded by CI, not committed)
+benchmark_artifacts/

@@ -199,8 +199,25 @@ is read from a **KV config store**, never `os.getenv`.
   `pg_tiktoken` counting, and the production batch backend without adding a
   repository split here.
 
-Grounding papers (LLM cost, routing, load balancing) live in
+Grounding papers (LLM cost, routing, load balancing, evaluation) live in
 [docs/papers](docs/papers/README.md) with citations.
+
+### NIM cost-quality benchmark (optional harness)
+
+Evidence-grade benchmark of the routing policies against a **dynamically
+discovered** NVIDIA NIM catalog: all-modality capability probes (chat,
+completions, Responses API, embeddings, image/video/audio understanding,
+transcription, speech; `omni_capable` derived), fair
+route/conduct/single-worker comparisons with paired-bootstrap uncertainty and
+Pareto frontiers, and strictly separated actual-free vs hypothetical-paid cost
+accounting. Deterministic `--dry-run` needs no network or secret; live runs
+resolve `NVIDIA_NIM_API_KEY` from the KV and fail closed otherwise. See
+[docs/nim_benchmark.md](docs/nim_benchmark.md).
+
+```bash
+python -m contextual_orchestrator nim-benchmark --dry-run \
+  --pricing-scenario examples/nim_pricing_scenario.json --output-dir benchmark_artifacts
+```
 
 ## Design Artifacts
 
@@ -255,6 +272,7 @@ python tests/test_paper_contracts.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
+python tests/test_nim_benchmark.py
 python tests/test_security_hardening.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py

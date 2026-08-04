@@ -41,6 +41,7 @@ This repository implements the interface and control plane, not the trained coor
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
+The [NIM cost-quality benchmark](nim_benchmark.md) is that evaluation set's supplier: it discovers the hosted catalog dynamically, probes every modality contract, and compares route/conduct/single-worker policies with paired uncertainty — evidence first, learned policy later.
 
 ## Product Planning Interpretation
 
