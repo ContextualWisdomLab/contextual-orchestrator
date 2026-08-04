@@ -28,11 +28,28 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Install test dependencies
-        # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Reuses the
-        # property-test lockfile (pytest + hypothesis), which covers the full
-        # suite's requirements: the package itself is stdlib-only.
-        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+      - name: Install test and quality dependencies
+        # Both inputs are fully hash-locked. The OpenCode-review tool lock adds
+        # coverage and interrogate; the property lock supplies Hypothesis for
+        # the repository's always-on fuzz/property tests.
+        run: >-
+          python -m pip install --require-hashes
+          -r requirements-opencode-review-ci.txt
+          -r fuzz/requirements-property.txt
 
       - name: Run full test suite
         run: python -m pytest -q
+
+      - name: Enforce exact broker statement and branch coverage
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch \
+            --source=scripts.ci.nim_credential_broker \
+            -m pytest -q tests/test_nim_credential_broker.py
+          python -m coverage report --fail-under=100 \
+            --include=scripts/ci/nim_credential_broker.py
+
+      - name: Enforce exact broker docstring coverage
+        run: >-
+          python -m interrogate -f 100
+          scripts/ci/nim_credential_broker.py
