@@ -1,0 +1,242 @@
+name: Hourly Product Development
+
+on:
+  workflow_dispatch:
+    inputs:
+      dry_run:
+        description: Evaluate the gate and prompt without creating an agent task
+        required: false
+        default: false
+        type: boolean
+  schedule:
+    - cron: "47 * * * *"
+
+concurrency:
+  group: hourly-product-development-${{ github.repository }}
+  cancel-in-progress: false
+
+# Repository inventory uses the built-in read-only token. GitHub's Agent Tasks
+# API rejects GitHub App installation tokens, including GITHUB_TOKEN, so task
+# inventory and creation use a fine-grained user token stored as the
+# COPILOT_GITHUB_TOKEN organization or repository secret. That token needs only
+# Agent tasks read/write access for this repository.
+permissions:
+  contents: read
+  pull-requests: read
+
+jobs:
+  dispatch-product-gap:
+    if: github.repository == 'ContextualWisdomLab/contextual-orchestrator'
+    runs-on: ubuntu-latest
+    env:
+      AGENT_TASK_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}
+      DEFAULT_BRANCH: main
+      DRY_RUN: ${{ inputs.dry_run || false }}
+      REPOSITORY_TOKEN: ${{ github.token }}
+    steps:
+      - name: Enforce pull-request-first single-flight gate
+        id: gate
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          if ! open_prs="$(
+            GH_TOKEN="$REPOSITORY_TOKEN" gh pr list \
+              --repo "$GITHUB_REPOSITORY" \
+              --state open \
+              --limit 1 \
+              --json number,url
+          )"; then
+            {
+              echo "dispatch=false"
+              echo "reason=pull_request_inventory_unavailable"
+            } >>"$GITHUB_OUTPUT"
+            echo "Pull-request inventory was unavailable; failing closed." \
+              >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ "$(jq 'length' <<<"$open_prs")" -gt 0 ]; then
+            {
+              echo "dispatch=false"
+              echo "reason=open_pull_request"
+            } >>"$GITHUB_OUTPUT"
+            echo "An open pull request exists; central PR governance owns this hour." \
+              >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if [ -z "${AGENT_TASK_TOKEN:-}" ]; then
+            {
+              echo "dispatch=false"
+              echo "reason=agent_task_token_unavailable"
+            } >>"$GITHUB_OUTPUT"
+            cat >>"$GITHUB_STEP_SUMMARY" <<'SUMMARY'
+          Agent task dispatch is disabled because `COPILOT_GITHUB_TOKEN` is not configured.
+          Configure a fine-grained user token with Agent tasks read/write permission for
+          this repository. The Agent Tasks API does not accept `GITHUB_TOKEN`.
+          SUMMARY
+            exit 0
+          fi
+
+          tasks_endpoint="/agents/repos/${GITHUB_REPOSITORY}/tasks?per_page=100"
+          if ! tasks_json="$(
+            GH_TOKEN="$AGENT_TASK_TOKEN" gh api \
+              --paginate \
+              --slurp \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "$tasks_endpoint"
+          )"; then
+            {
+              echo "dispatch=false"
+              echo "reason=task_inventory_unavailable"
+            } >>"$GITHUB_OUTPUT"
+            echo "Agent task inventory was unavailable; failing closed." \
+              >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          if ! jq -e 'all(.[]; (.tasks | type) == "array")' \
+            <<<"$tasks_json" >/dev/null; then
+            {
+              echo "dispatch=false"
+              echo "reason=task_inventory_unavailable"
+            } >>"$GITHUB_OUTPUT"
+            echo "Agent task inventory had an unexpected schema; failing closed." \
+              >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          active_tasks="$(
+            jq '[
+              .[] | .tasks[]?
+              | ((.state // "unknown") | ascii_downcase) as $state
+              | select(
+                  $state != "completed" and
+                  $state != "failed" and
+                  $state != "timed_out" and
+                  $state != "cancelled"
+                )
+            ] | length' <<<"$tasks_json"
+          )"
+          if [ "$active_tasks" -gt 0 ]; then
+            {
+              echo "dispatch=false"
+              echo "reason=active_agent_task"
+            } >>"$GITHUB_OUTPUT"
+            echo "An Agent Task is active or in an unknown state; no duplicate was created." \
+              >>"$GITHUB_STEP_SUMMARY"
+            exit 0
+          fi
+
+          {
+            echo "dispatch=true"
+            echo "reason=ready"
+          } >>"$GITHUB_OUTPUT"
+
+      - name: Prepare bounded commercial-quality task
+        if: steps.gate.outputs.dispatch == 'true'
+        shell: bash
+        run: |
+          cat >"$RUNNER_TEMP/contextual-orchestrator-agent-prompt.md" <<'PROMPT'
+          Continue product development for ContextualWisdomLab/contextual-orchestrator.
+
+          Start by reading AGENTS.md, README.md, CHANGELOG.md when present,
+          docs/architecture.md, docs/product_planning.md, open issues, recent merged pull
+          requests, the current source, and tests. Identify the single highest-value
+          buyer-visible product, reliability, interoperability, security, evaluation, or
+          operations gap that can be completed as exactly one bounded pull request.
+          Do not create a new repository.
+
+          Work test-first: establish a failing regression or executable contract before
+          implementation, then make the smallest coherent change that passes it. Preserve
+          the standalone Python package and its modular MSA role. Keep integration contracts
+          compatible with ContextualWisdomLab/.github, naruon, and other CWL services. New
+          database objects, if unavoidable, must use descriptive two-word-or-longer snake_case
+          names; snake_case is preferred over CamelCase or PascalCase for database objects.
+
+          Maintain 100% production statement and branch coverage and 100% production
+          docstring coverage. Docstrings must let a beginner understand public modules,
+          classes, functions, methods, properties, inputs, outputs, exceptions, and security
+          boundaries without reverse-engineering the implementation. Run focused tests, the
+          full suite, coverage, docstring checks, compile checks, package build and installed
+          package smoke tests, plus relevant SAST, dependency, secret, and adversarial checks.
+
+          Where behavior is ambiguous, use current authoritative international standards,
+          primary technical documentation, and peer-reviewed research. Preserve the published
+          distinctions among low-latency routing, bounded deep orchestration, worker isolation,
+          verifier roles, and quality/latency tradeoffs instead of claiming paper-level results
+          without evidence. Use Figma or Product Design when a real user interface, workflow,
+          or interaction contract benefits from it; do not manufacture design work for a
+          backend-only increment.
+
+          Treat issue #86 as the evidence contract for NVIDIA evaluation work. When that issue
+          is the highest-value reviewable slice, use NVIDIA_NIM_API_KEY only through GitHub
+          Secrets, dynamically discover the current hosted catalog with GET /v1/models, probe
+          all discovered models under bounded concurrency, and compare eligible single-model,
+          route-once, and conduct policies under equal task, call, step, timeout, and adjusted
+          token budgets. Keep actual free API cost separate from hypothetical paid cost. Never
+          invent prices: use a reviewed versioned price scenario or mark the hypothetical value
+          unknown. Record uncertainty, Pareto tradeoffs, provenance, failures, skipped-model
+          reasons, and secret-redacted artifacts. Do not hard-code model IDs as the catalog.
+
+          Update CHANGELOG.md and all affected user, architecture, operations, evaluation, and
+          security documentation. Follow Semantic Versioning. Change the package version only
+          when the resulting integrated state is genuinely release-ready, and prepare release
+          notes in the pull request rather than publishing a release from the task.
+
+          Do not merge, publish, release, or bypass reviews. Do not weaken branch protection,
+          security gates, coverage gates, independent approval, or exact-head verification.
+          Create exactly one bounded pull request against main with reproducible evidence,
+          standards or paper citations where relevant, explicit residual risks, and no unrelated
+          refactoring. The organization-central review → repair → current-head Checks → merge
+          loop owns every subsequent mutation and merge decision.
+          PROMPT
+
+      - name: Record dry-run decision
+        if: steps.gate.outputs.dispatch == 'true' && env.DRY_RUN == 'true'
+        shell: bash
+        run: |
+          {
+            echo "Dry run: one bounded product-development task would be created."
+            echo
+            cat "$RUNNER_TEMP/contextual-orchestrator-agent-prompt.md"
+          } >>"$GITHUB_STEP_SUMMARY"
+
+      - name: Create Copilot cloud-agent task
+        if: steps.gate.outputs.dispatch == 'true' && env.DRY_RUN != 'true'
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          request_file="$RUNNER_TEMP/contextual-orchestrator-agent-request.json"
+          jq -n \
+            --rawfile prompt "$RUNNER_TEMP/contextual-orchestrator-agent-prompt.md" \
+            --arg base "$DEFAULT_BRANCH" \
+            '{
+              prompt: $prompt,
+              base_ref: $base,
+              create_pull_request: true
+            }' >"$request_file"
+
+          response="$(
+            GH_TOKEN="$AGENT_TASK_TOKEN" gh api \
+              --method POST \
+              -H "Accept: application/vnd.github+json" \
+              -H "X-GitHub-Api-Version: 2026-03-10" \
+              "/agents/repos/${GITHUB_REPOSITORY}/tasks" \
+              --input "$request_file"
+          )"
+
+          task_id="$(jq -r '.id // "unknown"' <<<"$response")"
+          task_state="$(jq -r '.state // "unknown"' <<<"$response")"
+          task_url="$(jq -r '.html_url // empty' <<<"$response")"
+          {
+            echo "Created Copilot cloud-agent task \`$task_id\`."
+            echo "Initial state: \`$task_state\`."
+            if [ -n "$task_url" ]; then
+              echo "Task: $task_url"
+            fi
+            echo "Central PR governance owns review, repair, revalidation, and merge."
+          } >>"$GITHUB_STEP_SUMMARY"
