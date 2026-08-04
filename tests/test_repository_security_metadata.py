@@ -131,7 +131,7 @@ def test_security_tool_lockfile_uses_hash_pinning():
     assert "uv pip compile" in lock_text
     assert "--hash=sha256:" in lock_text
     assert "pip-audit==2.10.1" in lock_text
-    assert "cyclonedx-bom==7.3.0" in lock_text
+    assert "cyclonedx-bom==7.3.1" in lock_text
 
 
 if __name__ == "__main__":  # pragma: no cover
