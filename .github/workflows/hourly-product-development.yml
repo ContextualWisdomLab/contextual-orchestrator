@@ -144,10 +144,9 @@ jobs:
 
           Start by reading AGENTS.md, README.md, CHANGELOG.md when present,
           docs/architecture.md, docs/product_planning.md, open issues, recent merged pull
-          requests, the current source, and tests. Identify the single highest-value
-          buyer-visible product, reliability, interoperability, security, evaluation, or
-          operations gap that can be completed as exactly one bounded pull request.
-          Do not create a new repository.
+          requests, the current source, and tests. Identify the single highest-value buyer-visible
+          product, reliability, interoperability, security, evaluation, or operations gap that
+          can be completed as exactly one bounded pull request. Do not create a new repository.
 
           Work test-first: establish a failing regression or executable contract before
           implementation, then make the smallest coherent change that passes it. Preserve
@@ -156,11 +155,11 @@ jobs:
           database objects, if unavoidable, must use descriptive two-word-or-longer snake_case
           names; snake_case is preferred over CamelCase or PascalCase for database objects.
 
-          Maintain 100% production statement and branch coverage and 100% production
-          docstring coverage. Docstrings must let a beginner understand public modules,
-          classes, functions, methods, properties, inputs, outputs, exceptions, and security
-          boundaries without reverse-engineering the implementation. Run focused tests, the
-          full suite, coverage, docstring checks, compile checks, package build and installed
+          Maintain 100% production statement and branch coverage and
+          100% production docstring coverage. Docstrings must let a beginner understand public
+          modules, classes, functions, methods, properties, inputs, outputs, exceptions, and
+          security boundaries without reverse-engineering the implementation. Run focused tests,
+          the full suite, coverage, docstring checks, compile checks, package build and installed
           package smoke tests, plus relevant SAST, dependency, secret, and adversarial checks.
 
           Where behavior is ambiguous, use current authoritative international standards,
