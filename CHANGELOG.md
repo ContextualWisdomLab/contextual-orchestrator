@@ -20,3 +20,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
+- Record the reviewed current NVIDIA NIM General FAQ as expiring evidence for free Developer Program prototype-endpoint access, while keeping NVIDIA AI Enterprise production licensing and all hypothetical model prices explicitly separate.
