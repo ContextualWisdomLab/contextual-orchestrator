@@ -41,25 +41,64 @@ def test_hourly_loop_is_pull_request_first_and_fails_closed() -> None:
     assert "steps.gate.outputs.dispatch == 'true'" in workflow
 
 
-def test_hourly_loop_uses_nvidia_nim_and_keeps_credentials_from_the_agent() -> None:
-    """The agent authenticates to NVIDIA NIM only and never holds a GitHub token."""
+def test_hourly_loop_brokers_nim_without_exposing_the_secret_to_opencode() -> None:
+    """Only a hardened broker receives the NIM key; the coding agent never does."""
 
     workflow = _workflow_text()
 
     assert "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
     assert "REPOSITORY_TOKEN: ${{ github.token }}" in workflow
-    assert '"baseURL": "https://integrate.api.nvidia.com/v1"' in workflow
-    assert '"apiKey": "{env:NVIDIA_API_KEY}"' in workflow
+    assert 'UPSTREAM_HOST = "integrate.api.nvidia.com"' in workflow
+    assert '"baseURL": "http://nim-proxy:8001/v1"' in workflow
+    assert '"apiKey": "brokered-by-local-proxy"' in workflow
+    assert "ALLOWED_PATHS =" in workflow
+    assert '"/v1/chat/completions"' in workflow
+    assert '"/v1/models"' in workflow
+    assert "MAX_REQUESTS = 128" in workflow
+    assert "MAX_REQUEST_BYTES = 2 * 1024 * 1024" in workflow
+    assert "MAX_RESPONSE_BYTES = 32 * 1024 * 1024" in workflow
+    assert "docker network create --internal" in workflow
+    assert "docker network connect --alias nim-proxy" in workflow
+    assert "--read-only" in workflow
+    assert "--cap-drop=ALL" in workflow
+    assert "no-new-privileges" in workflow
+    assert "--pids-limit" in workflow
+    assert "$GITHUB_WORKSPACE/.git:/workspace/.git:ro" in workflow
+    assert "OPENCODE_DISABLE_PROJECT_CONFIG=1" in workflow
+    assert "OPENCODE_DISABLE_CLAUDE_CODE=1" in workflow
     assert "persist-credentials: false" in workflow
-    assert "env -u GH_TOKEN -u GITHUB_TOKEN -u REPOSITORY_TOKEN" in workflow
     assert 'OPENCODE_VERSION: "1.17.13"' in workflow
     assert "sha256sum -c -" in workflow
+    assert "/var/run/docker.sock" not in workflow
+
+    agent_start = workflow.index("- name: Run the isolated NVIDIA NIM development agent")
+    agent_end = workflow.index("- name: Validate isolated candidate filesystem", agent_start)
+    agent_step = workflow[agent_start:agent_end]
+    assert "NVIDIA_API_KEY" not in agent_step
+    assert "GH_TOKEN" not in agent_step
+    assert "GITHUB_TOKEN" not in agent_step
+    assert "ACTIONS_ID_TOKEN_REQUEST_TOKEN" not in agent_step
+
     assert "contents: write" in workflow
     assert "pull-requests: write" in workflow
     assert "gh pr create" in workflow
     assert "COPILOT_GITHUB_TOKEN" not in workflow
     assert "/agents/repos" not in workflow
     assert "gh pr merge" not in workflow
+
+
+def test_hourly_loop_rejects_special_files_before_patch_packaging() -> None:
+    """Agent-created links, devices, sockets, and oversized trees fail closed."""
+
+    workflow = _workflow_text()
+
+    assert "os.walk(root, followlinks=False)" in workflow
+    assert "stat.S_ISREG(mode)" in workflow
+    assert "stat.S_ISDIR(mode)" in workflow
+    assert "unsupported candidate filesystem entry" in workflow
+    assert "candidate filesystem exceeds 20000 entries" in workflow
+    assert "candidate filesystem exceeds 256 MiB" in workflow
+    assert "git status --porcelain" in workflow
 
 
 def test_hourly_loop_separates_agent_execution_from_privileged_publication() -> None:
