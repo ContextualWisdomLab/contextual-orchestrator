@@ -65,7 +65,7 @@ jobs:
         run: python -m pip install --require-hashes -r requirements-pip-bootstrap.txt
 
       - name: Verify pip bootstrap
-        run: python -m pip --version | grep -F "pip 26.2"
+        run: python -c 'from importlib.metadata import version; assert version("pip") == "26.2"'
 
       - name: Install audit and SBOM tools
         run: python -m pip install --require-hashes -r requirements-security-ci.txt
