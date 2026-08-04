@@ -42,6 +42,8 @@ def test_security_workflow_covers_core_repository_security_process():
         "github/codeql-action/analyze@v4",
         "python_supply_chain:",
         "actions/setup-python@v6",
+        "python -m pip install --require-hashes -r requirements-pip-bootstrap.txt",
+        'python -m pip --version | grep -F "pip 26.2"',
         "python -m pip install --require-hashes -r requirements-security-ci.txt",
         "python -m pip install --require-hashes -r requirements.lock",
         "python -m pip install --no-deps -e .",
@@ -125,6 +127,17 @@ def test_python_lockfile_uses_hash_pinning():
     assert "sqlalchemy==" in lock_text
 
 
+def test_pip_bootstrap_lockfile_uses_hash_pinning():
+    lock_text = read_text("requirements-pip-bootstrap.txt")
+    input_text = read_text("requirements-pip-bootstrap.in")
+
+    assert "uv pip compile" in lock_text
+    assert "pip==26.2" in input_text
+    assert "pip==26.2" in lock_text
+    assert "--hash=sha256:2d8542afcc84cdd8e846c2b36b2861fad1da376dd98f8e7113e9108a3c331690" in lock_text
+    assert "--hash=sha256:931c303696af6fa3417112103b1cad26890e5a07eccb5b99783700e33f2b8aad" in lock_text
+
+
 def test_security_tool_lockfile_uses_hash_pinning():
     lock_text = read_text("requirements-security-ci.txt")
 
@@ -142,5 +155,6 @@ if __name__ == "__main__":  # pragma: no cover
     test_security_policy_documents_reporting_and_automation()
     test_database_design_avoids_plaintext_prompt_output_storage()
     test_python_lockfile_uses_hash_pinning()
+    test_pip_bootstrap_lockfile_uses_hash_pinning()
     test_security_tool_lockfile_uses_hash_pinning()
     print("ok")
