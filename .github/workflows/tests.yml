@@ -66,17 +66,33 @@ jobs:
           set -euo pipefail
           python - <<'PY'
           from pathlib import Path
-          import textwrap
 
           root = Path.cwd()
           source_workflow = root / ".github" / "workflows" / "nim-source-repair.yml"
           workflow_text = source_workflow.read_text(encoding="utf-8")
-          start_marker = "          python - <<'PY'\n"
-          end_marker = "\n          PY\n\n      - name: Install hash-locked verification dependencies"
-          start = workflow_text.index(start_marker) + len(start_marker)
-          end = workflow_text.index(end_marker, start)
-          transformation = textwrap.dedent(workflow_text[start:end])
-          exec(compile(transformation, str(source_workflow), "exec"), {"__name__": "__main__"})
+          step_marker = "      - name: Integrate transport, budget, and evidence contracts directly\n"
+          script_marker = "          python - <<'PY'\n"
+          step_start = workflow_text.index(step_marker)
+          script_start = workflow_text.index(script_marker, step_start) + len(script_marker)
+          script_end = workflow_text.index("\n          PY\n", script_start)
+          script_lines = workflow_text[script_start:script_end].splitlines()
+          malformed_lines = [
+              line_number
+              for line_number, line in enumerate(script_lines, start=1)
+              if line and not line.startswith("          ")
+          ]
+          if malformed_lines:
+              raise SystemExit(
+                  "source transformation contains lines outside its YAML block: "
+                  f"{malformed_lines[:10]}"
+              )
+          transformation = "\n".join(
+              line[10:] if line else "" for line in script_lines
+          )
+          exec(
+              compile(transformation, str(source_workflow), "exec"),
+              {"__name__": "__main__"},
+          )
 
           test_path = root / "tests" / "test_nim_benchmark.py"
           test_text = test_path.read_text(encoding="utf-8")
