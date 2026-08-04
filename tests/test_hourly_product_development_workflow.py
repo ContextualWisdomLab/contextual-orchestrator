@@ -7,6 +7,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 WORKFLOW = ROOT / ".github" / "workflows" / "hourly-product-development.yml"
+TESTS_WORKFLOW = ROOT / ".github" / "workflows" / "tests.yml"
 
 
 def _workflow_text() -> str:
@@ -138,6 +139,21 @@ def test_publication_uses_an_app_token_so_created_prs_trigger_required_checks() 
     assert "pull-requests: read" in publisher
     assert "contents: write" not in publisher
     assert "pull-requests: write" not in publisher
+
+
+def test_broker_has_exact_statement_branch_and_docstring_gates() -> None:
+    """The new credential-bearing production module is held to the 100% policy."""
+
+    tests_workflow = TESTS_WORKFLOW.read_text(encoding="utf-8")
+
+    assert "requirements-opencode-review-ci.txt" in tests_workflow
+    assert "coverage run --branch" in tests_workflow
+    assert "--source=scripts.ci.nim_credential_broker" in tests_workflow
+    assert "tests/test_nim_credential_broker.py" in tests_workflow
+    assert "coverage report --fail-under=100" in tests_workflow
+    assert "--include=scripts/ci/nim_credential_broker.py" in tests_workflow
+    assert "interrogate -f 100" in tests_workflow
+    assert "scripts/ci/nim_credential_broker.py" in tests_workflow
 
 
 def test_hourly_loop_prompt_preserves_commercial_and_architecture_contracts() -> None:
