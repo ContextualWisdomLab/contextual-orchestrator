@@ -109,3 +109,19 @@ push or open a PR.
   scheduling (e.g. LLM-cascade / model-routing and queueing/load-balancing
   papers).
 <!-- END cwl-agent-guidance -->
+
+## CODEOWNERS-based merge gates — off, on hold
+
+Recorded 2026-08-04. CODEOWNERS approval gates (`require_code_owner_reviews` in branch
+protection, `require_code_owner_review` in rulesets) are disabled across ContextualWisdomLab:
+the org has a single maintainer, so a code-owner approval can never be supplied and any PR
+carrying such a gate is unmergeable. Do not re-add one to this repository until the org has
+more than one maintainer.
+
+Scope: this covers CODEOWNERS gates only. Every other review requirement — independent
+write-capable approval, required status checks, exact-head evidence — stays in force and is
+unaffected.
+
+Authority: the policy and its re-enable criteria live in `ContextualWisdomLab/.github`. This
+note is a non-authoritative pointer so that agents working in this repository do not
+re-introduce the gate; if it ever disagrees with central governance, central governance wins.
