@@ -11,7 +11,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Reject provider hosts that resolve to any non-globally-routable address, including RFC 6598 shared address space, while retaining explicit multicast, private, loopback, link-local, and reserved-address protections.
 - Document narrowly scoped Semgrep suppressions for parameter-bound database queries, the explicit development-only TLS verification opt-out, and provider URLs that pass the egress guard.
 - Separate the NVIDIA NIM development agent from both GitHub write credentials and the NIM API key: OpenCode runs in a capability-dropped, read-only, internal-network-only container, while a fixed-upstream broker injects the secret under request, concurrency, body, response, redirect, and content-type limits.
-- Publish autonomous changes only through a fresh credentialed runner after rejecting special filesystem entries, oversized trees, Git internals, `.github/` policy mutations, ambiguous paths, symbolic links, submodules, untrusted Git hooks, and oversized patch artifacts.
+- Publish autonomous changes only through a fresh runner after rejecting special filesystem entries, oversized trees, Git internals, `.github/` policy mutations, ambiguous paths, symbolic links, submodules, untrusted Git hooks, and oversized patch artifacts.
+- Keep the publisher's built-in `GITHUB_TOKEN` read-only and fail closed unless OIDC yields a short-lived OpenCode GitHub App token, ensuring an autonomous pull request triggers the repository's required checks instead of suppressing downstream workflows.
 
 ### Changed
 
