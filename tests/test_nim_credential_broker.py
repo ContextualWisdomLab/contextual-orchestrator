@@ -21,7 +21,7 @@ class FakeResponse:
         self,
         status: int = 200,
         body: bytes = b'{"ok":true}',
-        content_type: str = "application/json",
+        content_type: str | None = "application/json",
     ) -> None:
         """Store the status, body, and content type returned by the fake upstream."""
 
@@ -129,6 +129,14 @@ def test_broker_requires_a_nonempty_api_key() -> None:
 
     with pytest.raises(ValueError, match="API key"):
         broker.NIMCredentialBroker("")
+
+
+@pytest.mark.parametrize("limits", [(0, 1), (1, 0), (-1, 1), (1, -1)])
+def test_governor_rejects_nonpositive_limits(limits: tuple[int, int]) -> None:
+    """A governor cannot silently disable either security budget."""
+
+    with pytest.raises(ValueError, match="positive"):
+        broker.RequestGovernor(*limits)
 
 
 def test_health_and_target_validation_do_not_contact_upstream() -> None:
@@ -251,6 +259,21 @@ def test_model_catalog_request_has_no_body() -> None:
     assert connection.requests[0][0:3] == ("GET", "/v1/models", None)
 
 
+def test_missing_upstream_content_type_defaults_to_json() -> None:
+    """A missing upstream media type is normalized to the broker's safe default."""
+
+    connection = FakeConnection(FakeResponse(content_type=None))
+    application = broker.NIMCredentialBroker(
+        "secret",
+        connection_factory=FakeConnectionFactory(connection),
+    )
+
+    response = application.handle("GET", "/v1/models", {}, b"")
+
+    assert response.status == 200
+    assert response.content_type == "application/json"
+
+
 @pytest.mark.parametrize(
     ("upstream", "expected_message"),
     [
@@ -303,6 +326,28 @@ def test_transport_error_is_generic_and_releases_the_slot() -> None:
     assert connection.closed is True
 
 
+def test_connection_factory_error_is_generic_without_cleanup_failure() -> None:
+    """A connection-construction error leaves no object to close and still releases capacity."""
+
+    def fail_factory(*_args: Any, **_kwargs: Any) -> FakeConnection:
+        raise OSError("private DNS failure detail")
+
+    governor = broker.RequestGovernor(max_requests=2, max_concurrent_requests=1)
+    application = broker.NIMCredentialBroker(
+        "secret",
+        governor=governor,
+        connection_factory=fail_factory,
+    )
+
+    failed = application.handle("GET", "/v1/models", {}, b"")
+    application.connection_factory = FakeConnectionFactory(FakeConnection())
+    succeeded = application.handle("GET", "/v1/models", {}, b"")
+
+    assert failed.status == 502
+    assert b"private DNS" not in failed.body
+    assert succeeded.status == 200
+
+
 def test_request_and_concurrency_budgets_fail_closed() -> None:
     """The governor distinguishes exhausted call and active-request budgets."""
 
@@ -338,7 +383,12 @@ def test_request_and_concurrency_budgets_fail_closed() -> None:
 def test_http_handler_serves_health_and_chat_without_request_logging() -> None:
     """The stdlib HTTP adapter preserves broker responses for real clients."""
 
-    connection = FakeConnection(FakeResponse(body=b'data: {"ok":true}\n\n', content_type="text/event-stream"))
+    connection = FakeConnection(
+        FakeResponse(
+            body=b'data: {"ok":true}\n\n',
+            content_type="text/event-stream",
+        )
+    )
     application = broker.NIMCredentialBroker(
         "secret",
         connection_factory=FakeConnectionFactory(connection),
@@ -367,6 +417,42 @@ def test_http_handler_serves_health_and_chat_without_request_logging() -> None:
         client.close()
 
 
+def test_http_handler_rejects_bad_lengths_and_writes_empty_responses() -> None:
+    """The HTTP adapter avoids unbounded reads and supports an empty bounded body."""
+
+    empty_application = broker.NIMCredentialBroker(
+        "secret",
+        connection_factory=FakeConnectionFactory(FakeConnection(FakeResponse(body=b""))),
+    )
+
+    with running_server(empty_application) as (host, port):
+        client = http.client.HTTPConnection(host, port, timeout=5)
+        client.request("GET", "/v1/models")
+        empty = client.getresponse()
+        assert empty.status == 200
+        assert empty.getheader("Content-Length") == "0"
+        assert empty.read() == b""
+        client.close()
+
+        client = http.client.HTTPConnection(host, port, timeout=5)
+        client.putrequest("POST", "/v1/chat/completions")
+        client.putheader("Content-Length", "not-a-number")
+        client.endheaders()
+        malformed = client.getresponse()
+        assert malformed.status == 411
+        malformed.read()
+        client.close()
+
+        client = http.client.HTTPConnection(host, port, timeout=5)
+        client.putrequest("POST", "/v1/chat/completions")
+        client.putheader("Content-Length", str(broker.MAX_REQUEST_BYTES + 1))
+        client.endheaders()
+        oversized = client.getresponse()
+        assert oversized.status == 413
+        oversized.read()
+        client.close()
+
+
 def test_main_rejects_a_missing_environment_secret(monkeypatch: pytest.MonkeyPatch) -> None:
     """The executable entry point fails before binding when its secret is absent."""
 
@@ -374,3 +460,35 @@ def test_main_rejects_a_missing_environment_secret(monkeypatch: pytest.MonkeyPat
 
     with pytest.raises(SystemExit, match="NVIDIA_API_KEY"):
         broker.main()
+
+
+def test_main_serves_and_closes_with_a_configured_secret(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The executable entry point owns deterministic server startup and cleanup."""
+
+    class FakeServer:
+        """Record the lifecycle managed by the broker entry point."""
+
+        def __init__(self) -> None:
+            self.served = False
+            self.closed = False
+
+        def serve_forever(self, *, poll_interval: float) -> None:
+            assert poll_interval == 0.5
+            self.served = True
+
+        def server_close(self) -> None:
+            self.closed = True
+
+    fake_server = FakeServer()
+    monkeypatch.setenv("NVIDIA_API_KEY", "configured-secret")
+    monkeypatch.setattr(
+        broker,
+        "create_server",
+        lambda _application: fake_server,
+    )
+
+    assert broker.main() == 0
+    assert fake_server.served is True
+    assert fake_server.closed is True
