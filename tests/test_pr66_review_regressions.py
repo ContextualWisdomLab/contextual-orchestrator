@@ -71,7 +71,7 @@ class _ReviewEmbeddingBackend:
                 custom_id=request.custom_id,
                 index=index,
                 embedding=list(self.vector),
-                prompt_tokens=max(1, request.token_count),
+                prompt_tokens=max(1, int(request.token_count or 0)),
                 model=self.model,
             )
             for index, request in enumerate(request_items)
