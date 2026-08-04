@@ -15,20 +15,22 @@ concurrency:
   group: hourly-product-development-${{ github.repository }}
   cancel-in-progress: false
 
-# The built-in token handles pull-request inventory, the branch push, and pull
-# request creation. The coding agent itself runs inside this job as an
-# OpenCode session against NVIDIA NIM, authenticated only by the
-# NVIDIA_NIM_API_KEY organization secret. No Copilot subscription, Agent Tasks
-# API, or fine-grained user token is involved.
+# The default token is read-only; only the single job that pushes the agent's
+# branch and opens the pull request elevates to write. The coding agent itself
+# runs inside that job as an OpenCode session against NVIDIA NIM,
+# authenticated only by the NVIDIA_NIM_API_KEY organization secret. No Copilot
+# subscription, Agent Tasks API, or fine-grained user token is involved.
 permissions:
-  contents: write
-  pull-requests: write
+  contents: read
 
 jobs:
   dispatch-product-gap:
     if: github.repository == 'ContextualWisdomLab/contextual-orchestrator'
     runs-on: ubuntu-latest
     timeout-minutes: 55
+    permissions:
+      contents: write
+      pull-requests: write
     env:
       # The scoped NVIDIA_NIM_API_KEY organization secret is the only NIM
       # credential source. opencode.json expects that same value in
