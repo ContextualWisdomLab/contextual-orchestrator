@@ -2,42 +2,37 @@
 
 ## Purpose
 
-`Hourly Product Development` converts an empty pull-request queue into one bounded commercial-quality development task. It does not replace the organization-central review and merge system. `ContextualWisdomLab/.github` remains authoritative for reviewing every current head, applying bounded repairs, rerunning required checks, enforcing independent approval, and merging only a policy-clean pull request.
+`Hourly Product Development` converts an empty pull-request queue into one bounded commercial-quality development increment produced by an in-workflow OpenCode agent session against NVIDIA NIM. It does not replace the organization-central review and merge system. `ContextualWisdomLab/.github` remains authoritative for reviewing every current head, applying bounded repairs, rerunning required checks, enforcing independent approval, and merging only a policy-clean pull request.
 
 The workflow is intentionally repository-specific because its delegated prompt carries Contextual Orchestrator's architecture, quality, interoperability, research, and NVIDIA NIM evaluation contracts. The PR-maintenance logic remains centralized and is not duplicated here.
 
 ## Schedule and single-flight behavior
 
-The workflow runs at minute 47 of every hour and supports a manual `workflow_dispatch` dry run. Its concurrency group is scoped to the repository and uses `cancel-in-progress: false`, so a later schedule cannot cancel a task-dispatch decision already in progress.
+The workflow runs at minute 47 of every hour and supports a manual `workflow_dispatch` dry run. Its concurrency group is scoped to the repository and uses `cancel-in-progress: false`, so a later schedule cannot cancel an agent session already in progress; queued runs wait and then re-evaluate the gate.
 
 The gate evaluates these conditions in order:
 
-1. Read the open pull-request inventory with the built-in read-only `GITHUB_TOKEN`.
+1. Read the open pull-request inventory with the built-in `GITHUB_TOKEN`; stop when it is unavailable.
 2. Stop when any pull request is open, because the central maintenance loop owns that hour.
-3. Stop when `COPILOT_GITHUB_TOKEN` is absent.
-4. Read every Agent Task page with the dedicated user token.
-5. Stop when inventory retrieval fails or the response schema is unexpected.
-6. Stop when any task is active or has an unrecognized state.
-7. Create exactly one pull-request-producing Agent Task only when all prior gates are clear.
+3. Stop when `NVIDIA_NIM_API_KEY` is absent.
+4. Run exactly one bounded agent session, then package any working-tree changes as exactly one pull request.
 
-Terminal task states are `completed`, `failed`, `timed_out`, and `cancelled`. Every other value, including a missing state, is treated as active. This fail-closed rule prevents duplicate development tasks when the external API evolves or returns incomplete data.
+Because the agent runs synchronously inside the gated job, the concurrency group is the task inventory: there is no external Agent Task queue to poll, and a finished run leaves either nothing or an open pull request that closes the gate for the next hour.
 
 ## Credentials and permissions
 
-The workflow-level GitHub token has only:
+The workflow-level GitHub token has:
 
-- `contents: read`
-- `pull-requests: read`
+- `contents: write` — used only to push the agent's `nim-agent/product-dev-*` branch;
+- `pull-requests: write` — used only to open the bounded pull request.
 
-Repository inventory uses that token. Agent Task inventory and creation use the `COPILOT_GITHUB_TOKEN` repository or organization secret because the Agent Tasks API does not accept a GitHub App installation token such as `GITHUB_TOKEN`.
+The OpenCode agent session authenticates to NVIDIA NIM with the `NVIDIA_NIM_API_KEY` organization secret, bound to `NVIDIA_API_KEY` for the pinned, SHA256-verified OpenCode CLI. The agent process runs with `GH_TOKEN`, `GITHUB_TOKEN`, and the OIDC request environment stripped, and the checkout uses `persist-credentials: false`, so the model never holds a GitHub credential. No Copilot subscription, Agent Tasks API access, or fine-grained user token is involved.
 
-Configure `COPILOT_GITHUB_TOKEN` as a fine-grained user token with Agent tasks read/write access for this repository. Do not add repository-content or pull-request mutation scopes merely to run this workflow. The created cloud task opens a pull request; the scheduled workflow itself does not edit code, push branches, approve reviews, merge, publish, or release.
-
-`NVIDIA_NIM_API_KEY` is not injected into this dispatcher. NVIDIA evaluation work must introduce a separately reviewed benchmark workflow that receives only that secret in the step that contacts NVIDIA, never places the value in argv or artifacts, and follows issue #86's bounded catalog, quality, latency, provenance, and hypothetical-cost contract.
+The dispatcher exposes `NVIDIA_NIM_API_KEY` only as the agent's own reasoning backend. NVIDIA evaluation work for the product itself must still introduce a separately reviewed benchmark workflow that receives the secret only in the step that contacts NVIDIA, never places the value in argv or artifacts, and follows issue #86's bounded catalog, quality, latency, provenance, and hypothetical-cost contract.
 
 ## Delegated product contract
 
-The Agent Task prompt requires one reviewable increment and preserves these repository constraints:
+The agent prompt requires one reviewable increment and preserves these repository constraints:
 
 - test-first development;
 - complete production statement, branch, and docstring coverage;
@@ -54,15 +49,13 @@ The Agent Task prompt requires one reviewable increment and preserves these repo
 
 ## Dry run
 
-A manual run with `dry_run: true` executes all queue, token, and task-inventory gates. When dispatch is permitted, it prints the exact bounded task prompt to the workflow summary but does not call the task-creation endpoint. This mode validates the operational decision without creating a branch or pull request.
-
-A dry run still requires valid Agent Task inventory. Skipping inventory in dry-run mode would allow an operator to receive a misleading `ready` result while another task is active.
+A manual run with `dry_run: true` executes the queue and credential gates. When dispatch is permitted, it prints the exact bounded agent prompt to the workflow summary but does not start the agent session. This mode validates the operational decision without creating a branch or pull request.
 
 ## Failure semantics
 
-A missing inventory, unexpected response shape, missing token, open pull request, or active/unknown task produces a non-dispatch reason in the workflow summary. These states are safe no-ops, not successful evidence that development occurred.
+A missing pull-request inventory, missing NIM secret, or open pull request produces a non-dispatch reason in the workflow summary. These states are safe no-ops, not successful evidence that development occurred.
 
-A task-creation API failure fails the job. It is not converted into a successful no-op because the gate had already established that a task should be created; operational failure at that point needs visible intervention rather than silent loss.
+When every NVIDIA NIM model candidate fails, the run discards partial work and fails the job. It is not converted into a successful no-op because the gate had already established that a session should run; operational failure at that point needs visible intervention rather than silent loss. An agent session that completes without changing the tree is reported as a no-op.
 
 ## Operational verification
 

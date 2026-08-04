@@ -14,4 +14,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
-- Add a pull-request-first hourly product-development dispatcher that fails closed on open PRs, unavailable Agent Task inventory, missing task credentials, and active or unknown-state tasks while leaving review and merge authority in the organization-central governance workflows.
+- Add a pull-request-first hourly product-development loop that fails closed on open PRs and a missing `NVIDIA_NIM_API_KEY`, runs one bounded in-workflow OpenCode agent session against NVIDIA NIM, and opens exactly one pull request while leaving review and merge authority in the organization-central governance workflows.

@@ -28,35 +28,38 @@ def test_hourly_loop_is_scheduled_and_single_flight() -> None:
 
 
 def test_hourly_loop_is_pull_request_first_and_fails_closed() -> None:
-    """No development task is created while PR or task ownership is ambiguous."""
+    """No development session starts while PR ownership is ambiguous."""
 
     workflow = _workflow_text()
 
     pull_request_gate = workflow.index("gh pr list")
-    task_inventory = workflow.index("/agents/repos/${GITHUB_REPOSITORY}/tasks?per_page=100")
-    assert pull_request_gate < task_inventory
+    agent_session = workflow.index("opencode run")
+    assert pull_request_gate < agent_session
+    assert "reason=pull_request_inventory_unavailable" in workflow
     assert "reason=open_pull_request" in workflow
-    assert "reason=agent_task_token_unavailable" in workflow
-    assert "reason=task_inventory_unavailable" in workflow
-    assert "reason=active_agent_task" in workflow
-    assert '(.state // "unknown")' in workflow
+    assert "reason=nim_api_key_unavailable" in workflow
     assert 'steps.gate.outputs.dispatch == \'true\'' in workflow
 
 
-def test_hourly_loop_uses_the_agent_tasks_api_without_widening_repo_token() -> None:
-    """Agent-task inventory and creation use the dedicated least-privilege token."""
+def test_hourly_loop_uses_nvidia_nim_and_keeps_credentials_from_the_agent() -> None:
+    """The agent authenticates to NVIDIA NIM only and never holds a GitHub token."""
 
     workflow = _workflow_text()
 
-    assert "AGENT_TASK_TOKEN: ${{ secrets.COPILOT_GITHUB_TOKEN }}" in workflow
+    assert "NVIDIA_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}" in workflow
     assert "REPOSITORY_TOKEN: ${{ github.token }}" in workflow
-    assert "X-GitHub-Api-Version: 2026-03-10" in workflow
-    assert '"/agents/repos/${GITHUB_REPOSITORY}/tasks"' in workflow
-    assert "create_pull_request: true" in workflow
-    assert "contents: read" in workflow
-    assert "pull-requests: read" in workflow
-    assert "contents: write" not in workflow
-    assert "pull-requests: write" not in workflow
+    assert '"baseURL": "https://integrate.api.nvidia.com/v1"' in workflow
+    assert '"apiKey": "{env:NVIDIA_API_KEY}"' in workflow
+    assert "persist-credentials: false" in workflow
+    assert "env -u GH_TOKEN -u GITHUB_TOKEN -u REPOSITORY_TOKEN" in workflow
+    assert 'OPENCODE_VERSION: "1.17.13"' in workflow
+    assert "sha256sum -c -" in workflow
+    assert "contents: write" in workflow
+    assert "pull-requests: write" in workflow
+    assert "gh pr create" in workflow
+    assert "COPILOT_GITHUB_TOKEN" not in workflow
+    assert "/agents/repos" not in workflow
+    assert "gh pr merge" not in workflow
 
 
 def test_hourly_loop_prompt_preserves_commercial_and_architecture_contracts() -> None:
