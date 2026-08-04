@@ -202,6 +202,8 @@ jobs:
           rm -rf "$build_dir"
           install -d -m 0700 "$build_dir"
           install -m 0755 "$RUNNER_TEMP/opencode-bin/opencode" "$build_dir/opencode"
+          install -m 0644 "$GITHUB_WORKSPACE/requirements-opencode-review-ci.txt" \
+            "$build_dir/requirements-opencode-review-ci.txt"
           install -m 0644 "$GITHUB_WORKSPACE/fuzz/requirements-property.txt" \
             "$build_dir/requirements-property.txt"
 
@@ -214,10 +216,16 @@ jobs:
               && apt-get install -y --no-install-recommends bash ca-certificates git \\
               && rm -rf /var/lib/apt/lists/*
           COPY opencode /usr/local/bin/opencode
+          COPY requirements-opencode-review-ci.txt /tmp/requirements-opencode-review-ci.txt
           COPY requirements-property.txt /tmp/requirements-property.txt
           RUN chmod 0755 /usr/local/bin/opencode \\
-              && python -m pip install --require-hashes -r /tmp/requirements-property.txt \\
-              && rm -f /tmp/requirements-property.txt
+              && python -m pip install --require-hashes \\
+                -r /tmp/requirements-opencode-review-ci.txt \\
+              && python -m pip install --require-hashes \\
+                -r /tmp/requirements-property.txt \\
+              && rm -f \\
+                /tmp/requirements-opencode-review-ci.txt \\
+                /tmp/requirements-property.txt
           WORKDIR /workspace
           EOF
 
