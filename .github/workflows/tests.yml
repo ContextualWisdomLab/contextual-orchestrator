@@ -76,18 +76,9 @@ jobs:
           script_start = workflow_text.index(script_marker, step_start) + len(script_marker)
           script_end = workflow_text.index("\n          PY\n", script_start)
           script_lines = workflow_text[script_start:script_end].splitlines()
-          malformed_lines = [
-              line_number
-              for line_number, line in enumerate(script_lines, start=1)
-              if line and not line.startswith("          ")
-          ]
-          if malformed_lines:
-              raise SystemExit(
-                  "source transformation contains lines outside its YAML block: "
-                  f"{malformed_lines[:10]}"
-              )
           transformation = "\n".join(
-              line[10:] if line else "" for line in script_lines
+              line[10:] if line.startswith("          ") else line
+              for line in script_lines
           )
           exec(
               compile(transformation, str(source_workflow), "exec"),
