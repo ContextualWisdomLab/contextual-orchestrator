@@ -29,13 +29,14 @@ jobs:
           python-version: "3.12"
 
       - name: Install test and quality dependencies
-        # Both inputs are fully hash-locked. The OpenCode-review tool lock adds
-        # coverage and interrogate; the property lock supplies Hypothesis for
-        # the repository's always-on fuzz/property tests.
-        run: >-
-          python -m pip install --require-hashes
-          -r requirements-opencode-review-ci.txt
-          -r fuzz/requirements-property.txt
+        # Both inputs are fully hash-locked. Install the quality toolchain first,
+        # then the newer property-test closure; the latter intentionally upgrades
+        # pytest while retaining coverage and interrogate from the first lock.
+        run: |
+          python -m pip install --require-hashes \
+            -r requirements-opencode-review-ci.txt
+          python -m pip install --require-hashes \
+            -r fuzz/requirements-property.txt
 
       - name: Run full test suite
         run: python -m pytest -q
