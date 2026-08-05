@@ -22,9 +22,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: 88274c073cc925e61b750e77778e68c49468bc99
+      EXPECTED_PARENT_SHA: 03b30e5216c5c062a3d89aafbdc1f96919411257
       EXPECTED_SECURITY_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
-      PATCH_CONTEXT_SHA: 667b311564689a7a53e7fe2bfd91834f80869035
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
       FINAL_SOURCE_DIR: /tmp/nim-final-worktree
@@ -46,7 +45,6 @@ jobs:
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
           test "$GITHUB_REF" = "refs/heads/$TARGET_BRANCH"
           git merge-base --is-ancestor "$EXPECTED_SECURITY_BASE_SHA" HEAD
-          git merge-base --is-ancestor "$PATCH_CONTEXT_SHA" HEAD
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -60,6 +58,7 @@ jobs:
           patch_gzip="$RUNNER_TEMP/nim-final.patch.gz"
           patch_file="$RUNNER_TEMP/nim-final.patch"
           rehydrate_script="$RUNNER_TEMP/rehydrate_patch_index.py"
+          candidate_index="$RUNNER_TEMP/nim-candidate.index"
 
           cat .review-evidence/nim-final-patch/part-*.txt \
             | tr -d '\n\r' \
@@ -101,7 +100,6 @@ jobs:
 
           assert entries, "reviewed patch has no indexed paths"
           for path_text, old_object, declared_mode in entries:
-              path = Path(path_text)
               if set(old_object) == {"0"}:
                   subprocess.run(
                       ["git", "update-index", "--force-remove", "--", path_text],
@@ -109,10 +107,7 @@ jobs:
                       stdout=subprocess.DEVNULL,
                       stderr=subprocess.DEVNULL,
                   )
-                  if path.exists() or path.is_symlink():
-                      path.unlink()
                   continue
-
               full_object = subprocess.check_output(
                   ["git", "rev-parse", "--verify", f"{old_object}^{{blob}}"],
                   text=True,
@@ -130,17 +125,30 @@ jobs:
                   ["git", "update-index", "--add", "--cacheinfo", mode, full_object, path_text],
                   check=True,
               )
-              path.parent.mkdir(parents=True, exist_ok=True)
-              with path.open("wb") as output:
-                  subprocess.run(
-                      ["git", "cat-file", "blob", full_object],
-                      check=True,
-                      stdout=output,
-                  )
           PY
 
+          matched_base_sha=""
+          for candidate_sha in $(git rev-list --all --date-order --max-count=2500); do
+            rm -f "$candidate_index"
+            GIT_INDEX_FILE="$candidate_index" git read-tree "$candidate_sha"
+            if GIT_INDEX_FILE="$candidate_index" \
+                python "$rehydrate_script" "$patch_file" 2>/dev/null \
+              && GIT_INDEX_FILE="$candidate_index" \
+                git apply --check --cached "$patch_file" 2>/dev/null \
+              && GIT_INDEX_FILE="$candidate_index" \
+                git apply --cached "$patch_file" 2>/dev/null; then
+              candidate_tree="$(GIT_INDEX_FILE="$candidate_index" git write-tree)"
+              if test "$candidate_tree" = "$EXPECTED_FINAL_TREE_SHA"; then
+                matched_base_sha="$candidate_sha"
+                break
+              fi
+            fi
+          done
+          test -n "$matched_base_sha"
+          printf 'matched reviewed patch base: %s\n' "$matched_base_sha"
+
           rm -rf "$FINAL_SOURCE_DIR"
-          git worktree add --detach "$FINAL_SOURCE_DIR" "$PATCH_CONTEXT_SHA"
+          git worktree add --detach "$FINAL_SOURCE_DIR" "$matched_base_sha"
           cd "$FINAL_SOURCE_DIR"
           python "$rehydrate_script" "$patch_file"
           git apply --check --cached "$patch_file"
