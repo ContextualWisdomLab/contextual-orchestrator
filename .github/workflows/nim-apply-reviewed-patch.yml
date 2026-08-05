@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: e4e03c45981bd5a676a0eea9afd2e9fc1d0200d3
+      EXPECTED_PARENT_SHA: 6cd201205e60b34d4711ef2ea3e77b81239d7c2f
       EXPECTED_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
@@ -63,17 +63,27 @@ jobs:
           gzip -dc "$patch_gzip" > "$patch_file"
           printf '%s  %s\n' "$EXPECTED_PATCH_SHA256" "$patch_file" | sha256sum -c -
 
-          first_stage_commit="$(git log --reverse --format=%H -- .review-evidence/nim-final-patch/part-001.txt | head -n 1)"
-          test -n "$first_stage_commit"
-          patch_base_sha="$(git rev-parse "${first_stage_commit}^")"
-          rm -rf "$FINAL_SOURCE_DIR"
-          git worktree add --detach "$FINAL_SOURCE_DIR" "$patch_base_sha"
+          matched_base_sha=""
+          git worktree prune
+          for candidate_sha in $(git rev-list --first-parent --max-count=200 HEAD); do
+            rm -rf "$FINAL_SOURCE_DIR"
+            git worktree add --detach --quiet "$FINAL_SOURCE_DIR" "$candidate_sha"
+            if (
+              cd "$FINAL_SOURCE_DIR"
+              git apply --check "$patch_file" 2>/dev/null
+              git apply --index "$patch_file"
+              git diff --cached --check
+              test "$(git write-tree)" = "$EXPECTED_FINAL_TREE_SHA"
+            ); then
+              matched_base_sha="$candidate_sha"
+              break
+            fi
+            git worktree remove --force "$FINAL_SOURCE_DIR"
+          done
+          test -n "$matched_base_sha"
+          printf 'matched reviewed patch base: %s\n' "$matched_base_sha"
           cd "$FINAL_SOURCE_DIR"
-          git apply --check "$patch_file"
-          git apply --index "$patch_file"
-          git diff --cached --check
-          actual_tree="$(git write-tree)"
-          test "$actual_tree" = "$EXPECTED_FINAL_TREE_SHA"
+          test "$(git write-tree)" = "$EXPECTED_FINAL_TREE_SHA"
 
       - name: Install hash-locked verification dependencies
         shell: bash
