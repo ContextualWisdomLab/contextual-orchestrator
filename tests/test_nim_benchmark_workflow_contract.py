@@ -69,7 +69,8 @@ def test_tests_workflow_enforces_nim_coverage_docstrings_and_package_smoke() -> 
     assert "--source=contextual_orchestrator.nim_benchmark" in workflow
     assert "coverage report" in workflow and "--fail-under=100" in workflow
     assert "interrogate -f 100 contextual_orchestrator/nim_benchmark.py" in workflow
-    assert "pip wheel --no-deps --no-build-isolation" in workflow
+    assert "pip wheel --no-deps . --wheel-dir dist" in workflow
+    assert "--no-build-isolation" not in workflow
     assert '--target "$RUNNER_TEMP/nim-wheel-site"' in workflow
     assert 'cd "$RUNNER_TEMP"' in workflow
     assert 'PYTHONPATH="$RUNNER_TEMP/nim-wheel-site"' in workflow
