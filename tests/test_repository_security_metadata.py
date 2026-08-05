@@ -29,7 +29,7 @@ def test_security_workflow_covers_core_repository_security_process():
 
     expected_tokens = [
         "name: Security",
-        "branches: [main]",
+        "push:\n    branches: [main]",
         "cron:",
         "workflow_dispatch:",
         "contents: read",
@@ -66,6 +66,18 @@ def test_security_workflow_covers_core_repository_security_process():
     uses_lines = [line.strip() for line in workflow_text.splitlines() if line.strip().startswith("uses:")]
     assert uses_lines
     assert all(re.search(r"@[0-9a-f]{40}(?:\s+#|$)", line) for line in uses_lines)
+
+
+def test_required_pull_request_workflows_cover_stacked_bases():
+    """Run required local gates for stacked PRs, not only PRs targeting main."""
+    for workflow_path in (
+        ".github/workflows/tests.yml",
+        ".github/workflows/fuzz.yml",
+        ".github/workflows/security.yml",
+    ):
+        workflow_text = read_text(workflow_path)
+        assert "  pull_request:\n" in workflow_text
+        assert "  pull_request:\n    branches:" not in workflow_text
 
 
 def test_dependabot_tracks_actions_and_python_dependencies():
