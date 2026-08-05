@@ -7,21 +7,32 @@ security base without treating an older pull-request head as current approval
 evidence. It is an architecture decision record and verification receipt, not a
 release declaration or production routing recommendation.
 
-## Decision
+## Current review identity
 
-The benchmark remains stacked on the provider-egress security branch until that
-branch reaches protected `main`. The NIM implementation is accepted for renewed
-review only from the exact two-parent integration of:
+The current review target is:
+
+- benchmark head `48f007d9ec0ace3c1bcaee9b99236929fd622a4b`;
+- stacked provider-egress base `03124cf97b7bf02e30a48a13acfd78b6ef08d1ef`;
+- pull request `ContextualWisdomLab/contextual-orchestrator#90`.
+
+No workflow run or approval is recorded here as current-head acceptance evidence.
+The latest head includes a test-first Atheris instrumentation repair and must
+obtain fresh exact-head checks and independent review before readiness changes.
+
+## Historical integration evidence
+
+The following identifiers are retained only as historical integration evidence.
+They must not be used as current approval, branch-protection, or merge evidence:
 
 - benchmark source head `9b72816bb61fa540b8eb20fdc559e740a3c3c6ec`;
 - provider-egress security head `03124cf97b7bf02e30a48a13acfd78b6ef08d1ef`;
-- resulting reviewed integration commit
+- resulting historical integration commit
   `a2af3634d67a361cac18ba11ff9b8db24417b646`; and
-- exact integration workflow run `31005510483`.
+- historical integration workflow run `31005510483`.
 
-Any later documentation-only retrigger commit inherits that exact source tree but
-must still obtain fresh current-head checks and independent review. No prior
-check, approval, or security result is promoted to the new head automatically.
+The benchmark remains stacked on the provider-egress security branch until that
+branch reaches protected `main`. Every later head or base change invalidates
+prior checks and approvals automatically.
 
 ## Preserved security invariants
 
@@ -54,12 +65,13 @@ The integrated benchmark must also preserve these evidence properties:
 6. Actual free-to-caller access evidence and hypothetical paid pricing remain
    distinct, versioned evidence classes.
 7. Unknown model prices remain `unknown`; no rate is inferred or invented.
-8. Smoke-sized evidence reports `insufficient_evidence` and cannot authorize a
-   production routing change.
+8. Evidence below the configured task and completion floors reports
+   `insufficient_evidence` and cannot authorize a production routing change.
 
-## Exact verification evidence
+## Historical verification evidence
 
-The integrated source passed:
+Historical integration commit `a2af3634d67a361cac18ba11ff9b8db24417b646`
+was recorded as passing:
 
 - 449 repository tests;
 - 111 focused NIM tests;
@@ -70,9 +82,10 @@ The integrated source passed:
 - wheel build, isolated installation, and import; and
 - `git diff --check`.
 
-The merge had one reviewed conflict, in `CHANGELOG.md`. Its deterministic
-resolution retained both the NIM complete-request-plan evidence and the security
-base's APA 7 environment-marker doctoring entry.
+That historical run had one reviewed conflict, in `CHANGELOG.md`. Its
+deterministic resolution retained both the NIM complete-request-plan evidence
+and the security base's APA 7 environment-marker doctoring entry. These results
+do not establish the status of current head `48f007d9ec0ace3c1bcaee9b99236929fd622a4b`.
 
 ## Current-head acceptance rule
 
