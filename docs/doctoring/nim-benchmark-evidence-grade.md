@@ -77,14 +77,14 @@ run fails closed before the first capability probe; a lexicographic model prefix
 can never be emitted as routing-readiness evidence.
 
 The acceptance fixture uses 127 discovered models, nine capability contracts,
-seven evaluation workers, and ten locked tasks. Its complete upper bound is
-`1 + (127 × 9) + (10 × (7 + 1 + 5 + 1)) = 1,284` requests. The monthly workflow
-therefore uses a reviewed hard ceiling of 2,000 requests, leaving bounded room
-for catalog growth while retaining a deterministic cap. If a later catalog no
-longer fits, the same preflight reports required and configured counts and makes
-zero partial probe calls. Once admitted, all probe cells execute under bounded
-concurrency; thread scheduling changes only completion order, never inventory
-coverage or evaluation capacity.
+seven evaluation workers, and thirty locked tasks. Its complete upper bound is
+`1 + (127 × 9) + (30 × (7 + 1 + 5 + 1)) = 1,564` requests. The monthly workflow
+uses a reviewed hard ceiling of 2,000 requests, leaving bounded room for catalog
+growth while retaining a deterministic cap. If a later catalog no longer fits,
+the same preflight reports required and configured counts and makes zero partial
+probe calls. Once admitted, all probe cells execute under bounded concurrency;
+thread scheduling changes only completion order, never inventory coverage or
+evaluation capacity.
 
 The video-understanding probe contains a deterministic, decodable one-frame H.264
 MP4. Its embedded bytes have SHA-256
@@ -142,11 +142,25 @@ support, or per-model production price.
 
 ## Evidence sufficiency and uncertainty
 
-The bundled ten-task manifest is a smoke test. It verifies the integration
-surface but cannot authorize production routing. The governance floor is:
+The bundled locked split now contains thirty original, objectively scored tasks,
+so the scheduled benchmark can reach the repository's paired-task count floor.
+This repairs a product-validity gap in the former ten-task smoke fixture, which
+could exercise the pipeline but could never produce `evidence_review_required`
+under the benchmark's own minimum-pair contract.
+
+The governance floor is:
 
 - at least 30 locked paired tasks shared by compared policies; and
 - at least 90% successful cells across the requested comparison matrix.
+
+The first threshold prevents a scheduled run from being structurally condemned
+to smoke-only evidence. It does not establish domain representativeness,
+statistical power for every effect size, or production readiness. The tasks use
+objective exact-number or substring scorers and include arithmetic, logic,
+conversion, factual recall, language, and sequence cases, but buyers must still
+review whether this coverage matches their workloads. HELM's emphasis on
+multi-metric, scenario-explicit evaluation supports exposing such coverage
+limits rather than hiding them behind a single score.
 
 These values are explicit conservative release-governance thresholds, not a
 claim of universal statistical sufficiency. The artifact reports the observed
@@ -191,6 +205,8 @@ succeed:
 - transport tests for DNS rebinding, proxy isolation, redirects, SNI/authority,
   address fallback, bounded response bodies, and cleanup;
 - complete-plan preflight tests for 127 models, the exact boundary, one request short, zero partial egress, deterministic concurrency, and a valid media fixture;
+- a permanent acceptance test proving thirty unique locked task IDs and the
+  1,564-request representative complete-plan total;
 - live pricing and access-evidence expiry tests that prove failure before egress;
 - equal token/call budget tests for every comparison arm;
 - evidence-sufficiency, Pareto, provenance, and secret-redaction tests;
