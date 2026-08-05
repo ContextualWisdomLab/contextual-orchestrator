@@ -177,3 +177,52 @@ def test_capture_batch_and_workflow_ignore_nonlist_traces() -> None:
     )
     assert records[0]["reasoning_control"]["strategy"] == "adaptive"
 
+
+
+
+def test_retry_refreshes_downstream_reasoning_usage_evidence() -> None:
+    """Recomputed verifier and synthesizer traces must expose current usage."""
+    class RetryUsageClient(FakeClient):
+        """Assign distinct token counts to first and second downstream calls."""
+
+        def __init__(self) -> None:
+            super().__init__()
+            self.role_calls: dict[str, int] = {}
+
+        def _send(self, agent: FakeAgent, payload: dict[str, Any]) -> str:
+            """Delegate output behavior, then stamp role-specific call evidence."""
+            output = super()._send(agent, payload)
+            system = " ".join(
+                item.get("content", "")
+                for item in payload.get("messages", [])
+                if item.get("role") == "system"
+            )
+            role = next(
+                (name for name in ("verifier", "synthesizer") if f"Role: {name}" in system),
+                "",
+            )
+            if role:
+                self.role_calls[role] = self.role_calls.get(role, 0) + 1
+                value = (100 if role == "verifier" else 200) + self.role_calls[role]
+                self._usage = {
+                    "total_tokens": value + 10,
+                    "completion_tokens_details": {"reasoning_tokens": value},
+                }
+            return output
+
+    agents = [
+        FakeAgent("thinker_usage", "m", ("thinker",)),
+        FakeAgent("worker_usage", "m", ("worker",)),
+        FakeAgent("verifier_usage", "m", ("verifier",)),
+        FakeAgent("synth_usage", "m", ("synthesizer",)),
+    ]
+    for agent in agents:
+        rr.configure_agent_reasoning(agent, common_profile())
+    orchestrator = FakeOrchestrator(
+        agents, client=RetryUsageClient(), reasoning_policy=ReasoningPolicy()
+    )
+    result = orchestrator.conduct([{"role": "user", "content": "calculate"}])
+    verifier = next(row for row in result["trace"] if row["role"] == "verifier")
+    synthesizer = next(row for row in result["trace"] if row["role"] == "synthesizer")
+    assert verifier["reasoning"]["reasoning_tokens"] == 102
+    assert synthesizer["reasoning"]["reasoning_tokens"] == 202

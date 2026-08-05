@@ -72,7 +72,9 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
                 raise TypeError(
                     "reasoning_profile patch must be a mapping, ReasoningProfile, or None"
                 )
-        original_patch_agent(self, agent_pool_id, worker_agent_id, patch)
+        core_patch = dict(patch)
+        core_patch.pop("reasoning_profile", None)
+        original_patch_agent(self, agent_pool_id, worker_agent_id, core_patch)
         replacement = self._agent(worker_agent_id)
         configure_agent_reasoning(replacement, requested)
         pool_store = getattr(self, "_pool_store", None)

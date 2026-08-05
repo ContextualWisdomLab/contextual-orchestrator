@@ -125,7 +125,10 @@ class EdgeOrchestrator:
         return {"id": agent.id, "model": agent.model}
 
     def patch_agent(self, _pool_id: str, agent_id: str, patch: dict[str, Any]) -> dict[str, Any]:
-        """Replace an edge agent so profile preservation can be tested."""
+        """Replace an edge agent while rejecting extension-only fields."""
+        unknown = set(patch) - {"model"}
+        if unknown:
+            raise ValueError(f"unknown core patch fields: {sorted(unknown)}")
         current = self._agent(agent_id)
         replacement = EdgeAgent(current.id, str(patch.get("model", current.model)))
         self.agents = [replacement if item.id == agent_id else item for item in self.agents]

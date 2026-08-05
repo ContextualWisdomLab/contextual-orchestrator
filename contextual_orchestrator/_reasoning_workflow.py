@@ -48,6 +48,30 @@ def _step_messages(task: str, row: Mapping[str, Any], trace: Sequence[Mapping[st
     ]
 
 
+def _refresh_step_reasoning_from_event(
+    row: dict[str, Any],
+    role: str,
+    served_agent_id: str,
+    usage: Mapping[str, Any] | None,
+) -> None:
+    """Refresh a recomputed step with the exact captured provider decision."""
+    events = _EVENT_CAPTURE.get() or []
+    event = next(
+        (
+            item
+            for item in reversed(events)
+            if item["role"] == role and item["agent_id"] == served_agent_id
+        ),
+        None,
+    )
+    if event is None:
+        return
+    effective_usage = usage if isinstance(usage, Mapping) else event.get("usage")
+    row["reasoning"] = _reasoning_evidence(
+        event["profile"], event["decision"], effective_usage
+    )
+
+
 def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task: str) -> None:
     """Escalate one rejected worker and recompute affected downstream roles once."""
     verification = result.get("verification")
@@ -115,6 +139,9 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
         verifier["served_agent_id"] = verifier_served
         if verifier_usage is not None:
             verifier["usage"] = verifier_usage
+        _refresh_step_reasoning_from_event(
+            verifier, "verifier", verifier_served, verifier_usage
+        )
         result["verification"] = orchestrator._judge_verifier_output(
             verifier_output,
             str(next((row.get("output", "") for row in trace if row.get("role") == "thinker"), "")),
@@ -135,6 +162,9 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
         synthesizer["served_agent_id"] = synth_served
         if synth_usage is not None:
             synthesizer["usage"] = synth_usage
+        _refresh_step_reasoning_from_event(
+            synthesizer, "synthesizer", synth_served, synth_usage
+        )
         result["answer"] = synth_output
     else:
         result["answer"] = output
@@ -189,6 +219,7 @@ def _capture_batch(
 
 __all__ = [
     "_capture_batch",
+    "_refresh_step_reasoning_from_event",
     "_retry_rejected_worker_once",
     "_rewrite_batch_payload",
     "_step_messages",

@@ -212,3 +212,11 @@ def test_retry_helper_returns_for_nonretryable_shapes() -> None:
         "task",
     )
     rr.configure_agent_reasoning(worker, ceiling)
+
+
+
+def test_refresh_step_reasoning_without_event_is_a_noop() -> None:
+    """A direct retry helper call without capture leaves the row unchanged."""
+    row: dict[str, Any] = {}
+    rr._refresh_step_reasoning_from_event(row, "verifier", "missing", None)
+    assert row == {}

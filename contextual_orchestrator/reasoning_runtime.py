@@ -38,6 +38,7 @@ from ._reasoning_state import (
 )
 from ._reasoning_workflow import (
     _capture_batch,
+    _refresh_step_reasoning_from_event,
     _retry_rejected_worker_once,
     _rewrite_batch_payload,
     _step_messages,
