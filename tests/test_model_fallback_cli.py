@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
-from typing import Any
+from typing import Any, Mapping
 
 import pytest
 
@@ -16,12 +16,23 @@ from contextual_orchestrator.model_fallback import (
 from tests.fallback_test_support import manifest_document
 
 
-class _ExplodingEnvironment(dict[str, str]):
-    """Environment mapping that proves the policy process never reads secrets."""
+_GUARDED_CREDENTIAL_NAMES = frozenset({"FREE_API_KEY", "PAID_API_KEY"})
+
+
+class _CredentialGuardEnvironment(dict[str, str]):
+    """Environment copy that rejects reads of provider credential values only."""
+
+    def __init__(self, source: Mapping[str, str]) -> None:
+        """Copy locale and process settings while omitting guarded credentials."""
+        super().__init__(source)
+        for name in _GUARDED_CREDENTIAL_NAMES:
+            self.pop(name, None)
 
     def get(self, key: str, default: Any = None) -> Any:
-        """Fail if fallback planning attempts to inspect any environment value."""
-        raise AssertionError(f"fallback policy read environment value {key!r}")
+        """Fail only when fallback planning inspects a provider credential value."""
+        if key in _GUARDED_CREDENTIAL_NAMES:
+            raise AssertionError(f"fallback policy read credential value {key!r}")
+        return super().get(key, default)
 
 
 def write_manifest(path: Path) -> None:
@@ -37,7 +48,7 @@ def test_cli_emits_free_first_json_from_declared_credential_names(
     """A trusted caller declares available names without exposing secret values."""
     manifest_path = tmp_path / "policy.json"
     write_manifest(manifest_path)
-    monkeypatch.setattr(os, "environ", _ExplodingEnvironment())
+    monkeypatch.setattr(os, "environ", _CredentialGuardEnvironment(os.environ))
 
     assert main(
         [
@@ -119,10 +130,12 @@ def test_cli_treats_undeclared_credentials_as_unavailable(
 
 def test_cli_rejects_removed_environment_selector(
     tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
 ) -> None:
     """The policy-only CLI must not accept a secret-bearing environment selector."""
     manifest_path = tmp_path / "policy.json"
     write_manifest(manifest_path)
+    monkeypatch.setattr(os, "environ", _CredentialGuardEnvironment(os.environ))
     with pytest.raises(SystemExit):
         main(
             [
