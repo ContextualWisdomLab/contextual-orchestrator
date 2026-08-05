@@ -5,10 +5,10 @@
 Contextual Orchestrator controls three independent forms of test-time compute:
 
 1. **model routing** — choose one worker or a fallback candidate;
-2. **workflow topology** — route directly or construct a Conductor/TRINITY-style multi-step workflow with explicit access lists;
-3. **reasoning effort** — request only the model-specific reasoning level justified for each role and task.
+2. **workflow topology** — route directly or construct a Conductor/TRINITY-style multi-step workflow with explicit subtasks and access lists;
+3. **reasoning effort** — request only the model-specific reasoning level justified for each role, task, and workflow position.
 
-The third axis is explicit in this subsystem. It is not inferred from a model name, provider brand, or undocumented default.
+The third axis is explicit in this subsystem. It is not inferred from a model name, provider brand, undocumented default, latency target, or response-speed objective.
 
 ## Configuration contract
 
@@ -65,30 +65,60 @@ NVIDIA NIM also exposes model-dependent hard thinking budgets and parallel-reaso
 
 ## Adaptive policy
 
-The default policy starts at the model profile's inexpensive default and raises effort only for bounded evidence:
+The default policy begins at the model profile's operator-declared default. It raises effort only for bounded evidence and never uses response speed as an allocation signal.
+
+Semantic and role evidence:
 
 - thinker and verifier roles receive one baseline increment;
 - two or more complexity signals add one increment;
-- long context or explicit multi-step structure may add one increment;
+- long context or explicit multi-step task structure may add one increment;
 - two or more high-impact signals may add one increment;
 - the model's declared `maximum_level` is an absolute cap;
 - synthesizers do not inherit the analysis role's effort automatically.
 
-A single keyword cannot force maximum effort. Operators may instead use a fixed policy for controlled experiments:
+Workflow-structure evidence:
+
+- `workflow_step_index` and `workflow_step_count` identify the call's position in the direct or deep workflow;
+- `decomposition_count` records the number of validated workflow subtasks;
+- `recursion_depth` is derived from the accessed-step dependency graph;
+- `accessible_step_count` measures access-list fan-in without exposing hidden model reasoning;
+- later integration steps with several dependencies may receive more effort than an early worker step;
+- a direct route remains a one-step workload and does not inherit deep-workflow increments.
+
+A single keyword or one structural flag cannot force maximum effort. Operators may use a fixed policy for controlled experiments:
 
 ```python
 ReasoningPolicy(strategy="fixed", fixed_level="medium", max_escalations=0)
 ```
 
+## Workflow workload evidence
+
+Each visible reasoning decision may carry this strict audit object:
+
+```json
+{
+  "workflow_step_index": 3,
+  "workflow_step_count": 4,
+  "recursion_depth": 3,
+  "decomposition_count": 4,
+  "accessible_step_count": 3
+}
+```
+
+The values are validated as non-boolean integers with internally consistent bounds. Generated workflows replace the provisional template size before execution. Conducted template workflows derive recursion and fan-in from the access-list prompts, while recomputed verifier and synthesizer steps reconstruct their workload from the trace itself.
+
 ## Verification-driven escalation
 
-When a conducted workflow's verifier rejects the worker result, the runtime may retry exactly once at the next supported level. It then recomputes the affected verifier and synthesizer steps. It does not restart the whole workflow, exceed the policy cap, or retry when no higher supported level exists.
+When a conducted workflow's verifier rejects the worker result, the runtime may retry exactly once at the next supported level. It then recomputes only the affected verifier and synthesizer steps. It does not restart the whole workflow, exceed the policy cap, or retry when no higher supported level exists.
+
+The retried worker retains the same structural workload that produced the rejected result. The recomputed verifier and synthesizer receive workload evidence reconstructed from their actual trace position and access lists. A stale trace identity that no longer resolves to a configured agent fails closed rather than being silently redirected.
 
 The workflow trace records:
 
 - canonical level;
 - decision source and bounded factors;
 - role and escalation index;
+- validated workflow workload;
 - provider profile preset, supported levels, and cap;
 - provider-reported reasoning-token count when available.
 
@@ -102,11 +132,13 @@ Provider egress continues to use the repository's DNS-pinned HTTPS transport, or
 
 ## Batch and ablation
 
-Batch JSONL bodies are rewritten immediately before the secured upload. Decisions are selected per `custom_id`, not once for an entire batch. `run_reasoning_ablation` evaluates fixed effort cells over one prompt set and reports verifier acceptance, total tokens, and reasoning tokens. Task-specific benchmark scorers remain authoritative; verifier acceptance is a workflow measure, not a universal quality claim.
+Batch JSONL bodies are rewritten immediately before the secured upload. Decisions are selected per `custom_id`, not once for an entire batch. Each batch item is treated as an independent one-step route unless a future reviewed batch topology explicitly declares otherwise.
+
+`run_reasoning_ablation` evaluates fixed effort cells over one prompt set and reports verifier acceptance, total tokens, and reasoning tokens. Task-specific benchmark scorers remain authoritative; verifier acceptance is a workflow measure, not a universal quality claim. Ablation is the evidence path for deciding whether role or topology increments improve a specific evaluation set.
 
 ## Verification evidence
 
-Focused tests exercise configuration, provider projection, caller ownership, failover projection, routing, conducted workflows, streaming, passthrough, Batch, policy snapshots, admin profile visibility, durable profile re-save, bounded escalation, and realistic effort ablation. The current local slice verification covers all reasoning-control production modules at 100% statement and branch coverage, with complete module, class, function, method, and nested-function docstrings.
+The exact branch head is verified by the permanent read-only `Reasoning control quality` workflow. It checks out the pull-request head SHA, runs the complete repository suite, measures every reasoning-control production module at 100% statement and branch coverage, enforces 100% public and nested-function docstrings, compiles all Python sources, and checks the Git diff. The latest successful exact-head evidence before documentation-only follow-up commits recorded 447 passing tests, 1,077 reasoning-control statements, and 418 reasoning-control branches with no missing or partial lines. Every later head must rerun the same gate before its evidence is reusable.
 
 ## References — APA 7th
 
