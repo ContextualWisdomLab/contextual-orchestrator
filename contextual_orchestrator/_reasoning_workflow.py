@@ -118,7 +118,7 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
     agent_id = worker.get("served_agent_id", worker.get("agent_id"))
     try:
         agent = orchestrator._agent(agent_id)
-    except (KeyError, TypeError):
+    except (KeyError, StopIteration, TypeError):
         return
     policy = orchestrator_reasoning_policy(orchestrator)
     profile = agent_reasoning_profile(agent)
