@@ -10,15 +10,23 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Add an optional provider-neutral NVIDIA NIM benchmark harness that dynamically discovers the live `/v1/models` catalog, probes every discovered model under bounded concurrency and a hard request cap, records machine-readable capability outcomes, and compares direct, route-once, bounded-conduct, and explicit pricing-scenario policies over a locked task manifest.
 - Add deterministic no-egress benchmark dry runs, secret-redacted JSON/CSV/Markdown evidence artifacts, paired bootstrap uncertainty, quality-latency and quality-hypothetical-cost Pareto frontiers, all-modality catalog fuzzing, and a manually gated benchmark workflow.
+- Add a validated deterministic one-frame H.264 MP4 probe fixture, deterministic pre-allocation of model-capability cells before concurrent probing, and explicit evidence-sufficiency fields that keep the bundled smoke manifest from authorizing production routing.
+- Add direct benchmark quality gates for 100% production statement/branch coverage, 100% public docstrings, wheel build/install/import smoke testing, and optional-import isolation.
 
 ### Security
 
-- Isolate deterministic NIM dry runs in a credential-free GitHub Actions job and reserve provider credentials for the explicit live job, with executable workflow regression contracts.
 - Pin each HTTPS provider connection to the exact public addresses approved during validation, preserve the original hostname for TLS verification, bypass environment proxy resolution, and reject redirects to close DNS-rebinding and credential-forwarding SSRF paths.
 - Reject provider hosts that resolve to any non-globally-routable address, including RFC 6598 shared address space, while retaining explicit multicast, private, loopback, link-local, and reserved-address protections.
-- Document narrowly scoped Semgrep suppressions for parameter-bound database queries, the explicit development-only TLS verification opt-out, and provider URLs that pass the egress guard.
+- Document narrowly scoped Semgrep suppressions for parameter-bound database queries and the explicit development-only TLS verification opt-out.
+- Remove the NIM benchmark's dynamic `urllib.request.urlopen` sink and compatibility monkeypatch path; live discovery, probes, and evaluation now use direct validation-time-address-pinned TLS with original-host SNI/certificate verification, no proxy lookup, no redirect following, and deterministic cleanup.
+- Bound every NIM provider response to 8 MiB and fail closed before an oversized catalog, probe, or evaluation body can exhaust benchmark-runner memory.
+- Split scheduled dry and live benchmark jobs so zero-egress dry runs never receive `NVIDIA_NIM_API_KEY`; only the bounded live benchmark step receives the GitHub Secret.
+- Remove temporary branch-writing/source-export repair mechanisms and the optional benchmark monkeypatch module from the mergeable tree.
 
 ### Changed
 
 - Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
-- Record the reviewed current NVIDIA NIM General FAQ as expiring evidence for free Developer Program prototype-endpoint access, while keeping NVIDIA AI Enterprise production licensing and all hypothetical model prices explicitly separate.
+- Record the reviewed current NVIDIA NIM General FAQ as expiring evidence for free Developer Program hosted-endpoint prototyping access, while keeping NVIDIA AI Enterprise production licensing and every hypothetical model rate explicitly separate.
+- Require live hypothetical pricing scenarios to carry reviewed source, reviewer, review date, validity horizon, rate basis, uncertainty, and explicit rates; reject unreviewed, incomplete, future-dated, or expired price evidence before provider egress.
+- Give direct, route-once, conduct, and reviewed cheapest-worker cells one equal total prompt-plus-completion token budget and one common five-call envelope, with configured-versus-observed evidence in every cell.
+- Keep the optional NIM adapter lazy: importing the runtime package no longer imports the benchmark or mutates benchmark globals.
