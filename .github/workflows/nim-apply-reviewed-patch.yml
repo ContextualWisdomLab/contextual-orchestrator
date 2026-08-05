@@ -8,7 +8,7 @@ on:
       - .github/workflows/nim-apply-reviewed-patch.yml
 
 permissions:
-  contents: write
+  contents: read
 
 concurrency:
   group: nim-reviewed-patch-${{ github.ref }}
@@ -19,10 +19,12 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/contextual-orchestrator' &&
       github.ref == 'refs/heads/claude/nim-all-models-support-fecb0b'
+    permissions:
+      contents: write
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: 736893c529ab64244ca01413d004cc7b59b0cc2f
+      EXPECTED_PARENT_SHA: 07f28a9f63e76414f30c71526ba9336449f17b10
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
