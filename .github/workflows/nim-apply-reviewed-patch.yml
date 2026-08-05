@@ -3,7 +3,7 @@ name: Verify reviewed NIM benchmark integration
 on:
   pull_request:
     branches:
-      - fix/atheris-interpreter-lock
+      - claude/inkspan-pr-audit-ci-q1u4uj
     paths:
       - .github/workflows/nim-apply-reviewed-patch.yml
 
@@ -22,8 +22,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: 7d5d6aa1a7ea29e597c07883d417bba61968aea4
-      EXPECTED_BASE_SHA: cfd42f309ea39a189635ff8ba573c5d3b0e332ba
+      EXPECTED_PARENT_SHA: fd6b0746dbc19cd16edb80bd6044853f16e1b4c1
+      EXPECTED_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
