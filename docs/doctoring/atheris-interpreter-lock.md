@@ -44,6 +44,12 @@ Installation continues to use `--require-hashes`; no unhashed or network-selecte
 
 The test does not import Atheris or use provider egress. It therefore remains deterministic and can run before the platform-specific wheel is installed.
 
+## CI trust boundary
+
+The generic repository coverage verifier and the native fuzz runner have different responsibilities. Generic coverage must materialize the exact current lock identity or report a blocker; it must never accept an older lock-key artifact or silently fall back to an unhashed installation. Native Atheris execution remains isolated in the dedicated fuzz workflow so a platform-specific fuzz engine cannot make ordinary statement, branch, docstring, or package evidence non-portable.
+
+When a centrally maintained reusable workflow is referenced by a mutable branch and its verifier is repaired, retry semantics matter. GitHub documents that re-running only failed jobs retains the called reusable workflow commit from the first attempt, while re-running all jobs resolves the workflow from the specified branch reference. Operators must therefore use a fresh pull-request event or an all-jobs rerun when validating a central workflow repair, and must record the resulting current-head workflow identity. An older failed-job retry is not evidence for the repaired verifier.
+
 ## Applicability and uncertainty
 
 This record proves dependency-selection and artifact-integrity consistency for the repository's declared interpreter partition. It does not claim that every operating system or architecture has an Atheris wheel. Runners outside the documented Linux/CPython environments must perform their own artifact-availability review and must not remove `--require-hashes` to force installation.
@@ -51,6 +57,8 @@ This record proves dependency-selection and artifact-integrity consistency for t
 Artifact availability and hashes are time-sensitive upstream facts. They were rechecked on August 5, 2026. Future version changes require a new lock regeneration, focused contract update, and renewed evidence review.
 
 ## APA 7 references
+
+GitHub. (2026). *Reusing workflow configurations*. GitHub Docs. https://docs.github.com/en/actions/reference/workflows-and-actions/reusing-workflow-configurations
 
 Google. (2025). *Atheris* (Version 3.0.0) [Computer software]. Python Package Index. https://pypi.org/project/atheris/3.0.0/
 

@@ -43,5 +43,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Documentation
 
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, the NIM benchmark validity boundary, the thirty-task evidence floor, and supported-platform uncertainty.
+- Record the CI trust boundary between generic coverage and native fuzz execution, including the evidence-preserving retry rule for branch-referenced reusable workflows.
 - Make the NIM security-integration receipt head-stable: GitHub pull-request metadata and exact-head Checks are authoritative, while older commit and workflow identifiers remain explicitly historical only.
 - Clarify that the bundled thirty-task NIM manifest may reach `evidence_review_required` only when the paired-task and 90% completion floors are met; otherwise it remains `insufficient_evidence`, and no artifact changes production routing automatically.
