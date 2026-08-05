@@ -3,6 +3,9 @@ name: One-shot provider transport integration
 on:
   push:
     branches: [fix/atheris-interpreter-lock]
+  pull_request:
+    branches: [main]
+    types: [reopened]
 
 permissions:
   contents: write
