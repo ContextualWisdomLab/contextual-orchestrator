@@ -213,7 +213,13 @@ def select_reasoning_decision(
         score += 1
         factors.append("multiple_high_impact_signals")
     if structure is not None:
-        if structure.workflow_step_count >= 4 or structure.decomposition_count >= 3:
+        if (
+            structure.workflow_step_index >= 2
+            and (
+                structure.workflow_step_count >= 4
+                or structure.decomposition_count >= 3
+            )
+        ):
             score += 1
             factors.append("decomposed_workflow")
         if structure.recursion_depth >= 2:
