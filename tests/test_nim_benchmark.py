@@ -11,6 +11,7 @@ response-order drift, and secret redaction.
 from __future__ import annotations
 
 import contextlib
+import inspect
 import io
 import json
 import math
@@ -1320,6 +1321,9 @@ def test_cli_live_fails_closed_without_secret() -> None:
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
+            if inspect.signature(fn).parameters:
+                print(f"skip {name} (requires pytest fixtures)")
+                continue
             set_backend(InMemoryCredentialBackend())
             saved = os.environ.pop(nb.NIM_CREDENTIAL_NAME, None)
             try:
