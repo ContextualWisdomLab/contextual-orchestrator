@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add a transport-neutral, versioned model fallback policy that validates explicit cost tiers and deterministically exhausts eligible free candidates before any paid fallback.
+- Filter fallback candidates by repository visibility, required capability, and configured credential name without retaining or serializing secret values.
+- Add a standard-library CLI for immutable cross-repository workflow integration, with complete statement, branch, and public-docstring coverage for the fallback policy.
+
 ### Security
 
 - Pin each HTTPS provider connection to the exact public addresses approved during validation, preserve the original hostname for TLS verification, bypass environment proxy resolution, and reject redirects to close DNS-rebinding and credential-forwarding SSRF paths.

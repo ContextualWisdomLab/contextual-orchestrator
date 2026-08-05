@@ -37,6 +37,18 @@ from .cost_ledger import (
 from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
+from .model_fallback import (
+    CandidateValidationError,
+    CostTier,
+    FallbackCandidate,
+    FallbackContext,
+    FallbackManifestError,
+    FallbackPlan,
+    NoEligibleCandidateError,
+    SkippedCandidate,
+    build_fallback_plan,
+    load_fallback_manifest,
+)
 from .orchestrator import ModelAgent, ModelClient as _ModelClient, TaskOrchestrator, WorkflowStep, load_agents
 from .provider_transport import install_provider_transport as _install_provider_transport
 from .token_counting import HeuristicTokenCounter, build_token_counter
@@ -90,4 +102,15 @@ __all__ = [
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
+    # transport-neutral model fallback policy
+    "CandidateValidationError",
+    "CostTier",
+    "FallbackCandidate",
+    "FallbackContext",
+    "FallbackManifestError",
+    "FallbackPlan",
+    "NoEligibleCandidateError",
+    "SkippedCandidate",
+    "build_fallback_plan",
+    "load_fallback_manifest",
 ]
