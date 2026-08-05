@@ -8,15 +8,41 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+def _ordered_step_blocks(
+    workflow: str,
+    first_step_name: str,
+    second_step_name: str,
+) -> tuple[str, str]:
+    """Return non-empty ordered workflow slices for two named steps.
+
+    Raises:
+        AssertionError: If either step is absent, reversed, or has an empty
+            structural slice.
+    """
+    first_marker = f"- name: {first_step_name}"
+    second_marker = f"- name: {second_step_name}"
+    first_start = workflow.index(first_marker)
+    second_start = workflow.index(second_marker)
+    assert first_start < second_start, (
+        f"{first_step_name!r} must precede {second_step_name!r}"
+    )
+    first_block = workflow[first_start:second_start]
+    second_block = workflow[second_start:]
+    assert first_block.strip(), f"{first_step_name!r} block must not be empty"
+    assert second_block.strip(), f"{second_step_name!r} block must not be empty"
+    return first_block, second_block
+
+
 def test_dry_run_workflow_never_receives_live_nvidia_secret() -> None:
     """The zero-egress dry path must have no NVIDIA credential in its environment."""
     workflow = (REPOSITORY_ROOT / ".github/workflows/nim-benchmark.yml").read_text(
         encoding="utf-8"
     )
-    dry_start = workflow.index("- name: Run dry benchmark")
-    live_start = workflow.index("- name: Run live benchmark")
-    dry_block = workflow[dry_start:live_start]
-    live_block = workflow[live_start:]
+    dry_block, live_block = _ordered_step_blocks(
+        workflow,
+        "Run dry benchmark",
+        "Run live benchmark",
+    )
 
     assert "NVIDIA_NIM_API_KEY" not in dry_block
     assert live_block.count("NVIDIA_NIM_API_KEY:") == 1
@@ -28,9 +54,11 @@ def test_dry_run_workflow_honors_optional_pricing_scenario_without_secret() -> N
     workflow = (REPOSITORY_ROOT / ".github/workflows/nim-benchmark.yml").read_text(
         encoding="utf-8"
     )
-    dry_start = workflow.index("- name: Run dry benchmark")
-    live_start = workflow.index("- name: Run live benchmark")
-    dry_block = workflow[dry_start:live_start]
+    dry_block, _ = _ordered_step_blocks(
+        workflow,
+        "Run dry benchmark",
+        "Run live benchmark",
+    )
 
     assert "PRICING_SCENARIO: ${{ inputs.pricing_scenario }}" in dry_block
     assert 'extra_args+=(--pricing-scenario "$PRICING_SCENARIO")' in dry_block
