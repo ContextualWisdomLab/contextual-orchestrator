@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: 83b7906f2d4d88e1935f12b54fe8ca214c166465
+      EXPECTED_PARENT_SHA: e9bfb853db3031ce282cce51a30205067402568c
       EXPECTED_SECURITY_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
       PATCH_CONTEXT_SHA: 667b311564689a7a53e7fe2bfd91834f80869035
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
@@ -143,8 +143,13 @@ jobs:
           git worktree add --detach "$FINAL_SOURCE_DIR" "$PATCH_CONTEXT_SHA"
           cd "$FINAL_SOURCE_DIR"
           python "$rehydrate_script" "$patch_file"
-          git apply --check --index "$patch_file"
-          git apply --index "$patch_file"
+          git apply --check --cached "$patch_file"
+          git apply --cached "$patch_file"
+          git diff --cached --name-only --diff-filter=D -z \
+            | xargs -0 --no-run-if-empty rm -f --
+          git checkout-index --all --force
+          git clean -fdx
+          git diff-files --quiet
           git diff --cached --check
           actual_tree="$(git write-tree)"
           printf 'reconstructed tree: %s\n' "$actual_tree"
