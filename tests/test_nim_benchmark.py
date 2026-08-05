@@ -571,25 +571,38 @@ def test_probe_models_sorted_despite_input_order_drift() -> None:
     assert results[0]["endpoint"] == FAKE_ENDPOINT
 
 
-def test_probe_models_budget_exhaustion_leaves_machine_readable_skips() -> None:
-    models = [{"model_id": "a/model-one", "owned_by": ""}, {"model_id": "b/model-two", "owned_by": ""}]
+def test_probe_models_rejects_incomplete_probe_budget_before_egress() -> None:
+    """A capability phase never emits biased partial-inventory evidence."""
+    models = [
+        {"model_id": "a/model-one", "owned_by": ""},
+        {"model_id": "b/model-two", "owned_by": ""},
+    ]
     budget = nb.RequestBudget(5)
-    results = nb.probe_discovered_models(
-        models,
-        _fixed_transport(*_ok_json({"choices": [{"message": {"content": "OK"}}]})),
-        FAKE_ENDPOINT,
-        "key",
-        budget,
-        1,
-        lambda: 1234.0,
-        lambda: 0.0,
-    )
-    all_rows = [row for result in results for row in result["capability_probe_rows"]]
-    skipped = [row for row in all_rows if row["probe_outcome"] == "skipped"]
-    assert budget.requests_spent == 5
-    assert len(skipped) == len(all_rows) - 5
-    assert {row["outcome_reason"] for row in skipped} == {"request_budget_exhausted"}
-    assert results[-1]["model_classification"] == "skipped"
+    calls: list[str] = []
+
+    def transport(
+        _method: str,
+        _url: str,
+        _headers: dict[str, str],
+        _body: bytes | None,
+    ) -> tuple[int, bytes]:
+        calls.append("called")
+        return _ok_json({"choices": [{"message": {"content": "OK"}}]})
+
+    with pytest.raises(nb.BenchmarkBudgetError, match="capability probe plan needs 18"):
+        nb.probe_discovered_models(
+            models,
+            transport,
+            FAKE_ENDPOINT,
+            "key",
+            budget,
+            1,
+            lambda: 1234.0,
+            lambda: 0.0,
+        )
+
+    assert calls == []
+    assert budget.requests_spent == 0
 
 
 # --------------------------------------------------------------------------

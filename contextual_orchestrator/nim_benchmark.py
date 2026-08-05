@@ -18,7 +18,7 @@ Design contract (mirrors the issue):
   API, embeddings, image understanding (vision), video understanding,
   audio understanding (omni-style ``input_audio``), audio transcription,
   and audio speech synthesis. ``omni_capable`` is derived, never probed
-  separately. Skipped probes always carry a machine-readable reason.
+  separately. A run that cannot execute every cell fails before capability egress.
 * **Fair comparison** — the same task manifest, scorers, call caps,
   workflow-depth cap (five), timeout, and output-token budget apply to all
   compared systems.
@@ -986,17 +986,6 @@ def _probe_row(
     }
 
 
-def _skipped_probe_row(capability_name: str, skip_reason: str) -> dict[str, Any]:
-    """Row for a probe that never ran; the reason stays machine-readable."""
-    return {
-        "capability_name": capability_name,
-        "probe_outcome": "skipped",
-        "outcome_reason": skip_reason,
-        "http_status": None,
-        "probe_latency_ms": 0.0,
-    }
-
-
 _CHAT_CLASSIFICATIONS = frozenset({"chat_capable", "vision_chat_capable", "omni_capable"})
 
 
@@ -1072,7 +1061,7 @@ def probe_discovered_models(
         timer: Per-probe monotonic latency source.
 
     Returns:
-        Sorted model rows with complete attempted-or-skipped capability evidence.
+        Sorted model rows with complete capability evidence for every model.
 
     Raises:
         BenchmarkContractError: If concurrency is boolean or not positive.
@@ -1085,23 +1074,17 @@ def probe_discovered_models(
         raise BenchmarkContractError("probe_concurrency must be a positive integer")
 
     sorted_models = sorted(models, key=lambda row: row["model_id"])
-    planned_cells = [
-        (model["model_id"], capability_name)
-        for model in sorted_models
-        for capability_name in CAPABILITY_PROBE_ORDER
-    ]
-    permitted_cells = set(planned_cells[: request_budget.remaining_requests])
+    required_probe_requests = len(sorted_models) * len(CAPABILITY_PROBE_ORDER)
+    if required_probe_requests > request_budget.remaining_requests:
+        raise BenchmarkBudgetError(
+            f"complete capability probe plan needs {required_probe_requests} "
+            f"requests but only {request_budget.remaining_requests} remain"
+        )
 
     def probe_one(model: dict[str, Any]) -> dict[str, Any]:
-        """Execute only the preallocated cells for one model."""
+        """Execute every preflighted capability cell for one model."""
         rows: list[dict[str, Any]] = []
         for capability_name in CAPABILITY_PROBE_ORDER:
-            cell_key = (model["model_id"], capability_name)
-            if cell_key not in permitted_cells:
-                rows.append(
-                    _skipped_probe_row(capability_name, "request_budget_exhausted")
-                )
-                continue
             request_budget.spend_or_fail()
             rows.append(
                 execute_capability_probe(
@@ -1597,6 +1580,61 @@ def planned_evaluation_requests(worker_count: int, locked_task_count: int) -> in
     return locked_task_count * (worker_count + 1 + MAX_WORKFLOW_DEPTH + 1)
 
 
+def plan_complete_request_budget(
+    discovered_model_count: int,
+    max_eval_models: int,
+    locked_task_count: int,
+) -> dict[str, int]:
+    """Return the complete conservative request plan for one catalog snapshot.
+
+    The plan reserves one catalog request, every model-capability probe, and
+    the worst-case equal-budget evaluation envelope for every worker that may
+    enter the capped evaluation pool. It is intentionally conservative: fewer
+    chat-eligible or scenario-priced workers may leave requests unused, but a
+    live run never starts a biased partial probe phase.
+
+    Args:
+        discovered_model_count: Usable model ids returned by ``/v1/models``.
+        max_eval_models: Maximum workers allowed into policy evaluation.
+        locked_task_count: Number of locked benchmark tasks.
+
+    Returns:
+        Named request counts including the complete run total.
+
+    Raises:
+        BenchmarkContractError: If any count is boolean or not positive.
+    """
+    counts = {
+        "discovered_model_count": discovered_model_count,
+        "max_eval_models": max_eval_models,
+        "locked_task_count": locked_task_count,
+    }
+    for label, value in counts.items():
+        if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+            raise BenchmarkContractError(
+                f"{label} must be a positive integer"
+            )
+    planned_worker_count = min(discovered_model_count, max_eval_models)
+    capability_probe_request_count = (
+        discovered_model_count * len(CAPABILITY_PROBE_ORDER)
+    )
+    evaluation_reserve_request_count = planned_evaluation_requests(
+        planned_worker_count,
+        locked_task_count,
+    )
+    return {
+        "catalog_request_count": 1,
+        "capability_probe_request_count": capability_probe_request_count,
+        "evaluation_reserve_request_count": evaluation_reserve_request_count,
+        "planned_worker_count": planned_worker_count,
+        "total_required_request_count": (
+            1
+            + capability_probe_request_count
+            + evaluation_reserve_request_count
+        ),
+    }
+
+
 def evaluate_policies(
     agents: list[ModelAgent],
     manifest: dict[str, Any],
@@ -2047,6 +2085,11 @@ _REPORT_REQUIRED_PATHS = (
     "evaluation.routing_recommendation",
     "request_budget.max_total_requests",
     "request_budget.requests_spent",
+    "request_budget.planned_total_requests",
+    "request_budget.catalog_requests",
+    "request_budget.capability_probe_requests",
+    "request_budget.evaluation_reserve_requests",
+    "request_budget.planned_worker_count",
     "actual_cost_evidence",
     "honesty_labels.actual_cost_basis",
     "honesty_labels.provider_latency_source",
@@ -2114,6 +2157,8 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
         f"- discovered models: {report['catalog_snapshot']['discovered_model_count']}",
         f"- requests spent: {report['request_budget']['requests_spent']}"
         f" / {report['request_budget']['max_total_requests']}",
+        f"- complete request plan: {report['request_budget']['planned_total_requests']} "
+        "(catalog + all capability probes + evaluation reserve)",
         f"- evidence status: `{report['evaluation']['evidence_status']}`",
         f"- decision use: `{report['evaluation']['decision_use']}`",
         "",
@@ -2282,6 +2327,21 @@ def assemble_benchmark_report(
         "request_budget": {
             "max_total_requests": request_budget.max_total_requests,
             "requests_spent": request_budget.requests_spent,
+            "planned_total_requests": provenance_inputs["request_plan"][
+                "total_required_request_count"
+            ],
+            "catalog_requests": provenance_inputs["request_plan"][
+                "catalog_request_count"
+            ],
+            "capability_probe_requests": provenance_inputs["request_plan"][
+                "capability_probe_request_count"
+            ],
+            "evaluation_reserve_requests": provenance_inputs["request_plan"][
+                "evaluation_reserve_request_count"
+            ],
+            "planned_worker_count": provenance_inputs["request_plan"][
+                "planned_worker_count"
+            ],
         },
         "actual_cost_evidence": dict(ACTUAL_COST_EVIDENCE),
         "honesty_labels": {
@@ -2535,6 +2595,36 @@ def run_benchmark(
         api_key,
         request_budget,
     )
+    request_plan = plan_complete_request_budget(
+        discovered_model_count=len(catalog["models"]),
+        max_eval_models=max_eval_models,
+        locked_task_count=len(locked_evaluation_tasks(manifest)),
+    )
+    if (
+        request_plan["total_required_request_count"]
+        > request_budget.max_total_requests
+    ):
+        raise BenchmarkBudgetError(
+            "complete benchmark needs "
+            f"{request_plan['total_required_request_count']} requests but "
+            f"configured cap is {request_budget.max_total_requests}; "
+            "no capability probes were started"
+        )
+    benchmark_parameters.update(
+        {
+            "catalog_request_count": request_plan["catalog_request_count"],
+            "capability_probe_request_count": request_plan[
+                "capability_probe_request_count"
+            ],
+            "evaluation_reserve_request_count": request_plan[
+                "evaluation_reserve_request_count"
+            ],
+            "planned_worker_count": request_plan["planned_worker_count"],
+            "total_required_request_count": request_plan[
+                "total_required_request_count"
+            ],
+        }
+    )
     probed_models = probe_discovered_models(
         catalog["models"],
         active_transport,
@@ -2569,6 +2659,7 @@ def run_benchmark(
             "task_manifest_path": task_manifest_path,
             "pricing_scenario_path": pricing_scenario_path,
             "benchmark_parameters": benchmark_parameters,
+            "request_plan": request_plan,
         },
         seed,
     )
