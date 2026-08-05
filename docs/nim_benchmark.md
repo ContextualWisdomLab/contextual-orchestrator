@@ -27,6 +27,22 @@ python -m contextual_orchestrator nim-benchmark \
 The provider secret is never accepted through argv, printed, or serialized.
 The artifact writer refuses to write a file containing the resolved value.
 
+## Workflow credential boundary
+
+The GitHub Actions workflow uses separate top-level jobs for dry and live runs.
+`dry_run_benchmark` is available only for an explicitly selected manual dry run,
+contains no `secrets` expression, and executes the in-process synthetic provider.
+`live_benchmark` runs only for the conservative monthly schedule or an explicit
+manual live selection and owns the workflow's sole provider-secret binding.
+
+This separation enforces least privilege before Python starts. Dry-run safety no
+longer depends on an application branch correctly ignoring a credential that the
+job did not need. A static repository test fails if the dry-run job receives any
+secret expression, if the jobs are recombined, or if more than one provider-secret
+binding appears in the workflow. The threat model, rollback boundary, executable
+contract, and APA 7 references are recorded in
+`docs/doctoring/nim-benchmark-workflow-secret-isolation.md`.
+
 ## Provider-egress security boundary
 
 Catalog discovery, capability probes, and live policy evaluation share the
@@ -159,11 +175,12 @@ artifacts are deterministic so schema and evidence regressions appear as diffs.
 
 ## Workflow
 
-`.github/workflows/nim-benchmark.yml` supports manual dry/live dispatch and a
-conservative scheduled live run with an explicit hard request cap, single-flight
-concurrency, a job timeout, immutable action pins, and retained evidence
-artifacts. It never merges, releases, changes routing policy, or rewrites
-production configuration.
+`.github/workflows/nim-benchmark.yml` supports a credential-free manual dry-run
+job, an explicitly selected manual live job, and a conservative scheduled live
+run. The jobs retain explicit hard request caps, single-flight concurrency,
+timeouts, immutable action pins, and retained evidence artifacts. The workflow
+never merges, releases, changes routing policy, or rewrites production
+configuration.
 
 ## Method grounding
 
