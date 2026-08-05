@@ -49,11 +49,42 @@ from .model_fallback import (
     build_fallback_plan,
     load_fallback_manifest,
 )
-from .orchestrator import ModelAgent, ModelClient as _ModelClient, TaskOrchestrator, WorkflowStep, load_agents
+from .orchestrator import (
+    ModelAgent,
+    ModelClient as _ModelClient,
+    OrchestrationPolicy,
+    TaskOrchestrator,
+    WorkflowStep,
+    load_agents,
+)
 from .provider_transport import install_provider_transport as _install_provider_transport
+from .reasoning_control import (
+    CANONICAL_REASONING_LEVELS,
+    PayloadRule,
+    ReasoningAblationCell,
+    ReasoningDecision,
+    ReasoningPolicy,
+    ReasoningProfile,
+    adapt_reasoning_decision,
+    apply_reasoning_payload,
+    escalate_reasoning_decision,
+    extract_reasoning_tokens,
+    select_reasoning_decision,
+    sum_usage_tokens,
+)
+from .reasoning_runtime import (
+    agent_reasoning_profile,
+    configure_agent_reasoning,
+    configure_orchestrator_reasoning,
+    current_reasoning_decision,
+    install_reasoning_control as _install_reasoning_control,
+    orchestrator_reasoning_policy,
+    reasoning_override,
+)
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 _install_provider_transport(_ModelClient)
+_install_reasoning_control(ModelAgent, _ModelClient, TaskOrchestrator, OrchestrationPolicy)
 
 __all__ = [
     "ModelAgent",
@@ -113,4 +144,23 @@ __all__ = [
     "SkippedCandidate",
     "build_fallback_plan",
     "load_fallback_manifest",
+    # adaptive provider reasoning control
+    "CANONICAL_REASONING_LEVELS",
+    "PayloadRule",
+    "ReasoningAblationCell",
+    "ReasoningDecision",
+    "ReasoningPolicy",
+    "ReasoningProfile",
+    "adapt_reasoning_decision",
+    "apply_reasoning_payload",
+    "escalate_reasoning_decision",
+    "extract_reasoning_tokens",
+    "select_reasoning_decision",
+    "sum_usage_tokens",
+    "agent_reasoning_profile",
+    "configure_agent_reasoning",
+    "configure_orchestrator_reasoning",
+    "current_reasoning_decision",
+    "orchestrator_reasoning_policy",
+    "reasoning_override",
 ]
