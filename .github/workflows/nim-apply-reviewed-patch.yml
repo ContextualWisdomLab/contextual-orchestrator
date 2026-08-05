@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: fd6b0746dbc19cd16edb80bd6044853f16e1b4c1
+      EXPECTED_PARENT_SHA: cb7e9b34a019368da2d410a8ae809f1c6c36e795
       EXPECTED_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
@@ -40,7 +40,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
           test "${{ github.event.pull_request.base.sha }}" = "$EXPECTED_BASE_SHA"
           test "${{ github.event.pull_request.head.ref }}" = "$TARGET_BRANCH"
@@ -135,7 +135,7 @@ jobs:
       - name: Upload exact verified source tree
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
-          name: nim-final-source-${{ github.sha }}
+          name: nim-final-source-${{ github.event.pull_request.head.sha }}
           path: |
             ${{ runner.temp }}/nim-final-source.tar.gz
             ${{ runner.temp }}/nim-final-source.tar.gz.sha256
