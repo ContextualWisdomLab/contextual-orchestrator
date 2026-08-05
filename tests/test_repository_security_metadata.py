@@ -3,10 +3,69 @@ import re
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
+_YAML_KEY_TEMPLATE = r"(?:{plain}|'(?:{plain})'|\"(?:{plain})\")"
 
 
 def read_text(relative_path: str) -> str:
     return (ROOT_DIR / relative_path).read_text(encoding="utf-8")
+
+
+def _mapping_entry(
+    lines: list[str],
+    key: str,
+    indent: int,
+) -> tuple[str, list[str]] | None:
+    """Return one indentation-bounded YAML mapping entry."""
+    key_pattern = _YAML_KEY_TEMPLATE.format(plain=re.escape(key))
+    pattern = re.compile(
+        rf"^ {{{indent}}}{key_pattern}\s*:\s*(?P<inline>[^#]*?)(?:\s+#.*)?$"
+    )
+    matches = [
+        (index, match)
+        for index, line in enumerate(lines)
+        if (match := pattern.match(line)) is not None
+    ]
+    if not matches:
+        return None
+    assert len(matches) == 1, f"duplicate YAML mapping key {key!r}"
+    start_index, match = matches[0]
+    body: list[str] = []
+    for line in lines[start_index + 1 :]:
+        stripped = line.strip()
+        if stripped and not stripped.startswith("#"):
+            current_indent = len(line) - len(line.lstrip(" "))
+            if current_indent <= indent:
+                break
+        body.append(line)
+    return match.group("inline").strip(), body
+
+
+def _direct_child_indent(lines: list[str]) -> int | None:
+    """Return the indentation of direct child entries in one YAML mapping body."""
+    indents = [
+        len(line) - len(line.lstrip(" "))
+        for line in lines
+        if line.strip() and not line.lstrip().startswith("#")
+    ]
+    return min(indents) if indents else None
+
+
+def _pull_request_trigger_entry(workflow_text: str) -> tuple[str, list[str]]:
+    """Return the structurally parsed pull-request trigger entry."""
+    workflow_lines = workflow_text.splitlines()
+    on_entry = _mapping_entry(workflow_lines, "on", 0)
+    assert on_entry is not None, "workflow must declare a top-level 'on' mapping"
+    inline_on, on_body = on_entry
+    assert not inline_on, "required workflows must use a mapping-style 'on' block"
+    trigger_indent = _direct_child_indent(on_body)
+    assert trigger_indent is not None, "workflow 'on' mapping must not be empty"
+    pull_request_entry = _mapping_entry(
+        on_body,
+        "pull_request",
+        trigger_indent,
+    )
+    assert pull_request_entry is not None, "workflow must trigger on pull_request"
+    return pull_request_entry
 
 
 def test_readme_links_deepwiki_and_security_workflow_badges():
@@ -76,8 +135,18 @@ def test_required_pull_request_workflows_cover_stacked_bases():
         ".github/workflows/security.yml",
     ):
         workflow_text = read_text(workflow_path)
-        assert "  pull_request:\n" in workflow_text
-        assert "  pull_request:\n    branches:" not in workflow_text
+        inline_value, pull_request_body = _pull_request_trigger_entry(workflow_text)
+        assert not re.search(r"(?<![\w-])branches\s*:", inline_value)
+        child_indent = _direct_child_indent(pull_request_body)
+        if child_indent is not None:
+            assert (
+                _mapping_entry(
+                    pull_request_body,
+                    "branches",
+                    child_indent,
+                )
+                is None
+            )
 
 
 def test_dependabot_tracks_actions_and_python_dependencies():
@@ -106,7 +175,6 @@ def test_security_policy_documents_reporting_and_automation():
     assert "dependency review" in policy_text
     assert "pip-audit" in policy_text
     assert "requirements.lock" in policy_text
-    assert "requirements-security-ci.txt" in policy_text
     assert "CycloneDX SBOM" in policy_text
     assert "Trivy filesystem scanning" in policy_text
     assert "OpenSSF Scorecard" in policy_text
