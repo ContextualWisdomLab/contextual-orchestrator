@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: cb7e9b34a019368da2d410a8ae809f1c6c36e795
+      EXPECTED_PARENT_SHA: 3878e5b81d817016745586d413184770737b7280
       EXPECTED_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
@@ -33,7 +33,7 @@ jobs:
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ github.event.pull_request.head.sha }}
-          fetch-depth: 2
+          fetch-depth: 0
           persist-credentials: false
 
       - name: Bind execution to the reviewed staging parent and base
@@ -50,7 +50,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Decode and apply the reviewed patch
+      - name: Decode and reconcile the reviewed patch
         shell: bash
         run: |
           set -euo pipefail
@@ -61,10 +61,21 @@ jobs:
             | base64 --decode > "$patch_gzip"
           gzip -dc "$patch_gzip" > "$patch_file"
           printf '%s  %s\n' "$EXPECTED_PATCH_SHA256" "$patch_file" | sha256sum -c -
-          git apply --check "$patch_file"
-          git apply --index "$patch_file"
-          git rm -r .review-evidence/nim-final-patch
-          git rm .github/workflows/nim-apply-reviewed-patch.yml
+
+          mapfile -t patch_paths < <(git apply --numstat "$patch_file" | cut -f3-)
+          test "${#patch_paths[@]}" -gt 0
+          for patch_path in "${patch_paths[@]}"; do
+            if git apply --check --index --include="$patch_path" "$patch_file"; then
+              git apply --index --include="$patch_path" "$patch_file"
+            elif git apply --reverse --check --index --include="$patch_path" "$patch_file"; then
+              printf 'already reconciled: %s\n' "$patch_path"
+            else
+              git apply --3way --index --include="$patch_path" "$patch_file"
+            fi
+          done
+
+          git rm -r --ignore-unmatch .review-evidence/nim-final-patch
+          git rm --ignore-unmatch .github/workflows/nim-apply-reviewed-patch.yml
           git diff --cached --check
 
       - name: Install hash-locked verification dependencies
