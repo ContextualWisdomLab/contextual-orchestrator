@@ -22,10 +22,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: 3878e5b81d817016745586d413184770737b7280
+      EXPECTED_PARENT_SHA: 5bbedc2bdcd2d26ffe4c22c2f39658078e02bc8c
       EXPECTED_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
+      FINAL_SOURCE_DIR: ${{ runner.temp }}/nim-final-worktree
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -50,7 +51,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Decode and reconcile the reviewed patch
+      - name: Reconstruct the exact reviewed source tree
         shell: bash
         run: |
           set -euo pipefail
@@ -62,26 +63,23 @@ jobs:
           gzip -dc "$patch_gzip" > "$patch_file"
           printf '%s  %s\n' "$EXPECTED_PATCH_SHA256" "$patch_file" | sha256sum -c -
 
-          mapfile -t patch_paths < <(git apply --numstat "$patch_file" | cut -f3-)
-          test "${#patch_paths[@]}" -gt 0
-          for patch_path in "${patch_paths[@]}"; do
-            if git apply --check --index --include="$patch_path" "$patch_file"; then
-              git apply --index --include="$patch_path" "$patch_file"
-            elif git apply --reverse --check --index --include="$patch_path" "$patch_file"; then
-              printf 'already reconciled: %s\n' "$patch_path"
-            else
-              git apply --3way --index --include="$patch_path" "$patch_file"
-            fi
-          done
-
-          git rm -r --ignore-unmatch .review-evidence/nim-final-patch
-          git rm --ignore-unmatch .github/workflows/nim-apply-reviewed-patch.yml
+          first_stage_commit="$(git log --reverse --format=%H -- .review-evidence/nim-final-patch/part-001.txt | head -n 1)"
+          test -n "$first_stage_commit"
+          patch_base_sha="$(git rev-parse "${first_stage_commit}^")"
+          rm -rf "$FINAL_SOURCE_DIR"
+          git worktree add --detach "$FINAL_SOURCE_DIR" "$patch_base_sha"
+          cd "$FINAL_SOURCE_DIR"
+          git apply --check "$patch_file"
+          git apply --index "$patch_file"
           git diff --cached --check
+          actual_tree="$(git write-tree)"
+          test "$actual_tree" = "$EXPECTED_FINAL_TREE_SHA"
 
       - name: Install hash-locked verification dependencies
         shell: bash
         run: |
           set -euo pipefail
+          cd "$FINAL_SOURCE_DIR"
           python -m pip install --require-hashes -r fuzz/requirements-property.txt
           python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
 
@@ -89,6 +87,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd "$FINAL_SOURCE_DIR"
           python -m compileall -q contextual_orchestrator tests
           python -m pytest -q
           python -m coverage erase
@@ -108,6 +107,7 @@ jobs:
           test ! -e contextual_orchestrator/nim_benchmark_hardening.py
           test ! -e tests/test_nim_benchmark_hardening.py
           test ! -e .review-evidence/nim-source-repair.yml
+          test ! -e .review-evidence/nim-final-patch
           test ! -e .github/workflows/nim-apply-reviewed-patch.yml
           git diff --cached --check
 
@@ -115,6 +115,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          cd "$FINAL_SOURCE_DIR"
           rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
           python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
           python -m pip install --no-deps \
@@ -128,7 +129,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          cd "$GITHUB_WORKSPACE"
+          cd "$FINAL_SOURCE_DIR"
           rm -rf dist build .coverage htmlcov contextual_orchestrator.egg-info
           git add -A
           git diff --cached --check
