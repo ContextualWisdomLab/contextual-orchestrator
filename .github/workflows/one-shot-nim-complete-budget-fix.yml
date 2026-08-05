@@ -1,0 +1,129 @@
+name: One-shot NIM complete-budget preflight
+
+on:
+  push:
+    branches:
+      - claude/nim-all-models-support-fecb0b
+    paths:
+      - .github/scripts/one_shot_nim_complete_budget_fix.py.part-*
+      - .github/workflows/one-shot-nim-complete-budget-fix.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: one-shot-nim-complete-budget-preflight
+  cancel-in-progress: true
+
+jobs:
+  apply-test-first-fix:
+    if: >-
+      github.repository == 'ContextualWisdomLab/contextual-orchestrator'
+      && github.actor == 'seonghobae'
+      && github.ref == 'refs/heads/claude/nim-all-models-support-fecb0b'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Harden runner
+        uses: step-security/harden-runner@bf7454d06d71f1098171f2acdf0cd4708d7b5920 # v2.20.0
+        with:
+          egress-policy: audit
+
+      - name: Checkout exact feature branch without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: claude/nim-all-models-support-fecb0b
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Validate temporary-file-only setup delta
+        env:
+          REVIEWED_HEAD: 8e19d64ad77dd9377cb00ce4ec61bb2d782d2160
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          expected="$RUNNER_TEMP/expected-paths.txt"
+          actual="$RUNNER_TEMP/actual-paths.txt"
+          cat >"$expected" <<'EOF'
+          .github/scripts/one_shot_nim_complete_budget_fix.py.part-00
+          .github/scripts/one_shot_nim_complete_budget_fix.py.part-01
+          .github/scripts/one_shot_nim_complete_budget_fix.py.part-02
+          .github/scripts/one_shot_nim_complete_budget_fix.py.part-03
+          .github/workflows/one-shot-nim-complete-budget-fix.yml
+          EOF
+          git diff --name-only "$REVIEWED_HEAD" HEAD | sort >"$actual"
+          sort -o "$expected" "$expected"
+          diff -u "$expected" "$actual"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.0.0
+        with:
+          python-version: '3.12'
+
+      - name: Install hash-locked test and quality dependencies
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pip install --require-hashes -r fuzz/requirements-property.txt
+          python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
+
+      - name: Apply test-first complete-budget repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cat .github/scripts/one_shot_nim_complete_budget_fix.py.part-* > .github/scripts/one_shot_nim_complete_budget_fix.py
+          python .github/scripts/one_shot_nim_complete_budget_fix.py
+
+      - name: Verify complete benchmark quality and repository regression suite
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m coverage erase
+          python -m coverage run --branch \
+            --source=contextual_orchestrator.nim_benchmark \
+            -m pytest \
+            tests/test_nim_benchmark.py \
+            tests/test_nim_benchmark_release_acceptance.py \
+            tests/test_nim_benchmark_workflow_contract.py \
+            -q
+          python -m coverage report \
+            --include=contextual_orchestrator/nim_benchmark.py \
+            --show-missing \
+            --fail-under=100
+          python -m interrogate -f 100 contextual_orchestrator/nim_benchmark.py
+          python -m pytest -q
+          python -m compileall -q contextual_orchestrator tests
+          git diff --check
+
+      - name: Build and import the wheel
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
+          python -m pip wheel --no-deps . --wheel-dir dist
+          python -m pip install --no-deps \
+            --target "$RUNNER_TEMP/nim-wheel-site" \
+            dist/contextual_orchestrator-*.whl
+          cd "$RUNNER_TEMP"
+          PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
+            python -c "import contextual_orchestrator; import contextual_orchestrator.nim_benchmark"
+
+      - name: Remove temporary automation and publish verified source
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+          BRANCH_NAME: claude/nim-all-models-support-fecb0b
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rm .github/scripts/one_shot_nim_complete_budget_fix.py
+          rm .github/scripts/one_shot_nim_complete_budget_fix.py.part-*
+          rm .github/workflows/one-shot-nim-complete-budget-fix.yml
+          git add --all
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo '::error::Expected complete-budget production and test changes were not produced.'
+            exit 1
+          fi
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git commit -m 'fix(benchmark): reserve the complete dynamic request plan'
+          auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 | tr -d '\n')"
+          echo "::add-mask::$auth_header"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" \
+            push origin "HEAD:${BRANCH_NAME}"
