@@ -1,15 +1,13 @@
 name: NIM benchmark
 
 # Evidence-grade NVIDIA NIM model discovery and cost-quality benchmark
-# (issue #86). Two entry points:
-#   * manual dispatch — defaults to a deterministic DRY RUN (no NVIDIA egress);
-#     operators opt in explicitly to a live run and its request budget;
-#   * conservative monthly schedule — one live run under a small hard budget.
-# Single-flight concurrency: a run never overlaps or cancels another.
-# The benchmark fails closed on its own (missing secret for non-dry runs,
-# incomplete discovery, exceeded budget, missing provenance) — this workflow
-# never weakens that; it only supplies provenance and uploads artifacts.
-# It never merges, releases, or rewrites production configuration.
+# (issue #86). Two isolated entry points:
+#   * a deterministic manual dry run that never receives provider credentials;
+#   * an explicitly selected manual live run or conservative monthly live run.
+# Single-flight concurrency prevents overlap and never cancels an active run.
+# The benchmark fails closed on incomplete discovery, exceeded budgets, missing
+# provenance, or missing live credentials. It never merges, releases, or
+# rewrites production configuration.
 
 on:
   workflow_dispatch:
@@ -27,7 +25,7 @@ on:
         type: string
         default: ""
   schedule:
-    # Conservative: one live run per month, small budget, single-flight.
+    # Conservative: one live run per month under a small hard request budget.
     - cron: "23 3 5 * *"
 
 permissions:
@@ -38,8 +36,58 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
-  benchmark:
-    name: Discover, probe, and benchmark the NIM catalog
+  dry_run_benchmark:
+    name: Validate the benchmark without provider credentials
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.dry_run == true }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install pinned runtime
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+
+      - name: Run deterministic dry benchmark
+        env:
+          PRICING_SCENARIO: ${{ inputs.pricing_scenario }}
+          MAX_REQUESTS: ${{ inputs.max_total_requests }}
+          PROVENANCE_GIT_SHA: ${{ github.sha }}
+          PROVENANCE_RUN_ID: ${{ github.run_id }}
+        run: |
+          extra_args=(--dry-run)
+          if [ -n "$PRICING_SCENARIO" ]; then
+            extra_args+=(--pricing-scenario "$PRICING_SCENARIO")
+          fi
+          python -m contextual_orchestrator nim-benchmark \
+            "${extra_args[@]}" \
+            --task-manifest examples/nim_task_manifest.json \
+            --output-dir benchmark_artifacts \
+            --max-total-requests "$MAX_REQUESTS" \
+            --git-sha "$PROVENANCE_GIT_SHA" \
+            --workflow-run-id "$PROVENANCE_RUN_ID"
+
+      - name: Upload dry-run benchmark artifacts
+        if: always()
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
+        with:
+          name: nim-benchmark-dry-run-${{ github.run_id }}
+          path: benchmark_artifacts/
+          retention-days: 90
+          if-no-files-found: error
+
+  live_benchmark:
+    name: Discover, probe, and benchmark the live NIM catalog
+    if: ${{ github.event_name == 'schedule' || (github.event_name == 'workflow_dispatch' && inputs.dry_run == false) }}
     runs-on: ubuntu-latest
     timeout-minutes: 60
     steps:
@@ -58,46 +106,35 @@ jobs:
           python -m pip install --require-hashes -r requirements.lock
           python -m pip install --no-deps -e .
 
-      - name: Resolve run parameters
-        id: params
+      - name: Resolve live-run parameters
+        id: live_parameters
         env:
           EVENT_NAME: ${{ github.event_name }}
-          INPUT_DRY_RUN: ${{ inputs.dry_run }}
           INPUT_MAX_REQUESTS: ${{ inputs.max_total_requests }}
           INPUT_PRICING: ${{ inputs.pricing_scenario }}
         run: |
           if [ "$EVENT_NAME" = "schedule" ]; then
-            # Scheduled runs are live but conservative: small hard budget,
-            # no pricing scenario (hypothetical costs honestly 'unknown').
-            echo "dry_run_flag=" >> "$GITHUB_OUTPUT"
             echo "max_requests=300" >> "$GITHUB_OUTPUT"
             echo "pricing_scenario=" >> "$GITHUB_OUTPUT"
           else
-            if [ "$INPUT_DRY_RUN" = "true" ]; then
-              echo "dry_run_flag=--dry-run" >> "$GITHUB_OUTPUT"
-            else
-              echo "dry_run_flag=" >> "$GITHUB_OUTPUT"
-            fi
             echo "max_requests=${INPUT_MAX_REQUESTS}" >> "$GITHUB_OUTPUT"
             echo "pricing_scenario=${INPUT_PRICING}" >> "$GITHUB_OUTPUT"
           fi
 
-      - name: Run the benchmark
+      - name: Run live benchmark
         env:
-          # Bootstrap transport only: the CLI seeds this one secret into the
-          # in-process KV, then resolves it via get_credential. It is never
-          # passed via argv, printed, or serialized into artifacts; the
-          # harness refuses to write any artifact containing it.
+          # This is the only workflow binding for the provider credential. The
+          # dry-run job is structurally separate and cannot receive this value.
           NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-          DRY_RUN_FLAG: ${{ steps.params.outputs.dry_run_flag }}
-          PRICING_SCENARIO: ${{ steps.params.outputs.pricing_scenario }}
-          MAX_REQUESTS: ${{ steps.params.outputs.max_requests }}
+          PRICING_SCENARIO: ${{ steps.live_parameters.outputs.pricing_scenario }}
+          MAX_REQUESTS: ${{ steps.live_parameters.outputs.max_requests }}
           PROVENANCE_GIT_SHA: ${{ github.sha }}
           PROVENANCE_RUN_ID: ${{ github.run_id }}
         run: |
           extra_args=()
-          if [ -n "$DRY_RUN_FLAG" ]; then extra_args+=("$DRY_RUN_FLAG"); fi
-          if [ -n "$PRICING_SCENARIO" ]; then extra_args+=(--pricing-scenario "$PRICING_SCENARIO"); fi
+          if [ -n "$PRICING_SCENARIO" ]; then
+            extra_args+=(--pricing-scenario "$PRICING_SCENARIO")
+          fi
           python -m contextual_orchestrator nim-benchmark \
             "${extra_args[@]}" \
             --task-manifest examples/nim_task_manifest.json \
@@ -106,11 +143,11 @@ jobs:
             --git-sha "$PROVENANCE_GIT_SHA" \
             --workflow-run-id "$PROVENANCE_RUN_ID"
 
-      - name: Upload benchmark artifacts (JSON, CSV, Markdown)
+      - name: Upload live benchmark artifacts
         if: always()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
         with:
-          name: nim-benchmark-${{ github.run_id }}
+          name: nim-benchmark-live-${{ github.run_id }}
           path: benchmark_artifacts/
           retention-days: 90
           if-no-files-found: error
