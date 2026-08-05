@@ -6,12 +6,16 @@ on:
       - claude/nim-all-models-support-fecb0b
     paths:
       - .github/workflows/one-shot-nim-default-request-cap.yml
+  pull_request:
+    branches:
+      - fix/atheris-interpreter-lock
+    types: [reopened]
 
 permissions:
   contents: read
 
 concurrency:
-  group: one-shot-nim-default-request-cap-v2
+  group: one-shot-nim-default-request-cap-v3
   cancel-in-progress: true
 
 jobs:
@@ -19,7 +23,14 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/contextual-orchestrator'
       && github.actor == 'seonghobae'
-      && github.ref == 'refs/heads/claude/nim-all-models-support-fecb0b'
+      && (
+        (github.event_name == 'push'
+          && github.ref == 'refs/heads/claude/nim-all-models-support-fecb0b')
+        ||
+        (github.event_name == 'pull_request'
+          && github.event.pull_request.head.repo.full_name == github.repository
+          && github.event.pull_request.head.ref == 'claude/nim-all-models-support-fecb0b')
+      )
     runs-on: ubuntu-latest
     timeout-minutes: 30
     permissions:
@@ -30,16 +41,16 @@ jobs:
         with:
           egress-policy: audit
 
-      - name: Checkout exact pushed head without persisted credentials
-        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+      - name: Checkout exact contributor head without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           fetch-depth: 2
           persist-credentials: false
 
       - name: Validate one-file trigger and prove RED acceptance test
         env:
-          EXPECTED_PARENT_SHA: cdfe08e34a7def215a05f4e42e4db62dfd83deaf
+          EXPECTED_PARENT_SHA: 37c78b4d616f24b098e959ccb470e3825ee90b53
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
@@ -117,7 +128,7 @@ jobs:
 
       - name: Remove one-shot workflow and publish verified permanent tree
         env:
-          EXPECTED_HEAD: ${{ github.sha }}
+          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
           HEAD_BRANCH: claude/nim-all-models-support-fecb0b
           PUSH_TOKEN: ${{ github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
