@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import os
 from pathlib import Path
+from typing import Any
 
 import pytest
 
@@ -14,21 +16,28 @@ from contextual_orchestrator.model_fallback import (
 from tests.fallback_test_support import manifest_document
 
 
+class _ExplodingEnvironment(dict[str, str]):
+    """Environment mapping that proves the policy process never reads secrets."""
+
+    def get(self, key: str, default: Any = None) -> Any:
+        """Fail if fallback planning attempts to inspect any environment value."""
+        raise AssertionError(f"fallback policy read environment value {key!r}")
+
+
 def write_manifest(path: Path) -> None:
     """Write the shared valid manifest fixture as UTF-8 JSON."""
     path.write_text(json.dumps(manifest_document()), encoding="utf-8")
 
 
-def test_cli_emits_free_first_json_without_secret_values(
+def test_cli_emits_free_first_json_from_declared_credential_names(
     tmp_path: Path,
     monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """CLI checks named secrets but never prints their values."""
+    """A trusted caller declares available names without exposing secret values."""
     manifest_path = tmp_path / "policy.json"
     write_manifest(manifest_path)
-    monkeypatch.setenv("FREE_API_KEY", "free-secret-value")
-    monkeypatch.setenv("PAID_API_KEY", "paid-secret-value")
+    monkeypatch.setattr(os, "environ", _ExplodingEnvironment())
 
     assert main(
         [
@@ -39,9 +48,9 @@ def test_cli_emits_free_first_json_without_secret_values(
             "noema",
             "--repository-visibility",
             "public",
-            "--credential-env",
+            "--available-credential",
             "FREE_API_KEY",
-            "--credential-env",
+            "--available-credential",
             "PAID_API_KEY",
             "--required-capability",
             "structured_output",
@@ -50,26 +59,20 @@ def test_cli_emits_free_first_json_without_secret_values(
         ]
     ) == 0
 
-    output = capsys.readouterr().out
-    payload = json.loads(output)
+    payload = json.loads(capsys.readouterr().out)
     assert [item["candidate_id"] for item in payload["candidates"]] == [
         "free-primary",
         "paid-primary",
     ]
-    assert "free-secret-value" not in output
-    assert "paid-secret-value" not in output
 
 
 def test_cli_emits_models_and_respects_deny_paid(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
     """Shell consumers receive validated model identifiers."""
     manifest_path = tmp_path / "policy.json"
     write_manifest(manifest_path)
-    monkeypatch.setenv("FREE_API_KEY", "configured")
-    monkeypatch.setenv("PAID_API_KEY", "configured")
 
     assert main(
         [
@@ -78,9 +81,9 @@ def test_cli_emits_models_and_respects_deny_paid(
             str(manifest_path),
             "--agent",
             "noema",
-            "--credential-env",
+            "--available-credential",
             "FREE_API_KEY",
-            "--credential-env",
+            "--available-credential",
             "PAID_API_KEY",
             "--deny-paid",
             "--format",
@@ -90,16 +93,13 @@ def test_cli_emits_models_and_respects_deny_paid(
     assert capsys.readouterr().out == "nvidia/free\n"
 
 
-def test_cli_treats_empty_credentials_as_unavailable(
+def test_cli_treats_undeclared_credentials_as_unavailable(
     tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
     capsys: pytest.CaptureFixture[str],
 ) -> None:
-    """An empty secret is not a configured credential."""
+    """A credential absent from the trusted name set is unavailable."""
     manifest_path = tmp_path / "policy.json"
     write_manifest(manifest_path)
-    monkeypatch.setenv("FREE_API_KEY", "  ")
-    monkeypatch.setenv("PAID_API_KEY", "configured")
 
     assert main(
         [
@@ -108,15 +108,33 @@ def test_cli_treats_empty_credentials_as_unavailable(
             str(manifest_path),
             "--agent",
             "noema",
-            "--credential-env",
-            "FREE_API_KEY",
-            "--credential-env",
+            "--available-credential",
             "PAID_API_KEY",
             "--format",
             "ids",
         ]
     ) == 0
     assert capsys.readouterr().out == "paid-primary\n"
+
+
+def test_cli_rejects_removed_environment_selector(
+    tmp_path: Path,
+) -> None:
+    """The policy-only CLI must not accept a secret-bearing environment selector."""
+    manifest_path = tmp_path / "policy.json"
+    write_manifest(manifest_path)
+    with pytest.raises(SystemExit):
+        main(
+            [
+                "plan",
+                "--manifest",
+                str(manifest_path),
+                "--agent",
+                "noema",
+                "--credential-env",
+                "FREE_API_KEY",
+            ]
+        )
 
 
 def test_cli_rejects_invalid_json_missing_file_and_non_object_root(
@@ -147,7 +165,7 @@ def test_cli_rejects_invalid_json_missing_file_and_non_object_root(
 def test_cli_rejects_unsafe_credential_name(
     tmp_path: Path,
 ) -> None:
-    """Environment selectors use strict identifier syntax."""
+    """Declarative credential names use strict identifier syntax."""
     manifest_path = tmp_path / "policy.json"
     write_manifest(manifest_path)
     with pytest.raises(Exception, match="credential"):
@@ -158,7 +176,7 @@ def test_cli_rejects_unsafe_credential_name(
                 str(manifest_path),
                 "--agent",
                 "noema",
-                "--credential-env",
+                "--available-credential",
                 "bad-key",
             ]
         )
