@@ -23,9 +23,9 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      EXPECTED_PARENT_SHA: 2efcf08391911542a91b4a9e9e442f4fe60984c7
+      EXPECTED_PARENT_SHA: a06f9c5dffa38c249d032e38cc5b5328a7c77d10
       EXPECTED_PATCH_SHA256: f2a21849dd2600c534907e207872f5e494bc9725fd222abb70dd0c615b03adb8
-      EXPECTED_FINAL_TREE_SHA: e3d9c37375ee0d65ca0bdd5755f1e599d4051df9
+      EXPECTED_FINAL_TREE_SHA: f3a604c689b65ee36decbea95c272c8db823b62d
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
@@ -119,9 +119,9 @@ jobs:
     permissions:
       contents: write
     env:
-      EXPECTED_PARENT_SHA: 2efcf08391911542a91b4a9e9e442f4fe60984c7
+      EXPECTED_PARENT_SHA: a06f9c5dffa38c249d032e38cc5b5328a7c77d10
       EXPECTED_PATCH_SHA256: f2a21849dd2600c534907e207872f5e494bc9725fd222abb70dd0c615b03adb8
-      EXPECTED_FINAL_TREE_SHA: e3d9c37375ee0d65ca0bdd5755f1e599d4051df9
+      EXPECTED_FINAL_TREE_SHA: f3a604c689b65ee36decbea95c272c8db823b62d
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
       GITHUB_TOKEN: ${{ github.token }}
     steps:
