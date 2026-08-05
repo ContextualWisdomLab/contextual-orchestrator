@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Exclude zero-success benchmark policies from quality Pareto frontiers with explicit evidence labels, validate every Markdown-consumed report field before artifact writes, normalize excessive catalog JSON depth to the catalog domain error, preserve positive sub-second provider timeouts, and make the standalone NIM test runner fixture-safe.
 - Expose a stable complete-run request planning view and align API, CLI, manual-workflow, and deterministic test caps with the locked thirty-task evidence floor, preserving fail-before-probe behavior.
 - Fail closed after catalog discovery but before capability egress when the complete all-model probe and equal-budget evaluation plan cannot fit the configured hard request cap; the monthly 2,000-request ceiling covers the representative 127-model, thirty-task, seven-worker plan requiring 1,564 requests and still rejects larger plans before partial probing.
 - Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
