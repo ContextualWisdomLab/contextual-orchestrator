@@ -1,4 +1,4 @@
-"""Cost-aware, role-sensitive reasoning decision policy."""
+"""Quality-aware, role-sensitive reasoning decision policy."""
 
 from __future__ import annotations
 
@@ -6,6 +6,7 @@ from dataclasses import dataclass
 from typing import Any, Mapping
 
 from ._reasoning_profile import CANONICAL_REASONING_LEVELS, ReasoningProfile
+from ._reasoning_workload import ReasoningWorkload
 
 _COMPLEXITY_TERMS = (
     "analyze",
@@ -51,9 +52,10 @@ _ROLE_BASELINE_OFFSET = {
     "synthesizer": 0,
 }
 
+
 @dataclass(frozen=True)
 class ReasoningPolicy:
-    """Cost-quality policy for role-aware effort and bounded escalation."""
+    """Quality policy for role-aware effort and bounded escalation."""
 
     strategy: str = "adaptive"
     fixed_level: str | None = None
@@ -103,6 +105,7 @@ class ReasoningDecision:
     complexity_score: int
     factors: tuple[str, ...]
     escalation_index: int = 0
+    workload: ReasoningWorkload | None = None
 
     def __post_init__(self) -> None:
         """Validate canonical and non-negative decision evidence."""
@@ -120,10 +123,12 @@ class ReasoningDecision:
             raise ValueError("escalation_index must be an integer")
         if self.escalation_index < 0:
             raise ValueError("escalation_index must be non-negative")
+        if self.workload is not None and not isinstance(self.workload, ReasoningWorkload):
+            raise ValueError("decision workload must be ReasoningWorkload or None")
 
     def to_dict(self) -> dict[str, Any]:
         """Return API-safe evidence without private intermediate reasoning text."""
-        return {
+        value: dict[str, Any] = {
             "level": self.level,
             "source": self.source,
             "role": self.role,
@@ -131,6 +136,9 @@ class ReasoningDecision:
             "factors": list(self.factors),
             "escalation_index": self.escalation_index,
         }
+        if self.workload is not None:
+            value["workload"] = self.workload.to_dict()
+        return value
 
 
 @dataclass(frozen=True)
@@ -159,16 +167,31 @@ def select_reasoning_decision(
     policy: ReasoningPolicy,
     task: str,
     role: str,
+    *,
+    workload: ReasoningWorkload | Mapping[str, Any] | None = None,
 ) -> ReasoningDecision | None:
-    """Select the least costly bounded level justified by role and task risk."""
+    """Select bounded effort from role, task evidence, and workflow topology.
+
+    Latency is intentionally not an input. The policy allocates test-time compute
+    from role, semantic complexity, risk, decomposition, recursion, and access-list
+    fan-in, subject only to the model profile's explicit maximum.
+    """
     if profile is None or policy.strategy == "disabled":
         return None
     if not isinstance(task, str) or not isinstance(role, str) or not role:
         raise ValueError("task and role must be strings and role must not be empty")
+    structure = _coerce_workload(workload)
     if policy.strategy == "fixed":
         requested = policy.fixed_level or profile.default_level
         level = _nearest_supported(profile.bounded_levels, requested)
-        return ReasoningDecision(level, "fixed_policy", role, 0, ("fixed_policy",))
+        return ReasoningDecision(
+            level,
+            "fixed_policy",
+            role,
+            0,
+            ("fixed_policy",),
+            workload=structure,
+        )
 
     lowered = task.lower()
     factors: list[str] = []
@@ -189,9 +212,28 @@ def select_reasoning_decision(
     if risk_hits >= 2:
         score += 1
         factors.append("multiple_high_impact_signals")
+    if structure is not None:
+        if structure.workflow_step_count >= 4 or structure.decomposition_count >= 3:
+            score += 1
+            factors.append("decomposed_workflow")
+        if structure.recursion_depth >= 2:
+            score += 1
+            factors.append("recursive_workflow_depth")
+        if structure.accessible_step_count >= 2:
+            score += 1
+            factors.append("access_list_fan_in")
+        if (
+            structure.workflow_step_index >= max(2, structure.workflow_step_count - 2)
+            and structure.accessible_step_count >= 1
+        ):
+            score += 1
+            factors.append("late_workflow_integration")
 
     base_index = CANONICAL_REASONING_LEVELS.index(profile.default_level)
-    requested_index = min(base_index + score, CANONICAL_REASONING_LEVELS.index(profile.maximum_level))
+    requested_index = min(
+        base_index + score,
+        CANONICAL_REASONING_LEVELS.index(profile.maximum_level),
+    )
     requested = CANONICAL_REASONING_LEVELS[requested_index]
     level = _nearest_supported(profile.bounded_levels, requested)
     return ReasoningDecision(
@@ -200,6 +242,7 @@ def select_reasoning_decision(
         role=role,
         complexity_score=score,
         factors=tuple(factors or ("profile_default",)),
+        workload=structure,
     )
 
 
@@ -220,6 +263,7 @@ def adapt_reasoning_decision(
         complexity_score=decision.complexity_score,
         factors=decision.factors + ("projected_to_provider_capability",),
         escalation_index=decision.escalation_index,
+        workload=decision.workload,
     )
 
 
@@ -245,8 +289,19 @@ def escalate_reasoning_decision(
         complexity_score=decision.complexity_score,
         factors=decision.factors + ("verifier_rejected_prior_attempt",),
         escalation_index=decision.escalation_index + 1,
+        workload=decision.workload,
     )
 
+
+def _coerce_workload(
+    value: ReasoningWorkload | Mapping[str, Any] | None,
+) -> ReasoningWorkload | None:
+    """Normalize optional typed or JSON-compatible structural evidence."""
+    if value is None or isinstance(value, ReasoningWorkload):
+        return value
+    if isinstance(value, Mapping):
+        return ReasoningWorkload.from_mapping(value)
+    raise ValueError("workload must be a mapping, ReasoningWorkload, or None")
 
 
 def _nearest_supported(levels: tuple[str, ...], requested: str) -> str:
@@ -256,7 +311,11 @@ def _nearest_supported(levels: tuple[str, ...], requested: str) -> str:
     if requested not in CANONICAL_REASONING_LEVELS:
         raise ValueError(f"unknown canonical reasoning level: {requested}")
     requested_index = CANONICAL_REASONING_LEVELS.index(requested)
-    lower = [level for level in levels if CANONICAL_REASONING_LEVELS.index(level) <= requested_index]
+    lower = [
+        level
+        for level in levels
+        if CANONICAL_REASONING_LEVELS.index(level) <= requested_index
+    ]
     return lower[-1] if lower else levels[0]
 
 
@@ -264,8 +323,10 @@ __all__ = [
     "ReasoningAblationCell",
     "ReasoningDecision",
     "ReasoningPolicy",
+    "ReasoningWorkload",
+    "_coerce_workload",
+    "_nearest_supported",
     "adapt_reasoning_decision",
     "escalate_reasoning_decision",
     "select_reasoning_decision",
-    "_nearest_supported",
 ]
