@@ -15,7 +15,7 @@ on:
       max_total_requests:
         description: "Hard cap on provider requests for this run"
         type: number
-        default: 500
+        default: 2000
       pricing_scenario:
         description: "Optional reviewed pricing-scenario JSON path"
         type: string
