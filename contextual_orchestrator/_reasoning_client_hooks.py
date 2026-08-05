@@ -6,6 +6,7 @@ from typing import Any, Iterator
 
 from .reasoning_control import (
     ReasoningPolicy,
+    ReasoningWorkload,
     adapt_reasoning_decision,
     apply_reasoning_payload,
     select_reasoning_decision,
@@ -36,7 +37,12 @@ def install_client_hooks(model_client_type: type[Any]) -> None:
     original_client_send_raw = model_client_type._send_raw
     original_client_batch_upload = model_client_type._batch_upload
 
-    def client_chat(self: Any, agent: Any, messages: list[dict[str, str]], temperature: float = 0.2) -> str:
+    def client_chat(
+        self: Any,
+        agent: Any,
+        messages: list[dict[str, str]],
+        temperature: float = 0.2,
+    ) -> str:
         """Keep one role-aware decision active through chat payload construction."""
         role = _infer_role(messages)
         decision = _resolve_decision(agent, _message_text(messages), role)
@@ -58,7 +64,12 @@ def install_client_hooks(model_client_type: type[Any]) -> None:
             yield from original_client_stream_chat(self, agent, messages, temperature)
         _append_event(agent, role, decision)
 
-    def client_proxy_send(self: Any, agent: Any, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def client_proxy_send(
+        self: Any,
+        agent: Any,
+        endpoint: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         """Apply a worker decision to full-shape chat or Responses passthrough."""
         decision = _resolve_decision(agent, _input_text(payload), "worker")
         with _decision_scope(decision):
@@ -76,7 +87,11 @@ def install_client_hooks(model_client_type: type[Any]) -> None:
             apply_reasoning_payload(payload, profile, decision, "chat/completions"),
         )
 
-    def client_stream_send(self: Any, agent: Any, payload: dict[str, Any]) -> Iterator[str]:
+    def client_stream_send(
+        self: Any,
+        agent: Any,
+        payload: dict[str, Any],
+    ) -> Iterator[str]:
         """Project the active decision into a streaming chat payload."""
         profile = agent_reasoning_profile(agent)
         decision = adapt_reasoning_decision(profile, _ACTIVE_DECISION.get())
@@ -86,7 +101,12 @@ def install_client_hooks(model_client_type: type[Any]) -> None:
             apply_reasoning_payload(payload, profile, decision, "chat/completions"),
         )
 
-    def client_send_raw(self: Any, agent: Any, endpoint: str, payload: dict[str, Any]) -> dict[str, Any]:
+    def client_send_raw(
+        self: Any,
+        agent: Any,
+        endpoint: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
         """Project the active decision into chat or Responses passthrough payloads."""
         profile = agent_reasoning_profile(agent)
         decision = adapt_reasoning_decision(profile, _ACTIVE_DECISION.get())
@@ -105,7 +125,7 @@ def install_client_hooks(model_client_type: type[Any]) -> None:
         poll_interval: float = 5.0,
         poll_timeout: float = 3600.0,
     ) -> dict[str, dict[str, Any]]:
-        """Select and retain one bounded decision for each asynchronous batch item."""
+        """Select and retain one direct-route decision for each batch item."""
         policy = _ACTIVE_POLICY.get() or ReasoningPolicy()
         profile = agent_reasoning_profile(agent)
         decisions = {
@@ -117,6 +137,7 @@ def install_client_hooks(model_client_type: type[Any]) -> None:
                     policy,
                     _message_text(messages),
                     "worker",
+                    workload=ReasoningWorkload(),
                 )
             )
             is not None
@@ -144,7 +165,6 @@ def install_client_hooks(model_client_type: type[Any]) -> None:
         if profile is not None and decisions:
             payload = _rewrite_batch_payload(payload, decisions, profile)
         return original_client_batch_upload(self, agent, payload)
-
 
     model_client_type.chat = client_chat
     model_client_type.stream_chat = client_stream_chat
