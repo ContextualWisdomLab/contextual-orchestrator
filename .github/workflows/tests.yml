@@ -72,9 +72,8 @@ jobs:
             --include=contextual_orchestrator/nim_benchmark.py,contextual_orchestrator/nim_csv_evidence.py \
             --show-missing \
             --fail-under=100
-          python -m interrogate -f 100 \
-            contextual_orchestrator/nim_benchmark.py \
-            contextual_orchestrator/nim_csv_evidence.py
+          python -m interrogate -f 100 contextual_orchestrator/nim_benchmark.py
+          python -m interrogate -f 100 contextual_orchestrator/nim_csv_evidence.py
 
       - name: Build, install, and import the wheel
         run: |
