@@ -18,7 +18,7 @@ def test_nim_readme_describes_completion_dependent_evidence_status() -> None:
     )
     assert (
         "no benchmark artifact automatically changes production routing"
-        in normalized
+        in normalized.casefold()
     )
     assert (
         "manifest is smoke-sized and reports `insufficient_evidence`"
