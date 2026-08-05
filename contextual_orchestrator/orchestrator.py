@@ -9,6 +9,7 @@ from dataclasses import dataclass, replace
 from functools import wraps
 import hashlib
 import http.client
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -195,6 +196,19 @@ class OrchestrationPolicy:
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 
+def _literal_loopback_host(hostname: str | None) -> bool:
+    """Return whether a host is localhost or a literal loopback IP address."""
+    if hostname is None:
+        return False
+    normalized = hostname.rstrip(".").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
 def is_transient_error(exc: BaseException) -> bool:
     """Return True when a provider call failure is worth retrying with backoff."""
     if isinstance(exc, urllib.error.HTTPError):
@@ -231,7 +245,8 @@ class ModelClient:
         # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
         # explicit dev-only opt-out (insecure) for self-signed endpoints.
         self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
-        # Explicit test seam; production uses the DNS-pinned TLS connection.
+        # Explicit test seams; production uses direct loopback HTTP and DNS-pinned TLS.
+        self._http_connection_class = http.client.HTTPConnection
         self._https_connection_class = _PinnedHTTPSConnection
 
     @staticmethod
@@ -320,19 +335,10 @@ class ModelClient:
         production provider validation rejects it before credentials are used.
         """
         parsed = urlparse(request.full_url)
-        if parsed.scheme == "http":
-            return urllib.request.urlopen(  # nosec B310 - public validation rejects HTTP; private loopback test seam only. nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-                request,
-                timeout=self.timeout,
-            )
-        if parsed.scheme != "https" or not parsed.hostname:
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
             raise RuntimeError("provider request URL must use http(s)")
-
-        port = parsed.port or 443
-        pin_key = (parsed.hostname.lower(), port)
-        addresses = getattr(self._local, "provider_address_pins", {}).get(pin_key)
-        if not addresses:
-            raise RuntimeError("provider request has no validated address pin")
+        if parsed.username is not None or parsed.password is not None:
+            raise RuntimeError("provider request URL must not contain user information")
 
         target = parsed.path or "/"
         if parsed.params:
@@ -341,6 +347,48 @@ class ModelClient:
             target = f"{target}?{parsed.query}"
         headers = dict(request.header_items())
         headers["Connection"] = "close"
+
+        if parsed.scheme == "http":
+            if not _literal_loopback_host(parsed.hostname):
+                raise RuntimeError(
+                    "plain HTTP provider requests require a literal loopback target"
+                )
+            connection = self._http_connection_class(
+                parsed.hostname,
+                parsed.port or 80,
+                timeout=self.timeout,
+            )
+            try:
+                connection.request(
+                    request.get_method(),
+                    target,
+                    body=request.data,
+                    headers=headers,
+                )
+                response = connection.getresponse()
+            except (OSError, http.client.HTTPException) as exc:
+                connection.close()
+                raise urllib.error.URLError(exc) from exc
+            if response.status >= 300:
+                status = response.status
+                reason = response.reason
+                response_headers = response.headers
+                response.close()
+                connection.close()
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    status,
+                    reason,
+                    response_headers,
+                    None,
+                )
+            return _ProviderHTTPResponse(response, connection)
+
+        port = parsed.port or 443
+        pin_key = (parsed.hostname.lower(), port)
+        addresses = getattr(self._local, "provider_address_pins", {}).get(pin_key)
+        if not addresses:
+            raise RuntimeError("provider request has no validated address pin")
 
         last_error: BaseException | None = None
         for pinned_ip in addresses:
