@@ -1,4 +1,4 @@
-name: Inspect PR90 merge onto security base
+name: Integrate PR90 with exact security base
 
 on:
   push:
@@ -8,49 +8,163 @@ on:
       - .github/workflows/pr90-merge-inspection.yml
 
 permissions:
-  contents: read
+  contents: write
 
 concurrency:
-  group: pr90-merge-inspection-20260805
-  cancel-in-progress: true
+  group: pr90-security-base-integration-20260805
+  cancel-in-progress: false
 
 jobs:
-  inspect:
+  verify-and-publish:
     if: github.repository == 'ContextualWisdomLab/contextual-orchestrator'
     runs-on: ubuntu-24.04
-    timeout-minutes: 10
+    timeout-minutes: 35
     env:
       PR_HEAD_SHA: 9b72816bb61fa540b8eb20fdc559e740a3c3c6ec
       SECURITY_BASE_SHA: 03124cf97b7bf02e30a48a13acfd78b6ef08d1ef
+      TARGET_BRANCH: claude/nim-all-models-support-fecb0b
+      FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
+      GITHUB_TOKEN: ${{ github.token }}
     steps:
-      - name: Checkout exact PR head without credentials
+      - name: Checkout exact PR head without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: ${{ env.PR_HEAD_SHA }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Materialize the exact three-way merge result
+      - name: Bind to exact source and security heads
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
-          git config user.name merge-inspector
-          git config user.email merge-inspector@example.invalid
+          test "$(git rev-parse HEAD)" = "$PR_HEAD_SHA"
+          remote_head="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)"
+          test "$remote_head" = "$PR_HEAD_SHA"
           git fetch --no-tags origin "$SECURITY_BASE_SHA"
+          test "$(git rev-parse FETCH_HEAD)" = "$SECURITY_BASE_SHA"
+
+      - name: Merge exact security base and resolve only the reviewed changelog conflict
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           set +e
           git merge --no-commit --no-ff "$SECURITY_BASE_SHA"
           merge_exit=$?
           set -e
-          printf '%s\n' "$merge_exit" > merge-exit-code.txt
-          git diff --name-only --diff-filter=U > conflict-files.txt
-          git status --porcelain=v1 > merge-status.txt
-          git diff --cc > combined-conflict.diff
-          rm -rf .git
+          unmerged="$(git diff --name-only --diff-filter=U)"
+          if [ -n "$unmerged" ] && [ "$unmerged" != "CHANGELOG.md" ]; then
+            printf 'unexpected conflict set:\n%s\n' "$unmerged" >&2
+            exit 1
+          fi
+          if [ "$merge_exit" -ne 0 ] && [ "$unmerged" != "CHANGELOG.md" ]; then
+            echo 'merge failed without the reviewed changelog-only conflict' >&2
+            exit 1
+          fi
+          python3 - <<'PY'
+          from pathlib import Path
 
-      - name: Upload read-only merge workspace
-        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+          path = Path("CHANGELOG.md")
+          lines = path.read_text(encoding="utf-8").splitlines(keepends=True)
+          output: list[str] = []
+          index = 0
+          conflicts = 0
+          while index < len(lines):
+              if not lines[index].startswith("<<<<<<< "):
+                  output.append(lines[index])
+                  index += 1
+                  continue
+              conflicts += 1
+              index += 1
+              ours: list[str] = []
+              while index < len(lines) and not lines[index].startswith("======="):
+                  ours.append(lines[index])
+                  index += 1
+              if index >= len(lines):
+                  raise SystemExit("unterminated changelog conflict before separator")
+              index += 1
+              theirs: list[str] = []
+              while index < len(lines) and not lines[index].startswith(">>>>>>> "):
+                  theirs.append(lines[index])
+                  index += 1
+              if index >= len(lines):
+                  raise SystemExit("unterminated changelog conflict after separator")
+              index += 1
+              output.extend(ours)
+              if ours and theirs and ours[-1].strip() == "" and theirs[0].strip() == "":
+                  theirs = theirs[1:]
+              output.extend(theirs)
+          if conflicts not in (0, 1):
+              raise SystemExit(f"unexpected changelog conflict count: {conflicts}")
+          resolved = "".join(output)
+          if any(marker in resolved for marker in ("<<<<<<<", "=======", ">>>>>>>")):
+              raise SystemExit("changelog conflict markers remain")
+          required = (
+              "complete all-model probe and equal-budget evaluation plan",
+              "APA 7 doctoring for Python environment-marker semantics",
+          )
+          missing = [phrase for phrase in required if phrase not in resolved]
+          if missing:
+              raise SystemExit(f"resolved changelog lost required evidence: {missing}")
+          path.write_text(resolved, encoding="utf-8")
+          PY
+          git add CHANGELOG.md
+          test -z "$(git diff --name-only --diff-filter=U)"
+          git diff --cached --check
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
         with:
-          name: pr90-security-base-merge-${{ github.sha }}
-          path: .
-          include-hidden-files: true
-          if-no-files-found: error
-          retention-days: 1
+          python-version: "3.12"
+
+      - name: Install hash-locked verification tooling
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pip install --require-hashes -r fuzz/requirements-property.txt
+          python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
+
+      - name: Verify integrated behavior and quality gates
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m compileall -q contextual_orchestrator tests
+          python -m pytest -q
+          python -m coverage erase
+          python -m coverage run --branch \
+            --source=contextual_orchestrator.nim_benchmark \
+            -m pytest \
+            tests/test_nim_benchmark.py \
+            tests/test_nim_benchmark_release_acceptance.py \
+            tests/test_nim_benchmark_workflow_contract.py \
+            -q
+          python -m coverage report \
+            --include=contextual_orchestrator/nim_benchmark.py \
+            --show-missing \
+            --fail-under=100
+          python -m interrogate -f 100 contextual_orchestrator/nim_benchmark.py
+          git diff --cached --check
+
+      - name: Build, install, and import the integrated wheel
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          rm -rf dist "$RUNNER_TEMP/pr90-integrated-site"
+          python -m pip wheel --no-deps . --wheel-dir dist
+          python -m pip install --no-deps \
+            --target "$RUNNER_TEMP/pr90-integrated-site" \
+            dist/contextual_orchestrator-*.whl
+          cd "$RUNNER_TEMP"
+          PYTHONPATH="$RUNNER_TEMP/pr90-integrated-site" \
+            python -c "import contextual_orchestrator; import contextual_orchestrator.nim_benchmark"
+
+      - name: Commit exact two-parent integration and publish only when the source head is unchanged
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          cd "$GITHUB_WORKSPACE"
+          rm -rf dist build .coverage htmlcov contextual_orchestrator.egg-info
+          find . -type d -name __pycache__ -prune -exec rm -rf {} +
+          git add -A
+          git diff --cached --check
+          remote_head="$(git ls-remote origin "refs/heads/$TARGET_BRANCH" | cut -f1)"
+          test "$remote_head" = "$PR_HEAD_SHA"
+          git commit -m "merge: integrate provider-egress security base into NIM benchmark"
+          auth_header="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" \
+            push origin "HEAD:refs/heads/$TARGET_BRANCH"
