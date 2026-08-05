@@ -9,6 +9,7 @@ import sys
 
 from .credentials import register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
+from .reasoning_runtime import enable_reasoning_control
 from .server import SecurityConfig, serve
 
 
@@ -55,11 +56,20 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+def _enable_reasoning_runtime() -> None:
+    """Activate optional reasoning hooks for the executable product runtime."""
+    enable_reasoning_control()
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
         _register_credential_command(sys.argv[2:])
         return
+
+    # Product execution opts in explicitly. Merely importing the package remains
+    # side-effect free, while configuration loading below understands profiles.
+    _enable_reasoning_runtime()
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")

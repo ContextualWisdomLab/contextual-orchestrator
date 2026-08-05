@@ -1,8 +1,9 @@
 """Runtime integration for provider-neutral adaptive reasoning control.
 
-The extension installs only stable configuration, provider transport, role,
-workflow trace, bounded retry, and ablation seams. It remains idempotent and
-keeps the orchestration core usable without importing this optional module.
+Importing this module is side-effect free. Library consumers explicitly call
+:func:`enable_reasoning_control` before constructing or loading runtime objects;
+the product CLI performs that activation during command execution. The lower-
+level installer remains available for isolated fakes and alternate runtimes.
 """
 
 from __future__ import annotations
@@ -54,7 +55,7 @@ def install_reasoning_control(
     orchestrator_type: type[Any],
     policy_type: type[Any],
 ) -> None:
-    """Install reasoning control on repository runtime classes exactly once."""
+    """Install reasoning control on supplied runtime classes exactly once."""
     if getattr(model_client_type, "_reasoning_control_installed", False):
         return
     install_config_hooks(model_agent_type, orchestrator_type, policy_type)
@@ -63,12 +64,35 @@ def install_reasoning_control(
     model_client_type._reasoning_control_installed = True
 
 
+def enable_reasoning_control() -> None:
+    """Explicitly activate reasoning control for the built-in runtime classes.
+
+    Call this before loading agent configuration or constructing a
+    :class:`~contextual_orchestrator.orchestrator.TaskOrchestrator`. Repeated
+    calls are safe and do not wrap methods more than once.
+    """
+    from .orchestrator import (  # Local import preserves package import purity.
+        ModelAgent,
+        ModelClient,
+        OrchestrationPolicy,
+        TaskOrchestrator,
+    )
+
+    install_reasoning_control(
+        ModelAgent,
+        ModelClient,
+        TaskOrchestrator,
+        OrchestrationPolicy,
+    )
+
+
 __all__ = [
     "agent_reasoning_profile",
     "configure_agent_reasoning",
     "configure_orchestrator_reasoning",
     "current_reasoning_decision",
     "current_reasoning_workload",
+    "enable_reasoning_control",
     "install_reasoning_control",
     "orchestrator_reasoning_policy",
     "reasoning_override",

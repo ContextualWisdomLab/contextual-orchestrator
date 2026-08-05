@@ -16,6 +16,14 @@ The implementation claims provider-neutral control only for settings explicitly 
 | Observe reasoning-token consumption | Official provider usage contracts | Trace evidence records counts, never private intermediate reasoning text. |
 | Manage AI risk and governance evidence | ISO/IEC 23894:2023; ISO/IEC 42001:2023 | Decisions, caps, overrides, escalation, and ablations are machine-readable and auditable. |
 
+## Activation and ownership boundary
+
+Adaptive reasoning is an optional runtime extension. Package import must remain free of reasoning-related class mutation so standalone consumers, central `.github` automation, naruon, and other CWL services can inspect or import the library without import-order-dependent behavior.
+
+The built-in executable explicitly activates the extension before it loads agent configuration. Programmatic consumers call `enable_reasoning_control()` before loading agents or constructing an orchestrator. The operation is idempotent and retains a lower-level typed installer for isolated alternative runtimes and deterministic test fakes.
+
+This boundary is an architectural control rather than an empirical research claim. It prevents optional capability activation from becoming an implicit global side effect, makes ownership observable at the application composition root, and permits a later replacement of hooks with composition or subclasses without changing the public activation contract.
+
 ## Provider documentation reviewed
 
 - OpenAI API model and reasoning guidance: model-dependent effort sets and usage-level reasoning token details.

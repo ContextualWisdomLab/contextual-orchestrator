@@ -52,7 +52,6 @@ from .model_fallback import (
 from .orchestrator import (
     ModelAgent,
     ModelClient as _ModelClient,
-    OrchestrationPolicy,
     TaskOrchestrator,
     WorkflowStep,
     load_agents,
@@ -78,14 +77,16 @@ from .reasoning_runtime import (
     configure_agent_reasoning,
     configure_orchestrator_reasoning,
     current_reasoning_decision,
-    install_reasoning_control as _install_reasoning_control,
+    enable_reasoning_control,
     orchestrator_reasoning_policy,
     reasoning_override,
 )
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
+# The current stacked security base still installs its provider transport here.
+# Adaptive reasoning remains an explicit opt-in and never mutates classes merely
+# because the public package is imported.
 _install_provider_transport(_ModelClient)
-_install_reasoning_control(ModelAgent, _ModelClient, TaskOrchestrator, OrchestrationPolicy)
 
 __all__ = [
     "ModelAgent",
@@ -163,6 +164,7 @@ __all__ = [
     "configure_agent_reasoning",
     "configure_orchestrator_reasoning",
     "current_reasoning_decision",
+    "enable_reasoning_control",
     "orchestrator_reasoning_policy",
     "reasoning_override",
 ]

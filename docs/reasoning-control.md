@@ -10,6 +10,22 @@ Contextual Orchestrator controls three independent forms of test-time compute:
 
 The third axis is explicit in this subsystem. It is not inferred from a model name, provider brand, undocumented default, latency target, or response-speed objective.
 
+## Activation boundary
+
+Importing `contextual_orchestrator` does not activate or monkey-patch the optional reasoning extension. This preserves a predictable standalone library and lets another CWL service compose the package without import-order-dependent class mutation.
+
+The packaged CLI and HTTP-server entrypoint activate reasoning explicitly before agent configuration is loaded. Library consumers opt in before loading agents or constructing an orchestrator:
+
+```python
+from contextual_orchestrator import enable_reasoning_control
+from contextual_orchestrator.orchestrator import TaskOrchestrator, load_agents
+
+enable_reasoning_control()
+orchestrator = TaskOrchestrator(load_agents("agents.json"))
+```
+
+Activation is idempotent. Calling it again does not wrap methods twice. Applications that do not call it retain the legacy runtime shape, while the explicit product entrypoint enables the full reasoning profile and policy contract.
+
 ## Configuration contract
 
 Each model may declare a `reasoning_profile`:
@@ -138,7 +154,7 @@ Batch JSONL bodies are rewritten immediately before the secured upload. Decision
 
 ## Verification evidence
 
-The exact branch head is verified by the permanent read-only `Reasoning control quality` workflow. It checks out the pull-request head SHA, runs the complete repository suite, measures every reasoning-control production module at 100% statement and branch coverage, enforces 100% public and nested-function docstrings, compiles all Python sources, and checks the Git diff. The latest successful exact-head evidence before documentation-only follow-up commits recorded 447 passing tests, 1,077 reasoning-control statements, and 418 reasoning-control branches with no missing or partial lines. Every later head must rerun the same gate before its evidence is reusable.
+The exact branch head is verified by the permanent read-only `Reasoning control quality` workflow. It checks out the pull-request head SHA, runs the complete repository suite, measures every reasoning-control production module at 100% statement and branch coverage, enforces 100% public and nested-function docstrings, compiles all Python sources, and checks the Git diff. Every later head must rerun the same gate before its evidence is reusable.
 
 ## References — APA 7th
 

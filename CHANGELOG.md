@@ -28,8 +28,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
 - Treat reasoning effort as a third test-time-compute axis alongside model routing and workflow topology, with failover models projecting one canonical decision onto their declared capabilities.
 - Keep synthesizer effort below analysis roles by default and require multiple high-impact signals before adaptive policy reaches the model-specific maximum.
+- Make adaptive-reasoning activation explicit and idempotent: package import no longer installs reasoning hooks, while the product CLI activates them before loading agent configuration.
 
 ### Documentation
 
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, and the supported-platform uncertainty boundary.
 - Add architecture, operations, test strategy, provider mapping, governance, and APA 7 research evidence for adaptive reasoning control.
+- Record the standalone/MSA activation boundary and import-purity regression contract for optional reasoning control.

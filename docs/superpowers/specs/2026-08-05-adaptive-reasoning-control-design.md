@@ -35,24 +35,33 @@ Focused modules keep responsibilities independently testable:
 - `_reasoning_config_hooks.py`: agent round-trip and policy snapshot integration;
 - `_reasoning_client_hooks.py`: chat, stream, passthrough, and Batch provider hooks;
 - `_reasoning_orchestrator_hooks.py`: role invocation, admin visibility, replacement preservation, traces, retry, and ablation;
-- `reasoning_runtime.py`: idempotent public installer.
+- `reasoning_runtime.py`: side-effect-free explicit activation and idempotent typed installation.
 
 No new runtime dependency is introduced.
 
+## Activation decision
+
+Importing the public package must not install optional reasoning hooks or mutate core classes. The package exports `enable_reasoning_control()` as an explicit composition-root action. The built-in CLI calls it before loading agent configuration; library and MSA consumers call it before creating runtime objects only when they need adaptive reasoning.
+
+Repeated activation is idempotent. Isolated alternate runtimes and test fakes may call the lower-level typed installer with their own class set. This preserves the extension's current implementation seams while preventing global import-order dependence and gives a stable public boundary for a future composition- or subclass-based implementation.
+
 ## Data flow
 
-1. Resolve the selected agent's explicit profile.
-2. Select a canonical level from policy, role, and bounded task signals.
-3. Project the level to the candidate model during failover.
-4. Enter a request-local decision scope.
-5. Add endpoint-specific fields only when the caller does not own the complete path.
-6. Call the provider through the existing pinned HTTPS and KV credential seams.
-7. Capture usage and trace-safe decision evidence.
-8. If verification rejects the worker, retry once at the next supported level and recompute affected downstream roles.
+1. Explicitly activate the reasoning extension at the application composition root.
+2. Resolve the selected agent's explicit profile.
+3. Select a canonical level from policy, role, and bounded task signals.
+4. Project the level to the candidate model during failover.
+5. Enter a request-local decision scope.
+6. Add endpoint-specific fields only when the caller does not own the complete path.
+7. Call the provider through the existing pinned HTTPS and KV credential seams.
+8. Capture usage and trace-safe decision evidence.
+9. If verification rejects the worker, retry once at the next supported level and recompute affected downstream roles.
 
 ## Compatibility and persistence
 
-- An unprofiled agent preserves legacy request shape.
+- Importing `contextual_orchestrator` alone leaves reasoning hooks inactive.
+- The product CLI activates reasoning before loading agent files.
+- An unprofiled agent preserves legacy request shape after activation.
 - Agent configuration round-trips `reasoning_profile`.
 - Admin list/add/patch surfaces expose profile capability.
 - Frozen-dataclass replacement preserves the prior profile unless an explicit profile patch changes or removes it.
@@ -67,10 +76,11 @@ No new runtime dependency is introduced.
 - Caller-owned complete paths are not overwritten, including explicit `null`.
 - Hidden reasoning content is not stored; only level, factors, role, cap, escalation index, and token counts are recorded.
 - Existing DNS pinning, SNI/certificate verification, proxy bypass, redirect rejection, and KV secret resolution remain unchanged.
+- Optional reasoning activation is explicit rather than an import-time global mutation.
 
 ## Testing and acceptance
 
-Tests must cover malformed profiles, provider presets, custom paths, caller ownership, adaptive/fixed policies, high-impact thresholds, failover projection, route/conduct, planner, verifier, streaming, Responses passthrough, Batch JSONL, admin visibility, durable profile re-save, bounded escalation, realistic arithmetic recovery, and fixed-effort ablation.
+Tests must cover malformed profiles, provider presets, custom paths, caller ownership, adaptive/fixed policies, high-impact thresholds, failover projection, route/conduct, planner, verifier, streaming, Responses passthrough, Batch JSONL, admin visibility, durable profile re-save, bounded escalation, realistic arithmetic recovery, fixed-effort ablation, import purity, and idempotent explicit activation.
 
 Acceptance requires:
 
