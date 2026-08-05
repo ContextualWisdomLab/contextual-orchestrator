@@ -8,9 +8,11 @@ from typing import Any, Callable, Mapping, Sequence
 from .reasoning_control import (
     ReasoningDecision,
     ReasoningProfile,
+    ReasoningWorkload,
     adapt_reasoning_decision,
     apply_reasoning_payload,
     escalate_reasoning_decision,
+    workload_for_trace_row,
 )
 from ._reasoning_state import (
     _ACTIVE_POLICY,
@@ -20,14 +22,20 @@ from ._reasoning_state import (
     agent_reasoning_profile,
     orchestrator_reasoning_policy,
     reasoning_override,
+    reasoning_workload_override,
 )
 
-def _step_messages(task: str, row: Mapping[str, Any], trace: Sequence[Mapping[str, Any]]) -> list[dict[str, str]]:
+
+def _step_messages(
+    task: str,
+    row: Mapping[str, Any],
+    trace: Sequence[Mapping[str, Any]],
+) -> list[dict[str, str]]:
     """Reconstruct the repository's access-list prompt for one retryable step."""
     accessed: list[str] = []
     for raw_index in row.get("access", []):
-        if isinstance(raw_index, int) and 0 <= raw_index < len(trace):
-            accessed.append(str(trace[raw_index].get("output", "")))
+        if isinstance(raw_index, int) and not isinstance(raw_index, bool) and 0 <= raw_index < len(trace):
+            accessed.append(f"Step {raw_index}: {trace[raw_index].get('output', '')}")
     prior = "\n\n".join(accessed) if accessed else "(none)"
     role = str(row.get("role", "worker"))
     return [
@@ -68,7 +76,9 @@ def _refresh_step_reasoning_from_event(
         return
     effective_usage = usage if isinstance(usage, Mapping) else event.get("usage")
     row["reasoning"] = _reasoning_evidence(
-        event["profile"], event["decision"], effective_usage
+        event["profile"],
+        event["decision"],
+        effective_usage,
     )
 
 
@@ -88,6 +98,12 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
     if not isinstance(decision_data, Mapping):
         return
     try:
+        raw_workload = decision_data.get("workload")
+        workload = (
+            ReasoningWorkload.from_mapping(raw_workload)
+            if isinstance(raw_workload, Mapping)
+            else workload_for_trace_row(worker, trace)
+        )
         prior = ReasoningDecision(
             level=str(decision_data["level"]),
             source=str(decision_data["source"]),
@@ -95,6 +111,7 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
             complexity_score=int(decision_data.get("complexity_score", 0)),
             factors=tuple(decision_data.get("factors", ())),
             escalation_index=int(decision_data.get("escalation_index", 0)),
+            workload=workload,
         )
     except (KeyError, TypeError, ValueError):
         return
@@ -109,7 +126,7 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
     if escalated is None:
         return
 
-    with reasoning_override(escalated):
+    with reasoning_override(escalated), reasoning_workload_override(workload):
         output, served_id, usage = orchestrator._invoke(
             agent,
             _step_messages(task, worker, trace),
@@ -126,44 +143,74 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
     if served_profile is not None and served_decision is not None:
         worker["reasoning"] = _reasoning_evidence(served_profile, served_decision, usage)
 
-    verifier = next((row for row in trace if row.get("role") == "verifier" and row.get("id", -1) > worker.get("id", -1)), None)
+    verifier = next(
+        (
+            row
+            for row in trace
+            if row.get("role") == "verifier"
+            and row.get("id", -1) > worker.get("id", -1)
+        ),
+        None,
+    )
     if isinstance(verifier, dict):
         verifier_agent = orchestrator._agent(verifier.get("agent_id"))
-        verifier_output, verifier_served, verifier_usage = orchestrator._invoke(
-            verifier_agent,
-            _step_messages(task, verifier, trace),
-            text=task,
-            role="verifier",
-        )
+        verifier_workload = workload_for_trace_row(verifier, trace)
+        with reasoning_workload_override(verifier_workload):
+            verifier_output, verifier_served, verifier_usage = orchestrator._invoke(
+                verifier_agent,
+                _step_messages(task, verifier, trace),
+                text=task,
+                role="verifier",
+            )
         verifier["output"] = verifier_output
         verifier["served_agent_id"] = verifier_served
         if verifier_usage is not None:
             verifier["usage"] = verifier_usage
         _refresh_step_reasoning_from_event(
-            verifier, "verifier", verifier_served, verifier_usage
+            verifier,
+            "verifier",
+            verifier_served,
+            verifier_usage,
         )
         result["verification"] = orchestrator._judge_verifier_output(
             verifier_output,
-            str(next((row.get("output", "") for row in trace if row.get("role") == "thinker"), "")),
+            str(
+                next(
+                    (
+                        row.get("output", "")
+                        for row in trace
+                        if row.get("role") == "thinker"
+                    ),
+                    "",
+                )
+            ),
             output,
         )
 
     accepted = bool(result.get("verification", {}).get("accepted"))
-    synthesizer = next((row for row in reversed(trace) if row.get("role") == "synthesizer"), None)
+    synthesizer = next(
+        (row for row in reversed(trace) if row.get("role") == "synthesizer"),
+        None,
+    )
     if accepted and isinstance(synthesizer, dict):
         synth_agent = orchestrator._agent(synthesizer.get("agent_id"))
-        synth_output, synth_served, synth_usage = orchestrator._invoke(
-            synth_agent,
-            _step_messages(task, synthesizer, trace),
-            text=task,
-            role="synthesizer",
-        )
+        synth_workload = workload_for_trace_row(synthesizer, trace)
+        with reasoning_workload_override(synth_workload):
+            synth_output, synth_served, synth_usage = orchestrator._invoke(
+                synth_agent,
+                _step_messages(task, synthesizer, trace),
+                text=task,
+                role="synthesizer",
+            )
         synthesizer["output"] = synth_output
         synthesizer["served_agent_id"] = synth_served
         if synth_usage is not None:
             synthesizer["usage"] = synth_usage
         _refresh_step_reasoning_from_event(
-            synthesizer, "synthesizer", synth_served, synth_usage
+            synthesizer,
+            "synthesizer",
+            synth_served,
+            synth_usage,
         )
         result["answer"] = synth_output
     else:
@@ -176,7 +223,11 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
     }
 
 
-def _rewrite_batch_payload(payload: bytes, decisions: Mapping[str, ReasoningDecision], profile: ReasoningProfile) -> bytes:
+def _rewrite_batch_payload(
+    payload: bytes,
+    decisions: Mapping[str, ReasoningDecision],
+    profile: ReasoningProfile,
+) -> bytes:
     """Apply per-item decisions to an OpenAI Batch JSONL request body."""
     output: list[str] = []
     for raw_line in payload.decode("utf-8").splitlines():
@@ -187,10 +238,14 @@ def _rewrite_batch_payload(payload: bytes, decisions: Mapping[str, ReasoningDeci
         body = row.get("body")
         decision = decisions.get(custom_id) if isinstance(custom_id, str) else None
         if isinstance(body, Mapping) and decision is not None:
-            row["body"] = apply_reasoning_payload(body, profile, decision, "chat/completions")
+            row["body"] = apply_reasoning_payload(
+                body,
+                profile,
+                decision,
+                "chat/completions",
+            )
         output.append(json.dumps(row, ensure_ascii=False, separators=(",", ":")))
     return ("\n".join(output) + "\n").encode("utf-8")
-
 
 
 def _capture_batch(
@@ -214,7 +269,6 @@ def _capture_batch(
         _ACTIVE_POLICY.reset(policy_token)
         _EVENT_CAPTURE.reset(event_token)
     return records
-
 
 
 __all__ = [
