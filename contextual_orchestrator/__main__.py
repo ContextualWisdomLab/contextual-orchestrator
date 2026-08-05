@@ -64,9 +64,11 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "nim-benchmark":
         # Optional benchmark harness (issue #86): dynamic NIM catalog discovery,
         # all-modality capability probes, and the cost-quality policy benchmark.
-        from .nim_benchmark import run_benchmark_cli
+        # The lazy composition root also enriches the uploaded CSV with the exact
+        # role, agent, step, and model assignment evidence already present in JSON.
+        from .nim_csv_evidence import run_benchmark_cli_with_complete_csv
 
-        sys.exit(run_benchmark_cli(sys.argv[2:]))
+        sys.exit(run_benchmark_cli_with_complete_csv(sys.argv[2:]))
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
