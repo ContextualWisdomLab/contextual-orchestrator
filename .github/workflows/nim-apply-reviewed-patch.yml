@@ -22,10 +22,10 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: f11193dd2e46099750d8571810925658a2ce7c5b
-      EXPECTED_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
-      EXPECTED_DIRECT_PATCH_SHA256: fc16a96000e3a0ff88f3f27d52a14c1e73876989d2e918c9cd286aa459c7db76
-      EXPECTED_FINAL_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
+      EXPECTED_PARENT_SHA: 83b7906f2d4d88e1935f12b54fe8ca214c166465
+      EXPECTED_SECURITY_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
+      PATCH_CONTEXT_SHA: 667b311564689a7a53e7fe2bfd91834f80869035
+      EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
       FINAL_SOURCE_DIR: /tmp/nim-final-worktree
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
@@ -38,14 +38,15 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Bind execution to the reviewed staging parent and security base
+      - name: Bind execution to the reviewed lineage
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
           test "$GITHUB_REF" = "refs/heads/$TARGET_BRANCH"
-          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" HEAD
+          git merge-base --is-ancestor "$EXPECTED_SECURITY_BASE_SHA" HEAD
+          git merge-base --is-ancestor "$PATCH_CONTEXT_SHA" HEAD
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -56,113 +57,98 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          direct_patch="$RUNNER_TEMP/nim-direct.patch"
-          final_patch_gzip="$RUNNER_TEMP/nim-final.patch.gz"
-          final_patch="$RUNNER_TEMP/nim-final.patch"
-
-          python - "$direct_patch" <<'PY'
-          import base64
-          import lzma
-          from pathlib import Path
-          import sys
-
-          chunks = sorted(Path('.review-evidence/nim-direct-integration').glob('chunk-*.b85'))
-          assert chunks, 'direct-integration chunks are missing'
-          encoded = ''.join(path.read_text(encoding='utf-8').strip() for path in chunks)
-          Path(sys.argv[1]).write_bytes(lzma.decompress(base64.b85decode(encoded.encode('ascii'))))
-          PY
-          printf '%s  %s\n' "$EXPECTED_DIRECT_PATCH_SHA256" "$direct_patch" | sha256sum -c -
+          patch_gzip="$RUNNER_TEMP/nim-final.patch.gz"
+          patch_file="$RUNNER_TEMP/nim-final.patch"
+          rehydrate_script="$RUNNER_TEMP/rehydrate_patch_index.py"
 
           cat .review-evidence/nim-final-patch/part-*.txt \
             | tr -d '\n\r' \
-            | base64 --decode > "$final_patch_gzip"
-          gzip -dc "$final_patch_gzip" > "$final_patch"
-          printf '%s  %s\n' "$EXPECTED_FINAL_PATCH_SHA256" "$final_patch" | sha256sum -c -
+            | base64 --decode > "$patch_gzip"
+          gzip -dc "$patch_gzip" > "$patch_file"
+          printf '%s  %s\n' "$EXPECTED_PATCH_SHA256" "$patch_file" | sha256sum -c -
 
-          matched_base_sha=""
-          git worktree prune
-          for candidate_sha in $(git rev-list --first-parent --max-count=200 HEAD); do
-            rm -rf "$FINAL_SOURCE_DIR"
-            git worktree add --detach --quiet "$FINAL_SOURCE_DIR" "$candidate_sha"
-            if (
-              cd "$FINAL_SOURCE_DIR"
-              python - "$final_patch" <<'PY'
-              from __future__ import annotations
+          cat > "$rehydrate_script" <<'PY'
+          from __future__ import annotations
 
-              from pathlib import Path
-              import re
-              import shlex
-              import subprocess
-              import sys
+          from pathlib import Path
+          import re
+          import shlex
+          import subprocess
+          import sys
 
-              patch_path = Path(sys.argv[1])
-              current_path: str | None = None
-              entries: list[tuple[str, str, str | None]] = []
-              for line in patch_path.read_text(encoding='utf-8', errors='surrogateescape').splitlines():
-                  if line.startswith('diff --git '):
-                      parts = shlex.split(line)
-                      assert len(parts) == 4, line
-                      old_path = parts[2][2:]
-                      new_path = parts[3][2:]
-                      assert old_path == new_path, line
-                      current_path = new_path
-                      continue
-                  if current_path is None or not line.startswith('index '):
-                      continue
-                  match = re.fullmatch(r'index ([0-9a-f]+)\.\.([0-9a-f]+)(?: ([0-7]{6}))?', line)
-                  assert match is not None, line
-                  entries.append((current_path, match.group(1), match.group(3)))
-                  current_path = None
+          patch_path = Path(sys.argv[1])
+          current_path: str | None = None
+          entries: list[tuple[str, str, str | None]] = []
+          for line in patch_path.read_text(
+              encoding="utf-8", errors="surrogateescape"
+          ).splitlines():
+              if line.startswith("diff --git "):
+                  parts = shlex.split(line)
+                  assert len(parts) == 4, line
+                  old_path = parts[2][2:]
+                  new_path = parts[3][2:]
+                  assert old_path == new_path, line
+                  current_path = new_path
+                  continue
+              if current_path is None or not line.startswith("index "):
+                  continue
+              match = re.fullmatch(
+                  r"index ([0-9a-f]+)\.\.([0-9a-f]+)(?: ([0-7]{6}))?", line
+              )
+              assert match is not None, line
+              entries.append((current_path, match.group(1), match.group(3)))
+              current_path = None
 
-              assert entries, 'reviewed patch has no indexed paths'
-              for path_text, old_object, declared_mode in entries:
-                  path = Path(path_text)
-                  if set(old_object) == {'0'}:
-                      subprocess.run(
-                          ['git', 'update-index', '--force-remove', '--', path_text],
-                          check=False,
-                          stdout=subprocess.DEVNULL,
-                          stderr=subprocess.DEVNULL,
-                      )
-                      if path.exists() or path.is_symlink():
-                          path.unlink()
-                      continue
-
-                  full_object = subprocess.check_output(
-                      ['git', 'rev-parse', '--verify', f'{old_object}^{{blob}}'],
-                      text=True,
-                  ).strip()
-                  mode = declared_mode
-                  if mode is None:
-                      listing = subprocess.run(
-                          ['git', 'ls-files', '-s', '--', path_text],
-                          check=False,
-                          capture_output=True,
-                          text=True,
-                      ).stdout.strip()
-                      mode = listing.split(maxsplit=1)[0] if listing else '100644'
+          assert entries, "reviewed patch has no indexed paths"
+          for path_text, old_object, declared_mode in entries:
+              path = Path(path_text)
+              if set(old_object) == {"0"}:
                   subprocess.run(
-                      ['git', 'update-index', '--add', '--cacheinfo', mode, full_object, path_text],
-                      check=True,
+                      ["git", "update-index", "--force-remove", "--", path_text],
+                      check=False,
+                      stdout=subprocess.DEVNULL,
+                      stderr=subprocess.DEVNULL,
                   )
-                  path.parent.mkdir(parents=True, exist_ok=True)
-                  with path.open('wb') as output:
-                      subprocess.run(['git', 'cat-file', 'blob', full_object], check=True, stdout=output)
-              PY
-              git apply --check --index "$final_patch" 2>/dev/null
-              git apply --index "$final_patch"
-              git diff --cached --check
-              test "$(git write-tree)" = "$EXPECTED_FINAL_TREE_SHA"
-            ); then
-              matched_base_sha="$candidate_sha"
-              break
-            fi
-            git worktree remove --force "$FINAL_SOURCE_DIR"
-          done
-          test -n "$matched_base_sha"
-          printf 'matched reviewed patch base: %s\n' "$matched_base_sha"
+                  if path.exists() or path.is_symlink():
+                      path.unlink()
+                  continue
+
+              full_object = subprocess.check_output(
+                  ["git", "rev-parse", "--verify", f"{old_object}^{{blob}}"],
+                  text=True,
+              ).strip()
+              mode = declared_mode
+              if mode is None:
+                  listing = subprocess.run(
+                      ["git", "ls-files", "-s", "--", path_text],
+                      check=False,
+                      capture_output=True,
+                      text=True,
+                  ).stdout.strip()
+                  mode = listing.split(maxsplit=1)[0] if listing else "100644"
+              subprocess.run(
+                  ["git", "update-index", "--add", "--cacheinfo", mode, full_object, path_text],
+                  check=True,
+              )
+              path.parent.mkdir(parents=True, exist_ok=True)
+              with path.open("wb") as output:
+                  subprocess.run(
+                      ["git", "cat-file", "blob", full_object],
+                      check=True,
+                      stdout=output,
+                  )
+          PY
+
+          rm -rf "$FINAL_SOURCE_DIR"
+          git worktree add --detach "$FINAL_SOURCE_DIR" "$PATCH_CONTEXT_SHA"
           cd "$FINAL_SOURCE_DIR"
-          test "$(git write-tree)" = "$EXPECTED_FINAL_TREE_SHA"
+          python "$rehydrate_script" "$patch_file"
+          git apply --check --index "$patch_file"
+          git apply --index "$patch_file"
+          git diff --cached --check
+          actual_tree="$(git write-tree)"
+          printf 'reconstructed tree: %s\n' "$actual_tree"
+          test "$actual_tree" = "$EXPECTED_FINAL_TREE_SHA"
 
       - name: Install hash-locked verification dependencies
         shell: bash
