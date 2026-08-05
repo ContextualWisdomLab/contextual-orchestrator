@@ -15,18 +15,45 @@ The policy is deterministic and fail-closed:
   catalogue or a model-name suffix;
 - all eligible free candidates precede all eligible paid candidates;
 - free candidates fall back to other free candidates before paid escalation;
-- visibility, capability, and configured-credential-name filters run before a
+- visibility, capability, and declared-credential-name filters run before a
   provider call;
 - duplicate identities, unknown manifest fields, unsafe identifiers, and an
   empty eligible pool are errors;
 - candidate selection never accepts provider output. The consuming workflow's
   existing schema, security, and evidence gates remain authoritative;
-- secret values are neither retained nor serialized by the policy module.
+- secret values are never read, retained, or serialized by the policy module.
 
 This is a deterministic cost-ordering baseline, not a learned quality router.
 A future learned router must be benchmarked on the exact review/security task
 and must preserve the free-before-paid budget boundary when that policy is
 selected.
+
+## Credential-availability trust boundary
+
+The policy CLI previously accepted credential names and inspected the matching
+environment values. That behavior contradicted the provider- and
+transport-neutral boundary because it made the planning process a secret-value
+consumer and coupled availability to one process environment.
+
+The corrected contract is explicit:
+
+1. the trusted composition root already owns the provider transport and secret
+   store;
+2. it determines which credential identities are available;
+3. it passes only validated names through repeated `--available-credential`
+   arguments or through `FallbackContext.available_credentials`;
+4. the planning module never looks up, prints, hashes, caches, or serializes the
+   corresponding values;
+5. the downstream transport still resolves the actual value and fails closed
+   if the composition root declared availability incorrectly.
+
+A credential name is therefore trusted control data, not proof that a secret
+is usable. This separation reduces the privilege and data surface of the
+policy-only process while preserving the existing transport's authentication,
+output-validation, and reviewer-identity controls. NIST SP 800-204D's CI/CD
+software-supply-chain strategies and NIST SP 800-218A's AI-specific secure
+development profile support keeping pipeline responsibilities, artifacts, and
+security evidence explicit and independently verifiable.
 
 ## Evidence and standards mapping
 
@@ -45,17 +72,40 @@ and immutable policy revisions instead of name-based classification.
 
 ## Verification contract
 
-- 100% statement and branch coverage across the five fallback policy modules
-  (270 statements and 94 branches).
-- 100% docstrings for public fallback policy symbols.
-- Property under test: no eligible paid candidate appears before an eligible
-  free candidate regardless of numeric priority.
-- Stable tie ordering, credential/visibility/capability filtering, duplicate
-  rejection, strict manifest validation, empty-pool failure, CLI secret
-  non-disclosure, and free-only operation are covered by 32 regression tests.
-- The module imports on Python 3.10+ and uses only the standard library.
+Exact head `e3b814f1027fe504328cb27efc34668ad14baa12` was checked out by the
+permanent read-only `Model fallback policy quality` workflow. Run
+`30989460499` established:
+
+- 33 focused behavior regressions passed;
+- all five fallback policy modules reached 270/270 statements and 94/94
+  branches, or 100% statement and branch coverage;
+- public-symbol docstrings reached 100%;
+- `compileall` and `git diff --check` passed;
+- the CLI accepts declarative available names, rejects the removed
+  `--credential-env` selector, treats undeclared names as unavailable, and
+  proves provider credential values are not inspected;
+- no eligible paid candidate appears before an eligible free candidate,
+  regardless of numeric priority;
+- stable tie ordering, visibility/capability filtering, duplicate rejection,
+  strict manifest validation, empty-pool failure, and free-only operation remain
+  covered.
+
+The module imports on Python 3.10+ and uses only the standard library. Full
+repository and integrated-stack checks remain mandatory after the security
+prerequisite merges.
 
 ## APA 7 references
+
+Booth, H., Souppaya, M., Vassilev, A., Ogata, M., Stanley, M., & Scarfone, K.
+(2024). *Secure software development practices for generative AI and dual-use
+foundation models: An SSDF community profile* (NIST Special Publication
+800-218A). National Institute of Standards and Technology.
+https://doi.org/10.6028/NIST.SP.800-218A
+
+Chandramouli, R., Kautz, F., & Torres-Arias, S. (2024). *Strategies for the
+integration of software supply chain security in DevSecOps CI/CD pipelines*
+(NIST Special Publication 800-204D). National Institute of Standards and
+Technology. https://doi.org/10.6028/NIST.SP.800-204D
 
 Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large language
 models while reducing cost and improving performance* [Preprint]. arXiv.
