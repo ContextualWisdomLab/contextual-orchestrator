@@ -1,9 +1,9 @@
-name: Apply reviewed NIM benchmark integration
+name: Verify reviewed NIM benchmark integration
 
 on:
-  push:
+  pull_request:
     branches:
-      - claude/nim-all-models-support-fecb0b
+      - fix/atheris-interpreter-lock
     paths:
       - .github/workflows/nim-apply-reviewed-patch.yml
 
@@ -11,39 +11,39 @@ permissions:
   contents: read
 
 concurrency:
-  group: nim-reviewed-patch-${{ github.ref }}
+  group: nim-reviewed-patch-${{ github.event.pull_request.head.sha }}
   cancel-in-progress: false
 
 jobs:
-  apply-verify-publish:
+  apply-verify-export:
     if: >-
       github.repository == 'ContextualWisdomLab/contextual-orchestrator' &&
-      github.ref == 'refs/heads/claude/nim-all-models-support-fecb0b'
-    permissions:
-      contents: write
+      github.event.pull_request.head.ref == 'claude/nim-all-models-support-fecb0b'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: 07f28a9f63e76414f30c71526ba9336449f17b10
+      EXPECTED_PARENT_SHA: 7d5d6aa1a7ea29e597c07883d417bba61968aea4
+      EXPECTED_BASE_SHA: cfd42f309ea39a189635ff8ba573c5d3b0e332ba
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout exact triggering head without persisted credentials
+      - name: Checkout exact pull-request head without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha }}
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Bind execution to the reviewed staging parent
+      - name: Bind execution to the reviewed staging parent and base
         shell: bash
         run: |
           set -euo pipefail
           test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
-          test "$GITHUB_REF" = "refs/heads/$TARGET_BRANCH"
+          test "${{ github.event.pull_request.base.sha }}" = "$EXPECTED_BASE_SHA"
+          test "${{ github.event.pull_request.head.ref }}" = "$TARGET_BRANCH"
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -68,6 +68,7 @@ jobs:
           git diff --cached --check
 
       - name: Install hash-locked verification dependencies
+        shell: bash
         run: |
           set -euo pipefail
           python -m pip install --require-hashes -r fuzz/requirements-property.txt
@@ -112,10 +113,8 @@ jobs:
           PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
             python -c "import contextual_orchestrator; import contextual_orchestrator.nim_benchmark"
 
-      - name: Prove the exact final tree and publish only this branch
+      - name: Prove and export the exact final tree
         shell: bash
-        env:
-          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           cd "$GITHUB_WORKSPACE"
@@ -124,12 +123,22 @@ jobs:
           git diff --cached --check
           actual_tree="$(git write-tree)"
           test "$actual_tree" = "$EXPECTED_FINAL_TREE_SHA"
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git commit -m "fix(nim): integrate evidence-grade benchmark contracts"
-          basic_auth="$(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
-          git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $basic_auth" \
-            push \
-            --force-with-lease="refs/heads/${TARGET_BRANCH}:${GITHUB_SHA}" \
-            origin \
-            "HEAD:refs/heads/${TARGET_BRANCH}"
+          export_dir="$RUNNER_TEMP/nim-final-source"
+          rm -rf "$export_dir"
+          mkdir -p "$export_dir"
+          git checkout-index --all --prefix="$export_dir/"
+          tar -C "$export_dir" -czf "$RUNNER_TEMP/nim-final-source.tar.gz" .
+          printf '%s\n' "$actual_tree" > "$RUNNER_TEMP/nim-final-tree-sha.txt"
+          sha256sum "$RUNNER_TEMP/nim-final-source.tar.gz" \
+            > "$RUNNER_TEMP/nim-final-source.tar.gz.sha256"
+
+      - name: Upload exact verified source tree
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: nim-final-source-${{ github.sha }}
+          path: |
+            ${{ runner.temp }}/nim-final-source.tar.gz
+            ${{ runner.temp }}/nim-final-source.tar.gz.sha256
+            ${{ runner.temp }}/nim-final-tree-sha.txt
+          if-no-files-found: error
+          retention-days: 1
