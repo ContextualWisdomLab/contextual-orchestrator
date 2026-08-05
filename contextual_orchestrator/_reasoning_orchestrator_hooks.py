@@ -9,6 +9,8 @@ from .reasoning_control import (
     ReasoningAblationCell,
     ReasoningPolicy,
     ReasoningProfile,
+    ReasoningWorkload,
+    WorkflowReasoningCursor,
     select_reasoning_decision,
     sum_usage_tokens,
 )
@@ -23,9 +25,15 @@ from ._reasoning_state import (
     agent_reasoning_profile,
     configure_agent_reasoning,
     configure_orchestrator_reasoning,
+    current_reasoning_workload,
     orchestrator_reasoning_policy,
 )
 from ._reasoning_workflow import _capture_batch, _retry_rejected_worker_once
+
+_WORKFLOW_CURSOR: ContextVar[WorkflowReasoningCursor | None] = ContextVar(
+    "contextual_orchestrator_reasoning_workflow_cursor",
+    default=None,
+)
 
 
 def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
@@ -90,10 +98,20 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
         text: str,
         role: str,
     ) -> tuple[str, str, dict[str, Any] | None]:
-        """Select once canonically and let each failover project to its capability."""
+        """Select once from role, task, and graph evidence, then project on failover."""
         policy = orchestrator_reasoning_policy(self)
         profile = agent_reasoning_profile(primary)
-        decision = _OVERRIDE_DECISION.get() or select_reasoning_decision(profile, policy, text, role)
+        workload = current_reasoning_workload()
+        cursor = _WORKFLOW_CURSOR.get()
+        if workload is None and cursor is not None:
+            workload = cursor.observe(messages)
+        decision = _OVERRIDE_DECISION.get() or select_reasoning_decision(
+            profile,
+            policy,
+            text,
+            role,
+            workload=workload,
+        )
         policy_token = _ACTIVE_POLICY.set(policy)
         try:
             with _decision_scope(decision):
@@ -109,7 +127,11 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
         events = _EVENT_CAPTURE.get()
         if events:
             for event in reversed(events):
-                if event["role"] == role and event["agent_id"] == served_id and event.get("usage") is None:
+                if (
+                    event["role"] == role
+                    and event["agent_id"] == served_id
+                    and event.get("usage") is None
+                ):
                     event["usage"] = usage
                     break
         return output, served_id, usage
@@ -120,12 +142,14 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
         messages: list[dict[str, str]],
         *,
         allow_escalation: bool,
+        workflow_step_count: int,
     ) -> dict[str, Any]:
-        """Capture, annotate, and optionally repair one visible workflow."""
+        """Capture, structurally annotate, and optionally repair one visible workflow."""
         events: list[dict[str, Any]] = []
         event_token = _EVENT_CAPTURE.set(events)
         policy = orchestrator_reasoning_policy(self)
         policy_token = _ACTIVE_POLICY.set(policy)
+        cursor_token = _WORKFLOW_CURSOR.set(WorkflowReasoningCursor(workflow_step_count))
         try:
             result = operation(self, messages)
             trace = result.get("trace")
@@ -135,28 +159,47 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
             if allow_escalation:
                 _retry_rejected_worker_once(self, result, _message_text(messages))
         finally:
+            _WORKFLOW_CURSOR.reset(cursor_token)
             _ACTIVE_POLICY.reset(policy_token)
             _EVENT_CAPTURE.reset(event_token)
         return result
 
     def route_once(self: Any, messages: list[dict[str, str]]) -> dict[str, Any]:
-        """Capture reasoning evidence for the low-compute route path."""
-        return _capture_workflow(self, original_route_once, messages, allow_escalation=False)
+        """Capture reasoning evidence for the single-step route path."""
+        return _capture_workflow(
+            self,
+            original_route_once,
+            messages,
+            allow_escalation=False,
+            workflow_step_count=1,
+        )
 
     def conduct(self: Any, messages: list[dict[str, str]]) -> dict[str, Any]:
-        """Capture deep-workflow evidence and perform one verifier-driven retry."""
-        return _capture_workflow(self, original_conduct, messages, allow_escalation=True)
+        """Capture graph-aware deep-workflow evidence and one verifier-driven retry."""
+        return _capture_workflow(
+            self,
+            original_conduct,
+            messages,
+            allow_escalation=True,
+            workflow_step_count=4,
+        )
 
     def stream_route(
         self: Any,
         messages: list[dict[str, str]],
         workflow_run_id: str | None = None,
     ) -> Iterator[str]:
-        """Keep worker effort active across the lifetime of a streamed route."""
+        """Keep direct-route worker effort active across one streamed response."""
         task = _message_text(messages)
         agent = self._select_agent(task, "worker")
         policy = orchestrator_reasoning_policy(self)
-        decision = select_reasoning_decision(agent_reasoning_profile(agent), policy, task, "worker")
+        decision = select_reasoning_decision(
+            agent_reasoning_profile(agent),
+            policy,
+            task,
+            "worker",
+            workload=ReasoningWorkload(),
+        )
         policy_token = _ACTIVE_POLICY.set(policy)
         try:
             with _decision_scope(decision):
@@ -174,11 +217,17 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
         *,
         endpoint: str = "chat/completions",
     ) -> dict[str, Any]:
-        """Apply adaptive defaults to full-shape chat and Responses requests."""
+        """Apply direct-route defaults to full-shape chat and Responses requests."""
         task = _input_text(body)
         agent = self._select_agent(task, "worker")
         policy = orchestrator_reasoning_policy(self)
-        decision = select_reasoning_decision(agent_reasoning_profile(agent), policy, task, "worker")
+        decision = select_reasoning_decision(
+            agent_reasoning_profile(agent),
+            policy,
+            task,
+            "worker",
+            workload=ReasoningWorkload(),
+        )
         policy_token = _ACTIVE_POLICY.set(policy)
         try:
             with _decision_scope(decision):
@@ -187,22 +236,46 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
             _ACTIVE_POLICY.reset(policy_token)
 
     def plan_generated(self: Any, task: str) -> Any:
-        """Apply thinker-role effort to model-generated workflow planning."""
+        """Allocate thinker effort for explicit workflow decomposition."""
         planner = self._select_agent(task, "thinker")
         policy = orchestrator_reasoning_policy(self)
-        decision = select_reasoning_decision(agent_reasoning_profile(planner), policy, task, "thinker")
+        maximum_steps = int(getattr(self.policy, "max_workflow_steps", 4))
+        planning_workload = ReasoningWorkload(
+            workflow_step_index=0,
+            workflow_step_count=maximum_steps,
+            recursion_depth=0,
+            decomposition_count=maximum_steps,
+            accessible_step_count=0,
+        )
+        decision = select_reasoning_decision(
+            agent_reasoning_profile(planner),
+            policy,
+            task,
+            "thinker",
+            workload=planning_workload,
+        )
         policy_token = _ACTIVE_POLICY.set(policy)
         try:
             with _decision_scope(decision):
-                return original_plan_generated(self, task)
+                steps = original_plan_generated(self, task)
         finally:
             _ACTIVE_POLICY.reset(policy_token)
+        cursor = _WORKFLOW_CURSOR.get()
+        if cursor is not None and isinstance(steps, list):
+            cursor.set_plan_size(len(steps))
+        return steps
 
     def model_judge(self: Any, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Apply verifier-role effort to the optional model verdict."""
         judge = self._select_agent(task, "verifier")
         policy = orchestrator_reasoning_policy(self)
-        decision = select_reasoning_decision(agent_reasoning_profile(judge), policy, task, "verifier")
+        decision = select_reasoning_decision(
+            agent_reasoning_profile(judge),
+            policy,
+            task,
+            "verifier",
+            workload=ReasoningWorkload(),
+        )
         policy_token = _ACTIVE_POLICY.set(policy)
         try:
             with _decision_scope(decision):
@@ -225,7 +298,11 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
         cells: list[ReasoningAblationCell] = []
         try:
             for level in candidate_levels:
-                fixed = ReasoningPolicy(strategy="fixed", fixed_level=level, max_escalations=0)
+                fixed = ReasoningPolicy(
+                    strategy="fixed",
+                    fixed_level=level,
+                    max_escalations=0,
+                )
                 configure_orchestrator_reasoning(self, fixed)
                 accepted = 0
                 reasoning_tokens = 0
@@ -253,7 +330,9 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
             "mode": mode,
             "prompt_count": len(prompts),
             "cells": [cell.to_dict() for cell in cells],
-            "quality_measure": "workflow verifier acceptance; task-specific benchmark scorers remain authoritative",
+            "quality_measure": (
+                "workflow verifier acceptance; task-specific benchmark scorers remain authoritative"
+            ),
         }
 
     orchestrator_type._invoke = orchestrator_invoke
@@ -271,4 +350,4 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
         orchestrator_type.patch_agent = patch_agent
 
 
-__all__ = ["install_orchestrator_hooks"]
+__all__ = ["_WORKFLOW_CURSOR", "install_orchestrator_hooks"]
