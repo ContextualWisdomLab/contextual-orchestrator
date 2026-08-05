@@ -24,6 +24,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Bound every NIM provider response to 8 MiB and fail closed before an oversized catalog, probe, or evaluation body can exhaust benchmark-runner memory.
 - Split scheduled dry and live benchmark jobs so zero-egress dry runs never receive `NVIDIA_NIM_API_KEY`; only the bounded live benchmark step receives the GitHub Secret.
 - Remove temporary branch-writing/source-export repair mechanisms and the optional benchmark monkeypatch module from the mergeable tree.
+- Import the NIM catalog parser while Atheris import instrumentation is active, with an AST regression contract that prevents parser branches from silently losing coverage guidance.
 
 ### Changed
 
@@ -39,3 +40,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Documentation
 
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, the NIM benchmark validity boundary, the thirty-task evidence floor, and supported-platform uncertainty.
+- Make the NIM security-integration receipt head-stable: GitHub pull-request metadata and exact-head Checks are authoritative, while older commit and workflow identifiers remain explicitly historical only.
