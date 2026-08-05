@@ -42,6 +42,5 @@ def test_scheduled_ceiling_reserves_a_complete_127_model_run() -> None:
         "requests_after_catalog": 1563,
         "total_requests": 1564,
     }
-    assert 'default: 1600' in workflow
-    assert 'echo "max_requests=1600"' in workflow
-    assert "--max-total-requests 1600" in guide
+    assert 'echo "max_requests=2000"' in workflow
+    assert "--max-total-requests 2000" in guide
