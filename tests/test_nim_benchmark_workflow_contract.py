@@ -98,6 +98,7 @@ def test_tests_workflow_enforces_nim_coverage_docstrings_and_package_smoke() -> 
     assert "nim_benchmark_quality:" in workflow
     assert "coverage run --branch" in workflow
     assert "--source=contextual_orchestrator.nim_benchmark" in workflow
+    assert "tests/test_nim_benchmark_review_regressions.py" in workflow
     assert "coverage report" in workflow and "--fail-under=100" in workflow
     assert "interrogate -f 100 contextual_orchestrator/nim_benchmark.py" in workflow
     assert "pip wheel --no-deps . --wheel-dir dist" in workflow
