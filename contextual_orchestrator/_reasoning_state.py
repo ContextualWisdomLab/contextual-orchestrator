@@ -11,10 +11,12 @@ from .reasoning_control import (
     ReasoningDecision,
     ReasoningPolicy,
     ReasoningProfile,
+    ReasoningWorkload,
     adapt_reasoning_decision,
     extract_reasoning_tokens,
     select_reasoning_decision,
 )
+
 
 class _WeakIdentityMap:
     """Weak mapping keyed by object identity rather than value equality."""
@@ -66,6 +68,9 @@ _ACTIVE_POLICY: ContextVar[ReasoningPolicy | None] = ContextVar(
 _OVERRIDE_DECISION: ContextVar[ReasoningDecision | None] = ContextVar(
     "contextual_orchestrator_reasoning_override", default=None
 )
+_WORKLOAD_OVERRIDE: ContextVar[ReasoningWorkload | None] = ContextVar(
+    "contextual_orchestrator_reasoning_workload_override", default=None
+)
 _EVENT_CAPTURE: ContextVar[list[dict[str, Any]] | None] = ContextVar(
     "contextual_orchestrator_reasoning_events", default=None
 )
@@ -115,6 +120,11 @@ def current_reasoning_decision() -> ReasoningDecision | None:
     return _ACTIVE_DECISION.get()
 
 
+def current_reasoning_workload() -> ReasoningWorkload | None:
+    """Return structural evidence explicitly bound to the current recomputation."""
+    return _WORKLOAD_OVERRIDE.get()
+
+
 @contextmanager
 def reasoning_override(decision: ReasoningDecision | None) -> Iterator[None]:
     """Temporarily force one canonical decision, primarily for bounded retries."""
@@ -123,6 +133,18 @@ def reasoning_override(decision: ReasoningDecision | None) -> Iterator[None]:
         yield
     finally:
         _OVERRIDE_DECISION.reset(token)
+
+
+@contextmanager
+def reasoning_workload_override(workload: ReasoningWorkload | None) -> Iterator[None]:
+    """Temporarily bind exact workflow topology to a recomputed trace step."""
+    if workload is not None and not isinstance(workload, ReasoningWorkload):
+        raise TypeError("workload must be ReasoningWorkload or None")
+    token = _WORKLOAD_OVERRIDE.set(workload)
+    try:
+        yield
+    finally:
+        _WORKLOAD_OVERRIDE.reset(token)
 
 
 @contextmanager
@@ -179,7 +201,12 @@ def _infer_role(messages: Sequence[Mapping[str, Any]], fallback: str = "worker")
     return fallback
 
 
-def _resolve_decision(agent: Any, task: str, role: str) -> ReasoningDecision | None:
+def _resolve_decision(
+    agent: Any,
+    task: str,
+    role: str,
+    workload: ReasoningWorkload | None = None,
+) -> ReasoningDecision | None:
     """Resolve override, active decision, or policy selection for one agent."""
     profile = agent_reasoning_profile(agent)
     override = _OVERRIDE_DECISION.get()
@@ -189,7 +216,14 @@ def _resolve_decision(agent: Any, task: str, role: str) -> ReasoningDecision | N
     if active is not None:
         return adapt_reasoning_decision(profile, active)
     policy = _ACTIVE_POLICY.get() or ReasoningPolicy()
-    return select_reasoning_decision(profile, policy, task, role)
+    effective_workload = _WORKLOAD_OVERRIDE.get() or workload
+    return select_reasoning_decision(
+        profile,
+        policy,
+        task,
+        role,
+        workload=effective_workload,
+    )
 
 
 def _reasoning_evidence(
@@ -251,7 +285,6 @@ def _annotate_trace(trace: list[dict[str, Any]], events: list[dict[str, Any]]) -
         step["reasoning"] = _reasoning_evidence(event["profile"], event["decision"], usage)
 
 
-
 __all__ = [
     "_ACTIVE_DECISION",
     "_ACTIVE_POLICY",
@@ -260,6 +293,7 @@ __all__ = [
     "_EVENT_CAPTURE",
     "_OVERRIDE_DECISION",
     "_POLICY_OBJECTS",
+    "_WORKLOAD_OVERRIDE",
     "_WeakIdentityMap",
     "_annotate_trace",
     "_append_event",
@@ -273,6 +307,8 @@ __all__ = [
     "configure_agent_reasoning",
     "configure_orchestrator_reasoning",
     "current_reasoning_decision",
+    "current_reasoning_workload",
     "orchestrator_reasoning_policy",
     "reasoning_override",
+    "reasoning_workload_override",
 ]
