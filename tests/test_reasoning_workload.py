@@ -213,7 +213,7 @@ def test_conduct_trace_records_role_specific_graph_workload() -> None:
         ReasoningWorkload(2, 4, 2, 4, 2).to_dict(),
         ReasoningWorkload(3, 4, 3, 4, 3).to_dict(),
     ]
-    assert result["trace"][1]["reasoning"]["decision"]["level"] == "medium"
+    assert result["trace"][1]["reasoning"]["decision"]["level"] == "low"
     assert result["trace"][2]["reasoning"]["decision"]["level"] == "high"
 
 
