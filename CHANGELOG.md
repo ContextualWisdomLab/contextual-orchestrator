@@ -6,10 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Security
+
+- Pin each HTTPS provider connection to the exact public addresses approved during validation, preserve the original hostname for TLS verification, bypass environment proxy resolution, and reject redirects to close DNS-rebinding and credential-forwarding SSRF paths.
+- Reject provider hosts that resolve to any non-globally-routable address, including RFC 6598 shared address space, while retaining explicit multicast, private, loopback, link-local, and reserved-address protections.
+- Document narrowly scoped Semgrep suppressions for parameter-bound database queries, the explicit development-only TLS verification opt-out, and provider URLs that pass the egress guard.
+
 ### Changed
 
-- Partition the hash-locked Atheris fuzz dependency by Python interpreter so the Python 3.11 fuzz runner and Python 3.13+ coverage-evidence runners each select one published, reviewed release without weakening `--require-hashes`.
-
-### Documentation
-
-- Add an APA 7 doctoring record for Python environment-marker semantics, Atheris artifact availability, published hashes, and the supported-platform uncertainty boundary.
+- Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
