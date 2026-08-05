@@ -61,6 +61,7 @@ jobs:
             --source=contextual_orchestrator.nim_benchmark \
             -m pytest \
             tests/test_nim_benchmark.py \
+            tests/test_nim_benchmark_budget_view.py \
             tests/test_nim_benchmark_release_acceptance.py \
             tests/test_nim_benchmark_workflow_contract.py \
             -q
