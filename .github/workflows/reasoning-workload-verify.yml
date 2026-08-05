@@ -1,29 +1,41 @@
-name: Reasoning workload verification
+name: Reasoning control quality
 
 on:
+  pull_request:
+    paths:
+      - contextual_orchestrator/_reasoning_*.py
+      - contextual_orchestrator/reasoning_*.py
+      - tests/reasoning_fakes.py
+      - tests/test_reasoning_*.py
+      - .github/workflows/reasoning-workload-verify.yml
   push:
-    branches:
-      - feat/adaptive-reasoning-control
+    branches: [main]
+    paths:
+      - contextual_orchestrator/_reasoning_*.py
+      - contextual_orchestrator/reasoning_*.py
+      - tests/reasoning_fakes.py
+      - tests/test_reasoning_*.py
+      - .github/workflows/reasoning-workload-verify.yml
 
 permissions:
   contents: read
 
 concurrency:
-  group: reasoning-workload-${{ github.ref }}
+  group: reasoning-control-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 jobs:
   verify:
-    name: Verify structural reasoning allocation
+    name: Reasoning control statement, branch, and docstring coverage
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
       PYTHONPATH: ${{ github.workspace }}/tests
     steps:
-      - name: Checkout exact branch head without credentials
+      - name: Checkout exact source revision without credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
         with:
-          ref: ${{ github.sha }}
+          ref: ${{ github.event.pull_request.head.sha || github.sha }}
           persist-credentials: false
 
       - name: Set up Python
@@ -36,7 +48,7 @@ jobs:
           python -m pip install --require-hashes -r fuzz/requirements-property.txt
           python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
 
-      - name: Run full tests and changed-module coverage gates
+      - name: Run full tests and changed-module quality gates
         run: |
           python -m compileall -q contextual_orchestrator tests
           python -m pytest -q
