@@ -8,6 +8,7 @@ import copy
 from dataclasses import dataclass, replace
 from functools import wraps
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -27,6 +28,11 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .provider_transport import (
+    _PinnedHTTPSConnection,
+    _ProviderHTTPResponse,
+    _validated_public_addresses,
+)
 
 
 ChatMessage = dict[str, str]
@@ -190,6 +196,19 @@ class OrchestrationPolicy:
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 
+def _literal_loopback_host(hostname: str | None) -> bool:
+    """Return whether a host is localhost or a literal loopback IP address."""
+    if hostname is None:
+        return False
+    normalized = hostname.rstrip(".").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
 def is_transient_error(exc: BaseException) -> bool:
     """Return True when a provider call failure is worth retrying with backoff."""
     if isinstance(exc, urllib.error.HTTPError):
@@ -226,6 +245,9 @@ class ModelClient:
         # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
         # explicit dev-only opt-out (insecure) for self-signed endpoints.
         self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+        # Explicit test seams; production uses direct loopback HTTP and DNS-pinned TLS.
+        self._http_connection_class = http.client.HTTPConnection
+        self._https_connection_class = _PinnedHTTPSConnection
 
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
@@ -306,12 +328,104 @@ class ModelClient:
         return data["choices"][0]["message"]["content"]
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - URL from _provider_url after egress/SSRF validation. nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-            request,
-            timeout=self.timeout,
-            context=self._ssl_context,
-        )
+        """Open one request using only the validation-time provider addresses.
+
+        Public provider methods require HTTPS and call ``_validate_provider``
+        first. Plain HTTP remains a narrow private-loopback integration seam;
+        production provider validation rejects it before credentials are used.
+        """
+        parsed = urlparse(request.full_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise RuntimeError("provider request URL must use http(s)")
+        if parsed.username is not None or parsed.password is not None:
+            raise RuntimeError("provider request URL must not contain user information")
+
+        target = parsed.path or "/"
+        if parsed.params:
+            target = f"{target};{parsed.params}"
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        headers = dict(request.header_items())
+        headers["Connection"] = "close"
+
+        if parsed.scheme == "http":
+            if not _literal_loopback_host(parsed.hostname):
+                raise RuntimeError(
+                    "plain HTTP provider requests require a literal loopback target"
+                )
+            connection = self._http_connection_class(
+                parsed.hostname,
+                parsed.port or 80,
+                timeout=self.timeout,
+            )
+            try:
+                connection.request(
+                    request.get_method(),
+                    target,
+                    body=request.data,
+                    headers=headers,
+                )
+                response = connection.getresponse()
+            except (OSError, http.client.HTTPException) as exc:
+                connection.close()
+                raise urllib.error.URLError(exc) from exc
+            if response.status >= 300:
+                status = response.status
+                reason = response.reason
+                response_headers = response.headers
+                response.close()
+                connection.close()
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    status,
+                    reason,
+                    response_headers,
+                    None,
+                )
+            return _ProviderHTTPResponse(response, connection)
+
+        port = parsed.port or 443
+        pin_key = (parsed.hostname.lower(), port)
+        addresses = getattr(self._local, "provider_address_pins", {}).get(pin_key)
+        if not addresses:
+            raise RuntimeError("provider request has no validated address pin")
+
+        last_error: BaseException | None = None
+        for pinned_ip in addresses:
+            connection = self._https_connection_class(
+                parsed.hostname,
+                pinned_ip,
+                port,
+                self.timeout,
+                self._ssl_context,
+            )
+            try:
+                connection.request(
+                    request.get_method(),
+                    target,
+                    body=request.data,
+                    headers=headers,
+                )
+                response = connection.getresponse()
+            except (OSError, http.client.HTTPException) as exc:
+                connection.close()
+                last_error = exc
+                continue
+            if response.status >= 300:
+                status = response.status
+                reason = response.reason
+                response_headers = response.headers
+                response.close()
+                connection.close()
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    status,
+                    reason,
+                    response_headers,
+                    None,
+                )
+            return _ProviderHTTPResponse(response, connection)
+        raise urllib.error.URLError(last_error or "provider connection failed")
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
@@ -451,7 +565,10 @@ class ModelClient:
         }
 
     def _validate_provider(self, agent: ModelAgent) -> None:
-        """Reject unsafe remote model endpoints before any egress happens."""
+        """Validate one provider and retain its exact approved DNS answer."""
+        # Clear every prior thread-local pin before any credential or URL check so
+        # a failed revalidation can never reuse an earlier approved destination.
+        self._local.provider_address_pins = {}
         # Runtime secret must be resolvable from the KV — never an env var name,
         # never a silent os.getenv fallback. (Legacy api_key_env, if set, is used
         # only as the credential NAME; see ModelAgent.credential_name.)
@@ -471,23 +588,9 @@ class ModelClient:
         hostname = parsed.hostname.lower()
         if allowed_hosts and hostname not in allowed_hosts:
             raise RuntimeError(f"{agent.id} provider host is not allowlisted")
-        for address in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM):
-            ip_address = ipaddress.ip_address(address[4][0])
-            # ``not is_global`` rejects every non-globally-routable target, including
-            # ranges that carry none of the explicit flags below — notably RFC 6598
-            # shared address space (100.64.0.0/10, carrier-grade NAT / cloud-internal)
-            # and the unspecified address. The explicit flags are kept because some
-            # non-public multicast addresses report ``is_global`` True and must still
-            # be blocked.
-            if (
-                not ip_address.is_global
-                or ip_address.is_private
-                or ip_address.is_loopback
-                or ip_address.is_link_local
-                or ip_address.is_multicast
-                or ip_address.is_reserved
-            ):
-                raise RuntimeError(f"{agent.id} provider resolves to non-public address")
+        port = parsed.port or 443
+        addresses = _validated_public_addresses(hostname, port, agent.id)
+        self._local.provider_address_pins[(hostname, port)] = addresses
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""

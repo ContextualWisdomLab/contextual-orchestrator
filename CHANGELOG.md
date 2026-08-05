@@ -15,7 +15,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Restrict the private plain-HTTP provider seam to `localhost` or literal loopback IP addresses, reject URL userinfo before connection, dial directly without ambient proxy lookup, reject all redirect responses, and close failed resources deterministically.
 - Pin each HTTPS provider connection to the exact public addresses approved during validation, preserve the original hostname for TLS verification, bypass environment proxy resolution, and reject redirects to close DNS-rebinding and credential-forwarding SSRF paths.
+- Integrate DNS-pinned provider dispatch directly into `ModelClient` so package import performs no optional-adapter monkey-patching or order-dependent class mutation.
 - Reject provider hosts that resolve to any non-globally-routable address, including RFC 6598 shared address space, while retaining explicit multicast, private, loopback, link-local, and reserved-address protections.
 - Document narrowly scoped Semgrep suppressions for parameter-bound database queries and the explicit development-only TLS verification opt-out.
 - Remove the NIM benchmark's dynamic `urllib.request.urlopen` sink and compatibility monkeypatch path; live discovery, probes, and evaluation now use direct validation-time-address-pinned TLS with original-host SNI/certificate verification, no proxy lookup, no redirect following, and deterministic cleanup.
@@ -32,3 +34,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Give direct, route-once, conduct, and reviewed cheapest-worker cells one equal total prompt-plus-completion token budget and one common five-call envelope, with configured-versus-observed evidence in every cell.
 - Keep the optional NIM adapter lazy: importing the runtime package no longer imports the benchmark or mutates benchmark globals.
 - Record immutable source-artifact digests and exact Git tree identity in the integration evidence so buyers and reviewers can reproduce the accepted benchmark source independently of transient workflow state.
+
+### Documentation
+
+- Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, and the supported-platform uncertainty boundary.
