@@ -1,6 +1,6 @@
 {
-  "manifest_version": "2026-08-04.1",
-  "manifest_notes": "Immutable task ids; expected answers and rubrics are scoring-side only and are never injected into model prompts (no test-set leakage). The locked split is the evaluation set; the exploratory split is for tuning only and never enters headline comparisons.",
+  "manifest_version": "2026-08-05.2",
+  "manifest_notes": "Immutable task ids; expected answers and rubrics are scoring-side only and are never injected into model prompts (no test-set leakage). The locked split contains thirty original, objectively scored tasks so the scheduled paired comparison can reach the repository's declared non-smoke evidence floor. The exploratory split remains tuning-only and never enters headline comparisons.",
   "tasks": [
     {
       "task_id": "trick_arithmetic_bat_ball",
@@ -71,6 +71,146 @@
       "prompt": "Multiply 12 by 12, then add 56 to the result. Answer with the number only.",
       "scorer": {"name": "exact_number_match", "version": "1"},
       "expected": {"number": "200"}
+    },
+    {
+      "task_id": "linear_equation_solution",
+      "split": "locked",
+      "prompt": "Solve 3x + 5 = 26 for x. Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "7"}
+    },
+    {
+      "task_id": "combination_pair_count",
+      "split": "locked",
+      "prompt": "Five students each shake hands with every other student exactly once. How many handshakes occur? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "10"}
+    },
+    {
+      "task_id": "fair_coin_probability",
+      "split": "locked",
+      "prompt": "A fair coin is flipped twice. What is the probability that both flips are heads? Answer with a decimal number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "0.25"}
+    },
+    {
+      "task_id": "leap_year_day_count",
+      "split": "locked",
+      "prompt": "How many days are in the year 2024? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "366"}
+    },
+    {
+      "task_id": "temperature_conversion_celsius",
+      "split": "locked",
+      "prompt": "Convert 68 degrees Fahrenheit to degrees Celsius. Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "20"}
+    },
+    {
+      "task_id": "next_prime_number",
+      "split": "locked",
+      "prompt": "What is the smallest prime number greater than 29? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "31"}
+    },
+    {
+      "task_id": "arithmetic_mean_value",
+      "split": "locked",
+      "prompt": "What is the arithmetic mean of 2, 4, and 9? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "5"}
+    },
+    {
+      "task_id": "percentage_discount_price",
+      "split": "locked",
+      "prompt": "An item costs $80 before a 25 percent discount. What is the discounted price in dollars? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "60"}
+    },
+    {
+      "task_id": "rectangle_perimeter_value",
+      "split": "locked",
+      "prompt": "A rectangle has side lengths 7 centimeters and 4 centimeters. What is its perimeter in centimeters? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "22"}
+    },
+    {
+      "task_id": "constant_rate_travel",
+      "split": "locked",
+      "prompt": "A train travels at 72 kilometers per hour for 2.5 hours. How many kilometers does it travel? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "180"}
+    },
+    {
+      "task_id": "binary_decimal_conversion",
+      "split": "locked",
+      "prompt": "Convert the binary numeral 101101 to base ten. Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "45"}
+    },
+    {
+      "task_id": "roman_numeral_conversion",
+      "split": "locked",
+      "prompt": "Convert the Roman numeral XLII to an Arabic numeral. Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "42"}
+    },
+    {
+      "task_id": "elapsed_clock_time",
+      "split": "locked",
+      "prompt": "A meeting starts at 14:35 and lasts 95 minutes. At what time does it end? Answer in HH:MM format only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "16:10"}
+    },
+    {
+      "task_id": "syllogism_validity_classification",
+      "split": "locked",
+      "prompt": "All poets are readers. Some readers are cyclists. Therefore some poets are cyclists. Classify the conclusion in one word.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "invalid"}
+    },
+    {
+      "task_id": "string_reversal_result",
+      "split": "locked",
+      "prompt": "Reverse the letters of the English word stressed. Answer with the resulting word only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "desserts"}
+    },
+    {
+      "task_id": "korean_word_translation",
+      "split": "locked",
+      "prompt": "Translate the Korean word 사과 into English. Answer with one word only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "apple"}
+    },
+    {
+      "task_id": "chemical_symbol_gold",
+      "split": "locked",
+      "prompt": "What is the chemical symbol for gold? Answer with the symbol only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "Au"}
+    },
+    {
+      "task_id": "largest_ocean_name",
+      "split": "locked",
+      "prompt": "Name the largest ocean on Earth. Answer with its name only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "Pacific"}
+    },
+    {
+      "task_id": "capital_recall_canada",
+      "split": "locked",
+      "prompt": "Name the capital city of Canada. Answer with the city name only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "Ottawa"}
+    },
+    {
+      "task_id": "square_root_integer",
+      "split": "locked",
+      "prompt": "What is the positive integer square root of 144? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "12"}
     },
     {
       "task_id": "exploratory_summary_probe",
