@@ -85,11 +85,11 @@ and configured counts. Partial model-major prefixes cannot produce routing
 evidence. Once preflight passes, all fixed cells execute under bounded
 concurrency; thread scheduling can change completion order but not coverage.
 
-The monthly schedule uses a hard ceiling of 2,000 requests. On the 127-model
-catalog scale observed on 2026-08-05, the ten-task, seven-worker configuration
-requires 1,284 requests: one catalog request, 1,143 capability probes, and a
-140-request worst-case evaluation reserve. Catalog growth beyond the ceiling
-causes a zero-partial-egress preflight failure rather than silent truncation.
+The monthly schedule uses a hard ceiling of 2,000 requests. At the representative
+127-model catalog scale, the thirty-task, seven-worker configuration requires
+1,564 requests: one catalog request, 1,143 capability probes, and a 420-request
+worst-case evaluation reserve. Catalog growth beyond the ceiling causes a
+zero-partial-egress preflight failure rather than silent truncation.
 
 The embedded video fixture is a deterministic, decodable 16 × 16, one-frame
 H.264 MP4. Its bytes are verified against SHA-256
@@ -154,15 +154,19 @@ dry-run schemas and must never be presented as real model pricing.
 
 ## Evidence sufficiency and uncertainty
 
-The bundled ten-task manifest is a smoke fixture. It proves integration behavior
-but does not authorize production routing. A report reaches
-`evidence_review_required` only when it contains at least 30 paired locked tasks
-and at least 90% successful comparison cells. Otherwise it reports
-`insufficient_evidence` and explains the shortfall.
+The bundled manifest contains thirty original, objectively scored locked tasks
+and therefore reaches the repository's paired-task count floor. That count is a
+governance prerequisite, not proof that the task sample represents every buyer
+domain or that any routing policy is ready for production. A report reaches
+`evidence_review_required` only when it also completes at least 90% of the
+requested comparison cells; otherwise it reports `insufficient_evidence` and
+names the shortfall.
 
 These thresholds are explicit conservative governance floors, not universal
 statistical guarantees. Every report keeps `routing_recommendation` null even
-when the floor is met; a human review remains required.
+when both thresholds are met, so a human must review domain coverage,
+uncertainty, failure patterns, and operational constraints before changing
+production routing.
 
 - Seeded paired bootstrap intervals preserve task pairing.
 - Pareto frontiers cover quality versus latency and quality versus reviewed
