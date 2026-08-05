@@ -194,11 +194,10 @@ def exercise_nim_catalog(raw: bytes) -> None:
     """Drive the NIM benchmark model-catalog parser over arbitrary bytes.
 
     ``parse_model_catalog_body`` consumes an untrusted provider response
-    (``GET /v1/models``). Invariants for arbitrary input: structural failures
-    surface only as ``CatalogDiscoveryError`` (or a plain json RecursionError on
-    attacker-depth nesting); successful parses are deduplicated, sorted (immune
-    to provider response-order drift), machine-readably annotated, and stable
-    under reparse.
+    (``GET /v1/models``). Structural failures must surface only as
+    ``CatalogDiscoveryError``; successful parses are deduplicated, sorted
+    (immune to provider response-order drift), machine-readably annotated, and
+    stable under reparse.
     """
     from contextual_orchestrator.nim_benchmark import (
         CatalogDiscoveryError,
@@ -208,9 +207,6 @@ def exercise_nim_catalog(raw: bytes) -> None:
     try:
         catalog = parse_model_catalog_body(raw)
     except CatalogDiscoveryError:
-        return
-    except RecursionError:
-        # json depth blowups mirror the request-body parser's accepted failure.
         return
 
     assert set(catalog) == {"models", "duplicate_model_ids", "invalid_entries"}
