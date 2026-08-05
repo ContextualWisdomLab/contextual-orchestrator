@@ -16,7 +16,6 @@ from contextual_orchestrator.provider_transport import (
     _PinnedHTTPSConnection,
     _ProviderHTTPResponse,
     _validated_public_addresses,
-    install_provider_transport,
 )
 
 
@@ -127,13 +126,12 @@ def _public_dns_answers() -> list[tuple[int, int, int, str, tuple[str, int]]]:
     ]
 
 
-def test_transport_installer_is_idempotent() -> None:
-    """Repeated package initialization cannot wrap validation more than once."""
-    validate_method = ModelClient._validate_provider
-    open_method = ModelClient._open_provider
-    install_provider_transport(ModelClient)
-    assert ModelClient._validate_provider is validate_method
-    assert ModelClient._open_provider is open_method
+def test_package_import_keeps_model_client_transport_canonical() -> None:
+    """Importing the package cannot mutate canonical provider methods."""
+    assert ModelClient._validate_provider.__module__ == "contextual_orchestrator.orchestrator"
+    assert ModelClient._open_provider.__module__ == "contextual_orchestrator.orchestrator"
+    assert not hasattr(ModelClient, "_dns_pinned_transport_installed")
+    assert ModelClient()._https_connection_class is _PinnedHTTPSConnection
 
 
 def test_validated_public_addresses_supports_ipv6_and_deduplicates() -> None:
@@ -186,7 +184,7 @@ def test_validate_then_open_uses_same_dns_answer_without_reresolution() -> None:
         return_value=_public_dns_answers(),
     ) as resolver:
         client._validate_provider(agent)
-    assert resolver.call_count == 2
+    assert resolver.call_count == 1
 
     _FakeConnection.failing_ips = {"93.184.216.34"}
     _FakeConnection.responses = {"93.184.216.35": _FakeResponse(body=b"success")}
