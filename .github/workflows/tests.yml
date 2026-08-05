@@ -74,7 +74,7 @@ jobs:
         run: |
           set -euo pipefail
           rm -rf dist "$RUNNER_TEMP/nim-wheel-site"
-          python -m pip wheel --no-deps --no-build-isolation . --wheel-dir dist
+          python -m pip wheel --no-deps . --wheel-dir dist
           python -m pip install --no-deps \
             --target "$RUNNER_TEMP/nim-wheel-site" \
             dist/contextual_orchestrator-*.whl
