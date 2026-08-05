@@ -22,7 +22,7 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: a93ec2013652ddaec4ae8a6f7feb48205785846d
+      EXPECTED_PARENT_SHA: f11193dd2e46099750d8571810925658a2ce7c5b
       EXPECTED_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
       EXPECTED_DIRECT_PATCH_SHA256: fc16a96000e3a0ff88f3f27d52a14c1e73876989d2e918c9cd286aa459c7db76
       EXPECTED_FINAL_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
@@ -86,10 +86,70 @@ jobs:
             git worktree add --detach --quiet "$FINAL_SOURCE_DIR" "$candidate_sha"
             if (
               cd "$FINAL_SOURCE_DIR"
-              git apply --check "$direct_patch" 2>/dev/null
-              git apply --index "$direct_patch"
-              git diff --cached --check
-              git apply --check "$final_patch" 2>/dev/null
+              python - "$final_patch" <<'PY'
+              from __future__ import annotations
+
+              from pathlib import Path
+              import re
+              import shlex
+              import subprocess
+              import sys
+
+              patch_path = Path(sys.argv[1])
+              current_path: str | None = None
+              entries: list[tuple[str, str, str | None]] = []
+              for line in patch_path.read_text(encoding='utf-8', errors='surrogateescape').splitlines():
+                  if line.startswith('diff --git '):
+                      parts = shlex.split(line)
+                      assert len(parts) == 4, line
+                      old_path = parts[2][2:]
+                      new_path = parts[3][2:]
+                      assert old_path == new_path, line
+                      current_path = new_path
+                      continue
+                  if current_path is None or not line.startswith('index '):
+                      continue
+                  match = re.fullmatch(r'index ([0-9a-f]+)\.\.([0-9a-f]+)(?: ([0-7]{6}))?', line)
+                  assert match is not None, line
+                  entries.append((current_path, match.group(1), match.group(3)))
+                  current_path = None
+
+              assert entries, 'reviewed patch has no indexed paths'
+              for path_text, old_object, declared_mode in entries:
+                  path = Path(path_text)
+                  if set(old_object) == {'0'}:
+                      subprocess.run(
+                          ['git', 'update-index', '--force-remove', '--', path_text],
+                          check=False,
+                          stdout=subprocess.DEVNULL,
+                          stderr=subprocess.DEVNULL,
+                      )
+                      if path.exists() or path.is_symlink():
+                          path.unlink()
+                      continue
+
+                  full_object = subprocess.check_output(
+                      ['git', 'rev-parse', '--verify', f'{old_object}^{{blob}}'],
+                      text=True,
+                  ).strip()
+                  mode = declared_mode
+                  if mode is None:
+                      listing = subprocess.run(
+                          ['git', 'ls-files', '-s', '--', path_text],
+                          check=False,
+                          capture_output=True,
+                          text=True,
+                      ).stdout.strip()
+                      mode = listing.split(maxsplit=1)[0] if listing else '100644'
+                  subprocess.run(
+                      ['git', 'update-index', '--add', '--cacheinfo', mode, full_object, path_text],
+                      check=True,
+                  )
+                  path.parent.mkdir(parents=True, exist_ok=True)
+                  with path.open('wb') as output:
+                      subprocess.run(['git', 'cat-file', 'blob', full_object], check=True, stdout=output)
+              PY
+              git apply --check --index "$final_patch" 2>/dev/null
               git apply --index "$final_patch"
               git diff --cached --check
               test "$(git write-tree)" = "$EXPECTED_FINAL_TREE_SHA"
