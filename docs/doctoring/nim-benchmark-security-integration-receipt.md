@@ -9,15 +9,15 @@ release declaration or production routing recommendation.
 
 ## Current review identity
 
-The current review target is:
-
-- benchmark head `48f007d9ec0ace3c1bcaee9b99236929fd622a4b`;
-- stacked provider-egress base `03124cf97b7bf02e30a48a13acfd78b6ef08d1ef`;
-- pull request `ContextualWisdomLab/contextual-orchestrator#90`.
+The current review target is the exact head and base reported by GitHub for
+`ContextualWisdomLab/contextual-orchestrator#90` at review time. This tracked
+file intentionally does not hard-code its own head SHA: committing such a value
+would immediately create a new head and make the value stale. The pull-request
+body and GitHub Checks are the current identity and evidence index.
 
 No workflow run or approval is recorded here as current-head acceptance evidence.
-The latest head includes a test-first Atheris instrumentation repair and must
-obtain fresh exact-head checks and independent review before readiness changes.
+Every head or base change requires fresh exact-head checks and independent
+review before readiness changes.
 
 ## Historical integration evidence
 
@@ -85,7 +85,7 @@ was recorded as passing:
 That historical run had one reviewed conflict, in `CHANGELOG.md`. Its
 deterministic resolution retained both the NIM complete-request-plan evidence
 and the security base's APA 7 environment-marker doctoring entry. These results
-do not establish the status of current head `48f007d9ec0ace3c1bcaee9b99236929fd622a4b`.
+do not establish the status of any later pull-request head.
 
 ## Current-head acceptance rule
 
