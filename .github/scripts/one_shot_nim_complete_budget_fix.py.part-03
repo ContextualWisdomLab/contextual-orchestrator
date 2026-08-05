@@ -46,8 +46,9 @@ def update_benchmark_workflow(text: str) -> str:
 ''',
         '''          if [ "$EVENT_NAME" = "schedule" ]; then
             # The 1,500-call hard ceiling covers the representative 127-model
-            # complete-plan regression (1 catalog + 1,143 probes + 140 reserved
-            # evaluation calls). A larger dynamic catalog fails before probes.
+            # complete-plan preflight regression (1 catalog + 1,143 probes +
+            # 140 reserved evaluation calls). A larger dynamic catalog fails
+            # before the first capability probe.
             echo "max_requests=1500" >> "$GITHUB_OUTPUT"
             echo "pricing_scenario=" >> "$GITHUB_OUTPUT"
 ''',
