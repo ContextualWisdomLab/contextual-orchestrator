@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: one-shot-nim-default-request-cap
+  group: one-shot-nim-default-request-cap-v2
   cancel-in-progress: true
 
 jobs:
@@ -39,7 +39,7 @@ jobs:
 
       - name: Validate one-file trigger and prove RED acceptance test
         env:
-          EXPECTED_PARENT_SHA: bec1129ff6d2a75899333a8e577fefc464818a38
+          EXPECTED_PARENT_SHA: cdfe08e34a7def215a05f4e42e4db62dfd83deaf
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
