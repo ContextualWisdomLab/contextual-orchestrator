@@ -1,0 +1,378 @@
+name: Repair PR 96 loopback HTTP boundary
+
+on:
+  push:
+    branches:
+      - fix/atheris-interpreter-lock
+    paths:
+      - .github/workflows/repair-pr96-loopback-http.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-pr96-loopback-http
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: >-
+      github.repository == 'ContextualWisdomLab/contextual-orchestrator' &&
+      github.actor == 'seonghobae' &&
+      github.ref == 'refs/heads/fix/atheris-interpreter-lock'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    permissions:
+      contents: write
+    steps:
+      - name: Check out exact repair trigger
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 2
+          persist-credentials: false
+
+      - name: Verify audited repair parent
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD^)" = "2f3dd044fa269081ea578150348a7df9d6ce7e01"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.0.0
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked test dependencies
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: python -m pip install --disable-pip-version-check --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Add focused regression tests
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_provider_address_pinning.py")
+          source = path.read_text(encoding="utf-8")
+          old_import = "from contextual_orchestrator.orchestrator import ModelClient\n"
+          new_import = (
+              "from contextual_orchestrator.orchestrator import (\n"
+              "    ModelClient,\n"
+              "    _literal_loopback_host,\n"
+              ")\n"
+          )
+          if source.count(old_import) != 1:
+              raise SystemExit("expected one ModelClient import anchor")
+          source = source.replace(old_import, new_import, 1)
+          tests = r'''
+
+@pytest.mark.parametrize(
+    ("hostname", "expected"),
+    [
+        (None, False),
+        ("localhost", True),
+        ("localhost.", True),
+        ("127.0.0.1", True),
+        ("::1", True),
+        ("192.0.2.1", False),
+        ("api.example.com", False),
+        ("localhost.example", False),
+    ],
+)
+def test_literal_loopback_host_classification(
+    hostname: str | None,
+    expected: bool,
+) -> None:
+    """Only localhost and literal loopback addresses enter the HTTP test seam."""
+    assert _literal_loopback_host(hostname) is expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://api.example.com/v1/chat",
+        "http://192.0.2.1/v1/chat",
+    ],
+)
+def test_open_provider_rejects_non_loopback_http(url: str) -> None:
+    """Direct low-level callers cannot use plain HTTP outside loopback."""
+    client = ModelClient()
+    with pytest.raises(RuntimeError, match="literal loopback"):
+        client._open_provider(urllib.request.Request(url, method="POST"))
+
+
+def test_open_provider_rejects_url_userinfo() -> None:
+    """Provider URLs cannot smuggle credentials through URL user information."""
+    client = ModelClient()
+    request = urllib.request.Request(
+        "http://user:password@127.0.0.1:8080/v1/chat",
+        method="POST",
+    )
+    with pytest.raises(RuntimeError, match="user information"):
+        client._open_provider(request)
+
+
+def test_loopback_http_uses_direct_connection_and_bypasses_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The integration seam connects directly and ignores ambient proxy state."""
+    client = ModelClient(timeout=13)
+    response = _FakeResponse(body=b"loopback")
+    connection = mock.Mock()
+    connection.getresponse.return_value = response
+    connection_class = mock.Mock(return_value=connection)
+    client._http_connection_class = connection_class
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("NO_PROXY", "")
+    request = urllib.request.Request(
+        "http://127.0.0.1:8080/v1/chat?trace=yes",
+        data=b"{}",
+        headers={"authorization": "Bearer local-secret"},
+        method="POST",
+    )
+
+    with mock.patch(
+        "contextual_orchestrator.orchestrator.urllib.request.urlopen",
+        side_effect=AssertionError("ambient proxy-capable opener must not run"),
+    ) as urlopen:
+        with client._open_provider(request) as opened:
+            assert opened.read() == b"loopback"
+
+    urlopen.assert_not_called()
+    connection_class.assert_called_once_with("127.0.0.1", 8080, timeout=13)
+    connection.request.assert_called_once_with(
+        "POST",
+        "/v1/chat?trace=yes",
+        body=b"{}",
+        headers={"Authorization": "Bearer local-secret", "Connection": "close"},
+    )
+    response.closed is True
+    connection.close.assert_called_once_with()
+
+
+def test_loopback_http_rejects_redirect_and_closes_resources() -> None:
+    """A loopback response cannot redirect credentials to another origin."""
+    client = ModelClient()
+    response = _FakeResponse(status=302)
+    connection = mock.Mock()
+    connection.getresponse.return_value = response
+    client._http_connection_class = mock.Mock(return_value=connection)
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        client._open_provider(
+            urllib.request.Request("http://localhost:8080/v1/chat", method="POST")
+        )
+
+    assert exc_info.value.code == 302
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
+def test_loopback_http_connection_failure_closes_and_is_transient() -> None:
+    """A failed direct loopback connection is closed and surfaced as URLError."""
+    client = ModelClient()
+    connection = mock.Mock()
+    connection.request.side_effect = OSError("loopback unavailable")
+    client._http_connection_class = mock.Mock(return_value=connection)
+
+    with pytest.raises(urllib.error.URLError, match="loopback unavailable"):
+        client._open_provider(
+            urllib.request.Request("http://[::1]:8080/v1/chat", method="POST")
+        )
+
+    connection.close.assert_called_once_with()
+'''
+          if "def test_literal_loopback_host_classification(" in source:
+              raise SystemExit("loopback regression tests already exist")
+          path.write_text(source + tests, encoding="utf-8")
+          PY
+
+      - name: Prove the security regression is red
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          set +e
+          python -m pytest -q tests/test_provider_address_pinning.py \
+            -k 'literal_loopback or non_loopback_http or url_userinfo or loopback_http'
+          status=$?
+          set -e
+          test "$status" -ne 0
+
+      - name: Apply bounded production repair
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              source = path.read_text(encoding="utf-8")
+              count = source.count(old)
+              if count != 1:
+                  raise SystemExit(
+                      f"expected one repair anchor in {path}, found {count}"
+                  )
+              path.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+          path = Path("contextual_orchestrator/orchestrator.py")
+          replace_once(
+              path,
+              "import http.client\nimport json\n",
+              "import http.client\nimport ipaddress\nimport json\n",
+          )
+          replace_once(
+              path,
+              "TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})\n\n\ndef is_transient_error",
+              '''TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+
+
+def _literal_loopback_host(hostname: str | None) -> bool:
+    """Return whether a host is localhost or a literal loopback IP address."""
+    if hostname is None:
+        return False
+    normalized = hostname.rstrip(".").lower()
+    if normalized == "localhost":
+        return True
+    try:
+        return ipaddress.ip_address(normalized).is_loopback
+    except ValueError:
+        return False
+
+
+def is_transient_error''',
+          )
+          replace_once(
+              path,
+              "        # Explicit test seam; production uses the DNS-pinned TLS connection.\n        self._https_connection_class = _PinnedHTTPSConnection\n",
+              "        # Explicit test seams; production uses direct loopback HTTP and DNS-pinned TLS.\n        self._http_connection_class = http.client.HTTPConnection\n        self._https_connection_class = _PinnedHTTPSConnection\n",
+          )
+          old = '''        parsed = urlparse(request.full_url)
+        if parsed.scheme == "http":
+            return urllib.request.urlopen(  # nosec B310 - public validation rejects HTTP; private loopback test seam only. nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+                request,
+                timeout=self.timeout,
+            )
+        if parsed.scheme != "https" or not parsed.hostname:
+            raise RuntimeError("provider request URL must use http(s)")
+
+        port = parsed.port or 443
+        pin_key = (parsed.hostname.lower(), port)
+        addresses = getattr(self._local, "provider_address_pins", {}).get(pin_key)
+        if not addresses:
+            raise RuntimeError("provider request has no validated address pin")
+
+        target = parsed.path or "/"
+        if parsed.params:
+            target = f"{target};{parsed.params}"
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        headers = dict(request.header_items())
+        headers["Connection"] = "close"
+
+        last_error: BaseException | None = None
+'''
+          new = '''        parsed = urlparse(request.full_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+            raise RuntimeError("provider request URL must use http(s)")
+        if parsed.username is not None or parsed.password is not None:
+            raise RuntimeError("provider request URL must not contain user information")
+
+        target = parsed.path or "/"
+        if parsed.params:
+            target = f"{target};{parsed.params}"
+        if parsed.query:
+            target = f"{target}?{parsed.query}"
+        headers = dict(request.header_items())
+        headers["Connection"] = "close"
+
+        if parsed.scheme == "http":
+            if not _literal_loopback_host(parsed.hostname):
+                raise RuntimeError(
+                    "plain HTTP provider requests require a literal loopback target"
+                )
+            connection = self._http_connection_class(
+                parsed.hostname,
+                parsed.port or 80,
+                timeout=self.timeout,
+            )
+            try:
+                connection.request(
+                    request.get_method(),
+                    target,
+                    body=request.data,
+                    headers=headers,
+                )
+                response = connection.getresponse()
+            except (OSError, http.client.HTTPException) as exc:
+                connection.close()
+                raise urllib.error.URLError(exc) from exc
+            if response.status >= 300:
+                status = response.status
+                reason = response.reason
+                response_headers = response.headers
+                response.close()
+                connection.close()
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    status,
+                    reason,
+                    response_headers,
+                    None,
+                )
+            return _ProviderHTTPResponse(response, connection)
+
+        port = parsed.port or 443
+        pin_key = (parsed.hostname.lower(), port)
+        addresses = getattr(self._local, "provider_address_pins", {}).get(pin_key)
+        if not addresses:
+            raise RuntimeError("provider request has no validated address pin")
+
+        last_error: BaseException | None = None
+'''
+          replace_once(path, old, new)
+
+          changelog = Path("CHANGELOG.md")
+          text = changelog.read_text(encoding="utf-8")
+          entry = (
+              "- Restrict the private plain-HTTP provider seam to localhost or literal "
+              "loopback addresses, connect directly without ambient proxies, reject URL "
+              "userinfo and redirects, and close failed resources deterministically.\n"
+          )
+          marker = "### Security\n\n"
+          if entry not in text:
+              if marker not in text:
+                  raise SystemExit("CHANGELOG Security section missing")
+              text = text.replace(marker, marker + entry, 1)
+              changelog.write_text(text, encoding="utf-8")
+          PY
+          git diff --check
+
+      - name: Verify focused and full quality evidence
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          python -m pytest -q tests/test_provider_address_pinning.py tests/test_provider_integration.py
+          python -m pytest -q
+          python -m compileall -q contextual_orchestrator tests
+          git diff --check
+
+      - name: Publish exact repair and remove one-shot workflow
+        env:
+          EXPECTED_HEAD: ${{ github.sha }}
+          SOURCE_BRANCH: fix/atheris-interpreter-lock
+          GH_TOKEN: ${{ github.token }}
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
+          rm .github/workflows/repair-pr96-loopback-http.yml
+          test "$(git diff --name-only | sort)" = "$(printf '%s\n' \
+            .github/workflows/repair-pr96-loopback-http.yml \
+            CHANGELOG.md \
+            contextual_orchestrator/orchestrator.py \
+            tests/test_provider_address_pinning.py | sort)"
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix(security): restrict plain HTTP providers to loopback"
+          remote_url="https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git"
+          git push --force-with-lease="refs/heads/${SOURCE_BRANCH}:${EXPECTED_HEAD}" \
+            "$remote_url" "HEAD:refs/heads/${SOURCE_BRANCH}"
