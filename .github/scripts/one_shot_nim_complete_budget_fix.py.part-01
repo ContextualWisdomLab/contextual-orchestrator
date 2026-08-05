@@ -1,0 +1,200 @@
+                "dry_run",
+                TASK_MANIFEST_PATH,
+                None,
+                tmp,
+                max_total_requests=1283,
+                transport=transport,
+            )
+    assert calls == [("GET", "/v1/models")]
+
+
+def test_run_preflight_exact_boundary_preserves_evaluation_reserve() -> None:
+    """The exact 127-model ceiling completes every probe and retains evaluation capacity."""
+    transport, calls = _large_catalog_transport(127)
+    with tempfile.TemporaryDirectory() as tmp:
+        report = nb.run_benchmark(
+            "dry_run",
+            TASK_MANIFEST_PATH,
+            None,
+            tmp,
+            max_total_requests=1284,
+            transport=transport,
+        )
+    plan = report["request_budget"]["planned_request_counts"]
+    assert plan["total_requests"] == 1284
+    assert plan["capability_probe_requests"] == 1143
+    assert plan["evaluation_requests"] == 140
+    assert len(report["catalog_snapshot"]["probed_models"]) == 127
+    assert all(
+        row["probe_outcome"] != "skipped"
+        for model in report["catalog_snapshot"]["probed_models"]
+        for row in model["capability_probe_rows"]
+    )
+    assert len(calls) == 1144
+    assert report["request_budget"]["requests_spent"] <= 1284
+    assert report["request_budget"]["remaining_requests"] >= 0
+'''
+    return replace_once(text, run_test_anchor, run_tests, "complete-run preflight tests")
+
+
+def update_release_acceptance_tests(text: str) -> str:
+    """Replace deterministic partial-prefix evidence with complete-set concurrency evidence."""
+    old_test = '''def test_probe_budget_allocation_is_deterministic_before_concurrency() -> None:
+    """Thread scheduling cannot choose which model-capability cells receive budget."""
+    models = [
+        {"model_id": "a/model-one", "owned_by": "vendor"},
+        {"model_id": "b/model-two", "owned_by": "vendor"},
+    ]
+    first_model_started = threading.Event()
+    second_model_four_calls = threading.Event()
+    second_model_call_count = 0
+    count_lock = threading.Lock()
+
+    def transport(
+        _method: str,
+        _url: str,
+        _headers: dict[str, str],
+        body: bytes | None,
+    ) -> tuple[int, bytes]:
+        """Delay the first model so the old race gives budget to the second model."""
+        nonlocal second_model_call_count
+        payload = (body or b"").decode("utf-8", errors="ignore")
+        if "a/model-one" in payload:
+            first_model_started.set()
+            second_model_four_calls.wait(timeout=0.25)
+        elif "b/model-two" in payload:
+            first_model_started.wait(timeout=0.25)
+            with count_lock:
+                second_model_call_count += 1
+                if second_model_call_count == 4:
+                    second_model_four_calls.set()
+        return 400, b"{}"
+
+    rows = nb.probe_discovered_models(
+        models,
+        transport,
+        FAKE_ENDPOINT,
+        "credential-redacted",
+        nb.RequestBudget(5),
+        probe_concurrency=2,
+        clock=lambda: 1.0,
+        timer=lambda: 0.0,
+    )
+    rows_by_model = {row["model_id"]: row for row in rows}
+    attempted_first = [
+        row["capability_name"]
+        for row in rows_by_model["a/model-one"]["capability_probe_rows"]
+        if row["probe_outcome"] != "skipped"
+    ]
+    attempted_second = [
+        row["capability_name"]
+        for row in rows_by_model["b/model-two"]["capability_probe_rows"]
+        if row["probe_outcome"] != "skipped"
+    ]
+
+    assert attempted_first == list(nb.CAPABILITY_PROBE_ORDER[:5])
+    assert attempted_second == []
+'''
+    new_test = '''def test_complete_probe_set_is_deterministic_under_concurrency() -> None:
+    """Thread scheduling cannot remove any model-capability cell from evidence."""
+    models = [
+        {"model_id": "a/model-one", "owned_by": "vendor"},
+        {"model_id": "b/model-two", "owned_by": "vendor"},
+    ]
+    first_model_started = threading.Event()
+    second_model_four_calls = threading.Event()
+    second_model_call_count = 0
+    count_lock = threading.Lock()
+
+    def transport(
+        _method: str,
+        _url: str,
+        _headers: dict[str, str],
+        body: bytes | None,
+    ) -> tuple[int, bytes]:
+        """Force completion-order drift while every preflight-approved cell runs."""
+        nonlocal second_model_call_count
+        payload = (body or b"").decode("utf-8", errors="ignore")
+        if "a/model-one" in payload:
+            first_model_started.set()
+            second_model_four_calls.wait(timeout=0.25)
+        elif "b/model-two" in payload:
+            first_model_started.wait(timeout=0.25)
+            with count_lock:
+                second_model_call_count += 1
+                if second_model_call_count == 4:
+                    second_model_four_calls.set()
+        return 400, b"{}"
+
+    budget = nb.RequestBudget(18)
+    rows = nb.probe_discovered_models(
+        models,
+        transport,
+        FAKE_ENDPOINT,
+        "credential-redacted",
+        budget,
+        probe_concurrency=2,
+        clock=lambda: 1.0,
+        timer=lambda: 0.0,
+    )
+    rows_by_model = {row["model_id"]: row for row in rows}
+    attempted_first = [
+        row["capability_name"]
+        for row in rows_by_model["a/model-one"]["capability_probe_rows"]
+    ]
+    attempted_second = [
+        row["capability_name"]
+        for row in rows_by_model["b/model-two"]["capability_probe_rows"]
+    ]
+
+    assert attempted_first == list(nb.CAPABILITY_PROBE_ORDER)
+    assert attempted_second == list(nb.CAPABILITY_PROBE_ORDER)
+    assert budget.requests_spent == 18
+'''
+    return replace_once(
+        text,
+        old_test,
+        new_test,
+        "complete probe concurrency release acceptance",
+    )
+
+
+def update_workflow_contract_tests(text: str) -> str:
+    """Require the reviewed scheduled ceiling and fail-closed explanation."""
+    anchor = '''def test_dry_run_workflow_honors_optional_pricing_scenario_without_secret() -> None:
+    """Manual dry runs may validate an explicit scenario without live credentials."""
+    workflow = (REPOSITORY_ROOT / ".github/workflows/nim-benchmark.yml").read_text(
+        encoding="utf-8"
+    )
+    dry_start = workflow.index("- name: Run dry benchmark")
+    live_start = workflow.index("- name: Run live benchmark")
+    dry_block = workflow[dry_start:live_start]
+
+    assert "PRICING_SCENARIO: ${{ inputs.pricing_scenario }}" in dry_block
+    assert 'extra_args+=(--pricing-scenario "$PRICING_SCENARIO")' in dry_block
+    assert '"${extra_args[@]}"' in dry_block
+'''
+    replacement = anchor + '''\n\ndef test_scheduled_live_budget_covers_large_catalog_regression_ceiling() -> None:
+    """Scheduled automation uses the reviewed 1,500-call hard ceiling."""
+    workflow = (REPOSITORY_ROOT / ".github/workflows/nim-benchmark.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'default: 1500' in workflow
+    assert 'echo "max_requests=1500"' in workflow
+    assert "complete-plan preflight" in workflow
+    assert "max_requests=300" not in workflow
+'''
+    return replace_once(text, anchor, replacement, "scheduled budget workflow contract")
+
+
+def update_benchmark_source(text: str) -> str:
+    """Implement complete probe/evaluation request planning before capability egress."""
+    probe_order_anchor = '''CAPABILITY_PROBES = _build_capability_probes()
+CAPABILITY_PROBE_ORDER = tuple(CAPABILITY_PROBES)
+'''
+    probe_plan = probe_order_anchor + '''\n\ndef planned_capability_probe_requests(model_count: int) -> int:
+    """Return calls required to probe every capability for every discovered model.
+
+    Args:
+        model_count: Number of usable model IDs returned by dynamic discovery.
+
