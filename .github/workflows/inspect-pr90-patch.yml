@@ -1,0 +1,40 @@
+name: Inspect PR90 staged patch
+
+on:
+  push:
+    branches:
+      - claude/nim-all-models-support-fecb0b
+    paths:
+      - .github/workflows/inspect-pr90-patch.yml
+
+permissions:
+  contents: read
+
+jobs:
+  inspect:
+    if: >-
+      github.repository == 'ContextualWisdomLab/contextual-orchestrator' &&
+      github.ref == 'refs/heads/claude/nim-all-models-support-fecb0b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Checkout exact triggering head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Decode and report immutable evidence hashes
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          gzip_file="$RUNNER_TEMP/pr90.patch.gz"
+          patch_file="$RUNNER_TEMP/pr90.patch"
+          base64 --decode .review-evidence/pr90-complete-plan.patch.gz.b64 > "$gzip_file"
+          gzip -dc "$gzip_file" > "$patch_file"
+          printf 'gzip_sha256='
+          sha256sum "$gzip_file" | cut -d' ' -f1
+          printf 'patch_sha256='
+          sha256sum "$patch_file" | cut -d' ' -f1
+          printf 'patch_bytes='
+          wc -c < "$patch_file"
+          git apply --check "$patch_file"
