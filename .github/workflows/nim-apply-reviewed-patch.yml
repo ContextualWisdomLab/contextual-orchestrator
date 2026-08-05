@@ -22,11 +22,11 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: 428736c73f951d6cb2a78ba214f125f1959ccb6a
+      EXPECTED_PARENT_SHA: e4e03c45981bd5a676a0eea9afd2e9fc1d0200d3
       EXPECTED_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
-      FINAL_SOURCE_DIR: ${{ runner.temp }}/nim-final-worktree
+      FINAL_SOURCE_DIR: /tmp/nim-final-worktree
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
