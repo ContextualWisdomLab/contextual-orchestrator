@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only opt-out; default verify_tls=True uses ssl.create_default_context(). nosemgrep: python.lang.security.unverified-ssl-context.unverified-ssl-context
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - URL from _provider_url after egress/SSRF validation. nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -473,8 +473,15 @@ class ModelClient:
             raise RuntimeError(f"{agent.id} provider host is not allowlisted")
         for address in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM):
             ip_address = ipaddress.ip_address(address[4][0])
+            # ``not is_global`` rejects every non-globally-routable target, including
+            # ranges that carry none of the explicit flags below — notably RFC 6598
+            # shared address space (100.64.0.0/10, carrier-grade NAT / cloud-internal)
+            # and the unspecified address. The explicit flags are kept because some
+            # non-public multicast addresses report ``is_global`` True and must still
+            # be blocked.
             if (
-                ip_address.is_private
+                not ip_address.is_global
+                or ip_address.is_private
                 or ip_address.is_loopback
                 or ip_address.is_link_local
                 or ip_address.is_multicast

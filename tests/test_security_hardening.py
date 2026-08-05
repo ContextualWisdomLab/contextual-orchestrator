@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 import sys
+from unittest import mock
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -311,6 +313,60 @@ def test_provider_transport_rejects_protocol_relative_batch_paths() -> None:
         raise AssertionError("protocol-relative provider path should fail before urllib opens it")
 
 
+def test_external_provider_rejects_non_global_resolved_addresses() -> None:
+    # The egress guard must reject ANY non-globally-routable resolved address, not
+    # only the RFC1918/loopback/link-local/multicast/reserved flag set. RFC 6598
+    # shared address space (100.64.0.0/10, carrier-grade NAT and commonly used for
+    # cloud-internal services) is non-public yet carries NONE of those flags, so a
+    # host that resolves into it must still be blocked or it becomes an SSRF hole to
+    # internal targets. getaddrinfo is stubbed so the check is deterministic offline.
+    client = ModelClient()
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-shared-space")
+    set_backend(backend)
+    shared_space_agent = ModelAgent(
+        "shared_space_agent", "gpt-example", "https://provider.example/v1", "MODEL_KEY"
+    )
+    resolved = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("100.64.0.1", 443))]
+    try:
+        with mock.patch(
+            "contextual_orchestrator.orchestrator.socket.getaddrinfo",
+            return_value=resolved,
+        ):
+            try:
+                client._validate_provider(shared_space_agent)
+            except RuntimeError as exc:
+                assert "non-public address" in str(exc)
+            else:
+                raise AssertionError(
+                    "provider resolving to RFC 6598 shared address space "
+                    "(100.64.0.0/10) must be rejected by the egress guard"
+                )
+    finally:
+        set_backend(None)
+
+
+def test_external_provider_allows_public_resolved_address() -> None:
+    # The tightened guard must not over-block: a genuinely public, globally
+    # routable resolved address still passes validation.
+    client = ModelClient()
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-public")
+    set_backend(backend)
+    public_agent = ModelAgent(
+        "public_agent", "gpt-example", "https://provider.example/v1", "MODEL_KEY"
+    )
+    resolved = [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", 443))]
+    try:
+        with mock.patch(
+            "contextual_orchestrator.orchestrator.socket.getaddrinfo",
+            return_value=resolved,
+        ):
+            client._validate_provider(public_agent)  # must not raise
+    finally:
+        set_backend(None)
+
+
 def test_redact_value_preserves_non_string_scalars() -> None:
     assert redact_value(7) == 7
 
@@ -330,5 +386,7 @@ if __name__ == "__main__":
     test_external_provider_rejects_insecure_or_unlisted_hosts()
     test_provider_transport_rejects_local_url_schemes_before_urllib()
     test_provider_transport_rejects_protocol_relative_batch_paths()
+    test_external_provider_rejects_non_global_resolved_addresses()
+    test_external_provider_allows_public_resolved_address()
     test_redact_value_preserves_non_string_scalars()
     print("ok")
