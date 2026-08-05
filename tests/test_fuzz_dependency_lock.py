@@ -14,12 +14,6 @@ MARKER_PATTERN = re.compile(
     r"(?P<field>python_version|python_full_version)\s*"
     r"(?P<operator><|>=)\s*['\"](?P<boundary>\d+\.\d+)['\"]$"
 )
-LOCK_ENTRY_PATTERN = re.compile(
-    r"(?ms)^atheris==(?P<release>\d+\.\d+\.\d+)\s*;\s*"
-    r"python_full_version\s*(?P<operator><|>=)\s*'(?P<boundary>\d+\.\d+)'\s*\\\n"
-    r"(?P<body>(?:[ \t].*(?:\n|\Z))+?)"
-    r"(?=^[A-Za-z0-9_.-]+==|\Z)"
-)
 HASH_PATTERN = re.compile(r"--hash=sha256:(?P<digest>[0-9a-f]{64})")
 
 
@@ -78,16 +72,33 @@ def _project_requirements() -> tuple[InterpreterRequirement, ...]:
 def _lock_requirements() -> tuple[InterpreterRequirement, ...]:
     """Load interpreter markers and SHA-256 evidence from the universal lock."""
 
-    lock_text = FUZZ_LOCK_PATH.read_text(encoding="utf-8")
+    lines = FUZZ_LOCK_PATH.read_text(encoding="utf-8").splitlines()
     requirements: list[InterpreterRequirement] = []
-    for match in LOCK_ENTRY_PATTERN.finditer(lock_text):
+    line_index = 0
+    while line_index < len(lines):
+        line = lines[line_index]
+        if not line.startswith("atheris=="):
+            line_index += 1
+            continue
+
+        assert line.rstrip().endswith("\\"), (
+            f"Atheris lock header must continue to hashes: {line!r}"
+        )
+        parsed = _parse_requirement(line.rstrip()[:-1].rstrip())
+        line_index += 1
+        hashes: set[str] = set()
+        while line_index < len(lines) and lines[line_index].startswith((" ", "\t")):
+            hash_match = HASH_PATTERN.search(lines[line_index])
+            if hash_match is not None:
+                hashes.add(hash_match.group("digest"))
+            line_index += 1
         requirements.append(
             InterpreterRequirement(
-                release=match.group("release"),
-                field="python_full_version",
-                operator=match.group("operator"),
-                boundary=_version_pair(match.group("boundary")),
-                hashes=frozenset(HASH_PATTERN.findall(match.group("body"))),
+                release=parsed.release,
+                field=parsed.field,
+                operator=parsed.operator,
+                boundary=parsed.boundary,
+                hashes=frozenset(hashes),
             )
         )
     return tuple(requirements)
