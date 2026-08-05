@@ -249,7 +249,7 @@ def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) 
 
     with pytest.raises(
         nb.BenchmarkBudgetError,
-        match="complete benchmark needs 1284 requests but configured cap is 1283",
+        match="complete benchmark needs 1564 requests but configured cap is 1563",
     ):
         nb.run_benchmark(
             "dry_run",
@@ -257,7 +257,7 @@ def test_one_request_short_fails_after_catalog_before_any_probe(tmp_path: Path) 
             None,
             str(tmp_path / "insufficient"),
             endpoint=FAKE_ENDPOINT,
-            max_total_requests=1283,
+            max_total_requests=1563,
             max_eval_models=7,
             transport=transport,
         )

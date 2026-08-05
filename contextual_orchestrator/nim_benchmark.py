@@ -1635,6 +1635,45 @@ def plan_complete_request_budget(
     }
 
 
+def planned_complete_run_requests(
+    model_count: int,
+    locked_task_count: int,
+    max_eval_models: int,
+) -> dict[str, int]:
+    """Return buyer-facing request counts for a complete benchmark run.
+
+    This stable planning view translates the internal conservative preflight
+    into terminology used by release acceptance, operator documentation, and
+    acquisition evidence. Validation remains centralized in
+    :func:`plan_complete_request_budget`, so both views fail closed identically.
+
+    Args:
+        model_count: Usable model identifiers discovered from ``/v1/models``.
+        locked_task_count: Number of locked evaluation tasks.
+        max_eval_models: Maximum workers admitted to policy comparison.
+
+    Returns:
+        Catalog, capability, evaluation, post-catalog, and total request counts.
+    """
+    plan = plan_complete_request_budget(
+        discovered_model_count=model_count,
+        max_eval_models=max_eval_models,
+        locked_task_count=locked_task_count,
+    )
+    requests_after_catalog = (
+        plan["capability_probe_request_count"]
+        + plan["evaluation_reserve_request_count"]
+    )
+    return {
+        "catalog_discovery_requests": plan["catalog_request_count"],
+        "capability_probe_requests": plan["capability_probe_request_count"],
+        "evaluation_worker_ceiling": plan["planned_worker_count"],
+        "evaluation_requests": plan["evaluation_reserve_request_count"],
+        "requests_after_catalog": requests_after_catalog,
+        "total_requests": plan["total_required_request_count"],
+    }
+
+
 def evaluate_policies(
     agents: list[ModelAgent],
     manifest: dict[str, Any],
@@ -2484,7 +2523,7 @@ def run_benchmark(
     pricing_scenario_path: str | None,
     output_dir: str,
     endpoint: str = NIM_DEFAULT_ENDPOINT,
-    max_total_requests: int = 500,
+    max_total_requests: int = 2000,
     probe_concurrency: int = 4,
     timeout_seconds: float = 60.0,
     max_output_tokens: int = 256,
@@ -2695,7 +2734,7 @@ def run_benchmark_cli(argv: list[str]) -> int:
                         help="Versioned hypothetical price-assumption JSON (omit => costs stay 'unknown').")
     parser.add_argument("--output-dir", default="benchmark_artifacts")
     parser.add_argument("--endpoint", default=NIM_DEFAULT_ENDPOINT)
-    parser.add_argument("--max-total-requests", type=int, default=500)
+    parser.add_argument("--max-total-requests", type=int, default=2000)
     parser.add_argument("--probe-concurrency", type=int, default=4)
     parser.add_argument("--timeout-seconds", type=float, default=60.0)
     parser.add_argument("--max-output-tokens", type=int, default=256)

@@ -630,7 +630,7 @@ def _write_json(tmp_path: str, name: str, payload: object) -> str:
 def test_example_task_manifest_is_valid_and_split() -> None:
     manifest = nb.load_task_manifest(TASK_MANIFEST_PATH)
     locked = nb.locked_evaluation_tasks(manifest)
-    assert len(locked) == 10
+    assert len(locked) == 30
     assert len(manifest["tasks"]) - len(locked) == 2  # exploratory tuning split stays out
 
 
@@ -1069,7 +1069,7 @@ def _dry_report(output_dir: str) -> dict:
         TASK_MANIFEST_PATH,
         PRICING_SCENARIO_PATH,
         output_dir,
-        max_total_requests=400,
+        max_total_requests=600,
     )
 
 
@@ -1195,7 +1195,7 @@ def test_dry_run_accepts_explicit_transport() -> None:
             TASK_MANIFEST_PATH,
             None,
             tmp,
-            max_total_requests=400,
+            max_total_requests=600,
             transport=nb.build_dry_run_transport(),
         )
         assert report["provenance"]["pricing_scenario_sha256"] is None
@@ -1221,7 +1221,7 @@ def test_live_run_end_to_end_offline() -> None:
                 TASK_MANIFEST_PATH,
                 None,
                 tmp,
-                max_total_requests=400,
+                max_total_requests=600,
                 git_sha="abc123",
                 workflow_run_id="run-42",
                 transport=nb.build_dry_run_transport(),
@@ -1250,7 +1250,7 @@ def test_live_run_uses_default_transport_builder_when_none_given() -> None:
         with tempfile.TemporaryDirectory() as tmp:
             report = nb.run_benchmark(
                 "live", TASK_MANIFEST_PATH, None, tmp,
-                max_total_requests=400, git_sha="abc123", workflow_run_id="run-43",
+                max_total_requests=600, git_sha="abc123", workflow_run_id="run-43",
             )
     finally:
         nb.build_default_transport = original_builder
@@ -1290,7 +1290,7 @@ def test_cli_dry_run_succeeds() -> None:
                     "--task-manifest", TASK_MANIFEST_PATH,
                     "--pricing-scenario", PRICING_SCENARIO_PATH,
                     "--output-dir", tmp,
-                    "--max-total-requests", "400",
+                    "--max-total-requests", "600",
                 ]
             )
         assert exit_code == 0
