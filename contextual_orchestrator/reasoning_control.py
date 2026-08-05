@@ -1,8 +1,9 @@
-"""Provider-neutral, cost-aware control of model reasoning effort.
+"""Provider-neutral control of model reasoning effort.
 
 The public facade combines explicit model capability profiles, role-sensitive
-compute selection, provider payload projection, bounded verifier escalation,
-and measured reasoning-token evidence without retaining private model traces.
+compute selection, workflow-structure evidence, provider payload projection,
+bounded verifier escalation, and measured reasoning-token evidence without
+retaining private model traces.
 """
 
 from ._reasoning_payload import (
@@ -16,10 +17,12 @@ from ._reasoning_payload import (
     sum_usage_tokens,
 )
 from ._reasoning_policy import (
+    _coerce_workload,
     _nearest_supported,
     ReasoningAblationCell,
     ReasoningDecision,
     ReasoningPolicy,
+    ReasoningWorkload,
     adapt_reasoning_decision,
     escalate_reasoning_decision,
     select_reasoning_decision,
@@ -30,6 +33,11 @@ from ._reasoning_profile import (
     PayloadRule,
     ReasoningProfile,
 )
+from ._reasoning_workload import (
+    WorkflowReasoningCursor,
+    _access_ids,
+    workload_for_trace_row,
+)
 
 __all__ = [
     "CANONICAL_REASONING_LEVELS",
@@ -38,10 +46,13 @@ __all__ = [
     "ReasoningDecision",
     "ReasoningPolicy",
     "ReasoningProfile",
+    "ReasoningWorkload",
+    "WorkflowReasoningCursor",
     "adapt_reasoning_decision",
     "apply_reasoning_payload",
     "escalate_reasoning_decision",
     "extract_reasoning_tokens",
     "select_reasoning_decision",
     "sum_usage_tokens",
+    "workload_for_trace_row",
 ]
