@@ -1,0 +1,56 @@
+name: Inspect PR90 merge onto security base
+
+on:
+  push:
+    branches:
+      - tmp/pr90-merge-inspection-20260805
+    paths:
+      - .github/workflows/pr90-merge-inspection.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: pr90-merge-inspection-20260805
+  cancel-in-progress: true
+
+jobs:
+  inspect:
+    if: github.repository == 'ContextualWisdomLab/contextual-orchestrator'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    env:
+      PR_HEAD_SHA: 9b72816bb61fa540b8eb20fdc559e740a3c3c6ec
+      SECURITY_BASE_SHA: 03124cf97b7bf02e30a48a13acfd78b6ef08d1ef
+    steps:
+      - name: Checkout exact PR head without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ env.PR_HEAD_SHA }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Materialize the exact three-way merge result
+        shell: bash --noprofile --norc -e -o pipefail {0}
+        run: |
+          git config user.name merge-inspector
+          git config user.email merge-inspector@example.invalid
+          git fetch --no-tags origin "$SECURITY_BASE_SHA"
+          set +e
+          git merge --no-commit --no-ff "$SECURITY_BASE_SHA"
+          merge_exit=$?
+          set -e
+          printf '%s\n' "$merge_exit" > merge-exit-code.txt
+          git diff --name-only --diff-filter=U > conflict-files.txt
+          git status --porcelain=v1 > merge-status.txt
+          git diff --cc > combined-conflict.diff
+          rm -rf .git
+
+      - name: Upload read-only merge workspace
+        uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
+        with:
+          name: pr90-security-base-merge-${{ github.sha }}
+          path: .
+          include-hidden-files: true
+          if-no-files-found: error
+          retention-days: 1
