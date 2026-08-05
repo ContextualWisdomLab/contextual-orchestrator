@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Preserve every benchmark cell's step, role, agent, and model assignment in CLI and scheduled-workflow CSV artifacts as deterministic JSON; fail closed before publishing success when JSON/CSV identities are duplicated, malformed, or incomplete, and replace the enriched CSV atomically.
 - Exclude zero-success benchmark policies from quality Pareto frontiers with explicit evidence labels, validate every Markdown-consumed report field before artifact writes, normalize excessive catalog JSON depth to the catalog domain error, preserve positive sub-second provider timeouts, make the standalone NIM test runner fixture-safe, and execute these review regressions inside the 100% branch-coverage gate.
 - Expose a stable complete-run request planning view and align API, CLI, manual-workflow, and deterministic test caps with the locked thirty-task evidence floor, preserving fail-before-probe behavior.
 - Fail closed after catalog discovery but before capability egress when the complete all-model probe and equal-budget evaluation plan cannot fit the configured hard request cap; the monthly 2,000-request ceiling covers the representative 127-model, thirty-task, seven-worker plan requiring 1,564 requests and still rejects larger plans before partial probing.
