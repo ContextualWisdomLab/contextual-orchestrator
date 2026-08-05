@@ -63,6 +63,7 @@ jobs:
             tests/test_nim_benchmark.py \
             tests/test_nim_benchmark_budget_view.py \
             tests/test_nim_benchmark_release_acceptance.py \
+            tests/test_nim_benchmark_review_regressions.py \
             tests/test_nim_benchmark_workflow_contract.py \
             -q
           python -m coverage report \
