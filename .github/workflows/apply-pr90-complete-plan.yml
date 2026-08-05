@@ -23,8 +23,8 @@ jobs:
     runs-on: ubuntu-24.04
     timeout-minutes: 30
     env:
-      EXPECTED_PARENT_SHA: 8a31de7810e671b10a9601b372dc38e3256ed487
-      EXPECTED_PATCH_SHA256: 7e554f0c868ab027bda11014817bb1707deac179133fc803a71db4b1451d9a58
+      EXPECTED_PARENT_SHA: 2efcf08391911542a91b4a9e9e442f4fe60984c7
+      EXPECTED_PATCH_SHA256: f2a21849dd2600c534907e207872f5e494bc9725fd222abb70dd0c615b03adb8
       EXPECTED_FINAL_TREE_SHA: e3d9c37375ee0d65ca0bdd5755f1e599d4051df9
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
@@ -59,6 +59,7 @@ jobs:
           git apply --index "$patch_file"
           git rm .review-evidence/pr90-complete-plan.patch.gz.b64
           git rm .github/workflows/apply-pr90-complete-plan.yml
+          git rm .github/workflows/inspect-pr90-patch.yml
           git diff --cached --check
 
       - name: Install hash-locked verification dependencies
@@ -106,7 +107,9 @@ jobs:
           find . -type d -name __pycache__ -prune -exec rm -rf {} +
           git add -A
           git diff --cached --check
-          test "$(git write-tree)" = "$EXPECTED_FINAL_TREE_SHA"
+          actual_tree="$(git write-tree)"
+          echo "actual_final_tree_sha=$actual_tree"
+          test "$actual_tree" = "$EXPECTED_FINAL_TREE_SHA"
 
   publish:
     name: Publish the already verified tree
@@ -116,8 +119,8 @@ jobs:
     permissions:
       contents: write
     env:
-      EXPECTED_PARENT_SHA: 8a31de7810e671b10a9601b372dc38e3256ed487
-      EXPECTED_PATCH_SHA256: 7e554f0c868ab027bda11014817bb1707deac179133fc803a71db4b1451d9a58
+      EXPECTED_PARENT_SHA: 2efcf08391911542a91b4a9e9e442f4fe60984c7
+      EXPECTED_PATCH_SHA256: f2a21849dd2600c534907e207872f5e494bc9725fd222abb70dd0c615b03adb8
       EXPECTED_FINAL_TREE_SHA: e3d9c37375ee0d65ca0bdd5755f1e599d4051df9
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
       GITHUB_TOKEN: ${{ github.token }}
@@ -143,8 +146,11 @@ jobs:
           git apply --index "$patch_file"
           git rm .review-evidence/pr90-complete-plan.patch.gz.b64
           git rm .github/workflows/apply-pr90-complete-plan.yml
+          git rm .github/workflows/inspect-pr90-patch.yml
           git diff --cached --check
-          test "$(git write-tree)" = "$EXPECTED_FINAL_TREE_SHA"
+          actual_tree="$(git write-tree)"
+          echo "actual_final_tree_sha=$actual_tree"
+          test "$actual_tree" = "$EXPECTED_FINAL_TREE_SHA"
 
       - name: Commit and update only the exact source branch
         shell: bash --noprofile --norc -e -o pipefail {0}
