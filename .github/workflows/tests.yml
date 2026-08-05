@@ -66,6 +66,7 @@ jobs:
             tests/test_nim_benchmark_review_regressions.py \
             tests/test_nim_benchmark_workflow_contract.py \
             tests/test_nim_csv_evidence.py \
+            tests/test_nim_csv_evidence_edges.py \
             -q
           python -m coverage report \
             --include=contextual_orchestrator/nim_benchmark.py,contextual_orchestrator/nim_csv_evidence.py \
