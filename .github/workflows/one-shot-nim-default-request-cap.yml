@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: one-shot-nim-complete-plan-defaults-v6
+  group: one-shot-nim-complete-plan-defaults-v7
   cancel-in-progress: true
 
 jobs:
@@ -40,7 +40,7 @@ jobs:
 
       - name: Validate one-file trigger and preserve RED acceptance evidence
         env:
-          EXPECTED_PARENT_SHA: 521617186946a33bd91b2e2b1972d4e253e7a477
+          EXPECTED_PARENT_SHA: e31f9013cfcf93f22f4895326794c775a33c0d50
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
@@ -70,46 +70,48 @@ jobs:
           benchmark_path = Path("contextual_orchestrator/nim_benchmark.py")
           benchmark_source = benchmark_path.read_text(encoding="utf-8")
           wrapper_anchor = "\n\ndef evaluate_policies(\n"
-          wrapper = '''
-
-def planned_complete_run_requests(
-    model_count: int,
-    locked_task_count: int,
-    max_eval_models: int,
-) -> dict[str, int]:
-    """Return buyer-facing request counts for a complete benchmark run.
-
-    This stable planning view translates the internal conservative preflight
-    into terminology used by release acceptance, operator documentation, and
-    acquisition evidence. Validation remains centralized in
-    :func:`plan_complete_request_budget`, so both views fail closed identically.
-
-    Args:
-        model_count: Usable model identifiers discovered from ``/v1/models``.
-        locked_task_count: Number of locked evaluation tasks.
-        max_eval_models: Maximum workers admitted to policy comparison.
-
-    Returns:
-        Catalog, capability, evaluation, post-catalog, and total request counts.
-    """
-    plan = plan_complete_request_budget(
-        discovered_model_count=model_count,
-        max_eval_models=max_eval_models,
-        locked_task_count=locked_task_count,
-    )
-    requests_after_catalog = (
-        plan["capability_probe_request_count"]
-        + plan["evaluation_reserve_request_count"]
-    )
-    return {
-        "catalog_discovery_requests": plan["catalog_request_count"],
-        "capability_probe_requests": plan["capability_probe_request_count"],
-        "evaluation_worker_ceiling": plan["planned_worker_count"],
-        "evaluation_requests": plan["evaluation_reserve_request_count"],
-        "requests_after_catalog": requests_after_catalog,
-        "total_requests": plan["total_required_request_count"],
-    }
-'''
+          wrapper_lines = [
+              "",
+              "",
+              "def planned_complete_run_requests(",
+              "    model_count: int,",
+              "    locked_task_count: int,",
+              "    max_eval_models: int,",
+              ") -> dict[str, int]:",
+              '    """Return buyer-facing request counts for a complete benchmark run.',
+              "",
+              "    This stable planning view translates the internal conservative preflight",
+              "    into terminology used by release acceptance, operator documentation, and",
+              "    acquisition evidence. Validation remains centralized in",
+              "    :func:`plan_complete_request_budget`, so both views fail closed identically.",
+              "",
+              "    Args:",
+              "        model_count: Usable model identifiers discovered from ``/v1/models``.",
+              "        locked_task_count: Number of locked evaluation tasks.",
+              "        max_eval_models: Maximum workers admitted to policy comparison.",
+              "",
+              "    Returns:",
+              "        Catalog, capability, evaluation, post-catalog, and total request counts.",
+              '    """',
+              "    plan = plan_complete_request_budget(",
+              "        discovered_model_count=model_count,",
+              "        max_eval_models=max_eval_models,",
+              "        locked_task_count=locked_task_count,",
+              "    )",
+              "    requests_after_catalog = (",
+              '        plan["capability_probe_request_count"]',
+              '        + plan["evaluation_reserve_request_count"]',
+              "    )",
+              "    return {",
+              '        "catalog_discovery_requests": plan["catalog_request_count"],',
+              '        "capability_probe_requests": plan["capability_probe_request_count"],',
+              '        "evaluation_worker_ceiling": plan["planned_worker_count"],',
+              '        "evaluation_requests": plan["evaluation_reserve_request_count"],',
+              '        "requests_after_catalog": requests_after_catalog,',
+              '        "total_requests": plan["total_required_request_count"],',
+              "    }",
+          ]
+          wrapper = "\n".join(wrapper_lines) + "\n"
           if "def planned_complete_run_requests(" not in benchmark_source:
               if benchmark_source.count(wrapper_anchor) != 1:
                   raise SystemExit("complete-plan wrapper anchor drifted")
@@ -134,56 +136,56 @@ def planned_complete_run_requests(
           )
           replace_once(
               ".github/workflows/nim-benchmark.yml",
-              '        default: 500\n',
-              '        default: 2000\n',
+              "        default: 500\n",
+              "        default: 2000\n",
               "manual workflow default",
           )
 
-          test_path = Path("tests/test_nim_benchmark.py")
-          test_source = test_path.read_text(encoding="utf-8")
-          if test_source.count("max_total_requests=400") != 4:
+          benchmark_tests = Path("tests/test_nim_benchmark.py")
+          benchmark_test_source = benchmark_tests.read_text(encoding="utf-8")
+          if benchmark_test_source.count("max_total_requests=400") != 4:
               raise SystemExit(
                   "benchmark request fixtures: expected four 400-request anchors, found "
-                  f"{test_source.count('max_total_requests=400')}"
+                  f"{benchmark_test_source.count('max_total_requests=400')}"
               )
-          test_source = test_source.replace(
+          benchmark_test_source = benchmark_test_source.replace(
               "max_total_requests=400",
               "max_total_requests=600",
           )
           cli_cap_anchor = '"--max-total-requests", "400"'
-          if test_source.count(cli_cap_anchor) != 1:
+          if benchmark_test_source.count(cli_cap_anchor) != 1:
               raise SystemExit("CLI request fixture anchor drifted")
-          test_source = test_source.replace(
+          benchmark_test_source = benchmark_test_source.replace(
               cli_cap_anchor,
               '"--max-total-requests", "600"',
               1,
           )
-          split_anchor = "assert len(locked) == 10"
-          if test_source.count(split_anchor) != 1:
+          locked_count_anchor = "assert len(locked) == 10"
+          if benchmark_test_source.count(locked_count_anchor) != 1:
               raise SystemExit("locked manifest count anchor drifted")
-          test_source = test_source.replace(
-              split_anchor,
+          benchmark_test_source = benchmark_test_source.replace(
+              locked_count_anchor,
               "assert len(locked) == 30",
               1,
           )
-          test_path.write_text(test_source, encoding="utf-8")
+          benchmark_tests.write_text(benchmark_test_source, encoding="utf-8")
 
-          release_path = Path("tests/test_nim_benchmark_release_acceptance.py")
-          release_source = release_path.read_text(encoding="utf-8")
+          release_tests = Path("tests/test_nim_benchmark_release_acceptance.py")
+          release_test_source = release_tests.read_text(encoding="utf-8")
           old_message = (
               "complete benchmark needs 1284 requests but configured cap is 1283"
           )
-          if release_source.count(old_message) != 1:
+          if release_test_source.count(old_message) != 1:
               raise SystemExit("one-short expected-message anchor drifted")
-          release_source = release_source.replace(
+          release_test_source = release_test_source.replace(
               old_message,
               "complete benchmark needs 1564 requests but configured cap is 1563",
               1,
           )
-          if release_source.count("max_total_requests=1283") != 1:
+          if release_test_source.count("max_total_requests=1283") != 1:
               raise SystemExit("one-short configured-cap anchor drifted")
-          release_path.write_text(
-              release_source.replace(
+          release_tests.write_text(
+              release_test_source.replace(
                   "max_total_requests=1283",
                   "max_total_requests=1563",
                   1,
@@ -226,7 +228,7 @@ def planned_complete_run_requests(
           python -m compileall -q contextual_orchestrator tests
           git diff --check
 
-      - name: Remove one-shot workflow and publish verified permanent tree
+      - name: Publish verified permanent changes
         env:
           EXPECTED_HEAD: ${{ github.sha }}
           HEAD_BRANCH: claude/nim-all-models-support-fecb0b
@@ -236,9 +238,14 @@ def planned_complete_run_requests(
           test "$(git rev-parse HEAD)" = "$EXPECTED_HEAD"
           remote_head="$(git ls-remote origin "refs/heads/${HEAD_BRANCH}" | cut -f1)"
           test "$remote_head" = "$EXPECTED_HEAD"
-          rm .github/workflows/one-shot-nim-default-request-cap.yml
-          git add --all
+          git add \
+            .github/workflows/nim-benchmark.yml \
+            CHANGELOG.md \
+            contextual_orchestrator/nim_benchmark.py \
+            tests/test_nim_benchmark.py \
+            tests/test_nim_benchmark_release_acceptance.py
           git diff --cached --check
+          test -n "$(git diff --cached --name-only)"
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
           git commit -m 'fix(benchmark): align complete-plan evidence'
