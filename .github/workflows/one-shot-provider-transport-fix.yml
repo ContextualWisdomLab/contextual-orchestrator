@@ -12,7 +12,7 @@ permissions:
 
 concurrency:
   group: one-shot-provider-transport-integration
-  cancel-in-progress: false
+  cancel-in-progress: true
 
 jobs:
   integrate-and-verify:
