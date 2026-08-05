@@ -11,7 +11,7 @@ permissions:
   contents: read
 
 concurrency:
-  group: one-shot-nim-complete-plan-defaults-v5
+  group: one-shot-nim-complete-plan-defaults-v6
   cancel-in-progress: true
 
 jobs:
@@ -40,7 +40,7 @@ jobs:
 
       - name: Validate one-file trigger and preserve RED acceptance evidence
         env:
-          EXPECTED_PARENT_SHA: e56d1a35a4aa386eb4397b6e5eba3e881ba42156
+          EXPECTED_PARENT_SHA: 521617186946a33bd91b2e2b1972d4e253e7a477
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
@@ -52,7 +52,7 @@ jobs:
           set -e
           test "$red_status" -ne 0
 
-      - name: Implement complete-plan API and align request defaults
+      - name: Implement complete-plan API and align request evidence
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python3 -I - <<'PY'
@@ -141,16 +141,52 @@ def planned_complete_run_requests(
 
           test_path = Path("tests/test_nim_benchmark.py")
           test_source = test_path.read_text(encoding="utf-8")
-          dry_cap_anchor = "        max_total_requests=400,\n"
-          if test_source.count(dry_cap_anchor) != 3:
+          if test_source.count("max_total_requests=400") != 4:
               raise SystemExit(
-                  "dry report request cap: expected three anchors, found "
-                  f"{test_source.count(dry_cap_anchor)}"
+                  "benchmark request fixtures: expected four 400-request anchors, found "
+                  f"{test_source.count('max_total_requests=400')}"
               )
-          test_path.write_text(
-              test_source.replace(
-                  dry_cap_anchor,
-                  "        max_total_requests=600,\n",
+          test_source = test_source.replace(
+              "max_total_requests=400",
+              "max_total_requests=600",
+          )
+          cli_cap_anchor = '"--max-total-requests", "400"'
+          if test_source.count(cli_cap_anchor) != 1:
+              raise SystemExit("CLI request fixture anchor drifted")
+          test_source = test_source.replace(
+              cli_cap_anchor,
+              '"--max-total-requests", "600"',
+              1,
+          )
+          split_anchor = "assert len(locked) == 10"
+          if test_source.count(split_anchor) != 1:
+              raise SystemExit("locked manifest count anchor drifted")
+          test_source = test_source.replace(
+              split_anchor,
+              "assert len(locked) == 30",
+              1,
+          )
+          test_path.write_text(test_source, encoding="utf-8")
+
+          release_path = Path("tests/test_nim_benchmark_release_acceptance.py")
+          release_source = release_path.read_text(encoding="utf-8")
+          old_message = (
+              "complete benchmark needs 1284 requests but configured cap is 1283"
+          )
+          if release_source.count(old_message) != 1:
+              raise SystemExit("one-short expected-message anchor drifted")
+          release_source = release_source.replace(
+              old_message,
+              "complete benchmark needs 1564 requests but configured cap is 1563",
+              1,
+          )
+          if release_source.count("max_total_requests=1283") != 1:
+              raise SystemExit("one-short configured-cap anchor drifted")
+          release_path.write_text(
+              release_source.replace(
+                  "max_total_requests=1283",
+                  "max_total_requests=1563",
+                  1,
               ),
               encoding="utf-8",
           )
@@ -160,7 +196,7 @@ def planned_complete_run_requests(
           changelog_anchor = "### Changed\n\n"
           bullet = (
               "- Expose a stable complete-run request planning view and align API, "
-              "CLI, manual-workflow, and deterministic dry-run caps with the "
+              "CLI, manual-workflow, and deterministic test caps with the locked "
               "thirty-task evidence floor, preserving fail-before-probe behavior.\n"
           )
           if bullet not in changelog_source:
@@ -205,7 +241,7 @@ def planned_complete_run_requests(
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix(benchmark): align complete-plan defaults'
+          git commit -m 'fix(benchmark): align complete-plan evidence'
           auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$auth_header"
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" \
