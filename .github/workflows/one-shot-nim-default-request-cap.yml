@@ -1,4 +1,4 @@
-name: One-shot NIM default request cap
+name: One-shot NIM complete-plan defaults
 
 on:
   push:
@@ -6,16 +6,12 @@ on:
       - claude/nim-all-models-support-fecb0b
     paths:
       - .github/workflows/one-shot-nim-default-request-cap.yml
-  pull_request:
-    branches:
-      - fix/atheris-interpreter-lock
-    types: [reopened]
 
 permissions:
   contents: read
 
 concurrency:
-  group: one-shot-nim-default-request-cap-v4
+  group: one-shot-nim-complete-plan-defaults-v5
   cancel-in-progress: true
 
 jobs:
@@ -23,16 +19,10 @@ jobs:
     if: >-
       github.repository == 'ContextualWisdomLab/contextual-orchestrator'
       && github.actor == 'seonghobae'
-      && (
-        (github.event_name == 'push'
-          && github.ref == 'refs/heads/claude/nim-all-models-support-fecb0b')
-        ||
-        (github.event_name == 'pull_request'
-          && github.event.pull_request.head.repo.full_name == github.repository
-          && github.event.pull_request.head.ref == 'claude/nim-all-models-support-fecb0b')
-      )
-    runs-on: ubuntu-latest
-    timeout-minutes: 30
+      && github.event_name == 'push'
+      && github.ref == 'refs/heads/claude/nim-all-models-support-fecb0b'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 45
     permissions:
       contents: write
     steps:
@@ -44,13 +34,13 @@ jobs:
       - name: Checkout exact contributor head without persisted credentials
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          ref: ${{ github.event.pull_request.head.sha || github.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 2
           persist-credentials: false
 
-      - name: Validate one-file trigger and prove RED acceptance test
+      - name: Validate one-file trigger and preserve RED acceptance evidence
         env:
-          EXPECTED_PARENT_SHA: 545cd6405babcc4ca1f8bee184d793065ce37f72
+          EXPECTED_PARENT_SHA: e56d1a35a4aa386eb4397b6e5eba3e881ba42156
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
@@ -62,7 +52,7 @@ jobs:
           set -e
           test "$red_status" -ne 0
 
-      - name: Align API, CLI, workflow, and dry-run fixture caps
+      - name: Implement complete-plan API and align request defaults
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python3 -I - <<'PY'
@@ -72,8 +62,63 @@ jobs:
               target = Path(path)
               source = target.read_text(encoding="utf-8")
               if source.count(old) != 1:
-                  raise SystemExit(f"{label}: expected one anchor, found {source.count(old)}")
+                  raise SystemExit(
+                      f"{label}: expected one anchor, found {source.count(old)}"
+                  )
               target.write_text(source.replace(old, new, 1), encoding="utf-8")
+
+          benchmark_path = Path("contextual_orchestrator/nim_benchmark.py")
+          benchmark_source = benchmark_path.read_text(encoding="utf-8")
+          wrapper_anchor = "\n\ndef evaluate_policies(\n"
+          wrapper = '''
+
+def planned_complete_run_requests(
+    model_count: int,
+    locked_task_count: int,
+    max_eval_models: int,
+) -> dict[str, int]:
+    """Return buyer-facing request counts for a complete benchmark run.
+
+    This stable planning view translates the internal conservative preflight
+    into terminology used by release acceptance, operator documentation, and
+    acquisition evidence. Validation remains centralized in
+    :func:`plan_complete_request_budget`, so both views fail closed identically.
+
+    Args:
+        model_count: Usable model identifiers discovered from ``/v1/models``.
+        locked_task_count: Number of locked evaluation tasks.
+        max_eval_models: Maximum workers admitted to policy comparison.
+
+    Returns:
+        Catalog, capability, evaluation, post-catalog, and total request counts.
+    """
+    plan = plan_complete_request_budget(
+        discovered_model_count=model_count,
+        max_eval_models=max_eval_models,
+        locked_task_count=locked_task_count,
+    )
+    requests_after_catalog = (
+        plan["capability_probe_request_count"]
+        + plan["evaluation_reserve_request_count"]
+    )
+    return {
+        "catalog_discovery_requests": plan["catalog_request_count"],
+        "capability_probe_requests": plan["capability_probe_request_count"],
+        "evaluation_worker_ceiling": plan["planned_worker_count"],
+        "evaluation_requests": plan["evaluation_reserve_request_count"],
+        "requests_after_catalog": requests_after_catalog,
+        "total_requests": plan["total_required_request_count"],
+    }
+'''
+          if "def planned_complete_run_requests(" not in benchmark_source:
+              if benchmark_source.count(wrapper_anchor) != 1:
+                  raise SystemExit("complete-plan wrapper anchor drifted")
+              benchmark_source = benchmark_source.replace(
+                  wrapper_anchor,
+                  wrapper + wrapper_anchor,
+                  1,
+              )
+              benchmark_path.write_text(benchmark_source, encoding="utf-8")
 
           replace_once(
               "contextual_orchestrator/nim_benchmark.py",
@@ -93,27 +138,46 @@ jobs:
               '        default: 2000\n',
               "manual workflow default",
           )
-          replace_once(
-              "tests/test_nim_benchmark.py",
-              "        max_total_requests=400,\n",
-              "        max_total_requests=600,\n",
-              "dry report request cap",
+
+          test_path = Path("tests/test_nim_benchmark.py")
+          test_source = test_path.read_text(encoding="utf-8")
+          dry_cap_anchor = "        max_total_requests=400,\n"
+          if test_source.count(dry_cap_anchor) != 3:
+              raise SystemExit(
+                  "dry report request cap: expected three anchors, found "
+                  f"{test_source.count(dry_cap_anchor)}"
+              )
+          test_path.write_text(
+              test_source.replace(
+                  dry_cap_anchor,
+                  "        max_total_requests=600,\n",
+              ),
+              encoding="utf-8",
           )
+
           changelog = Path("CHANGELOG.md")
-          source = changelog.read_text(encoding="utf-8")
-          anchor = "### Changed\n\n"
+          changelog_source = changelog.read_text(encoding="utf-8")
+          changelog_anchor = "### Changed\n\n"
           bullet = (
-              "- Align API, CLI, manual-workflow, and deterministic dry-run request "
-              "defaults with the thirty-task complete-plan preflight so the bundled "
-              "benchmark succeeds without an implicit override.\n"
+              "- Expose a stable complete-run request planning view and align API, "
+              "CLI, manual-workflow, and deterministic dry-run caps with the "
+              "thirty-task evidence floor, preserving fail-before-probe behavior.\n"
           )
-          if source.count(anchor) != 1:
-              raise SystemExit("CHANGELOG Changed heading drifted")
-          changelog.write_text(source.replace(anchor, anchor + bullet, 1), encoding="utf-8")
+          if bullet not in changelog_source:
+              if changelog_source.count(changelog_anchor) != 1:
+                  raise SystemExit("CHANGELOG Changed heading drifted")
+              changelog.write_text(
+                  changelog_source.replace(
+                      changelog_anchor,
+                      changelog_anchor + bullet,
+                      1,
+                  ),
+                  encoding="utf-8",
+              )
           PY
           git diff --check
 
-      - name: Verify GREEN contracts and full repository suite
+      - name: Verify GREEN contracts and complete repository suite
         shell: bash --noprofile --norc -e -o pipefail {0}
         run: |
           python -m pytest \
@@ -128,7 +192,7 @@ jobs:
 
       - name: Remove one-shot workflow and publish verified permanent tree
         env:
-          EXPECTED_HEAD: ${{ github.event.pull_request.head.sha || github.sha }}
+          EXPECTED_HEAD: ${{ github.sha }}
           HEAD_BRANCH: claude/nim-all-models-support-fecb0b
           PUSH_TOKEN: ${{ github.token }}
         shell: bash --noprofile --norc -e -o pipefail {0}
@@ -141,7 +205,7 @@ jobs:
           git diff --cached --check
           git config user.name 'github-actions[bot]'
           git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
-          git commit -m 'fix(benchmark): align defaults with complete evidence plan'
+          git commit -m 'fix(benchmark): align complete-plan defaults'
           auth_header="$(printf 'x-access-token:%s' "$PUSH_TOKEN" | base64 | tr -d '\n')"
           echo "::add-mask::$auth_header"
           git -c http.https://github.com/.extraheader="AUTHORIZATION: basic $auth_header" \
