@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
-"""Run a credential-isolated, fixed-upstream NVIDIA NIM HTTP broker.
+"""Run a credential-isolated, DNS-pinned NVIDIA NIM HTTP broker.
 
 The hourly product-development workflow executes OpenCode in a container that
 has no NVIDIA credential and no direct Internet route. This module runs in a
 separate container, accepts only the two OpenAI-compatible operations required
-by the agent, injects the API key into a TLS-verified request to NVIDIA's fixed
-host, and returns a bounded response without sensitive headers or logs.
+by the agent, resolves and validates NVIDIA's fixed host exactly once per
+request, dials only those globally routable addresses while retaining the
+original TLS hostname, injects the API key only after validation, and returns a
+bounded response without sensitive headers or logs.
 """
 
 from __future__ import annotations
 
 import http.client
+import ipaddress
 import json
 import os
+import socket
 import ssl
 import threading
 import urllib.parse
@@ -35,9 +39,83 @@ MAX_REQUESTS: Final = 128
 MAX_REQUEST_BYTES: Final = 2 * 1024 * 1024
 MAX_RESPONSE_BYTES: Final = 32 * 1024 * 1024
 MAX_CONCURRENT_REQUESTS: Final = 2
+MAX_UPSTREAM_ADDRESSES: Final = 8
 UPSTREAM_TIMEOUT_SECONDS: Final = 300.0
 
 ConnectionFactory = Callable[..., http.client.HTTPSConnection]
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """Connect to one validated IP while authenticating the NVIDIA hostname."""
+
+    def __init__(
+        self,
+        server_hostname: str,
+        pinned_ip: str,
+        port: int,
+        timeout: float,
+        context: ssl.SSLContext,
+    ) -> None:
+        """Configure direct TLS to one address from the validated DNS snapshot."""
+
+        super().__init__(server_hostname, port=port, timeout=timeout, context=context)
+        self._pinned_ip = pinned_ip
+        self._server_hostname = server_hostname
+
+    def connect(self) -> None:
+        """Dial the pin and verify the certificate against the original host."""
+
+        raw_socket = socket.create_connection(
+            (self._pinned_ip, self.port),
+            self.timeout,
+            self.source_address,
+        )
+        try:
+            self.sock = self._context.wrap_socket(
+                raw_socket,
+                server_hostname=self._server_hostname,
+            )
+        except Exception:  # noqa: BLE001 - close the raw socket, then preserve TLS failure.
+            raw_socket.close()
+            raise
+
+
+def _validated_public_addresses(hostname: str, port: int) -> tuple[str, ...]:
+    """Resolve one bounded DNS snapshot and reject every non-global answer.
+
+    Args:
+        hostname: Fixed upstream hostname whose answers will be pinned.
+        port: Upstream TCP port supplied to the system resolver.
+
+    Returns:
+        Resolver-order, deduplicated globally routable IP address strings.
+
+    Raises:
+        OSError: If resolution is empty, contains any non-global address, or
+            exceeds the bounded address-candidate budget.
+        ValueError: If the resolver returns an invalid IP address literal.
+    """
+
+    validated_addresses: list[str] = []
+    records = socket.getaddrinfo(
+        hostname,
+        port,
+        type=socket.SOCK_STREAM,
+        proto=socket.IPPROTO_TCP,
+    )
+    for record in records:
+        resolved_address = ipaddress.ip_address(record[4][0])
+        if not resolved_address.is_global:
+            raise OSError("NVIDIA NIM upstream resolved to non-global address")
+        normalized_address = str(resolved_address)
+        if normalized_address in validated_addresses:
+            continue
+        validated_addresses.append(normalized_address)
+        if len(validated_addresses) > MAX_UPSTREAM_ADDRESSES:
+            raise OSError("NVIDIA NIM upstream returned too many addresses")
+    if not validated_addresses:
+        raise OSError("NVIDIA NIM upstream did not resolve")
+    return tuple(validated_addresses)
 
 
 @dataclass(frozen=True, slots=True)
@@ -115,7 +193,7 @@ class NIMCredentialBroker:
         api_key: str,
         *,
         governor: RequestGovernor | None = None,
-        connection_factory: ConnectionFactory = http.client.HTTPSConnection,
+        connection_factory: ConnectionFactory | None = None,
     ) -> None:
         """Create a broker without exposing its key to request callers.
 
@@ -123,8 +201,8 @@ class NIMCredentialBroker:
             api_key: NVIDIA NIM API key injected only into upstream requests.
             governor: Optional request governor, primarily for deterministic
                 testing. The production default applies the module budgets.
-            connection_factory: HTTPS connection constructor used for the fixed
-                upstream host. Tests may inject a network-free implementation.
+            connection_factory: Optional network-free test seam. Production
+                leaves this unset so every request uses validated DNS pins.
 
         Raises:
             ValueError: If ``api_key`` is empty or whitespace-only.
@@ -191,6 +269,36 @@ class NIMCredentialBroker:
             separators=(",", ":"),
         ).encode("utf-8")
 
+    def _connection_addresses(self) -> tuple[str | None, ...]:
+        """Return production DNS pins or one marker for an injected test seam."""
+
+        if self.connection_factory is not None:
+            return (None,)
+        return _validated_public_addresses(UPSTREAM_HOST, UPSTREAM_PORT)
+
+    def _open_connection(
+        self,
+        pinned_ip: str | None,
+        context: ssl.SSLContext,
+    ) -> http.client.HTTPSConnection:
+        """Open one test connection or one production DNS-pinned connection."""
+
+        if self.connection_factory is not None:
+            return self.connection_factory(
+                UPSTREAM_HOST,
+                UPSTREAM_PORT,
+                timeout=UPSTREAM_TIMEOUT_SECONDS,
+                context=context,
+            )
+        assert pinned_ip is not None
+        return _PinnedHTTPSConnection(
+            UPSTREAM_HOST,
+            pinned_ip,
+            UPSTREAM_PORT,
+            UPSTREAM_TIMEOUT_SECONDS,
+            context,
+        )
+
     def handle(
         self,
         method: str,
@@ -227,48 +335,70 @@ class NIMCredentialBroker:
         if reservation is Reservation.CONCURRENCY_LIMIT:
             return self._error(429, "broker concurrency budget exhausted")
 
-        connection: http.client.HTTPSConnection | None = None
         try:
-            connection = self.connection_factory(
-                UPSTREAM_HOST,
-                UPSTREAM_PORT,
-                timeout=UPSTREAM_TIMEOUT_SECONDS,
-                context=ssl.create_default_context(),
-            )
-            upstream_headers = {
-                "Accept": "application/json, text/event-stream",
-                "Accept-Encoding": "identity",
-                "Authorization": f"Bearer {self._api_key}",
-                "Connection": "close",
-                "Host": UPSTREAM_HOST,
-                "User-Agent": "contextual-orchestrator-nim-broker/1",
-            }
-            if validated_body is not None:
-                upstream_headers["Content-Type"] = "application/json"
-            connection.request(
-                method,
-                validated_target,
-                body=validated_body,
-                headers=upstream_headers,
-            )
-            response = connection.getresponse()
-            if 300 <= response.status < 400:
-                response.read(MAX_RESPONSE_BYTES + 1)
-                return self._error(502, "upstream redirects are not allowed")
-            response_body = response.read(MAX_RESPONSE_BYTES + 1)
-            if len(response_body) > MAX_RESPONSE_BYTES:
-                return self._error(502, "upstream response exceeds broker budget")
-            content_type = response.getheader("Content-Type", "application/json")
-            content_type = content_type or "application/json"
-            normalized_type = content_type.split(";", 1)[0].strip().lower()
-            if normalized_type not in {"application/json", "text/event-stream"}:
-                return self._error(502, "unsupported upstream content type")
-            return BrokerResponse(response.status, response_body, content_type)
-        except (OSError, http.client.HTTPException, ssl.SSLError, TimeoutError):
+            pinned_addresses = self._connection_addresses()
+            for pinned_ip in pinned_addresses:
+                connection: http.client.HTTPSConnection | None = None
+                try:
+                    connection = self._open_connection(
+                        pinned_ip,
+                        ssl.create_default_context(),
+                    )
+                    upstream_headers = {
+                        "Accept": "application/json, text/event-stream",
+                        "Accept-Encoding": "identity",
+                        "Authorization": f"Bearer {self._api_key}",
+                        "Connection": "close",
+                        "Host": UPSTREAM_HOST,
+                        "User-Agent": "contextual-orchestrator-nim-broker/1",
+                    }
+                    if validated_body is not None:
+                        upstream_headers["Content-Type"] = "application/json"
+                    connection.request(
+                        method,
+                        validated_target,
+                        body=validated_body,
+                        headers=upstream_headers,
+                    )
+                    response = connection.getresponse()
+                    if 300 <= response.status < 400:
+                        response.read(MAX_RESPONSE_BYTES + 1)
+                        return self._error(502, "upstream redirects are not allowed")
+                    response_body = response.read(MAX_RESPONSE_BYTES + 1)
+                    if len(response_body) > MAX_RESPONSE_BYTES:
+                        return self._error(502, "upstream response exceeds broker budget")
+                    content_type = response.getheader(
+                        "Content-Type",
+                        "application/json",
+                    )
+                    content_type = content_type or "application/json"
+                    normalized_type = content_type.split(";", 1)[0].strip().lower()
+                    if normalized_type not in {
+                        "application/json",
+                        "text/event-stream",
+                    }:
+                        return self._error(502, "unsupported upstream content type")
+                    return BrokerResponse(response.status, response_body, content_type)
+                except (
+                    OSError,
+                    http.client.HTTPException,
+                    ssl.SSLError,
+                    TimeoutError,
+                ):
+                    continue
+                finally:
+                    if connection is not None:
+                        connection.close()
+            return self._error(502, "NVIDIA NIM request failed")
+        except (
+            OSError,
+            http.client.HTTPException,
+            ssl.SSLError,
+            TimeoutError,
+            ValueError,
+        ):
             return self._error(502, "NVIDIA NIM request failed")
         finally:
-            if connection is not None:
-                connection.close()
             self.governor.release()
 
 
