@@ -36,6 +36,13 @@ _WORKFLOW_CURSOR: ContextVar[WorkflowReasoningCursor | None] = ContextVar(
 )
 
 
+def _update_generated_plan_cursor(steps: Any) -> None:
+    """Apply a validated generated list size to the active workflow cursor."""
+    cursor = _WORKFLOW_CURSOR.get()
+    if cursor is not None and isinstance(steps, list):
+        cursor.set_plan_size(len(steps))
+
+
 def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
     """Install role-aware invocation, workflow evidence, retry, and ablation hooks."""
     original_invoke = orchestrator_type._invoke
@@ -260,9 +267,7 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
                 steps = original_plan_generated(self, task)
         finally:
             _ACTIVE_POLICY.reset(policy_token)
-        cursor = _WORKFLOW_CURSOR.get()
-        if cursor is not None and isinstance(steps, list):
-            cursor.set_plan_size(len(steps))
+        _update_generated_plan_cursor(steps)
         return steps
 
     def model_judge(self: Any, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
@@ -350,4 +355,8 @@ def install_orchestrator_hooks(orchestrator_type: type[Any]) -> None:
         orchestrator_type.patch_agent = patch_agent
 
 
-__all__ = ["_WORKFLOW_CURSOR", "install_orchestrator_hooks"]
+__all__ = [
+    "_WORKFLOW_CURSOR",
+    "_update_generated_plan_cursor",
+    "install_orchestrator_hooks",
+]
