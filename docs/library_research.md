@@ -64,7 +64,7 @@ Extraction triggers:
 - The core needs a separately versioned API and compatibility matrix.
 - Security review requires a reusable locked package with independent provenance.
 
-Until those triggers exist, strengthen the single-repository product while retaining focused, importable modules.
+Until those triggers exist, strengthen the single-repo product while retaining focused, importable modules.
 
 ## Required For New Designs
 
