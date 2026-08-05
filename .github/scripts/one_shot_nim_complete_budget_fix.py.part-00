@@ -1,0 +1,200 @@
+#!/usr/bin/env python3
+"""Apply and verify the reviewed complete-run NIM request-budget preflight."""
+
+from __future__ import annotations
+
+import subprocess
+from pathlib import Path
+from typing import Callable
+
+
+ROOT = Path(__file__).resolve().parents[2]
+
+
+def replace_once(text: str, old: str, new: str, label: str) -> str:
+    """Replace one exact source fragment or fail closed without partial edits."""
+    occurrences = text.count(old)
+    if occurrences != 1:
+        raise RuntimeError(f"{label}: expected one source fragment, found {occurrences}")
+    return text.replace(old, new, 1)
+
+
+def rewrite(path: str, transform: Callable[[str], str]) -> None:
+    """Rewrite one UTF-8 repository file with a deterministic transformation."""
+    target = ROOT / path
+    original = target.read_text(encoding="utf-8")
+    updated = transform(original)
+    if updated == original:
+        raise RuntimeError(f"{path}: transform produced no change")
+    target.write_text(updated, encoding="utf-8")
+
+
+def update_benchmark_tests(text: str) -> str:
+    """Replace partial-prefix expectations with complete-run fail-closed evidence."""
+    text = replace_once(
+        text,
+        "import urllib.error\n",
+        "import urllib.error\nimport urllib.parse\n",
+        "benchmark test URL parsing import",
+    )
+    insertion_point = '''def test_budgeted_client_charges_each_chat_call() -> None:
+    budget = nb.RequestBudget(1)
+    client = nb._BudgetedModelClient(budget)
+    agent = _mock_agents("dryrun/chat-basic")[0]
+    assert client.chat(agent, [{"role": "user", "content": "hello there"}])
+    with pytest.raises(nb.BenchmarkBudgetError):
+        client.chat(agent, [{"role": "user", "content": "over budget"}])
+'''
+    inserted = insertion_point + '''\n\ndef test_capability_probe_request_plan_validates_counts() -> None:
+    """Capability planning is exact and rejects booleans, text, and negatives."""
+    assert nb.planned_capability_probe_requests(0) == 0
+    assert nb.planned_capability_probe_requests(127) == 1143
+    for invalid in (True, "127", -1):
+        with pytest.raises(nb.BenchmarkContractError):
+            nb.planned_capability_probe_requests(invalid)
+
+
+def test_complete_request_plan_for_127_models_reserves_evaluation() -> None:
+    """A representative large catalog reserves every probe and fair evaluation call."""
+    plan = nb.planned_complete_run_requests(
+        model_count=127,
+        locked_task_count=10,
+        max_eval_models=7,
+    )
+    assert plan == {
+        "catalog_discovery_requests": 1,
+        "capability_probe_requests": 1143,
+        "evaluation_worker_ceiling": 7,
+        "evaluation_requests": 140,
+        "requests_after_catalog": 1283,
+        "total_requests": 1284,
+    }
+    for values in (("127", 10, 7), (127, 0, 7), (127, 10, True)):
+        with pytest.raises(nb.BenchmarkContractError):
+            nb.planned_complete_run_requests(*values)
+'''
+    text = replace_once(
+        text,
+        insertion_point,
+        inserted,
+        "request-plan tests",
+    )
+
+    old_partial_test = '''def test_probe_models_budget_exhaustion_leaves_machine_readable_skips() -> None:
+    models = [{"model_id": "a/model-one", "owned_by": ""}, {"model_id": "b/model-two", "owned_by": ""}]
+    budget = nb.RequestBudget(5)
+    results = nb.probe_discovered_models(
+        models,
+        _fixed_transport(*_ok_json({"choices": [{"message": {"content": "OK"}}]})),
+        FAKE_ENDPOINT,
+        "key",
+        budget,
+        1,
+        lambda: 1234.0,
+        lambda: 0.0,
+    )
+    all_rows = [row for result in results for row in result["capability_probe_rows"]]
+    skipped = [row for row in all_rows if row["probe_outcome"] == "skipped"]
+    assert budget.requests_spent == 5
+    assert len(skipped) == len(all_rows) - 5
+    assert {row["outcome_reason"] for row in skipped} == {"request_budget_exhausted"}
+    assert results[-1]["model_classification"] == "skipped"
+'''
+    new_complete_tests = '''def test_probe_models_rejects_short_budget_before_any_probe_egress() -> None:
+    """An incomplete capability inventory cannot consume a biased model prefix."""
+    models = [
+        {"model_id": "a/model-one", "owned_by": ""},
+        {"model_id": "b/model-two", "owned_by": ""},
+    ]
+    calls: list[str] = []
+
+    def transport(method, url, headers, body):
+        calls.append(url)
+        return _ok_json({"choices": [{"message": {"content": "OK"}}]})
+
+    budget = nb.RequestBudget(17)
+    with pytest.raises(nb.BenchmarkBudgetError, match="no capability probes were sent"):
+        nb.probe_discovered_models(
+            models,
+            transport,
+            FAKE_ENDPOINT,
+            "key",
+            budget,
+            2,
+            lambda: 1234.0,
+            lambda: 0.0,
+        )
+    assert budget.requests_spent == 0
+    assert calls == []
+
+
+def test_probe_models_exact_budget_covers_every_cell_without_skips() -> None:
+    """The exact probe budget executes all model-capability cells under concurrency."""
+    models = [
+        {"model_id": "b/model-two", "owned_by": ""},
+        {"model_id": "a/model-one", "owned_by": ""},
+    ]
+    calls: list[str] = []
+
+    def transport(method, url, headers, body):
+        calls.append(url)
+        path = urllib.parse.urlparse(url).path
+        return 200, nb._dry_run_success_body(path)
+
+    budget = nb.RequestBudget(18)
+    results = nb.probe_discovered_models(
+        models,
+        transport,
+        FAKE_ENDPOINT,
+        "key",
+        budget,
+        2,
+        lambda: 1234.0,
+        lambda: 0.0,
+    )
+    all_rows = [row for result in results for row in result["capability_probe_rows"]]
+    assert [row["model_id"] for row in results] == ["a/model-one", "b/model-two"]
+    assert budget.requests_spent == 18
+    assert len(calls) == 18
+    assert len(all_rows) == 18
+    assert all(row["probe_outcome"] == "supported" for row in all_rows)
+'''
+    text = replace_once(
+        text,
+        old_partial_test,
+        new_complete_tests,
+        "partial probe allocation regression",
+    )
+
+    run_test_anchor = '''def test_run_benchmark_rejects_unknown_mode() -> None:
+    with pytest.raises(nb.BenchmarkContractError):
+        nb.run_benchmark("test", TASK_MANIFEST_PATH, None, "unused")
+'''
+    run_tests = run_test_anchor + '''\n\ndef _large_catalog_transport(model_count: int):
+    """Return a thread-safe-enough in-memory transport and observable call list."""
+    calls: list[tuple[str, str]] = []
+    catalog_body = json.dumps(
+        {
+            "data": [
+                {"id": f"vendor/model-{index:03d}", "owned_by": "vendor"}
+                for index in range(model_count)
+            ]
+        }
+    ).encode("utf-8")
+
+    def transport(method, url, headers, body):
+        path = urllib.parse.urlparse(url).path
+        calls.append((method, path))
+        if method == "GET" and path.endswith("/models"):
+            return 200, catalog_body
+        return 200, nb._dry_run_success_body(path)
+
+    return transport, calls
+
+
+def test_run_preflight_one_request_short_stops_after_catalog_discovery() -> None:
+    """A one-short 127-model budget sends no capability or evaluation request."""
+    transport, calls = _large_catalog_transport(127)
+    with tempfile.TemporaryDirectory() as tmp:
+        with pytest.raises(nb.BenchmarkBudgetError, match=r"1284 total requests.*configured cap is 1283"):
+            nb.run_benchmark(
