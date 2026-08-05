@@ -36,8 +36,19 @@ jobs:
         with:
           python-version: '3.12'
 
-      - name: Apply exact reviewed source transforms
-        run: python .github/scripts/one_shot_provider_transport_fix.py
+      - name: Normalize and apply exact reviewed source transforms
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          path = Path('.github/scripts/one_shot_provider_transport_fix.py')
+          text = path.read_text(encoding='utf-8')
+          old = 'return text[: text.index(marker)] + "\\n"'
+          new = 'return text[: text.index(marker)].rstrip() + "\\n"'
+          if text.count(old) != 1:
+              raise RuntimeError('expected one provider transport EOF transform')
+          path.write_text(text.replace(old, new), encoding='utf-8')
+          PY
+          python .github/scripts/one_shot_provider_transport_fix.py
 
       - name: Install hash-locked test dependencies
         run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
