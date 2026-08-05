@@ -17,6 +17,7 @@ import csv
 import io
 import json
 import os
+import stat
 import sys
 import tempfile
 from pathlib import Path
@@ -169,28 +170,28 @@ def enrich_benchmark_cell_csv(
         enriched_row["models_used_json"] = assignments[_cell_identity(row, "CSV")]
         writer.writerow(enriched_row)
 
-    csv_mode = csv_file.stat().st_mode
+    csv_mode = stat.S_IMODE(csv_file.stat().st_mode)
     csv_file.parent.mkdir(parents=True, exist_ok=True)
-    temporary_path: Path | None = None
+    file_descriptor, temporary_name = tempfile.mkstemp(
+        dir=csv_file.parent,
+        prefix=f".{csv_file.name}.",
+        suffix=".tmp",
+    )
+    temporary_path = Path(temporary_name)
     try:
-        with tempfile.NamedTemporaryFile(
+        with os.fdopen(
+            file_descriptor,
             "w",
             encoding="utf-8",
             newline="",
-            dir=csv_file.parent,
-            prefix=f".{csv_file.name}.",
-            suffix=".tmp",
-            delete=False,
         ) as temporary:
             temporary.write(buffer.getvalue())
             temporary.flush()
             os.fsync(temporary.fileno())
-            temporary_path = Path(temporary.name)
         os.chmod(temporary_path, csv_mode)
         os.replace(temporary_path, csv_file)
     finally:
-        if temporary_path is not None:
-            temporary_path.unlink(missing_ok=True)
+        temporary_path.unlink(missing_ok=True)
 
 
 def output_directory_from_argv(argv: list[str]) -> Path:
