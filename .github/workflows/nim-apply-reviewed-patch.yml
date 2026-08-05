@@ -1,9 +1,9 @@
 name: Verify reviewed NIM benchmark integration
 
 on:
-  pull_request:
+  push:
     branches:
-      - claude/inkspan-pr-audit-ci-q1u4uj
+      - claude/nim-all-models-support-fecb0b
     paths:
       - .github/workflows/nim-apply-reviewed-patch.yml
 
@@ -11,18 +11,18 @@ permissions:
   contents: read
 
 concurrency:
-  group: nim-reviewed-patch-${{ github.event.pull_request.head.sha }}
+  group: nim-reviewed-patch-${{ github.sha }}
   cancel-in-progress: false
 
 jobs:
   apply-verify-export:
     if: >-
       github.repository == 'ContextualWisdomLab/contextual-orchestrator' &&
-      github.event.pull_request.head.ref == 'claude/nim-all-models-support-fecb0b'
+      github.ref == 'refs/heads/claude/nim-all-models-support-fecb0b'
     runs-on: ubuntu-24.04
     timeout-minutes: 45
     env:
-      EXPECTED_PARENT_SHA: d98fe6c73b94152374f8f1d3334372d3e8d3b1f7
+      EXPECTED_PARENT_SHA: 428736c73f951d6cb2a78ba214f125f1959ccb6a
       EXPECTED_BASE_SHA: b9163f4e088318b3a9d4498868639993845567f5
       EXPECTED_PATCH_SHA256: 3f5313cf905042b049af8a22fa10a6db6f883959d592727352101343014e5322
       EXPECTED_FINAL_TREE_SHA: 8dc5da1f8ea8194631cf41628e1231f41c08fe4c
@@ -30,21 +30,21 @@ jobs:
       TARGET_BRANCH: claude/nim-all-models-support-fecb0b
       FORCE_JAVASCRIPT_ACTIONS_TO_NODE24: true
     steps:
-      - name: Checkout exact pull-request head without persisted credentials
+      - name: Checkout exact pushed head without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
-          ref: ${{ github.event.pull_request.head.sha }}
+          ref: ${{ github.sha }}
           fetch-depth: 0
           persist-credentials: false
 
-      - name: Bind execution to the reviewed staging parent and base
+      - name: Bind execution to the reviewed staging parent and security base
         shell: bash
         run: |
           set -euo pipefail
-          test "$(git rev-parse HEAD)" = "${{ github.event.pull_request.head.sha }}"
+          test "$(git rev-parse HEAD)" = "$GITHUB_SHA"
           test "$(git rev-parse HEAD^)" = "$EXPECTED_PARENT_SHA"
-          test "${{ github.event.pull_request.base.sha }}" = "$EXPECTED_BASE_SHA"
-          test "${{ github.event.pull_request.head.ref }}" = "$TARGET_BRANCH"
+          test "$GITHUB_REF" = "refs/heads/$TARGET_BRANCH"
+          git merge-base --is-ancestor "$EXPECTED_BASE_SHA" HEAD
 
       - name: Set up Python
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # v6.3.0
@@ -147,7 +147,7 @@ jobs:
       - name: Upload exact verified source tree
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # v5.0.0
         with:
-          name: nim-final-source-${{ github.event.pull_request.head.sha }}
+          name: nim-final-source-${{ github.sha }}
           path: |
             ${{ runner.temp }}/nim-final-source.tar.gz
             ${{ runner.temp }}/nim-final-source.tar.gz.sha256
