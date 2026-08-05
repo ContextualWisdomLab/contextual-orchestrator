@@ -11,7 +11,6 @@ on:
       - docs/doctoring/free-first-model-fallback.md
       - .github/workflows/model-fallback-policy-verify.yml
   push:
-    branches: [main]
     paths:
       - contextual_orchestrator/_fallback_*.py
       - contextual_orchestrator/model_fallback.py
