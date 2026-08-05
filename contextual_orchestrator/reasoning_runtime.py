@@ -20,6 +20,7 @@ from ._reasoning_state import (
     _EVENT_CAPTURE,
     _OVERRIDE_DECISION,
     _POLICY_OBJECTS,
+    _WORKLOAD_OVERRIDE,
     _WeakIdentityMap,
     _annotate_trace,
     _append_event,
@@ -33,8 +34,10 @@ from ._reasoning_state import (
     configure_agent_reasoning,
     configure_orchestrator_reasoning,
     current_reasoning_decision,
+    current_reasoning_workload,
     orchestrator_reasoning_policy,
     reasoning_override,
+    reasoning_workload_override,
 )
 from ._reasoning_workflow import (
     _capture_batch,
@@ -65,7 +68,9 @@ __all__ = [
     "configure_agent_reasoning",
     "configure_orchestrator_reasoning",
     "current_reasoning_decision",
+    "current_reasoning_workload",
     "install_reasoning_control",
     "orchestrator_reasoning_policy",
     "reasoning_override",
+    "reasoning_workload_override",
 ]
