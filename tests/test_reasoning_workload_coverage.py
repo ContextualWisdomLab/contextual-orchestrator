@@ -5,7 +5,11 @@ from __future__ import annotations
 import pytest
 
 from contextual_orchestrator._reasoning_workflow import _retry_rejected_worker_once
-from contextual_orchestrator.reasoning_control import ReasoningDecision, ReasoningWorkload
+from contextual_orchestrator.reasoning_control import (
+    ReasoningDecision,
+    ReasoningWorkload,
+    workload_for_trace_row,
+)
 
 from reasoning_fakes import make_orchestrator
 
@@ -19,14 +23,6 @@ def test_workload_from_mapping_rejects_non_object() -> None:
 def test_workload_trace_target_must_belong_to_workflow() -> None:
     """A target row outside the observed trace cannot receive invented depth."""
     with pytest.raises(ValueError, match="outside the workflow"):
-        ReasoningWorkload.from_mapping(
-            {
-                "workflow_step_index": 0,
-                "workflow_step_count": 1,
-            }
-        )
-        from contextual_orchestrator.reasoning_control import workload_for_trace_row
-
         workload_for_trace_row({"id": 2}, [{"id": 0, "access": []}])
 
 
