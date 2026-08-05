@@ -4,7 +4,6 @@ on:
   push:
     branches: [main]
   pull_request:
-    branches: [main]
   schedule:
     # Weekly deeper run (longer per-target budget via FUZZ_SECONDS).
     - cron: "41 4 * * 2"
