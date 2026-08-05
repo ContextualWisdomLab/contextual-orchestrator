@@ -171,7 +171,6 @@ def require_public_https_endpoint(url: str) -> tuple[str, ...]:
         raise BenchmarkContractError(str(exc)) from exc
 
 
-
 def build_default_transport(timeout_seconds: float) -> ProviderTransport:
     """Build direct HTTPS transport pinned to each request's DNS evidence.
 
@@ -260,7 +259,6 @@ def build_default_transport(timeout_seconds: float) -> ProviderTransport:
     return transport
 
 
-
 # --------------------------------------------------------------------------
 # Request budget (fail-closed hard cap)
 # --------------------------------------------------------------------------
@@ -315,7 +313,6 @@ class RequestBudget:
         """Return the non-negative provider request allowance still available."""
         with self._lock:
             return self.max_total_requests - self._spent
-
 
 
 class _BudgetedModelClient(ModelClient):
@@ -483,7 +480,7 @@ def parse_model_catalog_body(body: bytes) -> dict[str, Any]:
     """
     try:
         decoded = json.loads(body.decode("utf-8"))
-    except (UnicodeDecodeError, ValueError) as exc:
+    except (UnicodeDecodeError, ValueError, RecursionError) as exc:
         raise CatalogDiscoveryError(f"model catalog body is not valid JSON: {exc}") from exc
     if not isinstance(decoded, dict) or not isinstance(decoded.get("data"), list):
         raise CatalogDiscoveryError("model catalog must be a JSON object with a 'data' list")
@@ -801,7 +798,6 @@ def _video_data_uri() -> str:
     return f"data:video/mp4;base64,{base64.b64encode(_tiny_mp4_bytes()).decode('ascii')}"
 
 
-
 def _audio_probe_base64() -> str:
     """Base64 WAV payload used by the omni-style audio-understanding probe."""
     return base64.b64encode(_tiny_wav_bytes()).decode("ascii")
@@ -1111,7 +1107,6 @@ def probe_discovered_models(
     return results
 
 
-
 # --------------------------------------------------------------------------
 # Task manifest, scorers, pricing scenario
 # --------------------------------------------------------------------------
@@ -1332,7 +1327,6 @@ def load_pricing_scenario(path: str | None) -> dict[str, Any] | None:
     if scenario["scenario_status"] == "reviewed":
         _validate_reviewed_pricing_metadata(scenario)
     return scenario
-
 
 
 def hypothetical_cost_usd(
@@ -1808,7 +1802,6 @@ def evaluate_policies(
     }
 
 
-
 # --------------------------------------------------------------------------
 # Statistics: paired bootstrap + Pareto frontiers
 # --------------------------------------------------------------------------
@@ -1945,13 +1938,25 @@ def _numeric_cost_rows(summaries: list[dict[str, Any]]) -> list[dict[str, Any]]:
 
 def build_pareto_frontiers(summaries: list[dict[str, Any]]) -> dict[str, Any]:
     """Quality-latency and quality-hypothetical-cost Pareto frontiers."""
+    successful = [row for row in summaries if row["success_count"] > 0]
     return {
-        "quality_vs_latency": pareto_frontier(summaries, "mean_task_score", "mean_latency_ms"),
+        "quality_vs_latency": pareto_frontier(
+            successful,
+            "mean_task_score",
+            "mean_latency_ms",
+        ),
         "quality_vs_hypothetical_cost": pareto_frontier(
-            _numeric_cost_rows(summaries), "mean_task_score", "mean_hypothetical_cost_usd"
+            _numeric_cost_rows(successful),
+            "mean_task_score",
+            "mean_hypothetical_cost_usd",
         ),
         "excluded_unknown_cost_policies": sorted(
-            row["policy_name"] for row in summaries if not isinstance(row["mean_hypothetical_cost_usd"], float)
+            row["policy_name"]
+            for row in successful
+            if not isinstance(row["mean_hypothetical_cost_usd"], float)
+        ),
+        "excluded_zero_success_policies": sorted(
+            row["policy_name"] for row in summaries if row["success_count"] == 0
         ),
     }
 
@@ -2121,6 +2126,8 @@ _REPORT_REQUIRED_PATHS = (
     "evaluation.decision_use",
     "evaluation.minimum_paired_task_count",
     "evaluation.required_completion_fraction",
+    "evaluation.observed_paired_task_count",
+    "evaluation.observed_completion_fraction",
     "evaluation.routing_recommendation",
     "request_budget.max_total_requests",
     "request_budget.requests_spent",
@@ -2132,6 +2139,7 @@ _REPORT_REQUIRED_PATHS = (
     "actual_cost_evidence",
     "honesty_labels.actual_cost_basis",
     "honesty_labels.provider_latency_source",
+    "honesty_labels.hypothetical_cost_source",
 )
 
 
@@ -2260,7 +2268,6 @@ def render_markdown_summary(report: dict[str, Any]) -> str:
     return "\n".join(lines)
 
 
-
 def write_benchmark_artifacts(
     report: dict[str, Any],
     output_dir: str,
@@ -2300,7 +2307,6 @@ def write_benchmark_artifacts(
         "csv_path": csv_path,
         "markdown_path": markdown_path,
     }
-
 
 
 # --------------------------------------------------------------------------
@@ -2403,7 +2409,6 @@ def assemble_benchmark_report(
     _validate_actual_cost_evidence(report)
     validate_report_schema(report)
     return report
-
 
 
 # --------------------------------------------------------------------------
@@ -2602,7 +2607,7 @@ def run_benchmark(
         eval_base_url = endpoint
         eval_client = _BudgetedModelClient(
             request_budget,
-            timeout=int(timeout_seconds),
+            timeout=float(timeout_seconds),
             max_output_tokens=max_output_tokens,
         )
 
@@ -2704,7 +2709,6 @@ def run_benchmark(
     )
     report["artifact_paths"] = write_benchmark_artifacts(report, output_dir)
     return report
-
 
 
 def _bootstrap_live_credential() -> None:
