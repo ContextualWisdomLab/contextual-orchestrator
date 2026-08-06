@@ -243,16 +243,32 @@ def test_cli_wrapper_publishes_success_only_after_csv_enrichment(tmp_path: Path)
     output_dir = tmp_path / "evidence"
 
     def benchmark_cli(argv: list[str]) -> int:
-        output_dir.mkdir()
+        staged_output_dir = csv_evidence.output_directory_from_argv(argv)
+        staged_output_dir.mkdir()
         _write_report(
-            output_dir / "benchmark_report.json",
+            staged_output_dir / "benchmark_report.json",
             [{"policy_name": "route_once", "task_id": "task_one", "models_used": []}],
         )
         _write_csv(
-            output_dir / "benchmark_cells.csv",
+            staged_output_dir / "benchmark_cells.csv",
             [{"policy_name": "route_once", "task_id": "task_one", "task_score": "1"}],
         )
-        print(json.dumps({"run_mode": "dry_run"}))
+        (staged_output_dir / "benchmark_summary.md").write_text(
+            "# summary\n",
+            encoding="utf-8",
+        )
+        print(
+            json.dumps(
+                {
+                    "run_mode": "dry_run",
+                    "artifact_paths": {
+                        "json_path": str(staged_output_dir / "benchmark_report.json"),
+                        "csv_path": str(staged_output_dir / "benchmark_cells.csv"),
+                        "markdown_path": str(staged_output_dir / "benchmark_summary.md"),
+                    },
+                }
+            )
+        )
         return 0
 
     stdout = io.StringIO()
@@ -263,7 +279,13 @@ def test_cli_wrapper_publishes_success_only_after_csv_enrichment(tmp_path: Path)
     )
 
     assert result == 0
-    assert json.loads(stdout.getvalue()) == {"run_mode": "dry_run"}
+    payload = json.loads(stdout.getvalue())
+    assert payload["run_mode"] == "dry_run"
+    assert payload["artifact_paths"] == {
+        "json_path": str(output_dir / "benchmark_report.json"),
+        "csv_path": str(output_dir / "benchmark_cells.csv"),
+        "markdown_path": str(output_dir / "benchmark_summary.md"),
+    }
     assert "models_used_json" in (output_dir / "benchmark_cells.csv").read_text(
         encoding="utf-8"
     )
