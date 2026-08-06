@@ -67,6 +67,7 @@ jobs:
             tests/test_nim_benchmark_release_acceptance.py \
             tests/test_nim_benchmark_review_regressions.py \
             tests/test_nim_benchmark_workflow_contract.py \
+            tests/test_nim_artifact_publication.py \
             tests/test_nim_csv_evidence.py \
             tests/test_nim_csv_evidence_edges.py \
             -q
