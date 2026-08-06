@@ -133,6 +133,11 @@ def test_staging_argv_rewrite_supports_all_forms_and_rejects_duplicates(
             ["--output-dir", "one", "--output-dir=two"],
             staging,
         )
+    with pytest.raises(csv_evidence.CsvEvidenceError, match="only once"):
+        csv_evidence._argv_with_output_directory(
+            ["--output-dir=one", "--output-dir", "two"],
+            staging,
+        )
     with pytest.raises(csv_evidence.CsvEvidenceError, match="requires a value"):
         csv_evidence._argv_with_output_directory(["--output-dir"], staging)
 
