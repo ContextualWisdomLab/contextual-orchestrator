@@ -30,7 +30,7 @@ def _model_use() -> dict[str, str]:
 
 def _write_complete_artifacts(output_directory: Path, *, valid_report: bool = True) -> None:
     """Write one complete benchmark artifact set for wrapper-level tests."""
-    output_directory.mkdir(parents=True, exist_ok=False)
+    output_directory.mkdir(parents=True, exist_ok=True)
     report: object
     if valid_report:
         report = {
