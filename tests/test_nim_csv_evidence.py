@@ -244,7 +244,7 @@ def test_cli_wrapper_publishes_success_only_after_csv_enrichment(tmp_path: Path)
 
     def benchmark_cli(argv: list[str]) -> int:
         staged_output_dir = csv_evidence.output_directory_from_argv(argv)
-        staged_output_dir.mkdir()
+        staged_output_dir.mkdir(exist_ok=True)
         _write_report(
             staged_output_dir / "benchmark_report.json",
             [{"policy_name": "route_once", "task_id": "task_one", "models_used": []}],
