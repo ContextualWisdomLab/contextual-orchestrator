@@ -64,11 +64,18 @@ def main() -> None:
     if len(sys.argv) > 1 and sys.argv[1] == "nim-benchmark":
         # Optional benchmark harness (issue #86): dynamic NIM catalog discovery,
         # all-modality capability probes, and the cost-quality policy benchmark.
-        # The lazy composition root also enriches the uploaded CSV with the exact
-        # role, agent, step, and model assignment evidence already present in JSON.
+        # The explicit composition root derives strict complete-answer scoring,
+        # while the publication adapter enriches CSV model assignments and emits
+        # success only after the complete artifact set is transactionally ready.
         from .nim_csv_evidence import run_benchmark_cli_with_complete_csv
+        from .nim_strict_scoring import run_strict_benchmark_cli
 
-        sys.exit(run_benchmark_cli_with_complete_csv(sys.argv[2:]))
+        sys.exit(
+            run_benchmark_cli_with_complete_csv(
+                sys.argv[2:],
+                benchmark_cli=run_strict_benchmark_cli,
+            )
+        )
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
