@@ -11,6 +11,7 @@ from __future__ import annotations
 from contextlib import suppress
 import http.client
 import ipaddress
+import json
 import socket
 import ssl
 from typing import Any, Iterator
@@ -131,20 +132,43 @@ class _ProviderHTTPResponse:
         self.close()
 
     def __iter__(self) -> Iterator[bytes]:
-        """Yield bounded response lines for server-sent-event streaming.
+        """Yield bounded response lines and fail closed on broken SSE completion.
 
         Real ``HTTPResponse`` objects are consumed with size-limited ``readline``
         calls so a provider cannot make one pathological line allocate beyond the
-        remaining budget before the wrapper can inspect it. Lightweight test
+        remaining budget before the wrapper can inspect it. For an advertised
+        ``text/event-stream`` response, every ``data:`` frame must contain JSON
+        until the OpenAI-compatible terminal ``[DONE]`` marker arrives. Malformed
+        data or end-of-file before that marker raises instead of turning a partial
+        model answer into a successful orchestration result. Lightweight test
         doubles retain ordinary iteration while still receiving cumulative byte
         accounting.
         """
         if isinstance(self._response, http.client.HTTPResponse):
+            content_type = self._response.getheader("Content-Type", "")
+            is_event_stream = (
+                content_type.partition(";")[0].strip().lower() == "text/event-stream"
+            )
             while True:
                 line = self._response.readline(self._remaining_bytes() + 1)
                 if not line:
+                    if is_event_stream:
+                        raise RuntimeError("provider stream terminated before [DONE]")
                     return
-                yield self._account(line)
+                bounded_line = self._account(line)
+                if is_event_stream:
+                    text = bounded_line.decode("utf-8").strip()
+                    if text.startswith("data:"):
+                        data = text[len("data:") :].strip()
+                        if data == "[DONE]":
+                            return
+                        try:
+                            json.loads(data)
+                        except json.JSONDecodeError:
+                            raise RuntimeError(
+                                "malformed provider stream event"
+                            ) from None
+                yield bounded_line
         else:
             for line in self._response:
                 yield self._account(line)
