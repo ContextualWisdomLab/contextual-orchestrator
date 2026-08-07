@@ -79,7 +79,7 @@ class FallbackCandidate:
             )
         if not isinstance(self.required_credentials, tuple):
             raise CandidateValidationError(
-                "required_credentials must be a tuple"
+                "required_credentials must be a tuple sequence"
             )
         validate_credentials(self.required_credentials)
         validate_visibilities(self.repository_visibilities)
