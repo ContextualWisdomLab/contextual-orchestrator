@@ -18,9 +18,11 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
+- Run repository Tests, Fuzz, and Security workflows for stacked pull requests targeting any branch, bind every checkout to the literal contributor-head SHA, and keep checkout credentials non-persistent so local evidence cannot silently become absent or synthetic-merge-only evidence.
 
 ### Documentation
 
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, and the supported-platform uncertainty boundary.
 - Add provider-response resource-bound doctoring covering the 8 MiB fail-closed limit, HTTP framing preflight, bounded SSE reads, batch-output partitioning, incident handling, and operational rollback.
+- Add pull-request exact-head workflow doctoring covering stacked-base support, contributor-head identity, untrusted-code execution, merge-tree separation, cancellation handling, and rollback.
 - Record the CI trust boundary between generic coverage and native fuzz execution, including the evidence-preserving retry rule for branch-referenced reusable workflows.
