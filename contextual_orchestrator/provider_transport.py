@@ -132,42 +132,47 @@ class _ProviderHTTPResponse:
         self.close()
 
     def __iter__(self) -> Iterator[bytes]:
-        """Yield bounded response lines and fail closed on broken SSE completion.
+        """Yield only bounded, valid server-sent-event response lines.
 
-        Real ``HTTPResponse`` objects are consumed with size-limited ``readline``
-        calls so a provider cannot make one pathological line allocate beyond the
-        remaining budget before the wrapper can inspect it. For an advertised
-        ``text/event-stream`` response, every ``data:`` frame must contain JSON
-        until the OpenAI-compatible terminal ``[DONE]`` marker arrives. Malformed
-        data or end-of-file before that marker raises instead of turning a partial
-        model answer into a successful orchestration result. Lightweight test
-        doubles retain ordinary iteration while still receiving cumulative byte
-        accounting.
+        Real ``HTTPResponse`` iteration is reserved for provider streaming. It
+        therefore requires the standardized ``text/event-stream`` media type
+        before consuming any body bytes, then uses size-limited ``readline``
+        calls so one pathological line cannot allocate beyond the remaining
+        budget before inspection. Every ``data:`` frame must contain JSON until
+        the OpenAI-compatible terminal ``[DONE]`` marker arrives. A missing or
+        incorrect media type, malformed data, or end-of-file before that marker
+        fails closed instead of turning a non-stream or partial model answer into
+        successful orchestration output. Lightweight non-HTTP test doubles retain
+        ordinary iteration while still receiving cumulative byte accounting.
         """
         if isinstance(self._response, http.client.HTTPResponse):
-            content_type = self._response.getheader("Content-Type", "")
-            is_event_stream = (
-                content_type.partition(";")[0].strip().lower() == "text/event-stream"
-            )
+            try:
+                content_type = self._response.getheader("Content-Type", "")
+            except Exception:
+                raise RuntimeError(
+                    "provider stream content type could not be validated"
+                ) from None
+            media_type = content_type.partition(";")[0].strip().lower()
+            if media_type != "text/event-stream":
+                raise RuntimeError(
+                    "provider stream requires text/event-stream content type"
+                )
             while True:
                 line = self._response.readline(self._remaining_bytes() + 1)
                 if not line:
-                    if is_event_stream:
-                        raise RuntimeError("provider stream terminated before [DONE]")
-                    return
+                    raise RuntimeError("provider stream terminated before [DONE]")
                 bounded_line = self._account(line)
-                if is_event_stream:
-                    text = bounded_line.decode("utf-8").strip()
-                    if text.startswith("data:"):
-                        data = text[len("data:") :].strip()
-                        if data == "[DONE]":
-                            return
-                        try:
-                            json.loads(data)
-                        except json.JSONDecodeError:
-                            raise RuntimeError(
-                                "malformed provider stream event"
-                            ) from None
+                text = bounded_line.decode("utf-8").strip()
+                if text.startswith("data:"):
+                    data = text[len("data:") :].strip()
+                    if data == "[DONE]":
+                        return
+                    try:
+                        json.loads(data)
+                    except json.JSONDecodeError:
+                        raise RuntimeError(
+                            "malformed provider stream event"
+                        ) from None
                 yield bounded_line
         else:
             for line in self._response:
