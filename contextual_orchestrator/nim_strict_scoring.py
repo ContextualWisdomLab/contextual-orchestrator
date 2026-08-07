@@ -22,7 +22,7 @@ from typing import Any, Callable
 from . import nim_benchmark as benchmark
 
 
-STRICT_SCORING_POLICY_VERSION = "2026-08-07.1"
+STRICT_SCORING_POLICY_VERSION = "2026-08-07.2"
 _DEFAULT_TASK_MANIFEST = Path("examples/nim_task_manifest.json")
 _STRICT_NUMBER_KEY = ("exact_number_match", "2")
 _STRICT_TEXT_KEY = ("exact_text_match", "1")
@@ -33,10 +33,11 @@ _ASCII_DECIMAL_LITERAL = re.compile(
 )
 
 
-def _normalized_exact_text(value: str) -> str:
-    """Return NFC, case-folded text with surrounding and repeated whitespace removed."""
+def _normalized_exact_text(value: str, *, case_sensitive: bool) -> str:
+    """Return NFC text with normalized whitespace and the declared case policy."""
     normalized = unicodedata.normalize("NFC", value)
-    return " ".join(normalized.split()).casefold()
+    compact = " ".join(normalized.split())
+    return compact if case_sensitive else compact.casefold()
 
 
 def _expected_decimal(expected: dict[str, Any]) -> decimal.Decimal:
@@ -81,25 +82,39 @@ def score_exact_number_match_v2(
     return 1.0 if answer_value is not None and answer_value == expected_value else 0.0
 
 
-def _expected_texts(expected: dict[str, Any]) -> tuple[str, ...]:
-    """Return unique normalized exact-text alternatives from one expectation.
+def _text_case_sensitive(expected: dict[str, Any]) -> bool:
+    """Return an explicit Boolean case policy, defaulting legacy text to folded."""
+    value = expected.get("case_sensitive", False)
+    if not isinstance(value, bool):
+        raise benchmark.BenchmarkContractError(
+            "exact-text expected.case_sensitive must be boolean"
+        )
+    return value
+
+
+def _expected_texts(expected: dict[str, Any]) -> tuple[tuple[str, ...], bool]:
+    """Return unique normalized alternatives and their declared case policy.
 
     Raises:
-        benchmark.BenchmarkContractError: If the alternatives are absent,
-            malformed, empty, or duplicate after normalization.
+        benchmark.BenchmarkContractError: If the alternatives or case policy
+            are absent, malformed, empty, or duplicate after normalization.
     """
     values = expected.get("texts")
     if not isinstance(values, list) or not values:
         raise benchmark.BenchmarkContractError(
             "exact-text expected must contain a non-empty texts list"
         )
+    case_sensitive = _text_case_sensitive(expected)
     normalized: list[str] = []
     for value in values:
         if not isinstance(value, str):
             raise benchmark.BenchmarkContractError(
                 "exact-text expected must contain a non-empty texts list of strings"
             )
-        candidate = _normalized_exact_text(value)
+        candidate = _normalized_exact_text(
+            value,
+            case_sensitive=case_sensitive,
+        )
         if not candidate:
             raise benchmark.BenchmarkContractError(
                 "exact-text expected must contain a non-empty texts list of strings"
@@ -109,13 +124,16 @@ def _expected_texts(expected: dict[str, Any]) -> tuple[str, ...]:
                 "exact-text expected contains a duplicate normalized answer"
             )
         normalized.append(candidate)
-    return tuple(normalized)
+    return tuple(normalized), case_sensitive
 
 
 def score_exact_text_match(expected: dict[str, Any], answer_text: str) -> float:
     """Score one complete normalized text response against explicit alternatives."""
-    expected_values = _expected_texts(expected)
-    answer_value = _normalized_exact_text(answer_text)
+    expected_values, case_sensitive = _expected_texts(expected)
+    answer_value = _normalized_exact_text(
+        answer_text,
+        case_sensitive=case_sensitive,
+    )
     return 1.0 if answer_value in expected_values else 0.0
 
 
@@ -140,6 +158,22 @@ def enable_strict_evidence_scoring() -> None:
                 f"strict scorer identity collision: {scorer_key}"
             )
         benchmark.SCORER_REGISTRY[scorer_key] = scorer_function
+
+
+def _legacy_text_expectation(expected: dict[str, Any]) -> dict[str, Any]:
+    """Translate one legacy substring key into explicit strict text semantics."""
+    substring = expected.get("substring")
+    if not isinstance(substring, str) or not substring.strip():
+        raise benchmark.BenchmarkContractError(
+            "legacy locked substring expectation must be a non-empty string"
+        )
+    texts = expected.get("strict_texts", [substring])
+    strict_expected = {
+        "texts": texts,
+        "case_sensitive": expected.get("strict_case_sensitive", False),
+    }
+    _expected_texts(strict_expected)
+    return strict_expected
 
 
 def strict_task_manifest_payload(manifest: object) -> dict[str, Any]:
@@ -186,22 +220,22 @@ def strict_task_manifest_payload(manifest: object) -> dict[str, Any]:
             )
         scorer_key = (str(scorer.get("name")), str(scorer.get("version")))
         if scorer_key == _LEGACY_NUMBER_KEY:
+            _expected_decimal(expected)
             task["scorer"] = {
                 "name": _STRICT_NUMBER_KEY[0],
                 "version": _STRICT_NUMBER_KEY[1],
             }
         elif scorer_key == _LEGACY_TEXT_KEY:
-            substring = expected.get("substring")
-            if not isinstance(substring, str) or not substring.strip():
-                raise benchmark.BenchmarkContractError(
-                    "legacy locked substring expectation must be a non-empty string"
-                )
             task["scorer"] = {
                 "name": _STRICT_TEXT_KEY[0],
                 "version": _STRICT_TEXT_KEY[1],
             }
-            task["expected"] = {"texts": [substring]}
-        elif scorer_key not in {_STRICT_NUMBER_KEY, _STRICT_TEXT_KEY}:
+            task["expected"] = _legacy_text_expectation(expected)
+        elif scorer_key == _STRICT_NUMBER_KEY:
+            _expected_decimal(expected)
+        elif scorer_key == _STRICT_TEXT_KEY:
+            _expected_texts(expected)
+        else:
             raise benchmark.BenchmarkContractError(
                 f"locked task names unsupported strict scorer: {scorer_key}"
             )
