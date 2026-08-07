@@ -22,7 +22,7 @@ from typing import Any, Callable
 from . import nim_benchmark as benchmark
 
 
-STRICT_SCORING_POLICY_VERSION = "2026-08-07.3"
+STRICT_SCORING_POLICY_VERSION = "2026-08-07.4"
 MAX_STRICT_ANSWER_CHARACTERS = 4096
 _DEFAULT_TASK_MANIFEST = Path("examples/nim_task_manifest.json")
 _STRICT_NUMBER_KEY = ("exact_number_match", "2")
@@ -31,6 +31,11 @@ _LEGACY_NUMBER_KEY = ("exact_number_match", "1")
 _LEGACY_TEXT_KEY = ("substring_match", "1")
 _ASCII_DECIMAL_LITERAL = re.compile(
     r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
+)
+_NUMERIC_PROMPT_TOKEN = re.compile(
+    r"(?<![0-9A-Za-z_.])"
+    r"([+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?)"
+    r"(?![0-9A-Za-z_]|\.[0-9])"
 )
 
 
@@ -201,13 +206,61 @@ def _legacy_text_expectation(expected: dict[str, Any]) -> dict[str, Any]:
     return strict_expected
 
 
+def _prompt_leaks_decimal(prompt: str, expected_value: decimal.Decimal) -> bool:
+    """Return whether a complete prompt token equals the numeric answer key."""
+    _require_expected_character_budget(prompt, "locked task prompt")
+    for match in _NUMERIC_PROMPT_TOKEN.finditer(prompt):
+        try:
+            observed = decimal.Decimal(match.group(1))
+        except decimal.InvalidOperation:
+            continue
+        if observed == expected_value:
+            return True
+    return False
+
+
+def _prompt_leaks_text(prompt: str, expected: dict[str, Any]) -> bool:
+    """Return whether a declared complete text alias appears in the prompt."""
+    _require_expected_character_budget(prompt, "locked task prompt")
+    expected_values, case_sensitive = _expected_texts(expected)
+    normalized_prompt = _normalized_exact_text(
+        prompt,
+        case_sensitive=case_sensitive,
+    )
+    for expected_value in expected_values:
+        prefix = r"(?<!\w)" if expected_value[0].isalnum() or expected_value[0] == "_" else ""
+        suffix = r"(?!\w)" if expected_value[-1].isalnum() or expected_value[-1] == "_" else ""
+        if re.search(f"{prefix}{re.escape(expected_value)}{suffix}", normalized_prompt):
+            return True
+    return False
+
+
+def _strict_task_leaks_expected(task: dict[str, Any]) -> bool:
+    """Return whether one strict locked task reveals any accepted answer token."""
+    prompt = task.get("prompt")
+    if not isinstance(prompt, str) or not prompt.strip():
+        raise benchmark.BenchmarkContractError(
+            "strict scoring requires a non-empty locked task prompt"
+        )
+    scorer = task["scorer"]
+    expected = task["expected"]
+    scorer_key = (str(scorer.get("name")), str(scorer.get("version")))
+    if scorer_key == _STRICT_NUMBER_KEY:
+        return _prompt_leaks_decimal(prompt, _expected_decimal(expected))
+    if scorer_key == _STRICT_TEXT_KEY:
+        return _prompt_leaks_text(prompt, expected)
+    raise benchmark.BenchmarkContractError(
+        f"locked task names unsupported strict scorer: {scorer_key}"
+    )
+
+
 def strict_task_manifest_payload(manifest: object) -> dict[str, Any]:
     """Derive a strict locked-split manifest while preserving exploratory tasks.
 
     Historical authoring manifests may use the legacy containment scorers. This
     function upgrades only locked tasks to versioned complete-answer scorers.
     Already-strict locked tasks are preserved. Unknown locked scorer contracts
-    fail closed rather than being silently interpreted.
+    and prompt leakage fail closed before provider egress.
 
     Args:
         manifest: Parsed task-manifest JSON value.
@@ -217,7 +270,7 @@ def strict_task_manifest_payload(manifest: object) -> dict[str, Any]:
 
     Raises:
         benchmark.BenchmarkContractError: If the manifest or a locked scorer
-            cannot be converted without ambiguity.
+            cannot be converted without ambiguity or leaks an accepted answer.
     """
     if not isinstance(manifest, dict):
         raise benchmark.BenchmarkContractError(
@@ -263,6 +316,10 @@ def strict_task_manifest_payload(manifest: object) -> dict[str, Any]:
         else:
             raise benchmark.BenchmarkContractError(
                 f"locked task names unsupported strict scorer: {scorer_key}"
+            )
+        if _strict_task_leaks_expected(task):
+            raise benchmark.BenchmarkContractError(
+                f"task {task.get('task_id')!r} leaks its expected answer into the prompt"
             )
     source_version = strict_manifest.get("manifest_version")
     if not isinstance(source_version, str) or not source_version:
