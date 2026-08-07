@@ -51,15 +51,19 @@ class FallbackCandidate:
 
     def __post_init__(self) -> None:
         """Validate fields before a candidate reaches a workflow adapter."""
-        if not CANDIDATE_ID_RE.fullmatch(self.candidate_id):
+        if not isinstance(self.candidate_id, str) or not CANDIDATE_ID_RE.fullmatch(
+            self.candidate_id
+        ):
             raise CandidateValidationError(
                 "candidate_id must be a shell-safe identifier"
             )
-        if not PROVIDER_RE.fullmatch(self.provider):
+        if not isinstance(self.provider, str) or not PROVIDER_RE.fullmatch(
+            self.provider
+        ):
             raise CandidateValidationError(
                 "provider must be lowercase and shell-safe"
             )
-        if not MODEL_RE.fullmatch(self.model):
+        if not isinstance(self.model, str) or not MODEL_RE.fullmatch(self.model):
             raise CandidateValidationError(
                 "model must be a non-empty shell-safe model identifier"
             )
