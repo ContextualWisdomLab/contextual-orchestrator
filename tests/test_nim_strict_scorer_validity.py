@@ -92,7 +92,9 @@ def test_activation_is_idempotent_and_fails_closed_on_identity_collision(
         strict.enable_strict_evidence_scoring()
 
 
-def test_strict_manifest_derivation_upgrades_only_locked_tasks() -> None:
+def test_strict_manifest_derivation_upgrades_only_locked_tasks(
+    tmp_path: Path,
+) -> None:
     """Headline evidence uses strict versions while exploratory tuning stays legacy."""
     strict.enable_strict_evidence_scoring()
     source = _source_manifest()
@@ -121,7 +123,9 @@ def test_strict_manifest_derivation_upgrades_only_locked_tasks() -> None:
     } == {("substring_match", "1")}
     assert derived["tasks"][6]["expected"] == {"texts": ["Paris"]}
 
-    validated = nb.load_task_manifest_from_payload(derived)
+    derived_path = tmp_path / "derived.json"
+    derived_path.write_text(json.dumps(derived), encoding="utf-8")
+    validated = nb.load_task_manifest(str(derived_path))
     assert len(nb.locked_evaluation_tasks(validated)) == 30
 
 
