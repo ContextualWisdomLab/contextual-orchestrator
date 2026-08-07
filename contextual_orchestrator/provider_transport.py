@@ -1,8 +1,9 @@
 """DNS-pinned HTTPS primitives for validated model-provider egress.
 
 ``ModelClient`` owns policy validation and request dispatch directly. This
-module contains only focused connection, response-cleanup, and public-address
-validation helpers, so importing the package never mutates another class.
+module contains only focused connection, response-cleanup, bounded-consumption,
+and public-address validation helpers, so importing the package never mutates
+another class.
 """
 
 from __future__ import annotations
@@ -12,6 +13,10 @@ import ipaddress
 import socket
 import ssl
 from typing import Any, Iterator
+
+
+PROVIDER_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
+"""Maximum bytes consumed from one untrusted provider HTTP response."""
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -48,12 +53,21 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
 
 class _ProviderHTTPResponse:
-    """Provider response wrapper that deterministically closes its connection."""
+    """Bound provider bytes and deterministically close response resources."""
 
-    def __init__(self, response: Any, connection: Any) -> None:
-        """Retain the response and direct connection for context-managed cleanup."""
+    def __init__(
+        self,
+        response: Any,
+        connection: Any,
+        max_bytes: int = PROVIDER_RESPONSE_MAX_BYTES,
+    ) -> None:
+        """Retain resources and initialize one cumulative response-byte budget."""
+        if isinstance(max_bytes, bool) or not isinstance(max_bytes, int) or max_bytes <= 0:
+            raise ValueError("provider response byte limit must be a positive integer")
         self._response = response
         self._connection = connection
+        self._max_bytes = max_bytes
+        self._bytes_read = 0
 
     def __enter__(self) -> "_ProviderHTTPResponse":
         """Return this response wrapper from a context manager."""
@@ -64,16 +78,48 @@ class _ProviderHTTPResponse:
         self.close()
 
     def __iter__(self) -> Iterator[bytes]:
-        """Iterate raw response lines for server-sent-event streaming."""
-        return iter(self._response)
+        """Yield bounded response lines for server-sent-event streaming.
+
+        Real ``HTTPResponse`` objects are consumed with size-limited ``readline``
+        calls so a provider cannot make one pathological line allocate beyond the
+        remaining budget before the wrapper can inspect it. Lightweight test
+        doubles retain ordinary iteration while still receiving cumulative byte
+        accounting.
+        """
+        if isinstance(self._response, http.client.HTTPResponse):
+            while True:
+                line = self._response.readline(self._remaining_bytes() + 1)
+                if not line:
+                    return
+                yield self._account(line)
+        else:
+            for line in self._response:
+                yield self._account(line)
 
     def __getattr__(self, name: str) -> Any:
         """Delegate response metadata such as status and headers."""
         return getattr(self._response, name)
 
-    def read(self, *args: Any, **kwargs: Any) -> bytes:
-        """Read bytes from the underlying provider response."""
-        return self._response.read(*args, **kwargs)
+    def _remaining_bytes(self) -> int:
+        """Return bytes still available before the response must fail closed."""
+        return self._max_bytes - self._bytes_read
+
+    def _account(self, chunk: bytes) -> bytes:
+        """Charge one consumed chunk to the cumulative response-byte budget."""
+        next_total = self._bytes_read + len(chunk)
+        if next_total > self._max_bytes:
+            raise RuntimeError("provider response byte limit exceeded")
+        self._bytes_read = next_total
+        return chunk
+
+    def read(self, amt: int | None = None) -> bytes:
+        """Read at most the remaining byte budget and detect one-byte overflow."""
+        remaining = self._remaining_bytes()
+        if amt is None or amt < 0 or amt > remaining:
+            requested = remaining + 1
+        else:
+            requested = amt
+        return self._account(self._response.read(requested))
 
     def close(self) -> None:
         """Close both resources even when response cleanup raises."""
