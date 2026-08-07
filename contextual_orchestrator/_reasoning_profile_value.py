@@ -10,6 +10,7 @@ from ._reasoning_profile_types import (
     JsonScalar,
     PayloadRule,
     PRESETS,
+    _validate_json_scalar,
 )
 
 
@@ -27,6 +28,14 @@ class ReasoningProfile:
 
     def __post_init__(self) -> None:
         """Validate the complete provider capability contract."""
+        if not isinstance(self.supported_levels, tuple):
+            raise ValueError("supported_levels must be a tuple")
+        if not isinstance(self.level_values, tuple):
+            raise ValueError("level_values must be a tuple")
+        if not isinstance(self.chat_rules, tuple):
+            raise ValueError("chat_rules must be a tuple")
+        if not isinstance(self.responses_rules, tuple):
+            raise ValueError("responses_rules must be a tuple")
         if self.preset not in PRESETS:
             raise ValueError(f"unsupported reasoning preset: {self.preset}")
         if not self.supported_levels:
@@ -50,6 +59,8 @@ class ReasoningProfile:
         mapping = dict(self.level_values)
         if len(mapping) != len(self.level_values):
             raise ValueError("level_values must not contain duplicate keys")
+        for mapped in mapping.values():
+            _validate_json_scalar(mapped, "level_values values")
         unknown = set(mapping) - set(self.supported_levels)
         if unknown:
             raise ValueError(f"level_values maps unsupported levels: {sorted(unknown)}")
@@ -98,9 +109,9 @@ class ReasoningProfile:
         for level, mapped in raw_values.items():
             if not isinstance(level, str):
                 raise ValueError("level_values keys must be strings")
-            if not isinstance(mapped, (str, int, float, bool)) and mapped is not None:
-                raise ValueError("level_values values must be JSON scalars")
-            level_values.append((level, mapped))
+            level_values.append(
+                (level, _validate_json_scalar(mapped, "level_values values"))
+            )
         return cls(
             preset=preset,
             supported_levels=tuple(supported),
