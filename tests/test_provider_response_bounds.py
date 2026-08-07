@@ -56,7 +56,12 @@ class _BoundedHTTPResponse(http.client.HTTPResponse):
         """Initialize line data without opening a real socket."""
         self._lines = list(lines)
         self.readline_limits: list[int] = []
-        self.closed = False
+        self._closed_record = False
+
+    @property
+    def closed(self) -> bool:
+        """Expose cleanup state without relying on an uninitialized IOBase socket."""
+        return self._closed_record
 
     def readline(self, limit: int = -1) -> bytes:
         """Return one line, respecting the caller's requested maximum size."""
@@ -71,7 +76,7 @@ class _BoundedHTTPResponse(http.client.HTTPResponse):
 
     def close(self) -> None:
         """Record deterministic response cleanup."""
-        self.closed = True
+        self._closed_record = True
 
 
 def test_default_provider_response_budget_is_eight_mibibytes() -> None:
