@@ -7,6 +7,7 @@ not read provider credentials.
 
 from __future__ import annotations
 
+import ast
 import re
 import subprocess
 import sys
@@ -118,6 +119,34 @@ def test_fuzz_target_does_not_ignore_raw_catalog_recursion() -> None:
     catalog_target = target_text.split("def exercise_nim_catalog", 1)[1]
     assert "except RecursionError" not in catalog_target
     assert "plain json RecursionError" not in catalog_target
+
+
+def test_deterministic_clock_seams_use_named_functions() -> None:
+    """Keep dry-run clock seams lintable, documented, and free of E731 lambdas."""
+    source = (
+        REPOSITORY_ROOT / "contextual_orchestrator" / "nim_benchmark.py"
+    ).read_text(encoding="utf-8")
+    module = ast.parse(source)
+    run_benchmark = next(
+        node
+        for node in module.body
+        if isinstance(node, ast.FunctionDef) and node.name == "run_benchmark"
+    )
+    lambda_names: set[str] = set()
+    nested_function_names: set[str] = set()
+    for node in ast.walk(run_benchmark):
+        if isinstance(node, ast.AnnAssign) and isinstance(node.value, ast.Lambda):
+            if isinstance(node.target, ast.Name):
+                lambda_names.add(node.target.id)
+        elif isinstance(node, ast.Assign) and isinstance(node.value, ast.Lambda):
+            lambda_names.update(
+                target.id for target in node.targets if isinstance(target, ast.Name)
+            )
+        elif isinstance(node, ast.FunctionDef) and node is not run_benchmark:
+            nested_function_names.add(node.name)
+
+    assert not ({"clock", "probe_timer"} & lambda_names)
+    assert {"clock", "probe_timer"} <= nested_function_names
 
 
 class _CapturedModelTimeout(RuntimeError):
