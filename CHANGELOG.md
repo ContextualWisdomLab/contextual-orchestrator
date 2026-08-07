@@ -17,9 +17,10 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Restrict the private plain-HTTP provider seam to `localhost` or literal loopback IP addresses, reject URL userinfo before connection, dial directly without ambient proxy lookup, reject all redirect responses, and close failed resources deterministically.
 - Pin each HTTPS provider connection to the exact public addresses approved during validation, preserve the original hostname for TLS verification, bypass environment proxy resolution, and reject redirects to close DNS-rebinding and credential-forwarding SSRF paths.
+- Bound every provider response to 8 MiB of cumulative consumed bytes, including SSE iteration, reject oversized declared lengths before body consumption, fail closed on malformed or conflicting `Content-Length` and ambiguous `Content-Length` plus `Transfer-Encoding`, redact header-inspection failures, and never silently truncate an untrusted response.
 - Integrate DNS-pinned provider dispatch directly into `ModelClient` so package import performs no optional-adapter monkey-patching or order-dependent class mutation.
 - Reject provider hosts that resolve to any non-globally-routable address, including RFC 6598 shared address space, while retaining explicit multicast, private, loopback, link-local, and reserved-address protections.
-- Document narrowly scoped Semgrep suppressions for parameter-bound database queries and the explicit development-only TLS verification opt-out.
+- Document narrowly scoped Semgrep suppressions for parameter-bound database queries, the explicit development-only TLS verification opt-out, and provider URLs that pass the egress guard.
 - Remove the NIM benchmark's dynamic `urllib.request.urlopen` sink and compatibility monkeypatch path; live discovery, probes, and evaluation now use direct validation-time-address-pinned TLS with original-host SNI/certificate verification, no proxy lookup, no redirect following, and deterministic cleanup.
 - Bound every NIM provider response to 8 MiB and fail closed before an oversized catalog, probe, or evaluation body can exhaust benchmark-runner memory.
 - Split scheduled dry and live benchmark jobs so zero-egress dry runs never receive `NVIDIA_NIM_API_KEY`; only the bounded live benchmark step receives the GitHub Secret.
@@ -29,7 +30,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Changed
 
 - Derive a versioned strict locked-task manifest at the explicit NIM benchmark composition root: numeric evidence now requires one complete finite decimal response, text evidence requires one complete NFC/case-folded declared answer, malformed answer keys and scorer collisions fail before provider egress, exploratory legacy scorers remain isolated from headline comparisons, and ordinary package import remains side-effect free.
-- Make every repository-local pull-request checkout in Tests, Fuzz, and Security select `github.event.pull_request.head.sha` rather than GitHub's synthetic merge ref, while preserving `github.sha` for push, schedule, and manual runs and retaining non-persisted checkout credentials.
+- Run repository Tests, Fuzz, and Security workflows for stacked pull requests targeting any branch, bind every checkout to the literal contributor-head SHA, and keep checkout credentials non-persistent so local evidence cannot silently become absent or synthetic-merge-only evidence.
 - Preserve every benchmark cell's step, role, agent, and model assignment in CLI and scheduled-workflow CSV artifacts as deterministic JSON; fail closed before publishing success when JSON/CSV identities are duplicated, malformed, or incomplete, and replace the enriched CSV atomically.
 - Exclude zero-success benchmark policies from quality Pareto frontiers with explicit evidence labels, validate every Markdown-consumed report field before artifact writes, normalize excessive catalog JSON depth to the catalog domain error, preserve positive sub-second provider timeouts, make the standalone NIM test runner fixture-safe, and execute these review regressions inside the 100% branch-coverage gate.
 - Expose a stable complete-run request planning view and align API, CLI, manual-workflow, and deterministic test caps with the locked thirty-task evidence floor, preserving fail-before-probe behavior.
@@ -44,6 +45,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Documentation
 
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, the NIM benchmark validity boundary, strict complete-answer scoring, the thirty-task evidence floor, and supported-platform uncertainty.
+- Add provider-response resource-bound doctoring covering the 8 MiB fail-closed limit, HTTP framing preflight, bounded SSE reads, batch-output partitioning, incident handling, and operational rollback.
+- Add pull-request exact-head workflow doctoring covering stacked-base support, contributor-head identity, untrusted-code execution, merge-tree separation, cancellation handling, and rollback.
 - Record the CI trust boundary between generic coverage and native fuzz execution, including the evidence-preserving retry rule for branch-referenced reusable workflows.
 - Make the NIM security-integration receipt head-stable: GitHub pull-request metadata and exact-head Checks are authoritative, while older commit and workflow identifiers remain explicitly historical only.
 - Clarify that the bundled thirty-task NIM manifest may reach `evidence_review_required` only when the paired-task and 90% completion floors are met; otherwise it remains `insufficient_evidence`, and no artifact changes production routing automatically.
