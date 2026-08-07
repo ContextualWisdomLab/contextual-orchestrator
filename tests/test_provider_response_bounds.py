@@ -165,7 +165,7 @@ def test_invalid_or_conflicting_declared_lengths_fail_closed(
 
 def test_equal_duplicate_declared_lengths_are_normalized_without_body_reads() -> None:
     """RFC-compatible repeated equal decimal lengths remain valid at the limit."""
-    response = _HeaderHTTPResponse({"Content-Length": "0004, 4"})
+    response = _HeaderHTTPResponse({"Content-Length": "\t0004\t, 4 "})
     connection = mock.Mock()
 
     wrapper = _ProviderHTTPResponse(response, connection, max_bytes=4)
