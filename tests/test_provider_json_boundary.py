@@ -2,19 +2,26 @@
 
 Provider-controlled structured responses are bounded before parsing, decoded as
 strict UTF-8 JSON objects, and converted to stable errors that do not retain the
-untrusted document in an exception cause.  These tests intentionally exercise
-the boundary directly and prove every model-client JSON-object call site uses
-it instead of decoding response bytes independently.
+untrusted document in an exception cause. Validated HTTPS connections carry the
+request path into the response wrapper so existing model-client call sites gain
+the boundary without import-time mutation or duplicated parsing policy. Batch
+output file content remains strict JSON Lines rather than a single JSON object.
 """
 
 from __future__ import annotations
 
+import http.client
+import json
+import ssl
 from unittest import mock
 
 import pytest
 
 from contextual_orchestrator.orchestrator import ModelAgent, ModelClient
-from contextual_orchestrator.provider_transport import _ProviderHTTPResponse
+from contextual_orchestrator.provider_transport import (
+    _PinnedHTTPSConnection,
+    _ProviderHTTPResponse,
+)
 
 
 class _ByteResponse:
@@ -38,33 +45,6 @@ class _ByteResponse:
         self.closed = True
 
 
-class _JsonBoundaryResponse:
-    """Context-managed sentinel proving callers use ``read_json_object``."""
-
-    def __init__(self, value: dict[str, object]) -> None:
-        """Retain the object returned by the reviewed JSON boundary."""
-        self._value = value
-        self.json_reads = 0
-        self.closed = False
-
-    def __enter__(self) -> "_JsonBoundaryResponse":
-        """Return the sentinel as an opened provider response."""
-        return self
-
-    def __exit__(self, _exc_type: object, _exc: object, _traceback: object) -> None:
-        """Record deterministic context-manager cleanup."""
-        self.closed = True
-
-    def read_json_object(self) -> dict[str, object]:
-        """Return the already-validated provider JSON object."""
-        self.json_reads += 1
-        return self._value
-
-    def read(self, _amount: int | None = None) -> bytes:
-        """Fail if a caller bypasses the reviewed JSON-object boundary."""
-        raise AssertionError("provider JSON call site bypassed read_json_object")
-
-
 def _provider_agent() -> ModelAgent:
     """Return one two-word-ID HTTPS agent suitable for transport-unit seams."""
     return ModelAgent(
@@ -73,6 +53,14 @@ def _provider_agent() -> ModelAgent:
         base_url="https://provider.example",
         credential_key="NVIDIA_NIM_API_KEY",
     )
+
+
+def _path_aware_wrapper(payload: bytes, path: str) -> tuple[_ProviderHTTPResponse, _ByteResponse, mock.Mock]:
+    """Return one response wrapper carrying the validated provider request path."""
+    response = _ByteResponse(payload)
+    connection = mock.Mock()
+    connection._provider_request_path = path
+    return _ProviderHTTPResponse(response, connection, max_bytes=4096), response, connection
 
 
 @pytest.mark.parametrize(
@@ -138,35 +126,118 @@ def test_provider_json_accepts_valid_utf8_object() -> None:
     assert wrapper.read_json_object() == {"message": "안녕하세요", "count": 2}
 
 
-def test_model_client_json_object_paths_use_reviewed_boundary() -> None:
-    """Chat, passthrough, upload, and batch metadata share one decoder boundary."""
+def test_pinned_https_connection_records_response_contract_path() -> None:
+    """The exact validated request target accompanies its later response wrapper."""
+    connection = _PinnedHTTPSConnection(
+        "provider.example",
+        "203.0.113.10",
+        443,
+        1.0,
+        ssl.create_default_context(),
+    )
+
+    with mock.patch.object(http.client.HTTPSConnection, "request") as parent_request:
+        connection.request(
+            "POST",
+            "/v1/chat/completions?trace=one",
+            headers={"Authorization": "Bearer reviewed-secret"},
+        )
+
+    assert connection._provider_request_path == "/v1/chat/completions?trace=one"
+    parent_request.assert_called_once()
+
+
+def test_model_client_json_object_paths_fail_closed_through_transport() -> None:
+    """Every structured provider path redacts malformed response documents."""
+    client = ModelClient()
+    agent = _provider_agent()
+    malformed = b'{"secret":"private-provider-document",'
+
+    wrappers = [
+        _path_aware_wrapper(malformed, "/v1/chat/completions")[0],
+        _path_aware_wrapper(malformed, "/v1/responses")[0],
+        _path_aware_wrapper(malformed, "/v1/files")[0],
+        _path_aware_wrapper(malformed, "/v1/batches/batch-id")[0],
+    ]
+    calls = [
+        lambda: client._send(agent, {"model": agent.model}),
+        lambda: client._send_raw(agent, "responses", {"model": agent.model}),
+        lambda: client._batch_upload(agent, b"{}\n"),
+        lambda: client._batch_json(agent, "GET", "/batches/batch-id"),
+    ]
+
+    for wrapper, call in zip(wrappers, calls, strict=True):
+        client._open_provider = mock.Mock(return_value=wrapper)  # type: ignore[method-assign]
+        with pytest.raises(RuntimeError, match="provider JSON response is malformed") as error:
+            call()
+        assert error.value.__cause__ is None
+        assert "private-provider-document" not in str(error.value)
+
+
+def test_model_client_json_object_paths_preserve_valid_results() -> None:
+    """The shared strict boundary preserves existing structured response semantics."""
     client = ModelClient()
     agent = _provider_agent()
 
-    chat_response = _JsonBoundaryResponse(
-        {"choices": [{"message": {"content": "ok"}}], "usage": {"total_tokens": 1}}
+    wrapper, _, _ = _path_aware_wrapper(
+        json.dumps(
+            {
+                "choices": [{"message": {"content": "ok"}}],
+                "usage": {"total_tokens": 1},
+            }
+        ).encode("utf-8"),
+        "/v1/chat/completions",
     )
-    client._open_provider = mock.Mock(return_value=chat_response)  # type: ignore[method-assign]
+    client._open_provider = mock.Mock(return_value=wrapper)  # type: ignore[method-assign]
     assert client._send(agent, {"model": agent.model}) == "ok"
-    assert chat_response.json_reads == 1
-    assert chat_response.closed is True
 
-    raw_response = _JsonBoundaryResponse({"id": "response-id"})
-    client._open_provider = mock.Mock(return_value=raw_response)  # type: ignore[method-assign]
+    wrapper, _, _ = _path_aware_wrapper(b'{"id":"response-id"}', "/v1/responses")
+    client._open_provider = mock.Mock(return_value=wrapper)  # type: ignore[method-assign]
     assert client._send_raw(agent, "responses", {"model": agent.model}) == {
         "id": "response-id"
     }
-    assert raw_response.json_reads == 1
-    assert raw_response.closed is True
 
-    upload_response = _JsonBoundaryResponse({"id": "file-id"})
-    client._open_provider = mock.Mock(return_value=upload_response)  # type: ignore[method-assign]
-    assert client._batch_upload(agent, b'{}\n') == "file-id"
-    assert upload_response.json_reads == 1
-    assert upload_response.closed is True
+    wrapper, _, _ = _path_aware_wrapper(b'{"id":"file-id"}', "/v1/files")
+    client._open_provider = mock.Mock(return_value=wrapper)  # type: ignore[method-assign]
+    assert client._batch_upload(agent, b"{}\n") == "file-id"
 
-    batch_response = _JsonBoundaryResponse({"id": "batch-id"})
-    client._open_provider = mock.Mock(return_value=batch_response)  # type: ignore[method-assign]
+    wrapper, _, _ = _path_aware_wrapper(b'{"id":"batch-id"}', "/v1/batches/batch-id")
+    client._open_provider = mock.Mock(return_value=wrapper)  # type: ignore[method-assign]
     assert client._batch_json(agent, "GET", "/batches/batch-id") == {"id": "batch-id"}
-    assert batch_response.json_reads == 1
-    assert batch_response.closed is True
+
+
+def test_batch_output_path_preserves_strict_json_lines() -> None:
+    """Batch output remains line-addressable after strict per-line validation."""
+    wrapper, _, _ = _path_aware_wrapper(
+        b'{"custom_id":"first","value":1}\n{"custom_id":"second","value":2}\n',
+        "/v1/files/file-output/content",
+    )
+
+    rows = [json.loads(line) for line in wrapper.read().decode("utf-8").splitlines()]
+    assert rows == [
+        {"custom_id": "first", "value": 1},
+        {"custom_id": "second", "value": 2},
+    ]
+
+
+def test_batch_output_json_lines_reject_duplicate_members_and_private_text() -> None:
+    """Malformed JSONL fails before later row parsing can retain provider content."""
+    wrapper, response, connection = _path_aware_wrapper(
+        b'{"custom_id":"private-row","value":1,"value":2}\n',
+        "/v1/files/file-output/content?download=1",
+    )
+
+    with pytest.raises(RuntimeError, match="provider JSON Lines response is malformed") as error:
+        with wrapper:
+            wrapper.read()
+
+    assert error.value.__cause__ is None
+    assert "private-row" not in str(error.value)
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
+def test_path_aware_partial_read_retains_bounded_byte_semantics() -> None:
+    """Explicit partial reads remain byte-oriented and are never parsed prematurely."""
+    wrapper, _, _ = _path_aware_wrapper(b'{"value":1}', "/v1/chat/completions")
+    assert wrapper.read(2) == b'{"'
