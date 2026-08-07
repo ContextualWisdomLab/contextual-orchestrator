@@ -63,6 +63,10 @@ class _BoundedHTTPResponse(http.client.HTTPResponse):
         """Expose cleanup state without relying on an uninitialized IOBase socket."""
         return self._closed_record
 
+    def getheader(self, _name: str, default: str | None = None) -> str | None:
+        """Return no framing header unless a specialized test double supplies one."""
+        return default
+
     def readline(self, limit: int = -1) -> bytes:
         """Return one line, respecting the caller's requested maximum size."""
         self.readline_limits.append(limit)
@@ -92,6 +96,15 @@ class _HeaderHTTPResponse(_BoundedHTTPResponse):
         return self._headers.get(name.lower(), default)
 
 
+class _FailingHeaderHTTPResponse(_BoundedHTTPResponse):
+    """HTTP response double whose provider-header lookup fails with private detail."""
+
+    def getheader(self, _name: str, default: str | None = None) -> str | None:
+        """Raise one provider-controlled metadata failure before returning a value."""
+        del default
+        raise OSError("private upstream header detail")
+
+
 def test_default_provider_response_budget_is_eight_mibibytes() -> None:
     """The reviewed default keeps every provider response below eight MiB."""
     assert provider_transport.PROVIDER_RESPONSE_MAX_BYTES == 8 * 1024 * 1024
@@ -104,9 +117,12 @@ def test_provider_response_rejects_invalid_byte_budget(invalid_limit: object) ->
         _ProviderHTTPResponse(_ReadableResponse(b""), mock.Mock(), max_bytes=invalid_limit)
 
 
-def test_oversized_declared_length_fails_before_body_read_and_closes_resources() -> None:
+@pytest.mark.parametrize("declared_length", ["5", "100"])
+def test_oversized_declared_length_fails_before_body_read_and_closes_resources(
+    declared_length: str,
+) -> None:
     """An over-limit Content-Length is rejected before provider bytes are consumed."""
-    response = _HeaderHTTPResponse({"Content-Length": "5"})
+    response = _HeaderHTTPResponse({"Content-Length": declared_length})
     connection = mock.Mock()
 
     with pytest.raises(RuntimeError, match="response byte limit"):
@@ -148,6 +164,19 @@ def test_equal_duplicate_declared_lengths_are_normalized_without_body_reads() ->
     connection.close.assert_called_once_with()
 
 
+def test_declared_length_below_budget_is_accepted_without_body_reads() -> None:
+    """A valid shorter declared body remains subject to later cumulative reads."""
+    response = _HeaderHTTPResponse({"Content-Length": "4"})
+    connection = mock.Mock()
+
+    wrapper = _ProviderHTTPResponse(response, connection, max_bytes=40)
+    assert response.readline_limits == []
+    wrapper.close()
+
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
 def test_content_length_with_transfer_encoding_is_rejected_as_ambiguous() -> None:
     """Conflicting framing metadata cannot select a less-bounded body path."""
     response = _HeaderHTTPResponse(
@@ -158,6 +187,19 @@ def test_content_length_with_transfer_encoding_is_rejected_as_ambiguous() -> Non
     with pytest.raises(RuntimeError, match="framing is ambiguous"):
         _ProviderHTTPResponse(response, connection, max_bytes=4)
 
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
+def test_header_lookup_failure_is_redacted_and_closes_resources() -> None:
+    """Provider metadata failures do not expose private text or leak the socket."""
+    response = _FailingHeaderHTTPResponse([])
+    connection = mock.Mock()
+
+    with pytest.raises(RuntimeError, match="headers could not be validated") as error:
+        _ProviderHTTPResponse(response, connection, max_bytes=4)
+
+    assert "private upstream header detail" not in str(error.value)
     assert response.closed is True
     connection.close.assert_called_once_with()
 
