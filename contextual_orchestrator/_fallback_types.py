@@ -77,6 +77,10 @@ class FallbackCandidate:
             raise CandidateValidationError(
                 "priority must be between 0 and 1000000"
             )
+        if not isinstance(self.required_credentials, tuple):
+            raise CandidateValidationError(
+                "required_credentials must be a tuple"
+            )
         validate_credentials(self.required_credentials)
         validate_visibilities(self.repository_visibilities)
         validate_capabilities(self.capabilities)
@@ -106,9 +110,16 @@ class FallbackContext:
 
     def __post_init__(self) -> None:
         """Validate context vocabulary before policy evaluation."""
-        if self.repository_visibility not in ALLOWED_VISIBILITIES:
+        if (
+            not isinstance(self.repository_visibility, str)
+            or self.repository_visibility not in ALLOWED_VISIBILITIES
+        ):
             raise CandidateValidationError(
                 "repository visibility must be public, private, or internal"
+            )
+        if not isinstance(self.available_credentials, frozenset):
+            raise CandidateValidationError(
+                "available_credentials must be a frozenset"
             )
         validate_credentials(tuple(self.available_credentials))
         validate_capabilities(self.required_capabilities)
