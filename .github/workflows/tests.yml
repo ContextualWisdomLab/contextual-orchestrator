@@ -72,6 +72,7 @@ jobs:
             tests/test_nim_csv_evidence.py \
             tests/test_nim_csv_evidence_edges.py \
             tests/test_nim_strict_scorer_validity.py \
+            tests/test_nim_strict_scoring_bounds.py \
             tests/test_nim_strict_scoring_integration.py \
             -q
           python -m coverage report \
