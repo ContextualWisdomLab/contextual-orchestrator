@@ -20,7 +20,7 @@ ISO identifies ISO/IEC 30111:2019, *Information technology — Security techniqu
 
 ### GitHub vulnerability reporting and repository advisories
 
-GitHub's current documentation describes GitHub private vulnerability reporting as a structured private channel for public repositories when the feature is enabled. GitHub also documents repository security advisories as a private collaboration mechanism for discussing, fixing, and publishing vulnerability information. GitHub recommends that `SECURITY.md` explain supported versions and reporting instructions. These sources support the repository's primary reporting URL, public-issue fallback that contains no exploit detail, private remediation collaboration, reporter credit, and advisory publication boundary.
+GitHub's current documentation describes GitHub private vulnerability reporting as a structured private channel for public repositories when the feature is enabled. GitHub also documents the repository security advisory workflow as a private collaboration mechanism for discussing, fixing, and publishing vulnerability information. GitHub recommends that `SECURITY.md` explain supported versions and reporting instructions. These sources support the repository's primary reporting URL, public-issue fallback that contains no exploit detail, private remediation collaboration, reporter credit, and advisory publication boundary.
 
 ### NIST SSDF status
 
