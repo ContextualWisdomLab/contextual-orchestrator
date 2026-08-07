@@ -2,8 +2,8 @@
 
 ``ModelClient`` owns policy validation and request dispatch directly. This
 module contains only focused connection, response-cleanup, bounded-consumption,
-and public-address validation helpers, so importing the package never mutates
-another class.
+strict provider-response decoding, and public-address validation helpers, so
+importing the package never mutates another class.
 """
 
 from __future__ import annotations
@@ -21,6 +21,117 @@ from .credentials import NotConfigured
 
 PROVIDER_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 """Maximum bytes consumed from one untrusted provider HTTP response."""
+
+
+def _reject_non_finite_json_constant(_value: str) -> None:
+    """Reject Python JSON extensions that RFC 8259 does not permit."""
+    raise ValueError("non-finite JSON number")
+
+
+def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    """Build one JSON object while rejecting ambiguous duplicate member names."""
+    result: dict[str, Any] = {}
+    for name, value in pairs:
+        if name in result:
+            raise ValueError("duplicate JSON member name")
+        result[name] = value
+    return result
+
+
+def _parse_provider_json_object_text(text: str) -> dict[str, Any]:
+    """Parse strict RFC 8259 JSON text and require one top-level object.
+
+    Python's default decoder intentionally accepts ``NaN`` and infinities and
+    silently keeps the final value of duplicate object members. Provider
+    responses cross a trust boundary, so those extensions are rejected before
+    orchestration code can interpret ambiguous data. Decoder exceptions are
+    replaced without chaining because ``JSONDecodeError`` retains the entire
+    untrusted document in its ``doc`` attribute.
+    """
+    try:
+        value = json.loads(
+            text,
+            object_pairs_hook=_unique_json_object,
+            parse_constant=_reject_non_finite_json_constant,
+        )
+    except (ValueError, RecursionError):
+        raise RuntimeError("provider JSON response is malformed") from None
+    if not isinstance(value, dict):
+        raise RuntimeError("provider JSON response must be an object")
+    return value
+
+
+def _decode_provider_json_object(payload: bytes) -> dict[str, Any]:
+    """Decode one strict UTF-8 provider JSON object with redacted failures."""
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        raise RuntimeError("provider JSON response is malformed") from None
+    return _parse_provider_json_object_text(text)
+
+
+def _encode_provider_json_object(payload: bytes) -> bytes:
+    """Return canonical UTF-8 bytes after strict provider-object validation."""
+    value = _decode_provider_json_object(payload)
+    try:
+        return json.dumps(
+            value,
+            ensure_ascii=False,
+            allow_nan=False,
+            separators=(",", ":"),
+        ).encode("utf-8")
+    except (TypeError, ValueError, RecursionError):
+        raise RuntimeError("provider JSON response is malformed") from None
+
+
+def _encode_provider_json_lines(payload: bytes) -> bytes:
+    """Validate and canonicalize an OpenAI Batch API JSON Lines response.
+
+    Every non-empty line must independently be a strict UTF-8 JSON object. The
+    returned bytes remain line-addressable for the existing batch parser, but a
+    malformed provider document is rejected here before a later ``json.loads``
+    exception can retain private response content.
+    """
+    try:
+        text = payload.decode("utf-8")
+    except UnicodeDecodeError:
+        raise RuntimeError("provider JSON Lines response is malformed") from None
+    normalized_lines: list[str] = []
+    try:
+        for line in text.splitlines():
+            if not line.strip():
+                continue
+            value = json.loads(
+                line,
+                object_pairs_hook=_unique_json_object,
+                parse_constant=_reject_non_finite_json_constant,
+            )
+            if not isinstance(value, dict):
+                raise ValueError("JSON Lines row must be an object")
+            normalized_lines.append(
+                json.dumps(
+                    value,
+                    ensure_ascii=False,
+                    allow_nan=False,
+                    separators=(",", ":"),
+                )
+            )
+    except (TypeError, ValueError, RecursionError):
+        raise RuntimeError("provider JSON Lines response is malformed") from None
+    if not normalized_lines:
+        raise RuntimeError("provider JSON Lines response is malformed")
+    return "\n".join(normalized_lines).encode("utf-8")
+
+
+def _is_batch_output_content_path(request_path: str) -> bool:
+    """Return whether a validated target is a provider file-content endpoint."""
+    path = request_path.partition("?")[0]
+    segments = [segment for segment in path.split("/") if segment]
+    return (
+        len(segments) >= 3
+        and segments[-3] == "files"
+        and segments[-1] == "content"
+    )
 
 
 class _PinnedHTTPSConnection(http.client.HTTPSConnection):
@@ -52,9 +163,14 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
 
         Provider credentials are resolved immediately before request construction.
         A credential can still be revoked between DNS validation and dispatch, in
-        which case ``ModelClient`` produces an empty Bearer value.  This last
+        which case ``ModelClient`` produces an empty Bearer value. This last
         pre-socket boundary therefore rejects missing or empty authorization so a
         revoked secret can never degrade into unauthenticated provider egress.
+
+        The exact request target is also retained on this connection. The paired
+        response wrapper uses that already-validated target to distinguish normal
+        JSON objects from the Batch API's JSON Lines file-content response without
+        asking orchestration call sites to duplicate transport trust policy.
         """
         request_headers = headers or {}
         authorization = next(
@@ -71,6 +187,7 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             raise NotConfigured(
                 "provider HTTPS egress requires a current non-empty Bearer credential"
             )
+        self._provider_request_path = url
         super().request(
             method,
             url,
@@ -184,12 +301,13 @@ class _ProviderHTTPResponse:
         therefore requires the standardized ``text/event-stream`` media type
         before consuming any body bytes, then uses size-limited ``readline``
         calls so one pathological line cannot allocate beyond the remaining
-        budget before inspection. Every ``data:`` frame must contain JSON until
-        the OpenAI-compatible terminal ``[DONE]`` marker arrives. A missing or
-        incorrect media type, malformed data, or end-of-file before that marker
-        fails closed instead of turning a non-stream or partial model answer into
-        successful orchestration output. Lightweight non-HTTP test doubles retain
-        ordinary iteration while still receiving cumulative byte accounting.
+        budget before inspection. Every ``data:`` frame must contain a strict
+        JSON object until the OpenAI-compatible terminal ``[DONE]`` marker
+        arrives. A missing or incorrect media type, malformed data, or end-of-file
+        before that marker fails closed instead of turning a non-stream or partial
+        model answer into successful orchestration output. Lightweight non-HTTP
+        test doubles retain ordinary iteration while still receiving cumulative
+        byte accounting.
         """
         if isinstance(self._response, http.client.HTTPResponse):
             try:
@@ -217,8 +335,8 @@ class _ProviderHTTPResponse:
                     if data == "[DONE]":
                         return
                     try:
-                        json.loads(data)
-                    except json.JSONDecodeError:
+                        _parse_provider_json_object_text(data)
+                    except RuntimeError:
                         raise RuntimeError(
                             "malformed provider stream event"
                         ) from None
@@ -243,14 +361,44 @@ class _ProviderHTTPResponse:
         self._bytes_read = next_total
         return chunk
 
-    def read(self, amt: int | None = None) -> bytes:
-        """Read at most the remaining byte budget and detect one-byte overflow."""
+    def _read_bounded_bytes(self, amt: int | None = None) -> bytes:
+        """Consume no more than the remaining response-byte budget."""
         remaining = self._remaining_bytes()
         if amt is None or amt < 0 or amt > remaining:
             requested = remaining + 1
         else:
             requested = amt
         return self._account(self._response.read(requested))
+
+    def read_json_object(self) -> dict[str, Any]:
+        """Read one bounded provider body as a strict UTF-8 JSON object.
+
+        This explicit method is useful to focused transport callers and tests.
+        Normal validated HTTPS model-client reads receive the same protection
+        automatically through ``read`` using the request path captured by
+        ``_PinnedHTTPSConnection``.
+        """
+        return _decode_provider_json_object(self._read_bounded_bytes())
+
+    def read(self, amt: int | None = None) -> bytes:
+        """Read bounded bytes and validate complete validated-provider documents.
+
+        Explicit partial reads remain byte-oriented. A complete response from a
+        DNS-pinned HTTPS request is normalized only after strict validation: Batch
+        file-content endpoints are JSON Lines, while all other non-stream provider
+        endpoints used by ``ModelClient`` return one JSON object. Connections that
+        do not carry a validated request target (lightweight tests and the explicit
+        loopback integration seam) preserve the historical bounded-byte behavior.
+        """
+        payload = self._read_bounded_bytes(amt)
+        request_path = getattr(self._connection, "_provider_request_path", None)
+        if not isinstance(request_path, str) or not request_path:
+            return payload
+        if amt is not None and amt >= 0:
+            return payload
+        if _is_batch_output_content_path(request_path):
+            return _encode_provider_json_lines(payload)
+        return _encode_provider_json_object(payload)
 
     def close(self) -> None:
         """Close both resources even when response cleanup raises."""
