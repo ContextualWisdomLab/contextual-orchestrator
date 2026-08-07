@@ -41,6 +41,21 @@ def test_empty_trace_step_ids_receive_stable_positional_identifiers() -> None:
     ]
 
 
+def test_empty_step_id_avoids_an_existing_positional_identifier() -> None:
+    """A canonical fallback must remain unique when a real trace used its base ID."""
+    serialized = csv_evidence._models_used_json(
+        [
+            _assignment("trace_step_0002"),
+            _assignment("", "vendor/model-b"),
+        ]
+    )
+
+    assert [row["step_id"] for row in json.loads(serialized)] == [
+        "trace_step_0002",
+        "trace_step_0002_2",
+    ]
+
+
 def test_existing_trace_step_id_is_preserved_exactly() -> None:
     """A real non-empty trace identifier must not be rewritten by publication."""
     serialized = csv_evidence._models_used_json([_assignment("planner_step")])
