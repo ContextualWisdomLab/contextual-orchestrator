@@ -11,7 +11,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Restrict the private plain-HTTP provider seam to `localhost` or literal loopback IP addresses, reject URL userinfo before connection, dial directly without ambient proxy lookup, reject all redirect responses, and close failed resources deterministically.
 - Pin each HTTPS provider connection to the exact public addresses approved during validation, preserve the original hostname for TLS verification, bypass environment proxy resolution, and reject redirects to close DNS-rebinding and credential-forwarding SSRF paths.
 - Bound every provider response to 8 MiB of cumulative consumed bytes, including SSE iteration, reject oversized declared lengths before body consumption, fail closed on malformed or conflicting `Content-Length` and ambiguous `Content-Length` plus `Transfer-Encoding`, redact header-inspection failures, and never silently truncate an untrusted response.
-- Fail closed when an advertised OpenAI-compatible SSE provider stream contains malformed `data:` JSON or reaches EOF before its terminal `data: [DONE]` marker, preventing truncated model output from being accepted as successful orchestration evidence.
+- Require a real provider streaming response to advertise the `text/event-stream` media type before any streamed body line is consumed, accepting media-type parameters but rejecting missing or incompatible types and redacting header-access failures.
+- Fail closed when an accepted OpenAI-compatible SSE provider stream contains malformed `data:` JSON or reaches EOF before its terminal `data: [DONE]` marker, preventing truncated model output from being accepted as successful orchestration evidence.
 - Integrate DNS-pinned provider dispatch directly into `ModelClient` so package import performs no optional-adapter monkey-patching or order-dependent class mutation.
 - Reject provider hosts that resolve to any non-globally-routable address, including RFC 6598 shared address space, while retaining explicit multicast, private, loopback, link-local, and reserved-address protections.
 - Document narrowly scoped Semgrep suppressions for parameter-bound database queries, the explicit development-only TLS verification opt-out, and provider URLs that pass the egress guard.
@@ -24,6 +25,6 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Documentation
 
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, and the supported-platform uncertainty boundary.
-- Add provider-response resource-bound doctoring covering the 8 MiB fail-closed limit, HTTP framing preflight, bounded SSE reads, OpenAI-compatible `[DONE]` completion evidence, malformed-event and premature-EOF handling, batch-output partitioning, incident handling, and operational rollback.
+- Add provider-response resource-bound doctoring covering the 8 MiB fail-closed limit, HTTP framing preflight, `text/event-stream` media-type enforcement, bounded SSE reads, OpenAI-compatible `[DONE]` completion evidence, malformed-event and premature-EOF handling, batch-output partitioning, incident handling, and operational rollback.
 - Add pull-request exact-head workflow doctoring covering stacked-base support, contributor-head identity, untrusted-code execution, merge-tree separation, cancellation handling, and rollback.
 - Record the CI trust boundary between generic coverage and native fuzz execution, including the evidence-preserving retry rule for branch-referenced reusable workflows.
