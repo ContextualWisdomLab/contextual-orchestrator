@@ -208,7 +208,10 @@ class _ProviderHTTPResponse:
                 if not line:
                     raise RuntimeError("provider stream terminated before [DONE]")
                 bounded_line = self._account(line)
-                text = bounded_line.decode("utf-8").strip()
+                try:
+                    text = bounded_line.decode("utf-8").strip()
+                except UnicodeDecodeError:
+                    raise RuntimeError("malformed provider stream event") from None
                 if text.startswith("data:"):
                     data = text[len("data:") :].strip()
                     if data == "[DONE]":
