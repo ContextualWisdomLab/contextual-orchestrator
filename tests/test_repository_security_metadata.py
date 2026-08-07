@@ -101,6 +101,15 @@ def test_security_policy_documents_reporting_and_automation():
     assert "pinned to reviewed commit SHAs or hash-locked package requirements" in policy_text
 
 
+def test_agents_guidance_preserves_central_review_authority_and_nim_development_key():
+    agents_text = read_text("AGENTS.md")
+
+    assert "stays on **GitHub Models**" not in agents_text
+    assert "centrally governed" in agents_text
+    assert "`NVIDIA_NIM_API_KEY`" in agents_text
+    assert "`COPILOT_GITHUB_TOKEN`" in agents_text
+
+
 def test_database_design_avoids_plaintext_prompt_output_storage():
     database_text = read_text("docs/database_design.sql")
 
@@ -140,6 +149,7 @@ if __name__ == "__main__":  # pragma: no cover
     test_dependabot_tracks_actions_and_python_dependencies()
     test_codeowners_requires_repository_owner_review()
     test_security_policy_documents_reporting_and_automation()
+    test_agents_guidance_preserves_central_review_authority_and_nim_development_key()
     test_database_design_avoids_plaintext_prompt_output_storage()
     test_python_lockfile_uses_hash_pinning()
     test_security_tool_lockfile_uses_hash_pinning()
