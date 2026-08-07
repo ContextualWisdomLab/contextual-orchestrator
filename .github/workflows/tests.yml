@@ -60,7 +60,7 @@ jobs:
           set -euo pipefail
           python -m coverage erase
           python -m coverage run --branch \
-            --source=contextual_orchestrator.nim_benchmark,contextual_orchestrator.nim_csv_evidence \
+            --source=contextual_orchestrator.nim_benchmark,contextual_orchestrator.nim_csv_evidence,contextual_orchestrator.nim_strict_scoring \
             -m pytest \
             tests/test_nim_benchmark.py \
             tests/test_nim_benchmark_budget_view.py \
@@ -71,13 +71,15 @@ jobs:
             tests/test_nim_artifact_publication_edges.py \
             tests/test_nim_csv_evidence.py \
             tests/test_nim_csv_evidence_edges.py \
+            tests/test_nim_strict_scorer_validity.py \
             -q
           python -m coverage report \
-            --include=contextual_orchestrator/nim_benchmark.py,contextual_orchestrator/nim_csv_evidence.py \
+            --include=contextual_orchestrator/nim_benchmark.py,contextual_orchestrator/nim_csv_evidence.py,contextual_orchestrator/nim_strict_scoring.py \
             --show-missing \
             --fail-under=100
           python -m interrogate -f 100 contextual_orchestrator/nim_benchmark.py
           python -m interrogate -f 100 contextual_orchestrator/nim_csv_evidence.py
+          python -m interrogate -f 100 contextual_orchestrator/nim_strict_scoring.py
 
       - name: Build, install, and import the wheel
         run: |
@@ -89,4 +91,4 @@ jobs:
             dist/contextual_orchestrator-*.whl
           cd "$RUNNER_TEMP"
           PYTHONPATH="$RUNNER_TEMP/nim-wheel-site" \
-            python -c "import contextual_orchestrator; import contextual_orchestrator.nim_benchmark; import contextual_orchestrator.nim_csv_evidence"
+            python -c "import contextual_orchestrator; import contextual_orchestrator.nim_benchmark; import contextual_orchestrator.nim_csv_evidence; import contextual_orchestrator.nim_strict_scoring"
