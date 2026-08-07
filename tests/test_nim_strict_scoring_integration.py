@@ -68,7 +68,7 @@ def test_supported_dry_run_publishes_only_strict_locked_scores(
         stdout=stdout,
     )
 
-    assert result == 0
+    assert result == 0, stdout.getvalue()
     success = json.loads(stdout.getvalue())
     report_path = Path(success["artifact_paths"]["json_path"])
     csv_path = Path(success["artifact_paths"]["csv_path"])
@@ -106,5 +106,7 @@ def test_entrypoint_and_permanent_quality_gate_bind_strict_scoring() -> None:
     assert "benchmark_cli=run_strict_benchmark_cli" in entrypoint
     assert "contextual_orchestrator.nim_strict_scoring" in workflow
     assert "tests/test_nim_strict_scorer_validity.py" in workflow
+    assert "tests/test_nim_strict_scoring_bounds.py" in workflow
     assert "tests/test_nim_strict_scoring_integration.py" in workflow
+    assert "tests/test_nim_strict_scoring_leakage.py" in workflow
     assert "interrogate -f 100 contextual_orchestrator/nim_strict_scoring.py" in workflow
