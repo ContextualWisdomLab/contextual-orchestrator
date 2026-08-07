@@ -8,6 +8,7 @@ another class.
 
 from __future__ import annotations
 
+from contextlib import suppress
 import http.client
 import ipaddress
 import socket
@@ -52,6 +53,25 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
             raise
 
 
+def _content_length_exceeds_budget(value: str, max_bytes: int) -> bool:
+    """Validate one Content-Length field and compare without integer overflow."""
+    canonical_members: list[str] = []
+    for member in value.split(","):
+        token = member.strip()
+        if not token or not token.isascii() or not token.isdigit():
+            raise ValueError("invalid Content-Length")
+        canonical_members.append(token.lstrip("0") or "0")
+    declared = canonical_members[0]
+    if any(member != declared for member in canonical_members[1:]):
+        raise ValueError("conflicting Content-Length")
+    limit = str(max_bytes)
+    if len(declared) > len(limit):
+        return True
+    if len(declared) < len(limit):
+        return False
+    return declared > limit
+
+
 class _ProviderHTTPResponse:
     """Bound provider bytes and deterministically close response resources."""
 
@@ -68,6 +88,41 @@ class _ProviderHTTPResponse:
         self._connection = connection
         self._max_bytes = max_bytes
         self._bytes_read = 0
+        try:
+            self._validate_response_framing()
+        except Exception:
+            with suppress(Exception):
+                self.close()
+            raise
+
+    def _validate_response_framing(self) -> None:
+        """Reject malformed, ambiguous, or already over-budget HTTP framing."""
+        if not isinstance(self._response, http.client.HTTPResponse):
+            return
+        try:
+            content_length = self._response.getheader("Content-Length")
+            transfer_encoding = self._response.getheader("Transfer-Encoding")
+        except Exception:
+            raise RuntimeError(
+                "provider response headers could not be validated"
+            ) from None
+        if content_length is None:
+            return
+        if transfer_encoding is not None:
+            raise RuntimeError("provider response framing is ambiguous")
+        if not isinstance(content_length, str):
+            raise RuntimeError("provider response content length is invalid")
+        try:
+            exceeds_budget = _content_length_exceeds_budget(
+                content_length,
+                self._max_bytes,
+            )
+        except ValueError:
+            raise RuntimeError(
+                "provider response content length is invalid"
+            ) from None
+        if exceeds_budget:
+            raise RuntimeError("provider response byte limit exceeded")
 
     def __enter__(self) -> "_ProviderHTTPResponse":
         """Return this response wrapper from a context manager."""
