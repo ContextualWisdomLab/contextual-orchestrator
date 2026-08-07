@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Security gate**: every PR to `main` runs the required Security workflow. A failing Trivy or pip-audit job is a real finding — remediate by bumping the dependency and regenerating `requirements.lock`; never weaken, `continue-on-error`, or disable the gate.
 - **KV, not env**: runtime config and provider secrets are resolved from the KV credential registry (`get_credential`), never `os.getenv` at request time. Env is only bootstrap transport into the KV (see `docs/kv-credentials.md`).
-- **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot` and `scopeweave`. The OpenCode review pipeline is separate, stays on GitHub Models, and must not be changed.
+- **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot` and `scopeweave`. The OpenCode review pipeline is separate and centrally governed by `ContextualWisdomLab/.github`; do not replace its provider pool, reviewer identities, or credential chain from this repository. Repository-owned live model tests and autonomous development work use `NVIDIA_NIM_API_KEY`, never `COPILOT_GITHUB_TOKEN`.
 - **Research grounding**: substantive feature/process PRs should attach the relevant papers (PDF when redistribution is permissible, otherwise cite + link + summary) under `docs/papers/` with full citations.
 
 This file complements AGENTS.md with commands and architecture; where they differ, AGENTS.md wins.
