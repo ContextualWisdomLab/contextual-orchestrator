@@ -66,8 +66,8 @@ Rollback requires reverting the workflow changes and this contract together. A p
 
 ## APA 7 references
 
-GitHub. (2026). *Events that trigger workflows*. GitHub Docs. https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
+GitHub. (n.d.). *Events that trigger workflows*. Retrieved August 7, 2026, from https://docs.github.com/en/actions/reference/workflows-and-actions/events-that-trigger-workflows
 
-GitHub. (2026). *Securely using pull_request_target*. GitHub Docs. https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target
+GitHub. (n.d.). *Securely using pull_request_target*. Retrieved August 7, 2026, from https://docs.github.com/en/actions/reference/security/securely-using-pull_request_target
 
-GitHub. (2026). *Triggering a workflow*. GitHub Docs. https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow
+GitHub. (n.d.). *Triggering a workflow*. Retrieved August 7, 2026, from https://docs.github.com/en/actions/how-tos/write-workflows/choose-when-workflows-run/trigger-a-workflow
