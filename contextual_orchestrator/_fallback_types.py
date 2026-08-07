@@ -77,11 +77,14 @@ class FallbackCandidate:
             raise CandidateValidationError(
                 "priority must be between 0 and 1000000"
             )
-        if not isinstance(self.required_credentials, tuple):
+        if isinstance(self.required_credentials, (str, bytes)):
+            validate_credentials(self.required_credentials)
+        elif not isinstance(self.required_credentials, tuple):
             raise CandidateValidationError(
                 "required_credentials must be a tuple sequence"
             )
-        validate_credentials(self.required_credentials)
+        else:
+            validate_credentials(self.required_credentials)
         validate_visibilities(self.repository_visibilities)
         validate_capabilities(self.capabilities)
 
