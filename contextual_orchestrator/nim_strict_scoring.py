@@ -22,7 +22,8 @@ from typing import Any, Callable
 from . import nim_benchmark as benchmark
 
 
-STRICT_SCORING_POLICY_VERSION = "2026-08-07.2"
+STRICT_SCORING_POLICY_VERSION = "2026-08-07.3"
+MAX_STRICT_ANSWER_CHARACTERS = 4096
 _DEFAULT_TASK_MANIFEST = Path("examples/nim_task_manifest.json")
 _STRICT_NUMBER_KEY = ("exact_number_match", "2")
 _STRICT_TEXT_KEY = ("exact_text_match", "1")
@@ -31,6 +32,14 @@ _LEGACY_TEXT_KEY = ("substring_match", "1")
 _ASCII_DECIMAL_LITERAL = re.compile(
     r"[+-]?(?:[0-9]+(?:\.[0-9]*)?|\.[0-9]+)(?:[eE][+-]?[0-9]+)?"
 )
+
+
+def _require_expected_character_budget(value: str, label: str) -> None:
+    """Reject an answer-key string that exceeds the strict-scoring input cap."""
+    if len(value) > MAX_STRICT_ANSWER_CHARACTERS:
+        raise benchmark.BenchmarkContractError(
+            f"{label} exceeds the strict-scoring character budget"
+        )
 
 
 def _normalized_exact_text(value: str, *, case_sensitive: bool) -> str:
@@ -45,27 +54,38 @@ def _expected_decimal(expected: dict[str, Any]) -> decimal.Decimal:
 
     Raises:
         benchmark.BenchmarkContractError: If ``expected.number`` is not one
-            finite ASCII decimal literal represented as a JSON string.
+            bounded finite ASCII decimal literal represented as a JSON string.
     """
     value = expected.get("number")
     if not isinstance(value, str):
         raise benchmark.BenchmarkContractError(
             "exact-number expected.number must be a finite numeric literal string"
         )
+    _require_expected_character_budget(value, "exact-number expected.number")
     literal = unicodedata.normalize("NFC", value).strip()
     if _ASCII_DECIMAL_LITERAL.fullmatch(literal) is None:
         raise benchmark.BenchmarkContractError(
             "exact-number expected.number must be a finite numeric literal string"
         )
-    return decimal.Decimal(literal)
+    try:
+        return decimal.Decimal(literal)
+    except decimal.InvalidOperation as exc:
+        raise benchmark.BenchmarkContractError(
+            "exact-number expected.number must be a finite numeric literal string"
+        ) from exc
 
 
 def _answer_decimal(answer_text: str) -> decimal.Decimal | None:
-    """Parse a complete finite numeric answer, returning ``None`` for other text."""
+    """Parse one bounded complete numeric answer, returning ``None`` when unusable."""
+    if len(answer_text) > MAX_STRICT_ANSWER_CHARACTERS:
+        return None
     literal = unicodedata.normalize("NFC", answer_text).strip()
     if _ASCII_DECIMAL_LITERAL.fullmatch(literal) is None:
         return None
-    return decimal.Decimal(literal)
+    try:
+        return decimal.Decimal(literal)
+    except decimal.InvalidOperation:
+        return None
 
 
 def score_exact_number_match_v2(
@@ -76,6 +96,8 @@ def score_exact_number_match_v2(
 
     Containment is deliberately rejected: prose, negation, units, and multiple
     numbers cannot earn credit merely because they include the expected token.
+    Oversized or unrepresentable model output scores zero instead of consuming
+    unbounded normalization resources or aborting the benchmark.
     """
     expected_value = _expected_decimal(expected)
     answer_value = _answer_decimal(answer_text)
@@ -96,8 +118,8 @@ def _expected_texts(expected: dict[str, Any]) -> tuple[tuple[str, ...], bool]:
     """Return unique normalized alternatives and their declared case policy.
 
     Raises:
-        benchmark.BenchmarkContractError: If the alternatives or case policy
-            are absent, malformed, empty, or duplicate after normalization.
+        benchmark.BenchmarkContractError: If alternatives or case policy are
+            absent, malformed, empty, oversized, or duplicate after normalization.
     """
     values = expected.get("texts")
     if not isinstance(values, list) or not values:
@@ -111,6 +133,7 @@ def _expected_texts(expected: dict[str, Any]) -> tuple[tuple[str, ...], bool]:
             raise benchmark.BenchmarkContractError(
                 "exact-text expected must contain a non-empty texts list of strings"
             )
+        _require_expected_character_budget(value, "exact-text expected alias")
         candidate = _normalized_exact_text(
             value,
             case_sensitive=case_sensitive,
@@ -128,8 +151,10 @@ def _expected_texts(expected: dict[str, Any]) -> tuple[tuple[str, ...], bool]:
 
 
 def score_exact_text_match(expected: dict[str, Any], answer_text: str) -> float:
-    """Score one complete normalized text response against explicit alternatives."""
+    """Score one bounded complete text response against explicit alternatives."""
     expected_values, case_sensitive = _expected_texts(expected)
+    if len(answer_text) > MAX_STRICT_ANSWER_CHARACTERS:
+        return 0.0
     answer_value = _normalized_exact_text(
         answer_text,
         case_sensitive=case_sensitive,
