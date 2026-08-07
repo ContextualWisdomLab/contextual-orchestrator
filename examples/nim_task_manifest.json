@@ -1,6 +1,6 @@
 {
-  "manifest_version": "2026-08-05.2",
-  "manifest_notes": "Immutable task ids; expected answers and rubrics are scoring-side only and are never injected into model prompts (no test-set leakage). The locked split contains thirty original, objectively scored tasks so the scheduled paired comparison can reach the repository's declared non-smoke evidence floor. The exploratory split remains tuning-only and never enters headline comparisons.",
+  "manifest_version": "2026-08-07.1",
+  "manifest_notes": "Immutable task ids; expected answers and strict aliases are scoring-side only and are never injected into model prompts (no test-set leakage). The locked split contains thirty original, objectively scored tasks so the scheduled paired comparison can reach the repository's declared non-smoke evidence floor. Legacy scorer fields preserve authoring compatibility; the supported benchmark derives versioned complete-answer semantics, including explicit aliases and task-specific case sensitivity. The exploratory split remains tuning-only and never enters headline comparisons.",
   "tasks": [
     {
       "task_id": "trick_arithmetic_bat_ball",
@@ -180,7 +180,7 @@
     {
       "task_id": "korean_word_translation",
       "split": "locked",
-      "prompt": "Translate the Korean word 사과 into English. Answer with one word only.",
+      "prompt": "Translate the Korean fruit word 사과 into English. Answer with one word only.",
       "scorer": {"name": "substring_match", "version": "1"},
       "expected": {"substring": "apple"}
     },
@@ -189,14 +189,17 @@
       "split": "locked",
       "prompt": "What is the chemical symbol for gold? Answer with the symbol only.",
       "scorer": {"name": "substring_match", "version": "1"},
-      "expected": {"substring": "Au"}
+      "expected": {"substring": "Au", "strict_case_sensitive": true}
     },
     {
       "task_id": "largest_ocean_name",
       "split": "locked",
       "prompt": "Name the largest ocean on Earth. Answer with its name only.",
       "scorer": {"name": "substring_match", "version": "1"},
-      "expected": {"substring": "Pacific"}
+      "expected": {
+        "substring": "Pacific",
+        "strict_texts": ["Pacific", "Pacific Ocean"]
+      }
     },
     {
       "task_id": "capital_recall_canada",
