@@ -14,6 +14,8 @@ import sys
 import threading
 import urllib.request
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -72,6 +74,35 @@ def test_stream_send_parses_real_provider_sse() -> None:
         deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
     assert deltas == ["Hello", " streamed", " world"]  # role delta skipped, [DONE] stops
     assert "".join(deltas) == "Hello streamed world"
+
+
+def test_stream_send_rejects_eof_before_done_marker() -> None:
+    """An interrupted OpenAI-compatible stream cannot be reported as complete."""
+    with _FakeSSEProvider([_delta("partial")]) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        with pytest.raises(RuntimeError, match="terminated before.*DONE"):
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+
+
+def test_stream_send_rejects_malformed_data_event() -> None:
+    """Malformed provider data frames fail closed instead of disappearing silently."""
+    frames = ["data: {not-json}\n\n", "data: [DONE]\n\n"]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        with pytest.raises(RuntimeError, match="malformed provider stream event"):
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
 
 
 def test_stream_chat_mock_yields_chunks() -> None:
