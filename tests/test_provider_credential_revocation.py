@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import socket
 from unittest import mock
 
@@ -14,6 +15,7 @@ from contextual_orchestrator.credentials import (
     set_backend,
 )
 from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.provider_transport import _PinnedHTTPSConnection
 
 
 def _validated_provider() -> tuple[ModelClient, ModelAgent]:
@@ -37,8 +39,8 @@ def _validated_provider() -> tuple[ModelClient, ModelAgent]:
     return client, agent
 
 
-def test_every_provider_egress_path_rechecks_revoked_credential() -> None:
-    """Revocation after DNS validation must stop every request before socket egress."""
+def test_every_provider_egress_path_blocks_revoked_credential_before_socket() -> None:
+    """Revocation after DNS validation must stop every HTTPS request before socket egress."""
     client, agent = _validated_provider()
     try:
         set_backend(InMemoryCredentialBackend())
@@ -51,49 +53,47 @@ def test_every_provider_egress_path_rechecks_revoked_credential() -> None:
             lambda: client._batch_raw(agent, "/files/file_1/content"),
         )
         for operation in operations:
-            with mock.patch.object(
-                client,
-                "_open_provider",
-                side_effect=AssertionError("provider egress attempted after credential revocation"),
+            with mock.patch(
+                "contextual_orchestrator.provider_transport.socket.create_connection",
+                side_effect=AssertionError("socket egress attempted after credential revocation"),
             ):
-                with pytest.raises(NotConfigured, match="resolvable credential"):
+                with pytest.raises(NotConfigured, match="Bearer credential"):
                     operation()
     finally:
         set_backend(None)
 
 
-def test_provider_credential_resolution_returns_current_nonempty_secret() -> None:
-    """The dispatch-time resolver returns the exact current registered secret value."""
-    backend = InMemoryCredentialBackend()
-    backend.set("MODEL_KEY", "sk-current-value")
-    set_backend(backend)
-    try:
-        client = ModelClient()
-        agent = ModelAgent(
-            "remote_agent",
-            "gpt-example",
-            "https://provider.example/v1",
-            "MODEL_KEY",
-        )
-        assert client._provider_credential(agent) == "sk-current-value"
-    finally:
-        set_backend(None)
+def test_pinned_connection_rejects_missing_authorization_before_super_request() -> None:
+    """A direct pinned request without provider authorization also fails closed."""
+    connection = _PinnedHTTPSConnection(
+        "provider.example",
+        "8.8.8.8",
+        443,
+        1.0,
+        mock.Mock(),
+    )
+    with mock.patch.object(http.client.HTTPSConnection, "request") as base_request:
+        with pytest.raises(NotConfigured, match="Bearer credential"):
+            connection.request("POST", "/v1/chat/completions", headers={})
+    base_request.assert_not_called()
 
 
-def test_provider_credential_resolution_rejects_empty_secret() -> None:
-    """An empty registered value is unavailable rather than an empty Bearer credential."""
-    backend = InMemoryCredentialBackend()
-    backend.set("MODEL_KEY", "")
-    set_backend(backend)
-    try:
-        client = ModelClient()
-        agent = ModelAgent(
-            "remote_agent",
-            "gpt-example",
-            "https://provider.example/v1",
-            "MODEL_KEY",
-        )
-        with pytest.raises(NotConfigured, match="resolvable credential"):
-            client._provider_credential(agent)
-    finally:
-        set_backend(None)
+def test_pinned_connection_accepts_nonempty_bearer_for_normal_dispatch() -> None:
+    """A current non-empty Bearer value reaches the standard HTTPS request machinery."""
+    connection = _PinnedHTTPSConnection(
+        "provider.example",
+        "8.8.8.8",
+        443,
+        1.0,
+        mock.Mock(),
+    )
+    headers = {"Authorization": "Bearer sk-current-value"}
+    with mock.patch.object(http.client.HTTPSConnection, "request") as base_request:
+        connection.request("POST", "/v1/chat/completions", headers=headers)
+    base_request.assert_called_once_with(
+        "POST",
+        "/v1/chat/completions",
+        body=None,
+        headers=headers,
+        encode_chunked=False,
+    )
