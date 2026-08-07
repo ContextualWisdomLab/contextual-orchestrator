@@ -22,6 +22,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Reject provider hosts that resolve to any non-globally-routable address, including RFC 6598 shared address space, while retaining explicit multicast, private, loopback, link-local, and reserved-address protections.
 - Document narrowly scoped Semgrep suppressions for parameter-bound database queries, the explicit development-only TLS verification opt-out, and provider URLs that pass the egress guard.
 - Validate custom reasoning payload paths and scalar templates, preserve caller-owned reasoning fields, and record only bounded decision evidence rather than private intermediate reasoning text.
+- Reject mutable direct-constructor reasoning controls, omitted payload-rule values, and NaN or infinite provider mappings before any reasoning payload is projected.
 
 ### Changed
 
@@ -35,3 +36,4 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, and the supported-platform uncertainty boundary.
 - Add architecture, operations, test strategy, provider mapping, governance, and APA 7 research evidence for adaptive reasoning control.
 - Record the standalone/MSA activation boundary and import-purity regression contract for optional reasoning control.
+- Define the immutable direct-constructor and strict interoperable-JSON boundary for reasoning profile control data.
