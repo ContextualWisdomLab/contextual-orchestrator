@@ -110,8 +110,6 @@ class _ProviderHTTPResponse:
             return
         if transfer_encoding is not None:
             raise RuntimeError("provider response framing is ambiguous")
-        if not isinstance(content_length, str):
-            raise RuntimeError("provider response content length is invalid")
         try:
             exceeds_budget = _content_length_exceeds_budget(
                 content_length,
