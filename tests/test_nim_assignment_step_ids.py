@@ -62,6 +62,14 @@ def test_existing_trace_step_id_is_preserved_exactly() -> None:
     assert json.loads(serialized)[0]["step_id"] == "planner_step"
 
 
+def test_runtime_integer_trace_step_ids_are_preserved_as_decimal_strings() -> None:
+    """Runtime workflow integers must preserve exact identity in CSV-safe strings."""
+    serialized = csv_evidence._models_used_json(
+        [_assignment(0), _assignment(7, "vendor/model-b")]
+    )
+    assert [row["step_id"] for row in json.loads(serialized)] == ["0", "7"]
+
+
 def test_duplicate_non_empty_trace_step_ids_fail_closed() -> None:
     """Two assignments may not claim the same explicit workflow-step identity."""
     with pytest.raises(csv_evidence.CsvEvidenceError, match="duplicate step_id"):
@@ -70,7 +78,8 @@ def test_duplicate_non_empty_trace_step_ids_fail_closed() -> None:
         )
 
 
-def test_missing_or_non_string_trace_step_id_is_not_synthesized() -> None:
-    """Only a present string known to be the empty route sentinel is canonicalized."""
+@pytest.mark.parametrize("step_id", [None, True, -1, 1.5])
+def test_missing_or_unsupported_trace_step_id_is_not_synthesized(step_id: object) -> None:
+    """Unsupported or invalid runtime identities must fail instead of being invented."""
     with pytest.raises(csv_evidence.CsvEvidenceError, match="step_id"):
-        csv_evidence._models_used_json([_assignment(None)])
+        csv_evidence._models_used_json([_assignment(step_id)])
