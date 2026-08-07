@@ -69,6 +69,7 @@ jobs:
             tests/test_nim_benchmark_workflow_contract.py \
             tests/test_nim_artifact_publication.py \
             tests/test_nim_artifact_publication_edges.py \
+            tests/test_nim_assignment_step_ids.py \
             tests/test_nim_csv_evidence.py \
             tests/test_nim_csv_evidence_edges.py \
             tests/test_nim_strict_scorer_validity.py \
