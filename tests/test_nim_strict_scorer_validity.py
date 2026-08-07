@@ -44,13 +44,21 @@ def test_strict_numeric_scorer_rejects_invalid_expected_literals(
         strict.score_exact_number_match_v2(expected, "21")
 
 
-def test_exact_text_scorer_rejects_substrings_and_negations() -> None:
-    """A symbol or label must be the complete normalized response, not a substring."""
+def test_exact_text_scorer_rejects_substrings_and_honors_case_policy() -> None:
+    """Complete text matching must preserve each task's declared case semantics."""
     strict.enable_strict_evidence_scoring()
     scorer = nb.SCORER_REGISTRY[("exact_text_match", "1")]
 
-    assert scorer({"texts": ["Au"]}, "  au  ") == 1.0
-    assert scorer({"texts": ["Pacific", "Pacific Ocean"]}, "PACIFIC   OCEAN") == 1.0
+    assert scorer({"texts": ["Au"], "case_sensitive": False}, "  au  ") == 1.0
+    assert scorer({"texts": ["Au"], "case_sensitive": True}, "Au") == 1.0
+    assert scorer({"texts": ["Au"], "case_sensitive": True}, "au") == 0.0
+    assert (
+        scorer(
+            {"texts": ["Pacific", "Pacific Ocean"], "case_sensitive": False},
+            "PACIFIC   OCEAN",
+        )
+        == 1.0
+    )
     assert scorer({"texts": ["caf\u00e9"]}, "cafe\u0301") == 1.0
     assert scorer({"texts": ["Au"]}, "Australia") == 0.0
     assert scorer({"texts": ["Au"]}, "not Au") == 0.0
@@ -64,6 +72,7 @@ def test_exact_text_scorer_rejects_substrings_and_negations() -> None:
         ({"texts": [7]}, "list of strings"),
         ({"texts": ["   "]}, "list of strings"),
         ({"texts": ["Au", " au "]}, "duplicate normalized answer"),
+        ({"texts": ["Au"], "case_sensitive": "yes"}, "case_sensitive must be boolean"),
     ],
 )
 def test_exact_text_scorer_rejects_invalid_answer_keys(
@@ -90,6 +99,18 @@ def test_activation_is_idempotent_and_fails_closed_on_identity_collision(
     )
     with pytest.raises(nb.BenchmarkContractError, match="identity collision"):
         strict.enable_strict_evidence_scoring()
+
+
+def test_authoring_manifest_declares_objective_text_aliases_and_context() -> None:
+    """Locked text tasks must declare material aliases and disambiguating context."""
+    tasks = {task["task_id"]: task for task in _source_manifest()["tasks"]}
+
+    assert tasks["chemical_symbol_gold"]["expected"]["strict_case_sensitive"] is True
+    assert tasks["largest_ocean_name"]["expected"]["strict_texts"] == [
+        "Pacific",
+        "Pacific Ocean",
+    ]
+    assert "fruit" in tasks["korean_word_translation"]["prompt"].casefold()
 
 
 def test_strict_manifest_derivation_upgrades_only_locked_tasks(
@@ -121,7 +142,20 @@ def test_strict_manifest_derivation_upgrades_only_locked_tasks(
         (task["scorer"]["name"], task["scorer"]["version"])
         for task in exploratory
     } == {("substring_match", "1")}
-    assert derived["tasks"][6]["expected"] == {"texts": ["Paris"]}
+
+    derived_tasks = {task["task_id"]: task for task in derived["tasks"]}
+    assert derived_tasks["capital_recall_france"]["expected"] == {
+        "texts": ["Paris"],
+        "case_sensitive": False,
+    }
+    assert derived_tasks["chemical_symbol_gold"]["expected"] == {
+        "texts": ["Au"],
+        "case_sensitive": True,
+    }
+    assert derived_tasks["largest_ocean_name"]["expected"] == {
+        "texts": ["Pacific", "Pacific Ocean"],
+        "case_sensitive": False,
+    }
 
     derived_path = tmp_path / "derived.json"
     derived_path.write_text(json.dumps(derived), encoding="utf-8")
@@ -146,7 +180,7 @@ def test_strict_manifest_preserves_already_strict_locked_tasks() -> None:
                 "split": "locked",
                 "prompt": "Return one word only.",
                 "scorer": {"name": "exact_text_match", "version": "1"},
-                "expected": {"texts": ["answer"]},
+                "expected": {"texts": ["answer"], "case_sensitive": True},
             },
         ],
     }
@@ -188,6 +222,40 @@ def test_strict_manifest_preserves_already_strict_locked_tasks() -> None:
                 ],
             },
             "non-empty string",
+        ),
+        (
+            {
+                "manifest_version": "1",
+                "tasks": [
+                    {
+                        "task_id": "bad_alias_task",
+                        "split": "locked",
+                        "scorer": {"name": "substring_match", "version": "1"},
+                        "expected": {
+                            "substring": "Pacific",
+                            "strict_texts": "Pacific Ocean",
+                        },
+                    }
+                ],
+            },
+            "non-empty texts list",
+        ),
+        (
+            {
+                "manifest_version": "1",
+                "tasks": [
+                    {
+                        "task_id": "bad_case_task",
+                        "split": "locked",
+                        "scorer": {"name": "substring_match", "version": "1"},
+                        "expected": {
+                            "substring": "Au",
+                            "strict_case_sensitive": "yes",
+                        },
+                    }
+                ],
+            },
+            "case_sensitive must be boolean",
         ),
         (
             {
