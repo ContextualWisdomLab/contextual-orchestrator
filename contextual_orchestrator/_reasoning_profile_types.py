@@ -72,9 +72,9 @@ class PayloadRule:
 def _validate_json_scalar(value: Any, field_name: str) -> JsonScalar:
     """Return a strict JSON scalar, rejecting non-finite Python floats."""
     if not isinstance(value, (str, int, float, bool)) and value is not None:
-        raise ValueError(f"{field_name} must be a JSON scalar")
+        raise ValueError(f"{field_name} must be JSON scalars")
     if isinstance(value, float) and not math.isfinite(value):
-        raise ValueError(f"{field_name} must be a finite JSON scalar")
+        raise ValueError(f"{field_name} must be finite JSON scalars")
     return value
 
 
