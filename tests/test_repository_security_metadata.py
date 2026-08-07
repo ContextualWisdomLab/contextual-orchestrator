@@ -117,7 +117,7 @@ def test_security_policy_documents_coordinated_disclosure_lifecycle():
         "acknowledgement target",
         "not a remediation SLA",
         "CVE",
-        "reporter credit",
+        "Reporter credit",
         "public issue",
         "Do not include exploit details",
         "ISO/IEC 29147:2018",
