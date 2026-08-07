@@ -149,10 +149,14 @@ class _ProviderHTTPResponse:
             raise RuntimeError(
                 "provider response headers could not be validated"
             ) from None
+        if content_length is not None and transfer_encoding is not None:
+            raise RuntimeError("provider response framing is ambiguous")
+        if transfer_encoding is not None:
+            if transfer_encoding.lower() != "chunked":
+                raise RuntimeError("provider response transfer encoding is unsupported")
+            return
         if content_length is None:
             return
-        if transfer_encoding is not None:
-            raise RuntimeError("provider response framing is ambiguous")
         try:
             exceeds_budget = _content_length_exceeds_budget(
                 content_length,
