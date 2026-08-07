@@ -57,7 +57,7 @@ def _content_length_exceeds_budget(value: str, max_bytes: int) -> bool:
     """Validate one Content-Length field and compare without integer overflow."""
     canonical_members: list[str] = []
     for member in value.split(","):
-        token = member.strip()
+        token = member.strip(" \t")
         if not token or not token.isascii() or not token.isdigit():
             raise ValueError("invalid Content-Length")
         canonical_members.append(token.lstrip("0") or "0")
