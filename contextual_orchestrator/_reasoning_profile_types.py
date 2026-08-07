@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import re
 from typing import Any, Mapping
 
@@ -38,14 +39,15 @@ class PayloadRule:
 
     def __post_init__(self) -> None:
         """Validate path depth, identifier syntax, and template vocabulary."""
+        if not isinstance(self.path, tuple):
+            raise ValueError("reasoning payload path must be a tuple")
         if not 1 <= len(self.path) <= 8:
             raise ValueError("reasoning payload path must contain 1 to 8 segments")
         if any(not isinstance(part, str) or not _SAFE_SEGMENT.fullmatch(part) for part in self.path):
             raise ValueError("reasoning payload path contains an unsafe segment")
         if isinstance(self.value, str) and self.value.startswith("$") and self.value not in TEMPLATES:
             raise ValueError(f"unsupported reasoning payload template: {self.value}")
-        if not isinstance(self.value, (str, int, float, bool)) and self.value is not None:
-            raise ValueError("reasoning payload value must be a JSON scalar")
+        _validate_json_scalar(self.value, "reasoning payload value")
 
     @classmethod
     def from_dict(cls, value: Mapping[str, Any]) -> "PayloadRule":
@@ -58,11 +60,22 @@ class PayloadRule:
         path = value.get("path")
         if not isinstance(path, (list, tuple)) or not path or not all(isinstance(item, str) for item in path):
             raise ValueError("reasoning payload rule path must be a non-empty string array")
-        return cls(tuple(path), value.get("value"))
+        if "value" not in value:
+            raise ValueError("reasoning payload rule must include value")
+        return cls(tuple(path), value["value"])
 
     def to_dict(self) -> dict[str, Any]:
         """Return the rule as stable JSON-compatible data."""
         return {"path": list(self.path), "value": self.value}
+
+
+def _validate_json_scalar(value: Any, field_name: str) -> JsonScalar:
+    """Return a strict JSON scalar, rejecting non-finite Python floats."""
+    if not isinstance(value, (str, int, float, bool)) and value is not None:
+        raise ValueError(f"{field_name} must be a JSON scalar")
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ValueError(f"{field_name} must be a finite JSON scalar")
+    return value
 
 
 __all__ = [
