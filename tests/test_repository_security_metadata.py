@@ -101,6 +101,45 @@ def test_security_policy_documents_reporting_and_automation():
     assert "pinned to reviewed commit SHAs or hash-locked package requirements" in policy_text
 
 
+def test_security_policy_documents_coordinated_disclosure_lifecycle():
+    policy_text = read_text("SECURITY.md")
+    doctoring_text = read_text("docs/doctoring/security-disclosure-lifecycle.md")
+
+    required_policy_tokens = [
+        "## Supported Versions",
+        "## Scope",
+        "## Reporting a Vulnerability",
+        "## Coordinated Disclosure Lifecycle",
+        "## Safe Harbor and Research Boundaries",
+        "## Advisory and Release Evidence",
+        "latest supported release",
+        "GitHub Security Advisory",
+        "acknowledgement target",
+        "not a remediation SLA",
+        "CVE",
+        "reporter credit",
+        "public issue",
+        "Do not include exploit details",
+        "ISO/IEC 29147:2018",
+        "ISO/IEC 30111:2019",
+    ]
+    for token in required_policy_tokens:
+        assert token in policy_text
+
+    required_doctoring_tokens = [
+        "ISO/IEC 29147:2018",
+        "ISO/IEC 30111:2019",
+        "reviewed and confirmed",
+        "GitHub private vulnerability reporting",
+        "repository security advisory",
+        "NIST SP 800-218 Rev. 1",
+        "Initial Public Draft",
+        "APA 7",
+    ]
+    for token in required_doctoring_tokens:
+        assert token in doctoring_text
+
+
 def test_database_design_avoids_plaintext_prompt_output_storage():
     database_text = read_text("docs/database_design.sql")
 
@@ -140,6 +179,7 @@ if __name__ == "__main__":  # pragma: no cover
     test_dependabot_tracks_actions_and_python_dependencies()
     test_codeowners_requires_repository_owner_review()
     test_security_policy_documents_reporting_and_automation()
+    test_security_policy_documents_coordinated_disclosure_lifecycle()
     test_database_design_avoids_plaintext_prompt_output_storage()
     test_python_lockfile_uses_hash_pinning()
     test_security_tool_lockfile_uses_hash_pinning()
