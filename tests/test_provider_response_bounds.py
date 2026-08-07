@@ -135,7 +135,19 @@ def test_oversized_declared_length_fails_before_body_read_and_closes_resources(
 
 @pytest.mark.parametrize(
     "declared_length",
-    ["", "-1", "+1", "1.0", "1, 2", "4,,4", "١"],
+    [
+        "",
+        "-1",
+        "+1",
+        "1.0",
+        "1, 2",
+        "4,,4",
+        "١",
+        "\u00a04",
+        "4\u00a0",
+        "\v4",
+        "4\f",
+    ],
 )
 def test_invalid_or_conflicting_declared_lengths_fail_closed(
     declared_length: str,
