@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Derive a versioned strict locked-task manifest at the explicit NIM benchmark composition root: numeric evidence now requires one complete finite decimal response, text evidence requires one complete NFC/case-folded declared answer, malformed answer keys and scorer collisions fail before provider egress, exploratory legacy scorers remain isolated from headline comparisons, and ordinary package import remains side-effect free.
 - Make every repository-local pull-request checkout in Tests, Fuzz, and Security select `github.event.pull_request.head.sha` rather than GitHub's synthetic merge ref, while preserving `github.sha` for push, schedule, and manual runs and retaining non-persisted checkout credentials.
 - Preserve every benchmark cell's step, role, agent, and model assignment in CLI and scheduled-workflow CSV artifacts as deterministic JSON; fail closed before publishing success when JSON/CSV identities are duplicated, malformed, or incomplete, and replace the enriched CSV atomically.
 - Exclude zero-success benchmark policies from quality Pareto frontiers with explicit evidence labels, validate every Markdown-consumed report field before artifact writes, normalize excessive catalog JSON depth to the catalog domain error, preserve positive sub-second provider timeouts, make the standalone NIM test runner fixture-safe, and execute these review regressions inside the 100% branch-coverage gate.
@@ -42,7 +43,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
-- Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, the NIM benchmark validity boundary, the thirty-task evidence floor, and supported-platform uncertainty.
+- Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, the NIM benchmark validity boundary, strict complete-answer scoring, the thirty-task evidence floor, and supported-platform uncertainty.
 - Record the CI trust boundary between generic coverage and native fuzz execution, including the evidence-preserving retry rule for branch-referenced reusable workflows.
 - Make the NIM security-integration receipt head-stable: GitHub pull-request metadata and exact-head Checks are authoritative, while older commit and workflow identifiers remain explicitly historical only.
 - Clarify that the bundled thirty-task NIM manifest may reach `evidence_review_required` only when the paired-task and 90% completion floors are met; otherwise it remains `insufficient_evidence`, and no artifact changes production routing automatically.
