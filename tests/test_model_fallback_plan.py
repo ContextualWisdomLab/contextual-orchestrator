@@ -152,6 +152,7 @@ def test_plan_raises_when_every_candidate_is_ineligible() -> None:
         ("priority", -1, "priority"),
         ("priority", True, "priority"),
         ("required_credentials", ("bad-key",), "credential"),
+        ("required_credentials", ["API_KEY"], "tuple"),
         ("repository_visibilities", frozenset({"secret"}), "visibility"),
         ("capabilities", frozenset({"Structured Output"}), "capability"),
     ],
@@ -179,6 +180,10 @@ def test_context_and_collection_types_fail_closed() -> None:
     """Truthy strings and mutable control collections cannot bypass policy."""
     with pytest.raises(CandidateValidationError, match="visibility"):
         FallbackContext(repository_visibility="secret")
+    with pytest.raises(CandidateValidationError, match="visibility"):
+        FallbackContext(repository_visibility=[])  # type: ignore[arg-type]
+    with pytest.raises(CandidateValidationError, match="frozenset"):
+        FallbackContext(available_credentials=["API_KEY"])  # type: ignore[arg-type]
     with pytest.raises(CandidateValidationError, match="credential"):
         FallbackContext(available_credentials=frozenset({"bad-key"}))
     with pytest.raises(CandidateValidationError, match="capability"):
