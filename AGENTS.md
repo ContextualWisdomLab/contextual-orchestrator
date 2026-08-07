@@ -38,6 +38,26 @@ push or open a PR.
   code-scanning tools can't converge on one PR ref. Gating happens via the
   Security **job results**; do not add tools to the `code_scanning` rule.
 
+### Repository-writer lease and dependency authority
+
+- Enforce **one writer per repository branch**. Before every repository write,
+  refetch the **exact PR head and target blob SHA**. If either changed, inspect
+  the intervening work and reconcile once before editing; never overwrite an
+  independently moved branch from stale state.
+- Repositories outside `ContextualWisdomLab/contextual-orchestrator`, including
+  the central `ContextualWisdomLab/.github` control plane and repositories with
+  their own dedicated maintenance loops, are **read-only dependencies** unless
+  the task is explicitly assigned to that repository. Do not edit their
+  branches, dispatch **write-capable agents**, resolve their review threads, or
+  merge their PRs from this repository's loop.
+- Live GitHub state is authoritative. A predecessor-head, stale-head,
+  cancelled, absent, failed, queued, pending, skipped-required, or
+  synthetic-merge result is not current-head evidence and must never be reused
+  to approve or merge a later tree.
+- Do not create one-shot, self-modifying, encoded-patch, branch-local repair, or
+  temporary write-capable GitHub Actions workflows. Prefer direct reviewed
+  changes tied to the exact current head.
+
 ### Code exploration
 
 - This repo has **no `.codegraph/` index**, so use normal search
