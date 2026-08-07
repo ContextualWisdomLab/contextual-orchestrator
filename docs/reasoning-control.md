@@ -142,7 +142,9 @@ Hidden reasoning text is not retained.
 
 ## Caller ownership and security
 
-Caller-supplied complete reasoning paths always win, including explicit `null`. Custom paths are limited to safe identifier segments and eight levels of nesting. Rules accept JSON scalars and fixed templates only; no expression evaluation occurs. A scalar that conflicts with a configured nested path fails closed.
+Caller-supplied complete reasoning paths always win, including explicit `null`. Custom paths are limited to safe identifier segments and eight levels of nesting. Rules accept strict JSON scalars and fixed templates only; no expression evaluation occurs. A scalar that conflicts with a configured nested path fails closed.
+
+A rule must contain an explicit `value`; omission is not treated as JSON `null`. NaN, positive infinity, and negative infinity are rejected because they are Python float extensions rather than interoperable JSON numbers. JSON configuration arrays are copied into immutable tuples during parsing. Direct Python construction must likewise use tuples for rule paths, supported levels, level mappings, and endpoint-specific rule collections, so a caller cannot mutate validated control data after a profile is created.
 
 Provider egress continues to use the repository's DNS-pinned HTTPS transport, original-host TLS verification, redirect rejection, no environment proxy, and KV-backed credential boundary.
 
