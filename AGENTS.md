@@ -71,8 +71,12 @@ push or open a PR.
 - Provider clients must continue to resolve credentials from the KV registry,
   preserve credential-name compatibility, and refuse unresolved credentials
   before provider egress.
-- The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
-  do not change it.
+- The **OpenCode review pipeline is separate and centrally governed** by
+  `ContextualWisdomLab/.github`. Do not hard-code or replace its provider pool,
+  reviewer identities, or credential chain from this repository. For live model
+  tests and autonomous development work owned by this repository, use
+  `NVIDIA_NIM_API_KEY`; never repurpose `COPILOT_GITHUB_TOKEN` as a model or
+  development-agent credential.
 
 ### This repo's role in the ecosystem
 
