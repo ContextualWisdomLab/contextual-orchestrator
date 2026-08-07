@@ -26,13 +26,17 @@ from contextual_orchestrator.server import SecurityConfig, build_server  # noqa:
 class _FakeSSEProvider:
     """Emits a fixed list of raw SSE frame strings at POST /chat/completions."""
 
-    def __init__(self, frames: list[str]) -> None:
+    def __init__(
+        self,
+        frames: list[str],
+        content_type: str = "text/event-stream",
+    ) -> None:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("content-length", 0))
                 self.rfile.read(length)
                 self.send_response(200)
-                self.send_header("content-type", "text/event-stream")
+                self.send_header("content-type", content_type)
                 self.end_headers()
                 for frame in frames:
                     self.wfile.write(frame.encode("utf-8"))
@@ -102,6 +106,21 @@ def test_stream_send_rejects_malformed_data_event() -> None:
             api_key_env="UNSET_KEY_ENV",
         )
         with pytest.raises(RuntimeError, match="malformed provider stream event"):
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+
+
+def test_stream_send_rejects_non_event_stream_response() -> None:
+    """A 200 response with the wrong media type cannot masquerade as SSE success."""
+    frames = [_delta("should-not-publish"), "data: [DONE]\n\n"]
+    with _FakeSSEProvider(frames, content_type="application/json") as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        with pytest.raises(RuntimeError, match="event-stream content type"):
             list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
 
 
