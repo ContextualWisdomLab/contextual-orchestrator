@@ -21,8 +21,8 @@ Python's `http.client.HTTPResponse.read([amt])` supports reading at most the nex
 The contract is:
 
 1. a declared `Content-Length` greater than the remaining 8 MiB response budget is rejected before any body byte is read;
-2. repeated comma-separated `Content-Length` members are accepted only when their ASCII decimal values are canonically equal, including harmless leading-zero differences;
-3. empty, signed, fractional, non-ASCII, malformed, or conflicting `Content-Length` evidence fails closed;
+2. repeated comma-separated `Content-Length` members are accepted only when their ASCII decimal values are canonically equal, including harmless leading-zero differences, with only HTTP optional whitespace (`SP` or `HTAB`) removed around each member;
+3. empty, signed, fractional, non-ASCII, non-HTTP-whitespace, malformed, or conflicting `Content-Length` evidence fails closed;
 4. simultaneous `Content-Length` and `Transfer-Encoding` evidence is rejected as ambiguous rather than selecting a preferred framing interpretation;
 5. decimal lengths are compared as canonical strings instead of converting an attacker-controlled numeral into an unbounded integer;
 6. absent `Content-Length` remains supported and is still governed by cumulative consumption accounting;
@@ -54,8 +54,8 @@ The service does not publish partial JSON, partial batch evidence, or a partial 
 - the reviewed default is exactly 8 MiB;
 - invalid byte budgets fail closed;
 - over-budget declared lengths fail before a body read;
-- equal repeated decimal lengths, including leading-zero equivalents, remain valid;
-- malformed, non-ASCII, and conflicting declared lengths fail closed;
+- equal repeated decimal lengths, including leading-zero equivalents and valid `SP`/`HTAB` optional whitespace, remain valid;
+- malformed, non-ASCII, vertical/form-feed whitespace, non-breaking-space, and conflicting declared lengths fail closed;
 - `Content-Length` plus `Transfer-Encoding` fails as ambiguous;
 - header lookup failures are redacted and close both resources;
 - an unbounded read probes only one byte beyond the remaining budget;
@@ -72,7 +72,7 @@ The test-only commits precede the production framing implementation in branch hi
 
 The bound is intentionally enforced below model- or provider-specific parsing so malformed content cannot claim a larger allowance by choosing another response shape. No provider identity, model-routing policy, reviewer credential, or authority boundary changes.
 
-A provider that sends both `Content-Length` and `Transfer-Encoding`, conflicting repeated lengths, or non-decimal length evidence is treated as incompatible. Operators should preserve the bounded failure, retain the provider and endpoint identity in redacted incident evidence, and correct or replace the upstream integration rather than adding a local parsing exception.
+A provider that sends both `Content-Length` and `Transfer-Encoding`, conflicting repeated lengths, non-decimal length evidence, or whitespace outside HTTP `SP`/`HTAB` is treated as incompatible. Operators should preserve the bounded failure, retain the provider and endpoint identity in redacted incident evidence, and correct or replace the upstream integration rather than adding a local parsing exception.
 
 If production evidence shows a legitimate response class consistently approaching 8 MiB, raise a separately reviewed change with workload measurements and an explicit threat-model update. Do not disable the bound locally, truncate silently, or add an unreviewed environment-variable bypass.
 
