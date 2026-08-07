@@ -1,4 +1,4 @@
-"""Contracts that prevent pull-request workflows from testing synthetic merges."""
+"""Contracts that prevent local pull-request workflows from testing stale or synthetic heads."""
 
 from __future__ import annotations
 
@@ -20,10 +20,11 @@ WORKFLOW_PATHS = (
 
 
 @pytest.mark.parametrize("relative_path", WORKFLOW_PATHS)
-def test_pull_request_workflows_checkout_every_exact_head(relative_path: Path) -> None:
-    """Require every local checkout to select the contributor head on PR events."""
+def test_pull_request_workflows_cover_stacked_exact_heads(relative_path: Path) -> None:
+    """Require all PR bases to run while every checkout selects the contributor head."""
     workflow = (REPOSITORY_ROOT / relative_path).read_text(encoding="utf-8")
     checkout_count = workflow.count("uses: actions/checkout@")
     assert checkout_count > 0
+    assert "pull_request:\n    branches: [main]" not in workflow
     assert workflow.count(EXACT_HEAD_REF) == checkout_count
     assert workflow.count("persist-credentials: false") >= checkout_count
