@@ -16,6 +16,8 @@ import socket
 import ssl
 from typing import Any, Iterator
 
+from .credentials import NotConfigured
+
 
 PROVIDER_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 """Maximum bytes consumed from one untrusted provider HTTP response."""
@@ -36,6 +38,46 @@ class _PinnedHTTPSConnection(http.client.HTTPSConnection):
         super().__init__(server_hostname, port=port, timeout=timeout, context=context)
         self._pinned_ip = pinned_ip
         self._server_hostname = server_hostname
+
+    def request(
+        self,
+        method: str,
+        url: str,
+        body: Any = None,
+        headers: dict[str, str] | None = None,
+        *,
+        encode_chunked: bool = False,
+    ) -> None:
+        """Require a current non-empty Bearer credential before any socket can open.
+
+        Provider credentials are resolved immediately before request construction.
+        A credential can still be revoked between DNS validation and dispatch, in
+        which case ``ModelClient`` produces an empty Bearer value.  This last
+        pre-socket boundary therefore rejects missing or empty authorization so a
+        revoked secret can never degrade into unauthenticated provider egress.
+        """
+        request_headers = headers or {}
+        authorization = next(
+            (
+                str(value)
+                for name, value in request_headers.items()
+                if name.lower() == "authorization"
+            ),
+            "",
+        )
+        scheme, separator, credential = authorization.partition(" ")
+        if scheme.lower() != "bearer" or not separator or not credential.strip():
+            self.close()
+            raise NotConfigured(
+                "provider HTTPS egress requires a current non-empty Bearer credential"
+            )
+        super().request(
+            method,
+            url,
+            body=body,
+            headers=request_headers,
+            encode_chunked=encode_chunked,
+        )
 
     def connect(self) -> None:
         """Dial the pinned IP and verify the certificate against the original host."""
