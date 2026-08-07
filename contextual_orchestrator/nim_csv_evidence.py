@@ -5,10 +5,12 @@ JSON. This optional, standard-library-only adapter copies that evidence into the
 uploaded CSV as deterministic JSON so spreadsheet consumers retain the exact
 step, role, agent, and model identity required for audit and replay.
 
-Route-only traces may not have an explicit workflow-plan step identifier. The
-adapter assigns those present-but-empty sentinels deterministic positional IDs
-without changing real non-empty IDs. Missing, non-string, or duplicate explicit
-IDs still fail closed.
+Runtime orchestration traces use non-negative integer step identifiers, while
+route-only evidence can also carry a present-but-empty string sentinel. The
+adapter preserves integer identities as decimal strings and assigns empty
+sentinels deterministic positional IDs without changing real non-empty string
+IDs. Missing, boolean, negative-integer, unsupported-type, or duplicate explicit
+IDs fail closed.
 
 The adapter is intentionally lazy: importing :mod:`contextual_orchestrator`
 does not import this module or mutate the benchmark implementation. The NIM CLI
@@ -73,10 +75,17 @@ def _canonical_step_id(
     position: int,
     used_step_ids: set[str],
 ) -> str:
-    """Return one unique trace ID, canonicalizing only empty string sentinels."""
-    if not isinstance(raw_step_id, str):
-        raise CsvEvidenceError("model assignment requires string step_id")
-    candidate = raw_step_id.strip()
+    """Return one unique string trace ID from supported runtime identifiers."""
+    if isinstance(raw_step_id, bool):
+        raise CsvEvidenceError("model assignment requires string or integer step_id")
+    if isinstance(raw_step_id, int):
+        if raw_step_id < 0:
+            raise CsvEvidenceError("model assignment step_id integer must be non-negative")
+        candidate = str(raw_step_id)
+    elif isinstance(raw_step_id, str):
+        candidate = raw_step_id.strip()
+    else:
+        raise CsvEvidenceError("model assignment requires string or integer step_id")
     if not candidate:
         candidate = f"trace_step_{position:04d}"
         suffix = 2
@@ -84,7 +93,7 @@ def _canonical_step_id(
             candidate = f"trace_step_{position:04d}_{suffix}"
             suffix += 1
     elif candidate in used_step_ids:
-        raise CsvEvidenceError(f"duplicate model assignment step_id: {candidate}")
+        raise CsvEvidenceError(f"duplicate step_id: {candidate}")
     used_step_ids.add(candidate)
     return candidate
 
