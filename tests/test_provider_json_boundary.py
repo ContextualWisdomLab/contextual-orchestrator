@@ -21,6 +21,7 @@ from contextual_orchestrator.orchestrator import ModelAgent, ModelClient
 from contextual_orchestrator.provider_transport import (
     _PinnedHTTPSConnection,
     _ProviderHTTPResponse,
+    _is_batch_output_content_path,
 )
 
 
@@ -147,6 +148,21 @@ def test_pinned_https_connection_records_response_contract_path() -> None:
     parent_request.assert_called_once()
 
 
+@pytest.mark.parametrize(
+    ("path", "expected"),
+    [
+        ("/v1/files/file-output/content", True),
+        ("/files/file-output/content?download=1", True),
+        ("/v1/files", False),
+        ("/v1/chat/completions", False),
+        ("/v1/files/file-output/metadata", False),
+    ],
+)
+def test_batch_output_path_classification_is_narrow(path: str, expected: bool) -> None:
+    """Only the exact file-content suffix receives JSON Lines semantics."""
+    assert _is_batch_output_content_path(path) is expected
+
+
 def test_model_client_json_object_paths_fail_closed_through_transport() -> None:
     """Every structured provider path redacts malformed response documents."""
     client = ModelClient()
@@ -206,10 +222,10 @@ def test_model_client_json_object_paths_preserve_valid_results() -> None:
     assert client._batch_json(agent, "GET", "/batches/batch-id") == {"id": "batch-id"}
 
 
-def test_batch_output_path_preserves_strict_json_lines() -> None:
-    """Batch output remains line-addressable after strict per-line validation."""
+def test_batch_output_path_preserves_strict_json_lines_and_blank_separators() -> None:
+    """Batch output remains line-addressable while harmless blank rows are ignored."""
     wrapper, _, _ = _path_aware_wrapper(
-        b'{"custom_id":"first","value":1}\n{"custom_id":"second","value":2}\n',
+        b'{"custom_id":"first","value":1}\n\n{"custom_id":"second","value":2}\n',
         "/v1/files/file-output/content",
     )
 
@@ -220,10 +236,19 @@ def test_batch_output_path_preserves_strict_json_lines() -> None:
     ]
 
 
-def test_batch_output_json_lines_reject_duplicate_members_and_private_text() -> None:
-    """Malformed JSONL fails before later row parsing can retain provider content."""
-    wrapper, response, connection = _path_aware_wrapper(
+@pytest.mark.parametrize(
+    "payload",
+    [
         b'{"custom_id":"private-row","value":1,"value":2}\n',
+        b'{"custom_id":"\xffprivate-row"}\n',
+        b"[]\n",
+        b"\n \t\n",
+    ],
+)
+def test_batch_output_json_lines_reject_malformed_or_non_object_rows(payload: bytes) -> None:
+    """Invalid JSONL fails before later row parsing can retain provider content."""
+    wrapper, response, connection = _path_aware_wrapper(
+        payload,
         "/v1/files/file-output/content?download=1",
     )
 
@@ -241,3 +266,19 @@ def test_path_aware_partial_read_retains_bounded_byte_semantics() -> None:
     """Explicit partial reads remain byte-oriented and are never parsed prematurely."""
     wrapper, _, _ = _path_aware_wrapper(b'{"value":1}', "/v1/chat/completions")
     assert wrapper.read(2) == b'{"'
+
+
+def test_path_aware_negative_read_normalizes_complete_document() -> None:
+    """A negative read amount means full-document validation, matching HTTPResponse."""
+    wrapper, _, _ = _path_aware_wrapper(b'{ "value" : 1 }', "/v1/chat/completions")
+    assert wrapper.read(-1) == b'{"value":1}'
+
+
+def test_empty_request_path_preserves_byte_oriented_test_seam() -> None:
+    """An uncaptured test seam never gains provider-document authority accidentally."""
+    response = _ByteResponse(b"not-json")
+    connection = mock.Mock()
+    connection._provider_request_path = ""
+    wrapper = _ProviderHTTPResponse(response, connection, max_bytes=512)
+
+    assert wrapper.read() == b"not-json"
