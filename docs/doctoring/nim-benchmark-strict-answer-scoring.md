@@ -22,9 +22,16 @@ simple smoke-test fixtures, but they were not defensible quality evidence:
 - `not 21` could receive the same numeric score as `21`;
 - `Australia` could satisfy an expected chemical symbol of `Au`;
 - explanatory prose, contradictory alternatives, units, and multiple answers
-  could receive credit despite prompts requiring an answer only.
+  could receive credit despite prompts requiring an answer only; and
+- one global case-folding rule would either reject harmless capitalization in
+  names or incorrectly accept a case-sensitive symbol such as `au` for `Au`.
 
-This is construct-irrelevant score inflation. It can change policy means,
+The Korean word `사과` also has a fruit sense and an apology-related sense. A
+locked translation prompt that omitted the fruit context could reward or punish
+a model for resolving an ambiguity rather than for translation quality. The
+authoring prompt now names the fruit context explicitly.
+
+These are construct-irrelevant score effects. They can change policy means,
 bootstrap differences, Pareto membership, and the apparent advantage of direct,
 route-once, or conduct policies without any real improvement in task accuracy.
 
@@ -46,32 +53,49 @@ the derived locked evidence manifest.
 ### Exact normalized text, version 1
 
 `exact_text_match` version `1` compares the complete response against an
-explicit non-empty list of accepted answers. Both sides use Unicode NFC,
-whitespace trimming and collapse, and Unicode case folding. This treats
-canonically equivalent text consistently while avoiding compatibility
-normalization that could erase meaningful distinctions. Substrings,
-explanations, negations, and undeclared aliases do not match. Empty,
-non-string, or duplicate normalized answer keys fail before provider egress.
+explicit non-empty list of accepted answers. Both sides use Unicode NFC plus
+whitespace trimming and collapse. Each task declares whether comparison is
+case-sensitive. Case-insensitive tasks additionally use Unicode case folding;
+case-sensitive tasks retain case after NFC and whitespace normalization.
 
-Accepted alternatives must be declared in the answer key. The scorer never
-invents synonyms, translations, abbreviations, prices, or semantic equivalence.
+This treats canonically equivalent text consistently while avoiding Unicode
+compatibility normalization that could erase meaningful distinctions. It also
+lets capital-city and ordinary-name tasks accept harmless capitalization while
+requiring exact case for a chemical symbol. Substrings, explanations, negations,
+and undeclared aliases do not match. Empty, non-string, or duplicate normalized
+answer keys and non-Boolean case policies fail before provider egress.
+
+Accepted alternatives must be declared in the answer key. For example, the
+largest-ocean task explicitly accepts `Pacific` and `Pacific Ocean`; the scorer
+does not invent synonyms, translations, abbreviations, prices, or semantic
+equivalence.
 
 ## Authoring and evidence provenance
 
-The repository keeps the reviewed authoring manifest stable for historical test
-compatibility. Immediately before the supported benchmark CLI starts, the
-strict composition root:
+The repository keeps legacy scorer fields in the reviewed authoring manifest
+for historical compatibility, while adding scoring-side strict metadata where
+material:
+
+- `strict_texts` declares accepted complete-answer aliases;
+- `strict_case_sensitive` declares case-sensitive matching; and
+- disambiguating prompt context is author-visible but no expected answer is
+  injected into the model request.
+
+Immediately before the supported benchmark CLI starts, the strict composition
+root:
 
 1. reads the selected manifest without resolving a provider credential;
 2. deep-copies it;
-3. upgrades locked numeric scorer `1` to numeric scorer `2`;
-4. converts locked substring expectations into explicit exact-text answer lists;
-5. preserves exploratory tasks and already-strict locked tasks;
-6. rejects unknown locked scorer contracts;
-7. adds `scoring_policy_version = 2026-08-07.1` and a derived manifest version;
-8. writes the deterministic derived manifest to an owner-only temporary
+3. validates and upgrades locked numeric scorer `1` to numeric scorer `2`;
+4. converts locked substring expectations into explicit exact-text answer lists
+   and case policies;
+5. validates already-strict numeric and text answer keys;
+6. preserves exploratory tasks and already-strict locked tasks;
+7. rejects unknown locked scorer contracts;
+8. adds `scoring_policy_version = 2026-08-07.2` and a derived manifest version;
+9. writes the deterministic derived manifest to an owner-only temporary
    directory; and
-9. invokes the existing benchmark with that path.
+10. invokes the existing benchmark with that path.
 
 The existing task-manifest SHA-256 and manifest-version fields therefore bind
 artifacts to the exact derived scoring contract that produced them. The private
@@ -84,8 +108,9 @@ price, or routing decision enters the transformation.
 - Activation adds only previously unowned versioned scorer identities and fails
   closed on a registry collision.
 - The transformation opens no socket and reads no provider credential.
-- Ambiguous manifest selectors, malformed JSON, unsupported locked scorers, and
-  invalid answer keys fail before provider egress.
+- Ambiguous manifest selectors, malformed JSON, unsupported locked scorers,
+  invalid aliases, invalid case policies, and invalid numeric keys fail before
+  provider egress.
 - The benchmark remains evidence-generating. Strict scoring does not authorize
   a production route, price, merge, or release.
 
@@ -95,17 +120,25 @@ price, or routing decision enters the transformation.
 
 - full-response numeric equivalence and rejection of containment, negation,
   multiple values, and non-finite values;
-- NFC/case-folded exact text with explicit alternatives;
-- rejection of substring false positives, malformed alternatives, and
-  normalized duplicates;
+- NFC-normalized exact text with task-declared case semantics and explicit
+  alternatives;
+- case-sensitive chemical-symbol scoring and case-insensitive ordinary names;
+- declared `Pacific`/`Pacific Ocean` aliases and Korean fruit-context authoring;
+- rejection of substring false positives, malformed alternatives, invalid case
+  policies, and normalized duplicates;
 - idempotent explicit activation and fail-closed scorer identity ownership;
 - deterministic conversion of all locked authoring tasks while exploratory
   tasks remain legacy;
-- preservation of already-strict manifests and rejection of ambiguous scorer
-  contracts;
+- preservation and validation of already-strict manifests and rejection of
+  ambiguous scorer contracts;
 - split and equals CLI argument forms, duplicate/missing selector rejection;
 - owner-only deterministic temporary manifests; and
 - removal of the private derived manifest after the supported CLI call.
+
+`tests/test_nim_strict_scoring_integration.py` proves ordinary package-import
+isolation and runs the supported transactional publication path end to end,
+requiring every locked evaluation cell to carry only the strict scorer versions
+and leaving `routing_recommendation` null.
 
 The permanent NIM quality workflow includes this module in 100% production
 statement and branch coverage, 100% public docstrings, wheel packaging, and
