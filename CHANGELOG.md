@@ -10,6 +10,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 - Restrict the private plain-HTTP provider seam to `localhost` or literal loopback IP addresses, reject URL userinfo before connection, dial directly without ambient proxy lookup, reject all redirect responses, and close failed resources deterministically.
 - Pin each HTTPS provider connection to the exact public addresses approved during validation, preserve the original hostname for TLS verification, bypass environment proxy resolution, and reject redirects to close DNS-rebinding and credential-forwarding SSRF paths.
+- Bound every provider response to 8 MiB of cumulative consumed bytes, including SSE iteration, and fail closed without silent truncation when an untrusted provider exceeds the budget.
 - Integrate DNS-pinned provider dispatch directly into `ModelClient` so package import performs no optional-adapter monkey-patching or order-dependent class mutation.
 - Reject provider hosts that resolve to any non-globally-routable address, including RFC 6598 shared address space, while retaining explicit multicast, private, loopback, link-local, and reserved-address protections.
 - Document narrowly scoped Semgrep suppressions for parameter-bound database queries, the explicit development-only TLS verification opt-out, and provider URLs that pass the egress guard.
@@ -21,4 +22,5 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 ### Documentation
 
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, and the supported-platform uncertainty boundary.
+- Add provider-response resource-bound doctoring covering the 8 MiB fail-closed limit, bounded SSE reads, batch-output partitioning, and operational rollback.
 - Record the CI trust boundary between generic coverage and native fuzz execution, including the evidence-preserving retry rule for branch-referenced reusable workflows.
