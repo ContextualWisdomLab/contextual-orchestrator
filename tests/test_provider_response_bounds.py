@@ -50,7 +50,7 @@ class _ReadableResponse:
 
 
 class _BoundedHTTPResponse(http.client.HTTPResponse):
-    """HTTPResponse-shaped double whose readline calls expose their byte bound."""
+    """HTTPResponse-shaped SSE double whose readline calls expose their byte bound."""
 
     def __init__(self, lines: list[bytes]) -> None:
         """Initialize line data without opening a real socket."""
@@ -63,8 +63,10 @@ class _BoundedHTTPResponse(http.client.HTTPResponse):
         """Expose cleanup state without relying on an uninitialized IOBase socket."""
         return self._closed_record
 
-    def getheader(self, _name: str, default: str | None = None) -> str | None:
-        """Return no framing header unless a specialized test double supplies one."""
+    def getheader(self, name: str, default: str | None = None) -> str | None:
+        """Expose the SSE media type while leaving framing headers absent."""
+        if name.lower() == "content-type":
+            return "text/event-stream; charset=utf-8"
         return default
 
     def readline(self, limit: int = -1) -> bytes:
@@ -103,6 +105,16 @@ class _FailingHeaderHTTPResponse(_BoundedHTTPResponse):
         """Raise one provider-controlled metadata failure before returning a value."""
         del default
         raise OSError("private upstream header detail")
+
+
+class _FailingStreamHeaderHTTPResponse(_BoundedHTTPResponse):
+    """HTTP response double that fails only while reading its stream media type."""
+
+    def getheader(self, name: str, default: str | None = None) -> str | None:
+        """Allow framing validation, then fail on the later Content-Type lookup."""
+        if name.lower() == "content-type":
+            raise OSError("private stream header detail")
+        return default
 
 
 def test_default_provider_response_budget_is_eight_mibibytes() -> None:
@@ -269,22 +281,22 @@ def test_negative_read_amount_is_treated_as_full_bounded_read() -> None:
 
 
 def test_http_iteration_uses_bounded_readline_and_accepts_exact_budget() -> None:
-    """SSE-style HTTP iteration never asks the socket for more than budget plus one."""
-    response = _BoundedHTTPResponse([b"ab\n", b"c"])
+    """SSE iteration never asks the socket for more than remaining budget plus one."""
+    response = _BoundedHTTPResponse([b":a\n", b"data: [DONE]\n"])
     connection = mock.Mock()
-    wrapper = _ProviderHTTPResponse(response, connection, max_bytes=4)
+    wrapper = _ProviderHTTPResponse(response, connection, max_bytes=16)
 
     with wrapper:
-        assert list(wrapper) == [b"ab\n", b"c"]
+        assert list(wrapper) == [b":a\n"]
 
-    assert response.readline_limits == [5, 2, 1]
+    assert response.readline_limits == [17, 14]
     assert response.closed is True
     connection.close.assert_called_once_with()
 
 
 def test_http_iteration_rejects_cumulative_overflow_and_closes_resources() -> None:
     """A streaming provider cannot exceed the cumulative cap across multiple lines."""
-    response = _BoundedHTTPResponse([b"abc\n", b"de"])
+    response = _BoundedHTTPResponse([b":a\n", b":bc\n"])
     connection = mock.Mock()
     wrapper = _ProviderHTTPResponse(response, connection, max_bytes=5)
 
@@ -292,7 +304,22 @@ def test_http_iteration_rejects_cumulative_overflow_and_closes_resources() -> No
         with wrapper:
             list(wrapper)
 
-    assert response.readline_limits == [6, 2]
+    assert response.readline_limits == [6, 3]
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
+def test_http_iteration_rejects_stream_content_type_lookup_failure() -> None:
+    """A provider Content-Type lookup failure is redacted and closes resources."""
+    response = _FailingStreamHeaderHTTPResponse([b"data: [DONE]\n"])
+    connection = mock.Mock()
+    wrapper = _ProviderHTTPResponse(response, connection, max_bytes=32)
+
+    with pytest.raises(RuntimeError, match="content type could not be validated") as error:
+        with wrapper:
+            list(wrapper)
+
+    assert "private stream header detail" not in str(error.value)
     assert response.closed is True
     connection.close.assert_called_once_with()
 
