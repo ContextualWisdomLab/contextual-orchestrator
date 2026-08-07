@@ -56,12 +56,7 @@ def _expected_decimal(expected: dict[str, Any]) -> decimal.Decimal:
         raise benchmark.BenchmarkContractError(
             "exact-number expected.number must be a finite numeric literal string"
         )
-    parsed = decimal.Decimal(literal)
-    if not parsed.is_finite():
-        raise benchmark.BenchmarkContractError(
-            "exact-number expected.number must be a finite numeric literal string"
-        )
-    return parsed
+    return decimal.Decimal(literal)
 
 
 def _answer_decimal(answer_text: str) -> decimal.Decimal | None:
@@ -69,11 +64,7 @@ def _answer_decimal(answer_text: str) -> decimal.Decimal | None:
     literal = unicodedata.normalize("NFC", answer_text).strip()
     if _ASCII_DECIMAL_LITERAL.fullmatch(literal) is None:
         return None
-    try:
-        parsed = decimal.Decimal(literal)
-    except decimal.InvalidOperation:
-        return None
-    return parsed if parsed.is_finite() else None
+    return decimal.Decimal(literal)
 
 
 def score_exact_number_match_v2(
@@ -195,14 +186,20 @@ def strict_task_manifest_payload(manifest: object) -> dict[str, Any]:
             )
         scorer_key = (str(scorer.get("name")), str(scorer.get("version")))
         if scorer_key == _LEGACY_NUMBER_KEY:
-            task["scorer"] = {"name": _STRICT_NUMBER_KEY[0], "version": _STRICT_NUMBER_KEY[1]}
+            task["scorer"] = {
+                "name": _STRICT_NUMBER_KEY[0],
+                "version": _STRICT_NUMBER_KEY[1],
+            }
         elif scorer_key == _LEGACY_TEXT_KEY:
             substring = expected.get("substring")
             if not isinstance(substring, str) or not substring.strip():
                 raise benchmark.BenchmarkContractError(
                     "legacy locked substring expectation must be a non-empty string"
                 )
-            task["scorer"] = {"name": _STRICT_TEXT_KEY[0], "version": _STRICT_TEXT_KEY[1]}
+            task["scorer"] = {
+                "name": _STRICT_TEXT_KEY[0],
+                "version": _STRICT_TEXT_KEY[1],
+            }
             task["expected"] = {"texts": [substring]}
         elif scorer_key not in {_STRICT_NUMBER_KEY, _STRICT_TEXT_KEY}:
             raise benchmark.BenchmarkContractError(
