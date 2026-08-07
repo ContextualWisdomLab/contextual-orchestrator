@@ -28,6 +28,14 @@ def test_numeric_scorer_rejects_oversized_or_unrepresentable_model_answers() -> 
     )
 
 
+def test_unrepresentable_numeric_answer_key_fails_before_provider_egress() -> None:
+    """A grammar-valid but unrepresentable exponent is an invalid answer key."""
+    exponent_overflow = "1e" + "9" * 80
+
+    with pytest.raises(nb.BenchmarkContractError, match="finite numeric literal"):
+        strict.score_exact_number_match_v2({"number": exponent_overflow}, "1")
+
+
 def test_numeric_answer_key_over_budget_fails_before_provider_egress() -> None:
     """An oversized expected literal is an invalid manifest, not a failed model cell."""
     oversized = "9" * (strict.MAX_STRICT_ANSWER_CHARACTERS + 1)
