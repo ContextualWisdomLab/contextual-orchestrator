@@ -31,6 +31,13 @@ locked translation prompt that omitted the fruit context could reward or punish
 a model for resolving an ambiguity rather than for translation quality. The
 authoring prompt now names the fruit context explicitly.
 
+A second validity gap appeared after complete-answer scorers were introduced.
+The original no-leakage check asked the scorer to grade the whole prompt. A
+complete-answer scorer correctly gives a prompt sentence a zero, even when that
+sentence embeds the answer token. Thus `Hint: the result is 21.0` could evade a
+numeric answer key of `21`, and a declared alias such as `Pacific Ocean` could
+be present in the prompt without being detected.
+
 These are construct-irrelevant score effects. They can change policy means,
 bootstrap differences, Pareto membership, and the apparent advantage of direct,
 route-once, or conduct policies without any real improvement in task accuracy.
@@ -70,15 +77,37 @@ largest-ocean task explicitly accepts `Pacific` and `Pacific Ocean`; the scorer
 does not invent synonyms, translations, abbreviations, prices, or semantic
 equivalence.
 
+### Prompt no-leakage contract
+
+The derived locked manifest is reviewed independently of response scoring before
+any credential lookup or provider request.
+
+- Numeric prompts are scanned for complete ASCII decimal tokens. Each token is
+  parsed with decimal arithmetic and compared by value, so `21.0` and `21` are
+  equivalent leakage while `121` is not.
+- Text prompts are normalized with the same NFC, whitespace, and task-specific
+  case policy as the answer key. Every declared alias is searched at Unicode
+  word boundaries, so `Pacific Ocean` is caught, `Au` is not inferred from
+  `Australia`, and lower-case `au` does not leak the case-sensitive symbol
+  `Au`.
+- Invalid numeric tokens that Python cannot represent do not abort review unless
+  they are the expected answer key.
+- Missing, empty, oversized, or non-string locked prompts fail before egress.
+- Unknown scorer identities cannot bypass the leakage dispatcher.
+
+This check is intentionally lexical and answer-key-driven. It does not claim to
+detect paraphrased or semantically encoded leakage, and it never asks an LLM to
+judge its own benchmark prompt.
+
 ### Strict-scoring resource boundary
 
-Every expected alias, expected numeric literal, and model answer is limited to
-4,096 Unicode code points before normalization or decimal parsing. The limit is
-a conservative implementation guard for answer-only tasks, not a statistical or
-linguistic sufficiency claim.
+Every expected alias, expected numeric literal, locked prompt, and model answer
+is limited to 4,096 Unicode code points before normalization or decimal parsing.
+The limit is a conservative implementation guard for answer-only tasks, not a
+statistical or linguistic sufficiency claim.
 
-- An oversized expected value is an invalid manifest and fails before provider
-  egress.
+- An oversized expected value or locked prompt is an invalid manifest and fails
+  before provider egress.
 - An oversized model answer scores zero rather than allocating unbounded
   normalization or decimal resources.
 - A syntactically matched decimal exponent that Python cannot represent is
@@ -112,12 +141,14 @@ root:
 4. converts locked substring expectations into explicit exact-text answer lists
    and case policies;
 5. validates already-strict numeric and text answer keys;
-6. preserves exploratory tasks and already-strict locked tasks;
-7. rejects unknown locked scorer contracts;
-8. adds `scoring_policy_version = 2026-08-07.3` and a derived manifest version;
-9. writes the deterministic derived manifest to an owner-only temporary
-   directory; and
-10. invokes the existing benchmark with that path.
+6. rejects equivalent numeric tokens and declared text aliases embedded in each
+   locked prompt;
+7. preserves exploratory tasks and already-strict locked tasks;
+8. rejects unknown locked scorer contracts;
+9. adds `scoring_policy_version = 2026-08-07.4` and a derived manifest version;
+10. writes the deterministic derived manifest to an owner-only temporary
+    directory; and
+11. invokes the existing benchmark with that path.
 
 The existing task-manifest SHA-256 and manifest-version fields therefore bind
 artifacts to the exact derived scoring contract that produced them. The private
@@ -131,8 +162,8 @@ price, or routing decision enters the transformation.
   closed on a registry collision.
 - The transformation opens no socket and reads no provider credential.
 - Ambiguous manifest selectors, malformed JSON, unsupported locked scorers,
-  invalid aliases, invalid case policies, oversized expected values, and invalid
-  numeric keys fail before provider egress.
+  leaked answers, invalid aliases, invalid case policies, oversized expected
+  values or prompts, and invalid numeric keys fail before provider egress.
 - Oversized or unrepresentable model answers cannot abort the benchmark or
   consume the full provider-response allowance inside the scorer.
 - The benchmark remains evidence-generating. Strict scoring does not authorize
@@ -140,37 +171,29 @@ price, or routing decision enters the transformation.
 
 ## Verification
 
-`tests/test_nim_strict_scorer_validity.py` proves:
+`tests/test_nim_strict_scorer_validity.py` proves full-response numeric and text
+validity, task-declared case semantics, explicit aliases, Korean fruit-context
+authoring, invalid answer-key rejection, explicit activation, scorer ownership,
+deterministic manifest conversion, and private temporary-manifest lifecycle.
 
-- full-response numeric equivalence and rejection of containment, negation,
-  multiple values, and non-finite values;
-- NFC-normalized exact text with task-declared case semantics and explicit
-  alternatives;
-- case-sensitive chemical-symbol scoring and case-insensitive ordinary names;
-- declared `Pacific`/`Pacific Ocean` aliases and Korean fruit-context authoring;
-- rejection of substring false positives, malformed alternatives, invalid case
-  policies, and normalized duplicates;
-- idempotent explicit activation and fail-closed scorer identity ownership;
-- deterministic conversion of all locked authoring tasks while exploratory
-  tasks remain legacy;
-- preservation and validation of already-strict manifests and rejection of
-  ambiguous scorer contracts;
-- split and equals CLI argument forms, duplicate/missing selector rejection;
-- owner-only deterministic temporary manifests; and
-- removal of the private derived manifest after the supported CLI call.
+`tests/test_nim_strict_scoring_bounds.py` proves the 4,096-character answer
+contract, zero-score handling for oversized and unrepresentable model answers,
+and fail-before-egress rejection of oversized expected values.
 
-`tests/test_nim_strict_scoring_bounds.py` proves the 4,096-character contract,
-zero-score handling for oversized and unrepresentable model answers, and
-fail-before-egress rejection of oversized expected values.
+`tests/test_nim_strict_scoring_leakage.py` proves decimal-equivalent leakage,
+complete numeric-token boundaries, declared multi-word aliases, task-specific
+case behavior, larger-word false-positive prevention, punctuation aliases,
+unrepresentable unrelated numeric tokens, prompt type and size boundaries, and
+fail-closed unknown scorer dispatch.
 
 `tests/test_nim_strict_scoring_integration.py` proves ordinary package-import
 isolation and runs the supported transactional publication path end to end,
 requiring every locked evaluation cell to carry only the strict scorer versions
 and leaving `routing_recommendation` null.
 
-The permanent NIM quality workflow includes this module in 100% production
-statement and branch coverage, 100% public docstrings, wheel packaging, and
-installed-package import checks.
+The permanent NIM quality workflow includes all four strict-scoring test modules
+and this production module in 100% statement and branch coverage, 100% public
+docstrings, wheel packaging, and installed-package import checks.
 
 ## References
 
