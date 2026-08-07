@@ -70,6 +70,28 @@ largest-ocean task explicitly accepts `Pacific` and `Pacific Ocean`; the scorer
 does not invent synonyms, translations, abbreviations, prices, or semantic
 equivalence.
 
+### Strict-scoring resource boundary
+
+Every expected alias, expected numeric literal, and model answer is limited to
+4,096 Unicode code points before normalization or decimal parsing. The limit is
+a conservative implementation guard for answer-only tasks, not a statistical or
+linguistic sufficiency claim.
+
+- An oversized expected value is an invalid manifest and fails before provider
+  egress.
+- An oversized model answer scores zero rather than allocating unbounded
+  normalization or decimal resources.
+- A syntactically matched decimal exponent that Python cannot represent is
+  classified as an unusable model answer and scores zero instead of aborting the
+  benchmark.
+- Expected numeric conversion errors remain manifest errors, preserving the
+  distinction between invalid scoring keys and failed model responses.
+
+The provider-response 8 MiB boundary remains independent and authoritative for
+network body consumption. The smaller scoring cap prevents a bounded but still
+large response from becoming a CPU or memory amplification input at the scoring
+layer.
+
 ## Authoring and evidence provenance
 
 The repository keeps legacy scorer fields in the reviewed authoring manifest
@@ -92,7 +114,7 @@ root:
 5. validates already-strict numeric and text answer keys;
 6. preserves exploratory tasks and already-strict locked tasks;
 7. rejects unknown locked scorer contracts;
-8. adds `scoring_policy_version = 2026-08-07.2` and a derived manifest version;
+8. adds `scoring_policy_version = 2026-08-07.3` and a derived manifest version;
 9. writes the deterministic derived manifest to an owner-only temporary
    directory; and
 10. invokes the existing benchmark with that path.
@@ -109,8 +131,10 @@ price, or routing decision enters the transformation.
   closed on a registry collision.
 - The transformation opens no socket and reads no provider credential.
 - Ambiguous manifest selectors, malformed JSON, unsupported locked scorers,
-  invalid aliases, invalid case policies, and invalid numeric keys fail before
-  provider egress.
+  invalid aliases, invalid case policies, oversized expected values, and invalid
+  numeric keys fail before provider egress.
+- Oversized or unrepresentable model answers cannot abort the benchmark or
+  consume the full provider-response allowance inside the scorer.
 - The benchmark remains evidence-generating. Strict scoring does not authorize
   a production route, price, merge, or release.
 
@@ -134,6 +158,10 @@ price, or routing decision enters the transformation.
 - split and equals CLI argument forms, duplicate/missing selector rejection;
 - owner-only deterministic temporary manifests; and
 - removal of the private derived manifest after the supported CLI call.
+
+`tests/test_nim_strict_scoring_bounds.py` proves the 4,096-character contract,
+zero-score handling for oversized and unrepresentable model answers, and
+fail-before-egress rejection of oversized expected values.
 
 `tests/test_nim_strict_scoring_integration.py` proves ordinary package-import
 isolation and runs the supported transactional publication path end to end,
