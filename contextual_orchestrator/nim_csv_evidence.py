@@ -5,6 +5,11 @@ JSON. This optional, standard-library-only adapter copies that evidence into the
 uploaded CSV as deterministic JSON so spreadsheet consumers retain the exact
 step, role, agent, and model identity required for audit and replay.
 
+Route-only traces may not have an explicit workflow-plan step identifier. The
+adapter assigns those present-but-empty sentinels deterministic positional IDs
+without changing real non-empty IDs. Missing, non-string, or duplicate explicit
+IDs still fail closed.
+
 The adapter is intentionally lazy: importing :mod:`contextual_orchestrator`
 does not import this module or mutate the benchmark implementation. The NIM CLI
 composition root invokes it only for the benchmark command. The wrapper writes,
@@ -63,16 +68,44 @@ def _cell_identity(cell: object, source_label: str) -> tuple[str, str]:
     return values[0], values[1]
 
 
+def _canonical_step_id(
+    raw_step_id: object,
+    position: int,
+    used_step_ids: set[str],
+) -> str:
+    """Return one unique trace ID, canonicalizing only empty string sentinels."""
+    if not isinstance(raw_step_id, str):
+        raise CsvEvidenceError("model assignment requires string step_id")
+    candidate = raw_step_id.strip()
+    if not candidate:
+        candidate = f"trace_step_{position:04d}"
+        suffix = 2
+        while candidate in used_step_ids:
+            candidate = f"trace_step_{position:04d}_{suffix}"
+            suffix += 1
+    elif candidate in used_step_ids:
+        raise CsvEvidenceError(f"duplicate model assignment step_id: {candidate}")
+    used_step_ids.add(candidate)
+    return candidate
+
+
 def _models_used_json(value: object) -> str:
-    """Validate and deterministically serialize one cell's model assignments."""
+    """Validate, canonicalize, and deterministically serialize model assignments."""
     if not isinstance(value, list):
         raise CsvEvidenceError("report cell models_used must be a list")
     normalized: list[dict[str, str]] = []
-    for assignment in value:
+    used_step_ids: set[str] = set()
+    for position, assignment in enumerate(value, start=1):
         if not isinstance(assignment, dict):
             raise CsvEvidenceError("each model assignment must be an object")
-        normalized_assignment: dict[str, str] = {}
-        for field_name in _ASSIGNMENT_FIELDS:
+        normalized_assignment = {
+            "step_id": _canonical_step_id(
+                assignment.get("step_id"),
+                position,
+                used_step_ids,
+            )
+        }
+        for field_name in _ASSIGNMENT_FIELDS[1:]:
             field_value = assignment.get(field_name)
             if not isinstance(field_value, str) or not field_value:
                 raise CsvEvidenceError(
@@ -227,7 +260,9 @@ def _normalized_output_directory(output_directory: Path) -> Path:
     """Return a safe absolute final directory rooted at its resolved parent."""
     expanded = output_directory.expanduser()
     if expanded.name in {"", ".", ".."}:
-        raise CsvEvidenceError("output directory must name a dedicated artifact directory")
+        raise CsvEvidenceError(
+            "output directory must name a dedicated artifact directory"
+        )
     parent = expanded.parent.resolve()
     final_directory = parent / expanded.name
     if final_directory.is_symlink():
@@ -330,7 +365,9 @@ def _validate_complete_artifact_directory(staging_directory: Path) -> None:
     ) as handle:
         fieldnames = list(csv.DictReader(handle).fieldnames or [])
     if "models_used_json" not in fieldnames:
-        raise CsvEvidenceError("staged benchmark CSV lacks model-assignment evidence")
+        raise CsvEvidenceError(
+            "staged benchmark CSV lacks model-assignment evidence"
+        )
 
 
 def _restore_backup_after_failure(
