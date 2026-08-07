@@ -5,6 +5,8 @@ from __future__ import annotations
 import io
 import json
 from pathlib import Path
+import subprocess
+import sys
 
 from contextual_orchestrator.nim_csv_evidence import (
     run_benchmark_cli_with_complete_csv,
@@ -16,6 +18,35 @@ from contextual_orchestrator.nim_strict_scoring import (
 
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def test_ordinary_package_import_does_not_activate_optional_nim_modules() -> None:
+    """Gateway consumers must not import or activate benchmark-only adapters."""
+    script = """
+import json
+import sys
+
+import contextual_orchestrator
+
+print(json.dumps({
+    "benchmark": "contextual_orchestrator.nim_benchmark" in sys.modules,
+    "csv_evidence": "contextual_orchestrator.nim_csv_evidence" in sys.modules,
+    "strict_scoring": "contextual_orchestrator.nim_strict_scoring" in sys.modules,
+}))
+"""
+    completed = subprocess.run(
+        [sys.executable, "-c", script],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert json.loads(completed.stdout) == {
+        "benchmark": False,
+        "csv_evidence": False,
+        "strict_scoring": False,
+    }
 
 
 def test_supported_dry_run_publishes_only_strict_locked_scores(
