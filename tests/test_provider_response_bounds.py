@@ -79,6 +79,19 @@ class _BoundedHTTPResponse(http.client.HTTPResponse):
         self._closed_record = True
 
 
+class _HeaderHTTPResponse(_BoundedHTTPResponse):
+    """HTTP response double exposing provider-controlled framing headers."""
+
+    def __init__(self, headers: dict[str, str]) -> None:
+        """Store case-insensitive headers without reading a response body."""
+        super().__init__([])
+        self._headers = {name.lower(): value for name, value in headers.items()}
+
+    def getheader(self, name: str, default: str | None = None) -> str | None:
+        """Return one response header using HTTP's case-insensitive field names."""
+        return self._headers.get(name.lower(), default)
+
+
 def test_default_provider_response_budget_is_eight_mibibytes() -> None:
     """The reviewed default keeps every provider response below eight MiB."""
     assert provider_transport.PROVIDER_RESPONSE_MAX_BYTES == 8 * 1024 * 1024
@@ -89,6 +102,64 @@ def test_provider_response_rejects_invalid_byte_budget(invalid_limit: object) ->
     """A non-positive, boolean, or non-integer byte budget fails closed."""
     with pytest.raises(ValueError, match="positive integer"):
         _ProviderHTTPResponse(_ReadableResponse(b""), mock.Mock(), max_bytes=invalid_limit)
+
+
+def test_oversized_declared_length_fails_before_body_read_and_closes_resources() -> None:
+    """An over-limit Content-Length is rejected before provider bytes are consumed."""
+    response = _HeaderHTTPResponse({"Content-Length": "5"})
+    connection = mock.Mock()
+
+    with pytest.raises(RuntimeError, match="response byte limit"):
+        _ProviderHTTPResponse(response, connection, max_bytes=4)
+
+    assert response.readline_limits == []
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    "declared_length",
+    ["", "-1", "+1", "1.0", "1, 2", "4,,4", "١"],
+)
+def test_invalid_or_conflicting_declared_lengths_fail_closed(
+    declared_length: str,
+) -> None:
+    """Malformed, non-ASCII, or conflicting Content-Length evidence is rejected."""
+    response = _HeaderHTTPResponse({"Content-Length": declared_length})
+    connection = mock.Mock()
+
+    with pytest.raises(RuntimeError, match="content length"):
+        _ProviderHTTPResponse(response, connection, max_bytes=4)
+
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
+def test_equal_duplicate_declared_lengths_are_normalized_without_body_reads() -> None:
+    """RFC-compatible repeated equal decimal lengths remain valid at the limit."""
+    response = _HeaderHTTPResponse({"Content-Length": "0004, 4"})
+    connection = mock.Mock()
+
+    wrapper = _ProviderHTTPResponse(response, connection, max_bytes=4)
+    assert response.readline_limits == []
+    wrapper.close()
+
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
+def test_content_length_with_transfer_encoding_is_rejected_as_ambiguous() -> None:
+    """Conflicting framing metadata cannot select a less-bounded body path."""
+    response = _HeaderHTTPResponse(
+        {"Content-Length": "4", "Transfer-Encoding": "chunked"}
+    )
+    connection = mock.Mock()
+
+    with pytest.raises(RuntimeError, match="framing is ambiguous"):
+        _ProviderHTTPResponse(response, connection, max_bytes=4)
+
+    assert response.closed is True
+    connection.close.assert_called_once_with()
 
 
 def test_unbounded_read_probes_one_byte_past_remaining_budget() -> None:
