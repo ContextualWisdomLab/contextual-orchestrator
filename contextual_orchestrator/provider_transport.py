@@ -12,6 +12,7 @@ from contextlib import suppress
 import http.client
 import ipaddress
 import json
+import math
 import socket
 import ssl
 from typing import Any, Iterator
@@ -26,6 +27,14 @@ PROVIDER_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 def _reject_non_finite_json_constant(_value: str) -> None:
     """Reject Python JSON extensions that RFC 8259 does not permit."""
     raise ValueError("non-finite JSON number")
+
+
+def _parse_finite_json_float(value: str) -> float:
+    """Decode one JSON float while rejecting overflow into a non-finite value."""
+    parsed = float(value)
+    if not math.isfinite(parsed):
+        raise ValueError("non-finite JSON number")
+    return parsed
 
 
 def _unique_json_object(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
@@ -43,9 +52,10 @@ def _parse_provider_json_object_text(text: str) -> dict[str, Any]:
 
     Python's default decoder intentionally accepts ``NaN`` and infinities and
     silently keeps the final value of duplicate object members. Provider
-    responses cross a trust boundary, so those extensions are rejected before
-    orchestration code can interpret ambiguous data. Decoder exceptions are
-    replaced without chaining because ``JSONDecodeError`` retains the entire
+    responses cross a trust boundary, so those extensions and finite-syntax
+    numbers that overflow Python's runtime float representation are rejected
+    before orchestration code can interpret ambiguous data. Decoder exceptions
+    are replaced without chaining because ``JSONDecodeError`` retains the entire
     untrusted document in its ``doc`` attribute.
     """
     try:
@@ -53,6 +63,7 @@ def _parse_provider_json_object_text(text: str) -> dict[str, Any]:
             text,
             object_pairs_hook=_unique_json_object,
             parse_constant=_reject_non_finite_json_constant,
+            parse_float=_parse_finite_json_float,
         )
     except (ValueError, RecursionError):
         raise RuntimeError("provider JSON response is malformed") from None
@@ -105,6 +116,7 @@ def _encode_provider_json_lines(payload: bytes) -> bytes:
                 line,
                 object_pairs_hook=_unique_json_object,
                 parse_constant=_reject_non_finite_json_constant,
+                parse_float=_parse_finite_json_float,
             )
             if not isinstance(value, dict):
                 raise ValueError("JSON Lines row must be an object")
