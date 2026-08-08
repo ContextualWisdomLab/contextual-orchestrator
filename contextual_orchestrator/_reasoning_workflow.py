@@ -135,7 +135,9 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
         )
     worker["output"] = output
     worker["served_agent_id"] = served_id
-    if usage is not None:
+    if usage is None:
+        worker.pop("usage", None)
+    else:
         worker["usage"] = usage
     served_agent = orchestrator._agent(served_id)
     served_profile = agent_reasoning_profile(served_agent)
@@ -164,7 +166,9 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
             )
         verifier["output"] = verifier_output
         verifier["served_agent_id"] = verifier_served
-        if verifier_usage is not None:
+        if verifier_usage is None:
+            verifier.pop("usage", None)
+        else:
             verifier["usage"] = verifier_usage
         _refresh_step_reasoning_from_event(
             verifier,
@@ -204,7 +208,9 @@ def _retry_rejected_worker_once(orchestrator: Any, result: dict[str, Any], task:
             )
         synthesizer["output"] = synth_output
         synthesizer["served_agent_id"] = synth_served
-        if synth_usage is not None:
+        if synth_usage is None:
+            synthesizer.pop("usage", None)
+        else:
             synthesizer["usage"] = synth_usage
         _refresh_step_reasoning_from_event(
             synthesizer,
