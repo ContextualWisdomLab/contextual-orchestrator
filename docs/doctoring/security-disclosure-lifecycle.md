@@ -24,7 +24,7 @@ GitHub's current documentation describes GitHub private vulnerability reporting 
 
 ### NIST SSDF status
 
-NIST SP 800-218 Rev. 1, Secure Software Development Framework Version 1.2, is currently an **Initial Public Draft**, published 2025-12-17; its public comment period has closed. It is therefore contextual acquisition and secure-development evidence, not a finalized normative requirement. NIST describes SSDF as a common set of practices for reducing vulnerabilities and notes its usefulness in supplier/acquirer communication. The repository policy uses that evidence only to reinforce the need for verified remediation and release evidence; ISO/IEC 29147 and ISO/IEC 30111 remain the primary disclosure/handling standards cited by the policy.
+NIST SP 800-218 Rev. 1, Secure Software Development Framework Version 1.2, is currently an **Initial Public Draft**, published 2025-12-17; its public comment period has closed. The official NIST publication metadata lists Harold Booth, Michael Ogata, Karen Kent, Murugiah Souppaya, and Donna Dodson as the authors and identifies DOI `10.6028/NIST.SP.800-218r1.ipd`. It is therefore contextual acquisition and secure-development evidence, not a finalized normative requirement. NIST describes SSDF as a common set of practices for reducing vulnerabilities and notes its usefulness in supplier/acquirer communication. The repository policy uses that evidence only to reinforce the need for verified remediation and release evidence; ISO/IEC 29147 and ISO/IEC 30111 remain the primary disclosure/handling standards cited by the policy.
 
 ## Repository contract
 
@@ -60,8 +60,8 @@ International Organization for Standardization. (2018). *ISO/IEC 29147:2018 Info
 
 International Organization for Standardization. (2019). *ISO/IEC 30111:2019 Information technology—Security techniques—Vulnerability handling processes* (2nd ed.). https://www.iso.org/standard/69725.html
 
-National Institute of Standards and Technology. (2025). *Secure software development framework (SSDF) version 1.2: Recommendations for mitigating the risk of software vulnerabilities* (NIST SP 800-218 Rev. 1, Initial Public Draft). https://csrc.nist.gov/pubs/sp/800/218/r1/ipd
+Booth, H., Ogata, M., Kent, K., Souppaya, M., & Dodson, D. (2025). *Secure software development framework (SSDF) version 1.2: Recommendations for mitigating the risk of software vulnerabilities* (NIST SP 800-218 Rev. 1, Initial Public Draft). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-218r1.ipd
 
 ## APA 7 note
 
-The references above use organizational authors for standards and first-party documentation. Retrieval dates are included for GitHub pages because operational documentation can change without a new edition identifier. ISO edition years and NIST publication status are retained as publisher-controlled version evidence.
+ISO standards and GitHub first-party documentation use organizational authors. The NIST draft uses the individual authors listed in the official publication metadata, with NIST retained as publisher and the publication DOI used as the persistent locator. Retrieval dates are included for GitHub pages because operational documentation can change without a new edition identifier. ISO edition years and NIST publication status are retained as publisher-controlled version evidence.
