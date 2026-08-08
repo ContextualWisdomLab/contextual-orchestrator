@@ -4,7 +4,7 @@
 
 Treat every complete document returned by a validated HTTPS model-provider request as untrusted structured data until the transport layer has bounded, decoded, and validated it. Normal provider endpoints must cross the boundary as one strict UTF-8 JSON object. OpenAI-compatible Batch API file-content responses remain JSON Lines, with every non-empty line independently required to be a strict JSON object.
 
-The transport rejects malformed UTF-8, malformed JSON, non-finite numeric extensions (`NaN`, `Infinity`, and `-Infinity`), duplicate object member names, and top-level non-object values. It replaces decoder failures with stable redacted `RuntimeError` messages without exception chaining. Valid objects are re-serialized before existing model-client parsing so later decoder exceptions cannot retain the original untrusted document.
+The transport rejects malformed UTF-8, malformed JSON, non-finite numeric extensions (`NaN`, `Infinity`, and `-Infinity`), syntactically valid floating-point exponents that overflow Python's runtime representation to a non-finite value, duplicate object member names, and top-level non-object values. It replaces decoder failures with stable redacted `RuntimeError` messages without exception chaining. Valid objects are re-serialized before existing model-client parsing so later decoder exceptions cannot retain the original untrusted document.
 
 This boundary supplements, rather than replaces, the existing cumulative 8 MiB provider-response byte budget and HTTP framing checks.
 
@@ -12,9 +12,9 @@ This boundary supplements, rather than replaces, the existing cumulative 8 MiB p
 
 A model-provider response can contain customer prompts, model output, tool arguments, retrieved business data, or upstream diagnostics. Python's `JSONDecodeError` exposes the parsed document through its `doc` attribute. Chaining that exception through retry or logging code can therefore turn malformed upstream content into durable diagnostic evidence containing private data.
 
-Python also deliberately accepts several behaviors that are broader than interoperable JSON: its decoder accepts `NaN`, `Infinity`, and `-Infinity`, and repeated object names default to last-value-wins semantics. Those behaviors are useful for general-purpose compatibility but are undesirable at an orchestration trust boundary because two implementations can interpret the same provider evidence differently.
+Python also deliberately accepts several behaviors that are broader than interoperable JSON: its decoder accepts `NaN`, `Infinity`, and `-Infinity`, and repeated object names default to last-value-wins semantics. In addition, the default binary-float conversion can materialize an extreme but syntactically valid exponent such as `1e999` as infinity. Those behaviors are useful for general-purpose compatibility but are undesirable at an orchestration trust boundary because two implementations can interpret the same provider evidence differently.
 
-RFC 8259 requires JSON exchanged between systems outside a closed ecosystem to use UTF-8, excludes non-finite numbers from the JSON number grammar, and states that object names should be unique for interoperable behavior. The Python 3.14 documentation explicitly documents both the non-finite-number extension and the default repeated-name behavior, and exposes `parse_constant` and `object_pairs_hook` as controls. The implementation uses those controls to fail closed.
+RFC 8259 requires JSON exchanged between systems outside a closed ecosystem to use UTF-8, excludes literal non-finite values from the JSON number grammar, states that object names should be unique for interoperable behavior, and specifically identifies values such as `1E400` as evidence of potential interoperability problems when they exceed commonly available binary64 range and precision. The Python 3.14 documentation explicitly documents the non-finite-number extension and default repeated-name behavior, and exposes `parse_constant`, `parse_float`, and `object_pairs_hook` as controls. The implementation uses those controls to fail closed before a finite-syntax number can become a non-finite orchestration value.
 
 ## Request-path authority
 
@@ -28,7 +28,7 @@ The request path is not a new routing authority and does not change the destinat
 
 ## Batch compatibility
 
-The OpenAI Batch API defines batch input and output as per-line request/output objects stored in JSONL files. Batch file-content responses therefore cannot be forced through a single-document JSON parser. The transport validates every non-empty row independently, requires an object per row, rejects duplicate names and non-finite constants, and emits canonical UTF-8 JSON Lines for the existing batch parser.
+The OpenAI Batch API defines batch input and output as per-line request/output objects stored in JSONL files. Batch file-content responses therefore cannot be forced through a single-document JSON parser. The transport validates every non-empty row independently, requires an object per row, rejects duplicate names and any numeric value that would become non-finite at the Python boundary, and emits canonical UTF-8 JSON Lines for the existing batch parser.
 
 Blank-only or malformed output fails closed. A malformed provider row is never handed to the later orchestration-level `json.loads` call, so provider-controlled text is not retained in that later exception's document field.
 
@@ -36,7 +36,7 @@ Blank-only or malformed output fails closed. A malformed provider row is never h
 
 The boundary uses intentionally small, stable messages:
 
-- `provider JSON response is malformed` for invalid UTF-8, invalid JSON syntax, duplicate names, non-finite extensions, or parser/encoder recursion failure;
+- `provider JSON response is malformed` for invalid UTF-8, invalid JSON syntax, duplicate names, non-finite extensions, float overflow to a non-finite runtime value, or parser/encoder recursion failure;
 - `provider JSON response must be an object` when a valid JSON document has the wrong top-level type; and
 - `provider JSON Lines response is malformed` for invalid Batch output content.
 
@@ -56,11 +56,11 @@ Live NVIDIA NIM development continues to use the repository credential abstracti
 
 ## Verification
 
-`tests/test_provider_json_boundary.py` proves that:
+`tests/test_provider_json_boundary.py` and `tests/test_provider_json_finite_number_boundary.py` prove that:
 
 1. malformed UTF-8 and malformed JSON are redacted and carry no original exception cause;
-2. `NaN`, positive/negative infinity, duplicate names, and top-level arrays are rejected;
-3. valid Unicode JSON objects survive the boundary;
+2. `NaN`, positive/negative infinity, duplicate names, top-level arrays, and extreme exponents that overflow to infinity are rejected;
+3. valid Unicode JSON objects and ordinary finite exponent notation survive the boundary;
 4. the pinned HTTPS connection records the exact provider request target;
 5. chat, Responses passthrough, file-upload metadata, and batch metadata paths fail closed before their existing `json.loads` calls can retain malformed provider documents;
 6. valid structured responses preserve existing caller semantics;
@@ -75,12 +75,12 @@ Repository-local exact-head GitHub Checks remain diagnostic for the contributor 
 When this boundary rejects a provider response:
 
 1. identify the provider and endpoint from existing request/audit metadata rather than logging the response body;
-2. confirm whether the upstream service returned malformed JSON, duplicate names, non-finite constants, an unexpected top-level type, or malformed Batch JSONL;
+2. confirm whether the upstream service returned malformed JSON, duplicate names, a non-finite extension or out-of-range exponent, an unexpected top-level type, or malformed Batch JSONL;
 3. validate the provider against its current documented OpenAI-compatible contract;
 4. reproduce with synthetic non-sensitive data when evidence is needed; and
 5. fix the provider or compatibility adapter rather than relaxing the global parser.
 
-A provider-specific compatibility exception requires a reviewed architectural decision and dedicated regression tests. Do not re-enable permissive Python JSON extensions globally.
+A provider-specific compatibility exception requires a reviewed architectural decision and dedicated regression tests. Do not re-enable permissive Python JSON extensions globally or admit numeric values that become non-finite in the runtime representation.
 
 ## Rollback
 
