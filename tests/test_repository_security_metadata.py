@@ -134,6 +134,12 @@ def test_security_policy_documents_coordinated_disclosure_lifecycle():
         "repository security advisory",
         "NIST SP 800-218 Rev. 1",
         "Initial Public Draft",
+        "Harold Booth",
+        "Michael Ogata",
+        "Karen Kent",
+        "Murugiah Souppaya",
+        "Donna Dodson",
+        "https://doi.org/10.6028/NIST.SP.800-218r1.ipd",
         "APA 7",
     ]
     for token in required_doctoring_tokens:
