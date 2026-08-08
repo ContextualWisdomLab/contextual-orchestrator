@@ -17,6 +17,8 @@ from contextual_orchestrator import ModelAgent  # noqa: E402
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     NotConfigured,
+    PostgresCredentialBackend,
+    _select_backend,
     get_credential,
     register_credential,
     set_backend,
@@ -35,35 +37,37 @@ def _fresh_backend():
 
 
 def test_get_credential_returns_none_when_absent() -> None:
+    """Unregistered credentials are absent from the in-memory backend."""
     assert get_credential("OPENAI_API_KEY") is None
 
 
 def test_register_then_get_roundtrips_via_kv() -> None:
+    """Registered credentials round-trip through the active KV backend."""
     register_credential("OPENAI_API_KEY", "sk-live-123")
     assert get_credential("OPENAI_API_KEY") == "sk-live-123"
 
 
 def test_register_credential_overwrites() -> None:
+    """A later registration replaces the prior credential value."""
     register_credential("OPENAI_API_KEY", "sk-old")
     register_credential("OPENAI_API_KEY", "sk-new")
     assert get_credential("OPENAI_API_KEY") == "sk-new"
 
 
 def test_credential_key_defaults_to_openai() -> None:
+    """Remote agents default to the reviewed OpenAI credential key name."""
     agent = ModelAgent("remote_agent", "gpt-example", "https://api.openai.com/v1")
     assert agent.credential_key == "OPENAI_API_KEY"
     assert agent.credential_name == "OPENAI_API_KEY"
 
 
 def test_legacy_api_key_env_is_treated_as_credential_name_not_env() -> None:
-    # A legacy api_key_env value maps to the credential NAME; it is never read
-    # from the process environment.
+    """Legacy api_key_env names never authorize a process-environment fallback."""
     os.environ.pop("LEGACY_PROVIDER_KEY", None)
     os.environ["LEGACY_PROVIDER_KEY"] = "sk-from-env-should-be-ignored"
     try:
         agent = ModelAgent("legacy_agent", "gpt-example", "https://api.openai.com/v1", "LEGACY_PROVIDER_KEY")
         assert agent.credential_name == "LEGACY_PROVIDER_KEY"
-        # Not registered in the KV -> unresolvable, despite the env var existing.
         assert get_credential(agent.credential_name) is None
         register_credential("LEGACY_PROVIDER_KEY", "sk-from-kv")
         assert get_credential(agent.credential_name) == "sk-from-kv"
@@ -72,6 +76,7 @@ def test_legacy_api_key_env_is_treated_as_credential_name_not_env() -> None:
 
 
 def test_explicit_credential_key_resolves() -> None:
+    """An explicit provider credential key resolves only through the KV seam."""
     agent = ModelAgent(
         "vendor_agent", "gpt-example", "https://api.openai.com/v1", credential_key="VENDOR_API_KEY"
     )
@@ -81,8 +86,7 @@ def test_explicit_credential_key_resolves() -> None:
 
 
 def test_non_mock_agent_without_credential_raises_not_env_fallback() -> None:
-    # Even with a matching env var set, an unresolved KV credential must raise
-    # NotConfigured rather than silently reading os.getenv.
+    """Remote validation fails closed when KV has no credential, even if env does."""
     os.environ["OPENAI_API_KEY"] = "sk-env-must-not-be-used"
     try:
         client = ModelClient()
@@ -95,13 +99,14 @@ def test_non_mock_agent_without_credential_raises_not_env_fallback() -> None:
 
 
 def test_mock_agent_stays_keyless() -> None:
-    # Mock agents early-return before any credential logic; no KV required.
+    """Mock agents require no remote credential material."""
     client = ModelClient()
     agent = ModelAgent("general_agent", "mock-generalist", "mock://local")
     assert client.chat(agent, [{"role": "user", "content": "hi"}])
 
 
 def test_unknown_backend_selector_raises(monkeypatch) -> None:
+    """Unknown credential backends fail closed rather than silently falling back."""
     from contextual_orchestrator import credentials
 
     set_backend(None)
@@ -109,3 +114,48 @@ def test_unknown_backend_selector_raises(monkeypatch) -> None:
     with pytest.raises(NotConfigured):
         credentials.get_backend()
     set_backend(None)
+
+
+def test_postgres_backend_requires_bootstrap_dsn() -> None:
+    """A missing bootstrap DSN fails closed with NotConfigured."""
+    with pytest.raises(NotConfigured):
+        PostgresCredentialBackend("", "boot-passphrase")
+
+
+def test_postgres_backend_requires_bootstrap_passphrase() -> None:
+    """A missing bootstrap passphrase fails closed with NotConfigured."""
+    with pytest.raises(NotConfigured):
+        PostgresCredentialBackend("postgresql://host/db", "")
+
+
+def test_postgres_backend_stores_bootstrap_transport() -> None:
+    """A valid dsn+passphrase is stored as bootstrap transport, schema not yet ensured."""
+    backend = PostgresCredentialBackend("postgresql://host/db", "boot-passphrase")
+    assert backend._dsn == "postgresql://host/db"
+    assert backend._passphrase == "boot-passphrase"  # noqa: S105 - test-only fixture
+    assert backend._ensured is False
+
+
+def test_postgres_backend_from_env_reads_bootstrap_vars(monkeypatch) -> None:
+    """from_env reads both the DSN and passphrase bootstrap env vars."""
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_DSN", "postgresql://host/db")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE", "boot-passphrase")
+    backend = PostgresCredentialBackend.from_env()
+    assert isinstance(backend, PostgresCredentialBackend)
+    assert backend._dsn == "postgresql://host/db"
+    assert backend._passphrase == "boot-passphrase"  # noqa: S105 - test-only fixture
+
+
+def test_select_backend_memory_default_is_in_memory(monkeypatch) -> None:
+    """The default (unset) backend selector yields the in-memory backend."""
+    monkeypatch.delenv("CONTEXTUAL_ORCHESTRATOR_KV_BACKEND", raising=False)
+    assert isinstance(_select_backend(), InMemoryCredentialBackend)
+
+
+def test_select_backend_postgres_builds_from_env(monkeypatch) -> None:
+    """Selecting 'postgres' builds the Postgres backend from bootstrap env vars."""
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_BACKEND", "postgres")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_DSN", "postgresql://host/db")
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE", "boot-passphrase")
+    backend = _select_backend()
+    assert isinstance(backend, PostgresCredentialBackend)
