@@ -17,6 +17,7 @@ from unittest import mock
 
 import pytest
 
+import contextual_orchestrator.provider_transport as provider_transport
 from contextual_orchestrator.orchestrator import ModelAgent, ModelClient
 from contextual_orchestrator.provider_transport import (
     _PinnedHTTPSConnection,
@@ -125,6 +126,25 @@ def test_provider_json_accepts_valid_utf8_object() -> None:
     wrapper = _ProviderHTTPResponse(response, mock.Mock(), max_bytes=512)
 
     assert wrapper.read_json_object() == {"message": "안녕하세요", "count": 2}
+
+
+def test_provider_json_canonicalization_redacts_unserializable_values(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A decoded value that cannot be canonicalized fails without leaking input."""
+    private_marker = b"private-provider-marker"
+    monkeypatch.setattr(
+        provider_transport,
+        "_decode_provider_json_object",
+        lambda _payload: {"value": object()},
+    )
+
+    with pytest.raises(RuntimeError, match="provider JSON response is malformed") as error:
+        provider_transport._encode_provider_json_object(private_marker)
+
+    assert error.value.__cause__ is None
+    assert private_marker.decode() not in str(error.value)
+    assert private_marker.decode() not in repr(error.value)
 
 
 def test_pinned_https_connection_records_response_contract_path() -> None:

@@ -32,6 +32,7 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
     heuristic_embedding,
 )
 from contextual_orchestrator.cost_ledger import (  # noqa: E402
+    ATTRIBUTION_DIMENSION_CATALOG,
     AttributionDimensions,
     CostLedger,
     InMemoryLedgerStore,
@@ -60,6 +61,21 @@ from contextual_orchestrator.token_counting import HeuristicTokenCounter  # noqa
 
 def test_cheapest_upstream_returns_none_for_empty_candidates() -> None:
     assert cheapest_upstream([], price_book=None) is None
+
+
+def test_cheapest_upstream_keeps_scanning_after_a_more_expensive_candidate() -> None:
+    """A costly middle candidate cannot stop a later cheaper upstream winning."""
+    price_book = PriceBook(InMemoryConfigStore())
+    price_book.set_price(PriceEntry("first", "model", 2.0, 2.0))
+    price_book.set_price(PriceEntry("costly", "model", 4.0, 4.0))
+    price_book.set_price(PriceEntry("cheapest", "model", 1.0, 1.0))
+    candidates = [
+        {"provider": "first", "model": "model"},
+        {"provider": "costly", "model": "model"},
+        {"provider": "cheapest", "model": "model"},
+    ]
+
+    assert cheapest_upstream(candidates, price_book) == candidates[2]
 
 
 def test_extract_answer_and_embedding_handle_empty_bodies() -> None:
@@ -329,6 +345,30 @@ def test_sql_ledger_store_query_honours_time_window() -> None:
     assert len(store.query()) == 2
 
 
+def test_sql_ledger_store_dimension_seed_is_idempotent() -> None:
+    """Reopening one ledger connection does not duplicate attribution dimensions."""
+    conn = sqlite3.connect(":memory:")
+    SqlLedgerStore(conn)
+    SqlLedgerStore(conn)
+
+    count = conn.execute("SELECT COUNT(*) FROM cost_attribution_dimensions").fetchone()[0]
+    assert count == len(ATTRIBUTION_DIMENSION_CATALOG)
+
+
+def test_cost_ledger_ignores_falsey_text_health_and_merges_later_counters() -> None:
+    """A blank store-health detail cannot hide later numeric health counters."""
+
+    class _HealthStore(InMemoryLedgerStore):
+        def telemetry_health(self):
+            return {"last_error_type": "", "records_stored": 2}
+
+    ledger = _priced_ledger(store=_HealthStore())
+    health = ledger.telemetry_health()
+
+    assert health["last_error_type"] is None
+    assert health["records_stored"] == 2
+
+
 # ---------------------------------------------------------------------------
 # cost_router: pure helpers + coordinator edge behaviours
 # ---------------------------------------------------------------------------
@@ -337,6 +377,20 @@ def test_sql_ledger_store_query_honours_time_window() -> None:
 def test_provider_from_base_url_maps_mock_and_remote_hosts() -> None:
     assert _provider_from_base_url("mock://local") == "mock"
     assert _provider_from_base_url("https://api.openai.com/v1") == "api.openai.com"
+
+
+def test_provider_from_base_url_fails_closed_when_parser_rejects_input(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A URL parser failure produces no guessed provider authority."""
+    import urllib.parse
+
+    monkeypatch.setattr(
+        urllib.parse,
+        "urlparse",
+        lambda _value: (_ for _ in ()).throw(ValueError("bad URL")),
+    )
+    assert _provider_from_base_url("https://invalid.example") == ""
 
 
 def test_positive_int_falls_back_on_invalid_or_non_positive() -> None:
@@ -367,6 +421,15 @@ def test_served_provider_model_falls_back_when_agent_unresolvable() -> None:
     assert (provider, model) == ("unknown", "fallback-model")
 
 
+def test_served_provider_model_falls_back_when_trace_has_no_agent_identity() -> None:
+    """A trace row without an agent identity retains the caller's model fallback."""
+    coordinator = _coordinator()
+    assert coordinator._served_provider_model({"trace": [{}]}, "fallback-model") == (
+        "unknown",
+        "fallback-model",
+    )
+
+
 def test_batch_and_embedding_job_lookups_raise_for_unknown_ids() -> None:
     coordinator = _coordinator()
     with pytest.raises(KeyError):
@@ -382,6 +445,26 @@ def test_force_token_safe_chunks_empty_and_single_unit_midpoint_split() -> None:
     chunks = coordinator._force_token_safe_chunks("abcdefgh", model="m", max_tokens=1, max_chars=100)
     assert "".join(text for text, _ in chunks) == "abcdefgh"
     assert len(chunks) > 1
+
+
+def test_split_embedding_input_falls_back_when_adapter_counts_change() -> None:
+    """An inconsistent token adapter still yields bounded parts that preserve all text."""
+
+    class _SequenceCounter:
+        def __init__(self) -> None:
+            self.counts = iter([2, 1, 1, 1, 1, 1, 1])
+
+        def count_text(self, text, model):
+            return next(self.counts, 1)
+
+        def count_messages(self, messages, model):
+            return 1
+
+    coordinator = _coordinator(token_counter=_SequenceCounter())
+    chunks = coordinator._split_embedding_input("a b", model="m", max_tokens=1, max_chars=100)
+
+    assert "".join(text for text, _tokens in chunks) == "a b"
+    assert len(chunks) == 2
 
 
 def test_count_embedding_tokens_tolerates_counter_failure_and_zero() -> None:

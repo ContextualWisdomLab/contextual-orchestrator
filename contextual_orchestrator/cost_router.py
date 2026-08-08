@@ -420,15 +420,14 @@ class CostRoutingCoordinator:
                     current = unit
                 else:
                     current = candidate
-            if current:
-                chunks.extend(
-                    self._force_token_safe_chunks(
-                        current,
-                        model=model,
-                        max_tokens=max_tokens,
-                        max_chars=max_chars,
-                    )
+            chunks.extend(
+                self._force_token_safe_chunks(
+                    current,
+                    model=model,
+                    max_tokens=max_tokens,
+                    max_chars=max_chars,
                 )
+            )
             if len(chunks) > 1 or (chunks and chunks[0][0] != text):
                 return chunks
 
@@ -632,8 +631,6 @@ def _weighted_average_embedding(parts: List[tuple[List[float], int]]) -> List[fl
         return []
     dimension = max(len(vector) for vector in vectors)
     total_weight = sum(max(1, int(weight)) for _vector, weight in parts)
-    if total_weight <= 0:
-        total_weight = len(parts)
     reduced: List[float] = []
     for offset in range(dimension):
         weighted_sum = 0.0

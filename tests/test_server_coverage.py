@@ -16,6 +16,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+import contextual_orchestrator.server as server_module  # noqa: E402
 from contextual_orchestrator.server import (  # noqa: E402
     RequestError,
     SecurityConfig,
@@ -430,3 +431,144 @@ def test_agent_crud_batch_and_post_error_matrix() -> None:
         )
         assert status == 413
         assert body["error"]["code"] == "request_too_large"
+
+
+def test_document_surfaces_and_buffered_stream_preserve_content_types() -> None:
+    """OpenAPI, admin HTML, and buffered SSE return their public wire formats."""
+    orchestrator = _build()
+    with _running_server(orchestrator) as base_url:
+        status, body, headers = _request(base_url, "GET", "/openapi.json", token=None)
+        assert status == 200
+        assert isinstance(body, dict)
+        assert body["info"]["title"] == "Contextual Orchestrator API"
+        assert headers["content-type"].startswith("application/json")
+
+        status, body, headers = _request(base_url, "GET", "/admin")
+        assert status == 200
+        assert "Contextual Orchestrator" in body
+        assert headers["content-type"] == "text/html; charset=utf-8"
+
+        status, body, headers = _request(
+            base_url,
+            "POST",
+            "/v1/chat/completions",
+            {
+                "model": "contextual-orchestrator",
+                "messages": [{"role": "user", "content": "plan, implement, and verify this change"}],
+                "mode": "conduct",
+                "stream": True,
+            },
+        )
+        assert status == 200
+        assert headers["content-type"] == "text/event-stream; charset=utf-8"
+        assert '"object": "chat.completion.chunk"' in body
+        assert body.endswith("data: [DONE]\n\n")
+
+
+def test_live_stream_reports_a_terminal_error_after_headers_are_sent(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A route stream failure terminates with an error frame and releases the slot."""
+    orchestrator = _build()
+
+    def failing_stream(_messages, workflow_run_id=None):
+        yield "partial"
+        raise RuntimeError("provider disconnected")
+
+    monkeypatch.setattr(orchestrator, "stream_route", failing_stream)
+    with _running_server(orchestrator) as base_url:
+        status, body, headers = _request(
+            base_url,
+            "POST",
+            "/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "stream this answer"}],
+                "mode": "route",
+                "stream": True,
+            },
+        )
+
+    assert status == 200
+    assert headers["content-type"] == "text/event-stream; charset=utf-8"
+    assert '"content": "partial"' in body
+    assert '"finish_reason": "error"' in body
+    assert body.endswith("data: [DONE]\n\n")
+
+
+def test_http_method_error_boundaries_return_stable_statuses(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """PATCH, DELETE, GET, and POST convert domain and unexpected failures safely."""
+    orchestrator = _build()
+    with _running_server(orchestrator) as base_url:
+        status, body, _ = _request(base_url, "PATCH", "/api/v1/not-a-route", {})
+        assert status == 404
+        assert body["error"]["code"] == "route_not_found"
+
+        status, body, _ = _request(base_url, "DELETE", "/api/v1/not-a-route")
+        assert status == 404
+        assert body["error"]["code"] == "route_not_found"
+
+        status, body, _ = _request(
+            base_url,
+            "PATCH",
+            "/api/v1/agent_pools/default_pool/worker_agents/general_agent",
+            {"status": "not-a-status"},
+        )
+        assert status == 400
+        assert body["error"]["code"] == "invalid_request"
+
+        monkeypatch.setattr(orchestrator, "remove_agent", lambda *_args: (_ for _ in ()).throw(ValueError("last agent")))
+        status, body, _ = _request(
+            base_url,
+            "DELETE",
+            "/api/v1/agent_pools/default_pool/worker_agents/general_agent",
+        )
+        assert status == 400
+        assert body["error"]["code"] == "invalid_request"
+
+        failure_cases = [
+            ("admin_state", "GET", "/admin/state", None),
+            (
+                "patch_agent",
+                "PATCH",
+                "/api/v1/agent_pools/default_pool/worker_agents/general_agent",
+                {"priority": 3},
+            ),
+            (
+                "remove_agent",
+                "DELETE",
+                "/api/v1/agent_pools/default_pool/worker_agents/general_agent",
+                None,
+            ),
+            (
+                "add_agent",
+                "POST",
+                "/api/v1/agent_pools/default_pool/worker_agents",
+                {"id": "new_agent", "model": "mock-new", "base_url": "mock://new"},
+            ),
+        ]
+        for method_name, http_method, path, payload in failure_cases:
+            monkeypatch.setattr(
+                orchestrator,
+                method_name,
+                lambda *_args, **_kwargs: (_ for _ in ()).throw(RuntimeError("unexpected failure")),
+            )
+            status, body, _ = _request(base_url, http_method, path, payload)
+            assert status == 500, (method_name, body)
+            assert body["error"]["code"] == "internal_error"
+
+
+def test_serve_starts_the_built_server(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The blocking serve entrypoint announces its address and starts serving."""
+    started: list[bool] = []
+
+    class FakeServer:
+        def serve_forever(self) -> None:
+            started.append(True)
+
+    monkeypatch.setattr(server_module, "build_server", lambda *_args, **_kwargs: FakeServer())
+    server_module.serve(_build(), host="127.0.0.1", port=8765)
+
+    assert started == [True]
+    assert capsys.readouterr().out == "listening on http://127.0.0.1:8765\n"

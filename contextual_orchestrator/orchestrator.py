@@ -31,6 +31,7 @@ from .credentials import NotConfigured, get_credential
 from .provider_transport import (
     _PinnedHTTPSConnection,
     _ProviderHTTPResponse,
+    _parse_provider_json_object_text,
     _validated_public_addresses,
 )
 
@@ -66,6 +67,22 @@ SECRET_PATTERNS = (
 )
 
 DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
+
+
+def _classify_commercial_status(
+    blocked_count: int,
+    warning_count: int,
+    *,
+    blocked_status: str,
+    warning_status: str,
+    ready_status: str,
+) -> str:
+    """Return the public status for blocker, warning, or fully-ready evidence."""
+    if blocked_count:
+        return blocked_status
+    if warning_count:
+        return warning_status
+    return ready_status
 
 
 @dataclass(frozen=True)
@@ -232,6 +249,8 @@ class ModelClient:
         ca_bundle: str | None = None,
         verify_tls: bool = True,
     ) -> None:
+        if max_retries < 0:
+            raise ValueError("max_retries must be at least zero")
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
         self.max_retries = max_retries
@@ -292,16 +311,15 @@ class ModelClient:
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
-        last_error: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        attempt = 0
+        while True:
             try:
                 return self._send(agent, payload)
             except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
                 if attempt >= self.max_retries or not is_transient_error(exc):
-                    break
+                    raise RuntimeError(f"provider {agent.id} request failed") from exc
                 self._sleep(self._backoff_delay(attempt))
-        raise RuntimeError(f"provider {agent.id} request failed") from last_error
+                attempt += 1
 
     def _backoff_delay(self, attempt: int) -> float:
         """Full-jitter exponential backoff, capped, so retries do not thundering-herd a provider."""
@@ -472,9 +490,9 @@ class ModelClient:
                 if data == "[DONE]":
                     break
                 try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
+                    chunk = _parse_provider_json_object_text(data)
+                except RuntimeError:
+                    raise RuntimeError("malformed provider stream event") from None
                 delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
                 if delta:
                     yield delta
@@ -965,7 +983,6 @@ class TaskOrchestrator:
         # Optional durable persistence: default None keeps all state purely in-memory
         # (zero behavior change). When set, runs/audit/analytics survive restart.
         self._store = _StateStore(state_db) if state_db else None
-        self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
 
@@ -2426,12 +2443,13 @@ class TaskOrchestrator:
             ),
         ]
         summary = self._buyer_manifest_summary(items)
-        if summary["by_completion_state"].get("blocked", 0):
-            manifest_status = "buyer_review_blocked"
-        elif summary["by_completion_state"].get("warning", 0):
-            manifest_status = "buyer_review_ready_with_warnings"
-        else:
-            manifest_status = "buyer_review_ready"
+        manifest_status = _classify_commercial_status(
+            summary["by_completion_state"].get("blocked", 0),
+            summary["by_completion_state"].get("warning", 0),
+            blocked_status="buyer_review_blocked",
+            warning_status="buyer_review_ready_with_warnings",
+            ready_status="buyer_review_ready",
+        )
 
         return {
             "manifest_status": manifest_status,
@@ -2588,12 +2606,13 @@ class TaskOrchestrator:
         ]
         all_items = included_artifacts + follow_up_items
         summary = self._buyer_manifest_summary(all_items)
-        if summary["by_completion_state"].get("blocked", 0):
-            bundle_status = "buyer_handoff_blocked"
-        elif summary["by_completion_state"].get("warning", 0):
-            bundle_status = "buyer_handoff_ready_with_warnings"
-        else:
-            bundle_status = "buyer_handoff_ready"
+        bundle_status = _classify_commercial_status(
+            summary["by_completion_state"].get("blocked", 0),
+            summary["by_completion_state"].get("warning", 0),
+            blocked_status="buyer_handoff_blocked",
+            warning_status="buyer_handoff_ready_with_warnings",
+            ready_status="buyer_handoff_ready",
+        )
 
         return {
             "bundle_status": bundle_status,
@@ -2667,15 +2686,18 @@ class TaskOrchestrator:
             for item in handoff["follow_up_items"]
             if item["completion_state"] == "warning"
         ]
-        if concrete_blockers:
-            saleability_status = "saleability_blocked"
-            decision_label = "Blocked by concrete defect"
-        elif warning_conditions:
-            saleability_status = "saleability_ready_with_warnings"
-            decision_label = "Ready for buyer diligence with explicit warnings"
-        else:
-            saleability_status = "saleability_ready"
-            decision_label = "Ready for buyer diligence"
+        saleability_status = _classify_commercial_status(
+            len(concrete_blockers),
+            len(warning_conditions),
+            blocked_status="saleability_blocked",
+            warning_status="saleability_ready_with_warnings",
+            ready_status="saleability_ready",
+        )
+        decision_label = {
+            "saleability_blocked": "Blocked by concrete defect",
+            "saleability_ready_with_warnings": "Ready for buyer diligence with explicit warnings",
+            "saleability_ready": "Ready for buyer diligence",
+        }[saleability_status]
 
         return {
             "saleability_status": saleability_status,
@@ -2888,12 +2910,13 @@ class TaskOrchestrator:
         export_section_summary = self._buyer_manifest_summary(export_sections)
         blocked_count = export_section_summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = len(required_external_evidence)
-        if blocked_count:
-            export_status = "commercial_export_blocked"
-        elif warning_count:
-            export_status = "commercial_export_ready_with_warnings"
-        else:
-            export_status = "commercial_export_ready"
+        export_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_export_blocked",
+            warning_status="commercial_export_ready_with_warnings",
+            ready_status="commercial_export_ready",
+        )
 
         return {
             "export_status": export_status,
@@ -3086,12 +3109,13 @@ class TaskOrchestrator:
         summary = self._buyer_manifest_summary(all_items)
         blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
-        if blocked_count:
-            acceptance_status = "commercial_acceptance_blocked"
-        elif warning_count:
-            acceptance_status = "commercial_acceptance_ready_with_warnings"
-        else:
-            acceptance_status = "commercial_acceptance_ready"
+        acceptance_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_acceptance_blocked",
+            warning_status="commercial_acceptance_ready_with_warnings",
+            ready_status="commercial_acceptance_ready",
+        )
 
         return {
             "acceptance_status": acceptance_status,
@@ -3348,12 +3372,13 @@ class TaskOrchestrator:
         summary = self._buyer_manifest_summary(release_artifacts + external_release_gaps)
         blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
-        if blocked_count:
-            release_status = "commercial_release_blocked"
-        elif warning_count:
-            release_status = "commercial_release_ready_with_warnings"
-        else:
-            release_status = "commercial_release_ready"
+        release_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_release_blocked",
+            warning_status="commercial_release_ready_with_warnings",
+            ready_status="commercial_release_ready",
+        )
 
         return {
             "release_status": release_status,
@@ -3445,12 +3470,13 @@ class TaskOrchestrator:
             })
 
         blocked_count = len(concrete_blockers) + (1 if release_blocked else 0)
-        if blocked_count:
-            gap_register_status = "commercial_gap_register_blocked"
-        elif gap_items:
-            gap_register_status = "commercial_gap_register_open"
-        else:
-            gap_register_status = "commercial_gap_register_clear"
+        gap_register_status = _classify_commercial_status(
+            blocked_count,
+            len(gap_items),
+            blocked_status="commercial_gap_register_blocked",
+            warning_status="commercial_gap_register_open",
+            ready_status="commercial_gap_register_clear",
+        )
 
         production_gap_count = sum(1 for item in gap_items if item["gap_type"] == "production_evidence_gap")
         buyer_specific_gap_count = sum(1 for item in gap_items if item["gap_type"] == "buyer_specific_gap")
@@ -3643,12 +3669,13 @@ class TaskOrchestrator:
         buyer_specific_gap_count = 1 if buyer_gap else 0
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            procurement_status = "commercial_procurement_blocked"
-        elif warning_count:
-            procurement_status = "commercial_procurement_ready_with_warnings"
-        else:
-            procurement_status = "commercial_procurement_ready"
+        procurement_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_procurement_blocked",
+            warning_status="commercial_procurement_ready_with_warnings",
+            ready_status="commercial_procurement_ready",
+        )
 
         return {
             "procurement_status": procurement_status,
@@ -3845,12 +3872,13 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in contract_items)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            contract_status = "commercial_contract_blocked"
-        elif warning_count:
-            contract_status = "commercial_contract_ready_with_warnings"
-        else:
-            contract_status = "commercial_contract_ready"
+        contract_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_contract_blocked",
+            warning_status="commercial_contract_ready_with_warnings",
+            ready_status="commercial_contract_ready",
+        )
 
         return {
             "contract_status": contract_status,
@@ -4044,12 +4072,13 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in onboarding_items)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            onboarding_status = "commercial_onboarding_blocked"
-        elif warning_count:
-            onboarding_status = "commercial_onboarding_ready_with_warnings"
-        else:
-            onboarding_status = "commercial_onboarding_ready"
+        onboarding_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_onboarding_blocked",
+            warning_status="commercial_onboarding_ready_with_warnings",
+            ready_status="commercial_onboarding_ready",
+        )
 
         return {
             "onboarding_status": onboarding_status,
@@ -4251,12 +4280,13 @@ class TaskOrchestrator:
         production_evidence_action_count = sum(
             1 for item in operations_items if item.get("source_gap_status") == "production_input_required"
         )
-        if blocked_count:
-            operations_status = "commercial_operations_blocked"
-        elif warning_count:
-            operations_status = "commercial_operations_ready_with_warnings"
-        else:
-            operations_status = "commercial_operations_ready"
+        operations_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_operations_blocked",
+            warning_status="commercial_operations_ready_with_warnings",
+            ready_status="commercial_operations_ready",
+        )
 
         return {
             "operations_status": operations_status,
@@ -4482,12 +4512,13 @@ class TaskOrchestrator:
         buyer_privacy_gap_count = sum(
             1 for item in security_attestation_items if item.get("source_gap_status") == "buyer_input_required"
         )
-        if blocked_count:
-            security_attestation_status = "commercial_security_attestation_blocked"
-        elif warning_count:
-            security_attestation_status = "commercial_security_attestation_ready_with_warnings"
-        else:
-            security_attestation_status = "commercial_security_attestation_ready"
+        security_attestation_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_security_attestation_blocked",
+            warning_status="commercial_security_attestation_ready_with_warnings",
+            ready_status="commercial_security_attestation_ready",
+        )
 
         return {
             "security_attestation_status": security_attestation_status,
@@ -4726,12 +4757,13 @@ class TaskOrchestrator:
         external_value_proof_gap_count = sum(
             1 for item in value_items if item.get("source_gap_status") == "external_value_proof_required"
         )
-        if blocked_count:
-            value_status = "commercial_value_blocked"
-        elif warning_count:
-            value_status = "commercial_value_ready_with_warnings"
-        else:
-            value_status = "commercial_value_ready"
+        value_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_value_blocked",
+            warning_status="commercial_value_ready_with_warnings",
+            ready_status="commercial_value_ready",
+        )
 
         return {
             "value_status": value_status,
@@ -5006,12 +5038,13 @@ class TaskOrchestrator:
         buyer_signature_gap_count = sum(
             1 for item in close_items if item.get("source_gap_status") == "buyer_signature_required"
         )
-        if blocked_count:
-            close_status = "commercial_close_blocked"
-        elif warning_count:
-            close_status = "commercial_close_ready_with_warnings"
-        else:
-            close_status = "commercial_close_ready"
+        close_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_close_blocked",
+            warning_status="commercial_close_ready_with_warnings",
+            ready_status="commercial_close_ready",
+        )
 
         return {
             "close_status": close_status,
@@ -5315,12 +5348,13 @@ class TaskOrchestrator:
             + value["value_summary"]["external_value_proof_gap_count"]
             + export["export_summary"]["warning_count"]
         )
-        if blocked_count:
-            gtm_status = "commercial_go_to_market_blocked"
-        elif warning_count:
-            gtm_status = "commercial_go_to_market_ready_with_warnings"
-        else:
-            gtm_status = "commercial_go_to_market_ready"
+        gtm_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_go_to_market_blocked",
+            warning_status="commercial_go_to_market_ready_with_warnings",
+            ready_status="commercial_go_to_market_ready",
+        )
 
         return {
             "go_to_market_status": gtm_status,
@@ -5621,12 +5655,13 @@ class TaskOrchestrator:
         external_input_group_count = (
             buyer_environment_gap_count + production_telemetry_gap_count + commercial_signature_gap_count
         )
-        if blocked_count:
-            launch_status = "commercial_launch_blocked"
-        elif warning_count:
-            launch_status = "commercial_launch_ready_with_warnings"
-        else:
-            launch_status = "commercial_launch_ready"
+        launch_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_launch_blocked",
+            warning_status="commercial_launch_ready_with_warnings",
+            ready_status="commercial_launch_ready",
+        )
 
         return {
             "launch_status": launch_status,
@@ -5897,12 +5932,13 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in scorecard_items)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            completion_status = "commercial_completion_blocked"
-        elif warning_count:
-            completion_status = "commercial_completion_ready_with_warnings"
-        else:
-            completion_status = "commercial_completion_ready"
+        completion_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_completion_blocked",
+            warning_status="commercial_completion_ready_with_warnings",
+            ready_status="commercial_completion_ready",
+        )
 
         return {
             "completion_status": completion_status,
@@ -6141,12 +6177,13 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in workflow_steps)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            workflow_status = "buyer_acceptance_workflow_blocked"
-        elif warning_count:
-            workflow_status = "buyer_acceptance_workflow_ready_with_warnings"
-        else:
-            workflow_status = "buyer_acceptance_workflow_ready"
+        workflow_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="buyer_acceptance_workflow_blocked",
+            warning_status="buyer_acceptance_workflow_ready_with_warnings",
+            ready_status="buyer_acceptance_workflow_ready",
+        )
 
         return {
             "workflow_status": workflow_status,
@@ -6410,12 +6447,13 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in demo_steps)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            demo_status = "commercial_demo_blocked"
-        elif warning_count:
-            demo_status = "commercial_demo_ready_with_warnings"
-        else:
-            demo_status = "commercial_demo_ready"
+        demo_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_demo_blocked",
+            warning_status="commercial_demo_ready_with_warnings",
+            ready_status="commercial_demo_ready",
+        )
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -6753,12 +6791,13 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in proposal_sections)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            proposal_status = "commercial_proposal_blocked"
-        elif warning_count:
-            proposal_status = "commercial_proposal_ready_with_warnings"
-        else:
-            proposal_status = "commercial_proposal_ready"
+        proposal_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_proposal_blocked",
+            warning_status="commercial_proposal_ready_with_warnings",
+            ready_status="commercial_proposal_ready",
+        )
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -7096,12 +7135,13 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in approval_gates)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            purchase_approval_status = "commercial_purchase_approval_blocked"
-        elif warning_count:
-            purchase_approval_status = "commercial_purchase_approval_ready_with_warnings"
-        else:
-            purchase_approval_status = "commercial_purchase_approval_ready"
+        purchase_approval_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_purchase_approval_blocked",
+            warning_status="commercial_purchase_approval_ready_with_warnings",
+            ready_status="commercial_purchase_approval_ready",
+        )
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -7491,12 +7531,13 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in diligence_sections)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            due_diligence_status = "commercial_due_diligence_blocked"
-        elif warning_count:
-            due_diligence_status = "commercial_due_diligence_ready_with_warnings"
-        else:
-            due_diligence_status = "commercial_due_diligence_ready"
+        due_diligence_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_due_diligence_blocked",
+            warning_status="commercial_due_diligence_ready_with_warnings",
+            ready_status="commercial_due_diligence_ready",
+        )
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -7888,15 +7929,18 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in memo_sections)
         blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
-        if blocked_count:
-            investment_committee_status = "commercial_investment_committee_blocked"
-            recommendation_status = "do_not_recommend_until_blockers_cleared"
-        elif warning_count:
-            investment_committee_status = "commercial_investment_committee_ready_with_warnings"
-            recommendation_status = "recommend_with_buyer_conditions"
-        else:
-            investment_committee_status = "commercial_investment_committee_ready"
-            recommendation_status = "recommend"
+        investment_committee_status = _classify_commercial_status(
+            blocked_count,
+            warning_count,
+            blocked_status="commercial_investment_committee_blocked",
+            warning_status="commercial_investment_committee_ready_with_warnings",
+            ready_status="commercial_investment_committee_ready",
+        )
+        recommendation_status = {
+            "commercial_investment_committee_blocked": "do_not_recommend_until_blockers_cleared",
+            "commercial_investment_committee_ready_with_warnings": "recommend_with_buyer_conditions",
+            "commercial_investment_committee_ready": "recommend",
+        }[investment_committee_status]
         required_runtime_endpoints = list(
             dict.fromkeys(
                 endpoint
@@ -8256,44 +8300,6 @@ class TaskOrchestrator:
             "warn": counts.get("warn", 0),
             "fail": counts.get("fail", 0),
         }
-
-
-def _report_cache_token(value: Any) -> Any:
-    if isinstance(value, (str, int, float, bool, type(None))):
-        return value
-    if isinstance(value, tuple):
-        return tuple(_report_cache_token(item) for item in value)
-    return ("id", id(value))
-
-
-def _commercial_report_cached(method: Any) -> Any:
-    @wraps(method)
-    def wrapper(self: TaskOrchestrator, *args: Any, **kwargs: Any) -> dict[str, Any]:
-        local = self._commercial_report_cache_local
-        depth = getattr(local, "depth", 0)
-        if depth == 0:
-            local.cache = {}
-        local.depth = depth + 1
-        try:
-            key = (
-                method.__name__,
-                _report_cache_token(args),
-                tuple(sorted((name, _report_cache_token(value)) for name, value in kwargs.items())),
-            )
-            if key not in local.cache:
-                local.cache[key] = method(self, *args, **kwargs)
-            return local.cache[key]
-        finally:
-            local.depth -= 1
-            if depth == 0:
-                local.cache = {}
-
-    return wrapper
-
-
-for _report_name, _report_method in list(TaskOrchestrator.__dict__.items()):
-    if _report_name.startswith("commercial_") and _report_name.endswith("_report"):
-        setattr(TaskOrchestrator, _report_name, _commercial_report_cached(_report_method))
 
 
 def redact_text(text: str) -> str:

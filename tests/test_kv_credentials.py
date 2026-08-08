@@ -13,7 +13,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent  # noqa: E402
+from contextual_orchestrator import ModelAgent, credentials  # noqa: E402
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     NotConfigured,
@@ -159,3 +159,27 @@ def test_select_backend_postgres_builds_from_env(monkeypatch) -> None:
     monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE", "boot-passphrase")
     backend = _select_backend()
     assert isinstance(backend, PostgresCredentialBackend)
+
+
+def test_get_backend_reuses_backend_initialized_while_waiting_for_lock(monkeypatch) -> None:
+    """A concurrent initializer wins without a second backend construction."""
+    set_backend(None)
+    sentinel = InMemoryCredentialBackend()
+    selector_calls: list[bool] = []
+
+    class _InitializingLock:
+        def __enter__(self):
+            credentials._backend = sentinel
+
+        def __exit__(self, exc_type, exc, traceback):
+            return False
+
+    monkeypatch.setattr(credentials, "_backend_lock", _InitializingLock())
+    monkeypatch.setattr(
+        credentials,
+        "_select_backend",
+        lambda: selector_calls.append(True) or InMemoryCredentialBackend(),
+    )
+
+    assert credentials.get_backend() is sentinel
+    assert selector_calls == []

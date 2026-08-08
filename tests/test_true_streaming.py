@@ -124,6 +124,49 @@ def test_stream_send_rejects_non_event_stream_response() -> None:
             list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
 
 
+class _IterableStreamResponse:
+    """Lightweight context response for exercising the documented test-double seam."""
+
+    def __init__(self, frames: list[bytes]) -> None:
+        self.frames = frames
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def __iter__(self):
+        return iter(self.frames)
+
+
+def test_stream_send_stops_at_done_for_lightweight_response_double() -> None:
+    """The non-HTTP seam emits no provider data after the terminal marker."""
+    client = ModelClient()
+    client._open_provider = lambda _request: _IterableStreamResponse(  # type: ignore[method-assign]
+        [
+            _delta("accepted").encode(),
+            b"data: [DONE]\n\n",
+            _delta("must-not-escape").encode(),
+        ]
+    )
+    agent = ModelAgent("worker_agent", "gpt-x", base_url="https://provider.example")
+
+    assert list(client._stream_send(agent, {"model": "gpt-x", "stream": True})) == ["accepted"]
+
+
+def test_stream_send_rejects_malformed_event_from_lightweight_response_double() -> None:
+    """The non-HTTP seam enforces the same fail-closed JSON contract as live HTTP."""
+    client = ModelClient()
+    client._open_provider = lambda _request: _IterableStreamResponse(  # type: ignore[method-assign]
+        [b"data: {not-json}\n\n", b"data: [DONE]\n\n"]
+    )
+    agent = ModelAgent("worker_agent", "gpt-x", base_url="https://provider.example")
+
+    with pytest.raises(RuntimeError, match="malformed provider stream event"):
+        list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+
+
 def test_stream_chat_mock_yields_chunks() -> None:
     client = ModelClient()
     agent = ModelAgent("general_agent", "mock-model")  # base_url defaults to mock://local

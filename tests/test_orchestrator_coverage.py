@@ -31,6 +31,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
     ModelClient,
+    _classify_commercial_status,
     _coerce_input_text,
     _freeze_report_cache_value,
     _recommend_config,
@@ -121,12 +122,14 @@ def test_coerce_input_text_flattens_strings_dicts_and_content_lists() -> None:
     """Responses input coercion walks only supported text-bearing shapes."""
     value = [
         "plain string",
+        42,
         {"content": "dict content"},
         {"content": [{"text": "chunk text"}, {"no_text": 1}]},
         {"other": "ignored"},
     ]
     assert _coerce_input_text(value) == "plain string dict content chunk text"
     assert _coerce_input_text("already a string") == "already a string"
+    assert _coerce_input_text(None) == ""
 
 
 _GENERATED_PLAN = {
@@ -245,9 +248,11 @@ def test_batch_route_persists_runs_to_state_store() -> None:
     with tempfile.TemporaryDirectory() as directory:
         orchestrator = TaskOrchestrator(
             [ModelAgent("general_agent", "m", tags=("reasoning", "writing"))],
+            budget_max_output_tokens=10_000,
             state_db=str(Path(directory) / "state.sqlite"),
         )
         assert orchestrator._store is not None
+        assert orchestrator.budget_status()["exceeded"] is False
         records = orchestrator.batch_route(["hello there worker"])
         assert len(records) == 1
         assert len(orchestrator._workflow_runs) == 1
@@ -332,6 +337,24 @@ def test_provider_egress_criterion_fails_for_insecure_remote_agent() -> None:
     assert "insecure_agent" in criterion["evidence"]
 
 
+def test_provider_egress_criterion_accepts_named_credential_over_https() -> None:
+    """A remote HTTPS provider with a named KV credential passes egress posture."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "secure_agent",
+                "gpt-x",
+                "https://api.example.com/v1",
+                credential_key="PROVIDER_API_KEY",
+            )
+        ]
+    )
+    criterion = orchestrator._provider_egress_criterion()
+
+    assert criterion["status"] == "pass"
+    assert criterion["evidence"] == "1 remote providers use https and a named KV credential"
+
+
 def test_freeze_report_cache_value_handles_sets_and_unhashables() -> None:
     """Cache-key normalization is deterministic for sets and unhashable scalars."""
     assert _freeze_report_cache_value({3, 1, 2}) == (1, 2, 3)
@@ -348,6 +371,25 @@ def test_recommend_config_none_and_over_budget_cheapest() -> None:
     recommendation = _recommend_config(results, cost_budget_usd=0.5)
     assert recommendation["name"] == "budget_config"
     assert recommendation["reason"] == "no config within budget; cheapest instead"
+
+
+@pytest.mark.parametrize(
+    ("blocked_count", "warning_count", "expected"),
+    [(2, 3, "blocked"), (0, 3, "warning"), (0, 0, "ready")],
+)
+def test_commercial_status_classifier_prioritizes_blockers_then_warnings(
+    blocked_count: int,
+    warning_count: int,
+    expected: str,
+) -> None:
+    """One shared classifier preserves the three public readiness states."""
+    assert _classify_commercial_status(
+        blocked_count,
+        warning_count,
+        blocked_status="blocked",
+        warning_status="warning",
+        ready_status="ready",
+    ) == expected
 
 
 _INSECURE_PROFILE = {
