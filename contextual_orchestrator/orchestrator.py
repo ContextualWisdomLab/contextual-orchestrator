@@ -1345,7 +1345,7 @@ class TaskOrchestrator:
         """Apply governance updates to an agent and emit an audit event."""
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
-        if agent_pool_id != "default":  # pragma: no cover
+        if agent_pool_id not in {"default", "default_pool"}:  # pragma: no cover
             raise KeyError(agent_pool_id)
         current = self._agent(worker_agent_id)
         patched = current
@@ -1397,7 +1397,7 @@ class TaskOrchestrator:
 
     def add_agent(self, agent_pool_id: str, value: dict[str, Any]) -> dict[str, Any]:
         """Register a new worker agent (model group member) at runtime; persists when agents_db is set."""
-        if agent_pool_id != "default":  # pragma: no cover
+        if agent_pool_id not in {"default", "default_pool"}:  # pragma: no cover
             raise KeyError(agent_pool_id)
         if "id" not in value or "model" not in value:
             raise ValueError("agent requires id and model")
@@ -1425,7 +1425,7 @@ class TaskOrchestrator:
 
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
         """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
-        if agent_pool_id != "default":  # pragma: no cover
+        if agent_pool_id not in {"default", "default_pool"}:  # pragma: no cover
             raise KeyError(agent_pool_id)
         target = self._agent(worker_agent_id)
         remaining_enabled = [agent for agent in self.agents if agent.id != worker_agent_id and not agent.disabled]
@@ -4835,7 +4835,7 @@ class TaskOrchestrator:
             *operations["concrete_blockers"],
             *export["concrete_blockers"],
         ]
-        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        concrete_blockers = _deduplicate_report_values(concrete_blockers)
         close_items = [
             {
                 "item_name": "sellable_product_packet",
@@ -5118,7 +5118,7 @@ class TaskOrchestrator:
             *export["concrete_blockers"],
             *saleability["concrete_blockers"],
         ]
-        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        concrete_blockers = _deduplicate_report_values(concrete_blockers)
         gtm_items = [
             {
                 "item_name": "commercial_close_packet",
@@ -5418,7 +5418,7 @@ class TaskOrchestrator:
             *onboarding["concrete_blockers"],
             *acceptance["concrete_blockers"],
         ]
-        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        concrete_blockers = _deduplicate_report_values(concrete_blockers)
         launch_items = [
             {
                 "item_name": "go_to_market_packet",
@@ -5719,7 +5719,7 @@ class TaskOrchestrator:
             concrete_blockers.append("commercial_readiness_failed")
         if launch["launch_status"] == "commercial_launch_blocked":
             concrete_blockers.append("commercial_launch_blocked")
-        concrete_blockers = list(dict.fromkeys(concrete_blockers))
+        concrete_blockers = _deduplicate_report_values(concrete_blockers)
         scorecard_items = [
             {
                 "item_name": "product_design_evidence",
@@ -6014,7 +6014,7 @@ class TaskOrchestrator:
                 "next_action": next_action,
             }
 
-        concrete_blockers = list(dict.fromkeys(acceptance["concrete_blockers"] + completion["concrete_blockers"]))
+        concrete_blockers = _deduplicate_report_values(acceptance["concrete_blockers"] + completion["concrete_blockers"])
         acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
         completion_blocked = completion["completion_status"] == "commercial_completion_blocked"
         local_runtime_state = "blocked" if acceptance_blocked or completion_blocked or concrete_blockers else "ready"
@@ -6262,9 +6262,7 @@ class TaskOrchestrator:
                 "expected_evidence": expected_evidence,
             }
 
-        concrete_blockers = list(
-            dict.fromkeys(completion["concrete_blockers"] + buyer_workflow["concrete_blockers"])
-        )
+        concrete_blockers = _deduplicate_report_values(completion["concrete_blockers"] + buyer_workflow["concrete_blockers"])
         local_runtime_state = (
             "blocked"
             if completion["completion_status"] == "commercial_completion_blocked"
@@ -6580,13 +6578,9 @@ class TaskOrchestrator:
                 "next_action": next_action,
             }
 
-        concrete_blockers = list(
-            dict.fromkeys(
-                completion["concrete_blockers"]
+        concrete_blockers = _deduplicate_report_values(completion["concrete_blockers"]
                 + demo["concrete_blockers"]
-                + buyer_workflow["concrete_blockers"]
-            )
-        )
+                + buyer_workflow["concrete_blockers"])
         local_runtime_state = (
             "blocked"
             if completion["completion_status"] == "commercial_completion_blocked"
@@ -6933,7 +6927,7 @@ class TaskOrchestrator:
                 "next_action": next_action,
             }
 
-        concrete_blockers = list(dict.fromkeys(proposal["concrete_blockers"] + close["concrete_blockers"]))
+        concrete_blockers = _deduplicate_report_values(proposal["concrete_blockers"] + close["concrete_blockers"])
         local_runtime_state = (
             "blocked"
             if proposal["proposal_status"] == "commercial_proposal_blocked"
@@ -7297,15 +7291,11 @@ class TaskOrchestrator:
                 "next_action": next_action,
             }
 
-        concrete_blockers = list(
-            dict.fromkeys(
-                purchase["concrete_blockers"]
+        concrete_blockers = _deduplicate_report_values(purchase["concrete_blockers"]
                 + proposal["concrete_blockers"]
                 + completion["concrete_blockers"]
                 + demo["concrete_blockers"]
-                + buyer_workflow["concrete_blockers"]
-            )
-        )
+                + buyer_workflow["concrete_blockers"])
         local_runtime_state = (
             "blocked"
             if purchase["purchase_approval_status"] == "commercial_purchase_approval_blocked"
@@ -7714,16 +7704,12 @@ class TaskOrchestrator:
                 "next_action": next_action,
             }
 
-        concrete_blockers = list(
-            dict.fromkeys(
-                due_diligence["concrete_blockers"]
+        concrete_blockers = _deduplicate_report_values(due_diligence["concrete_blockers"]
                 + purchase["concrete_blockers"]
                 + proposal["concrete_blockers"]
                 + completion["concrete_blockers"]
                 + demo["concrete_blockers"]
-                + buyer_workflow["concrete_blockers"]
-            )
-        )
+                + buyer_workflow["concrete_blockers"])
         local_runtime_state = (
             "blocked"
             if due_diligence["due_diligence_status"] == "commercial_due_diligence_blocked"
@@ -8350,6 +8336,15 @@ def _freeze_report_cache_value(value: Any) -> Any:
     except TypeError:
         return repr(value)
     return value
+
+
+def _deduplicate_report_values(values: list[Any]) -> list[Any]:
+    """Return first-occurrence report values without requiring hashability."""
+    unique_values: list[Any] = []
+    for value in values:
+        if value not in unique_values:
+            unique_values.append(value)
+    return unique_values
 
 
 def _cached_commercial_report(method: Any) -> Any:
