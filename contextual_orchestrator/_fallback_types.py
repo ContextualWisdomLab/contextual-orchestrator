@@ -51,15 +51,19 @@ class FallbackCandidate:
 
     def __post_init__(self) -> None:
         """Validate fields before a candidate reaches a workflow adapter."""
-        if not CANDIDATE_ID_RE.fullmatch(self.candidate_id):
+        if not isinstance(self.candidate_id, str) or not CANDIDATE_ID_RE.fullmatch(
+            self.candidate_id
+        ):
             raise CandidateValidationError(
                 "candidate_id must be a shell-safe identifier"
             )
-        if not PROVIDER_RE.fullmatch(self.provider):
+        if not isinstance(self.provider, str) or not PROVIDER_RE.fullmatch(
+            self.provider
+        ):
             raise CandidateValidationError(
                 "provider must be lowercase and shell-safe"
             )
-        if not MODEL_RE.fullmatch(self.model):
+        if not isinstance(self.model, str) or not MODEL_RE.fullmatch(self.model):
             raise CandidateValidationError(
                 "model must be a non-empty shell-safe model identifier"
             )
@@ -73,7 +77,14 @@ class FallbackCandidate:
             raise CandidateValidationError(
                 "priority must be between 0 and 1000000"
             )
-        validate_credentials(self.required_credentials)
+        if isinstance(self.required_credentials, (str, bytes)):
+            validate_credentials(self.required_credentials)
+        elif not isinstance(self.required_credentials, tuple):
+            raise CandidateValidationError(
+                "required_credentials must be a tuple sequence"
+            )
+        else:
+            validate_credentials(self.required_credentials)
         validate_visibilities(self.repository_visibilities)
         validate_capabilities(self.capabilities)
 
@@ -102,9 +113,16 @@ class FallbackContext:
 
     def __post_init__(self) -> None:
         """Validate context vocabulary before policy evaluation."""
-        if self.repository_visibility not in ALLOWED_VISIBILITIES:
+        if (
+            not isinstance(self.repository_visibility, str)
+            or self.repository_visibility not in ALLOWED_VISIBILITIES
+        ):
             raise CandidateValidationError(
                 "repository visibility must be public, private, or internal"
+            )
+        if not isinstance(self.available_credentials, frozenset):
+            raise CandidateValidationError(
+                "available_credentials must be a frozenset"
             )
         validate_credentials(tuple(self.available_credentials))
         validate_capabilities(self.required_capabilities)

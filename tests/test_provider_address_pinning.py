@@ -11,12 +11,14 @@ import pytest
 
 from contextual_orchestrator import ModelAgent
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend
-from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.orchestrator import (
+    ModelClient,
+    _literal_loopback_host,
+)
 from contextual_orchestrator.provider_transport import (
     _PinnedHTTPSConnection,
     _ProviderHTTPResponse,
     _validated_public_addresses,
-    install_provider_transport,
 )
 
 
@@ -127,13 +129,12 @@ def _public_dns_answers() -> list[tuple[int, int, int, str, tuple[str, int]]]:
     ]
 
 
-def test_transport_installer_is_idempotent() -> None:
-    """Repeated package initialization cannot wrap validation more than once."""
-    validate_method = ModelClient._validate_provider
-    open_method = ModelClient._open_provider
-    install_provider_transport(ModelClient)
-    assert ModelClient._validate_provider is validate_method
-    assert ModelClient._open_provider is open_method
+def test_package_import_keeps_model_client_transport_canonical() -> None:
+    """Importing the package cannot mutate canonical provider methods."""
+    assert ModelClient._validate_provider.__module__ == "contextual_orchestrator.orchestrator"
+    assert ModelClient._open_provider.__module__ == "contextual_orchestrator.orchestrator"
+    assert not hasattr(ModelClient, "_dns_pinned_transport_installed")
+    assert ModelClient()._https_connection_class is _PinnedHTTPSConnection
 
 
 def test_validated_public_addresses_supports_ipv6_and_deduplicates() -> None:
@@ -186,7 +187,7 @@ def test_validate_then_open_uses_same_dns_answer_without_reresolution() -> None:
         return_value=_public_dns_answers(),
     ) as resolver:
         client._validate_provider(agent)
-    assert resolver.call_count == 2
+    assert resolver.call_count == 1
 
     _FakeConnection.failing_ips = {"93.184.216.34"}
     _FakeConnection.responses = {"93.184.216.35": _FakeResponse(body=b"success")}
@@ -354,3 +355,120 @@ def test_pinned_https_connection_closes_socket_when_tls_setup_fails() -> None:
         with pytest.raises(ssl.SSLError, match="handshake failed"):
             connection.connect()
     raw_socket.close.assert_called_once_with()
+
+
+@pytest.mark.parametrize(
+    ("hostname", "expected"),
+    [
+        (None, False),
+        ("localhost", True),
+        ("localhost.", True),
+        ("127.0.0.1", True),
+        ("::1", True),
+        ("192.0.2.1", False),
+        ("api.example.com", False),
+        ("localhost.example", False),
+    ],
+)
+def test_literal_loopback_host_classification(
+    hostname: str | None,
+    expected: bool,
+) -> None:
+    """Only localhost and literal loopback addresses enter the HTTP test seam."""
+    assert _literal_loopback_host(hostname) is expected
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "http://api.example.com/v1/chat",
+        "http://192.0.2.1/v1/chat",
+    ],
+)
+def test_open_provider_rejects_non_loopback_http(url: str) -> None:
+    """Direct low-level callers cannot use plain HTTP outside loopback."""
+    client = ModelClient()
+    with pytest.raises(RuntimeError, match="literal loopback"):
+        client._open_provider(urllib.request.Request(url, method="POST"))
+
+
+def test_open_provider_rejects_url_userinfo() -> None:
+    """Provider URLs cannot smuggle credentials through URL user information."""
+    client = ModelClient()
+    request = urllib.request.Request(
+        "http://user:password@127.0.0.1:8080/v1/chat",
+        method="POST",
+    )
+    with pytest.raises(RuntimeError, match="user information"):
+        client._open_provider(request)
+
+
+def test_loopback_http_uses_direct_connection_and_bypasses_proxy(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """The integration seam connects directly and ignores ambient proxy state."""
+    client = ModelClient(timeout=13)
+    response = _FakeResponse(body=b"loopback")
+    connection = mock.Mock()
+    connection.getresponse.return_value = response
+    connection_class = mock.Mock(return_value=connection)
+    client._http_connection_class = connection_class
+    monkeypatch.setenv("HTTP_PROXY", "http://proxy.example:3128")
+    monkeypatch.setenv("NO_PROXY", "")
+    request = urllib.request.Request(
+        "http://127.0.0.1:8080/v1/chat?trace=yes",
+        data=b"{}",
+        headers={"authorization": "Bearer local-secret"},
+        method="POST",
+    )
+
+    with mock.patch(
+        "contextual_orchestrator.orchestrator.urllib.request.urlopen",
+        side_effect=AssertionError("ambient proxy-capable opener must not run"),
+    ) as urlopen:
+        with client._open_provider(request) as opened:
+            assert opened.read() == b"loopback"
+
+    urlopen.assert_not_called()
+    connection_class.assert_called_once_with("127.0.0.1", 8080, timeout=13)
+    connection.request.assert_called_once_with(
+        "POST",
+        "/v1/chat?trace=yes",
+        body=b"{}",
+        headers={"Authorization": "Bearer local-secret", "Connection": "close"},
+    )
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
+def test_loopback_http_rejects_redirect_and_closes_resources() -> None:
+    """A loopback response cannot redirect credentials to another origin."""
+    client = ModelClient()
+    response = _FakeResponse(status=302)
+    connection = mock.Mock()
+    connection.getresponse.return_value = response
+    client._http_connection_class = mock.Mock(return_value=connection)
+
+    with pytest.raises(urllib.error.HTTPError) as exc_info:
+        client._open_provider(
+            urllib.request.Request("http://localhost:8080/v1/chat", method="POST")
+        )
+
+    assert exc_info.value.code == 302
+    assert response.closed is True
+    connection.close.assert_called_once_with()
+
+
+def test_loopback_http_connection_failure_closes_and_is_transient() -> None:
+    """A failed direct loopback connection is closed and surfaced as URLError."""
+    client = ModelClient()
+    connection = mock.Mock()
+    connection.request.side_effect = OSError("loopback unavailable")
+    client._http_connection_class = mock.Mock(return_value=connection)
+
+    with pytest.raises(urllib.error.URLError, match="loopback unavailable"):
+        client._open_provider(
+            urllib.request.Request("http://[::1]:8080/v1/chat", method="POST")
+        )
+
+    connection.close.assert_called_once_with()

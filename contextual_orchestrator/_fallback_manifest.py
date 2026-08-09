@@ -43,7 +43,8 @@ def load_fallback_manifest(
         raise FallbackManifestError(
             f"unknown manifest keys: {joined(unknown_manifest_keys)}"
         )
-    if document.get("schema_version") != SCHEMA_VERSION:
+    schema_version = document.get("schema_version")
+    if type(schema_version) is not int or schema_version != SCHEMA_VERSION:
         raise FallbackManifestError(
             f"schema_version must be {SCHEMA_VERSION}"
         )
@@ -57,6 +58,10 @@ def load_fallback_manifest(
             raise FallbackManifestError(
                 "agent name must be a safe identifier"
             )
+    if not isinstance(agent, str) or not AGENT_NAME_RE.fullmatch(agent):
+        raise FallbackManifestError(
+            "agent selector must be a safe identifier"
+        )
     if agent not in agents:
         raise FallbackManifestError(
             f"agent {agent!r} was not found in manifest"

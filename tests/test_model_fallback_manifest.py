@@ -25,6 +25,8 @@ def test_manifest_parses_candidates_without_reordering_source() -> None:
     [
         (lambda document: document.update({"unknown": True}), "unknown manifest"),
         (lambda document: document.update({"schema_version": 2}), "schema_version"),
+        (lambda document: document.update({"schema_version": True}), "schema_version"),
+        (lambda document: document.update({"schema_version": 1.0}), "schema_version"),
         (lambda document: document.update({"agents": []}), "agents must be"),
         (
             lambda document: document.update({"agents": {"bad agent": {}}}),
@@ -46,6 +48,15 @@ def test_manifest_rejects_non_object_root_and_missing_agent() -> None:
         load_fallback_manifest([], "noema")  # type: ignore[arg-type]
     with pytest.raises(FallbackManifestError, match="was not found"):
         load_fallback_manifest(manifest_document(), "strix")
+
+
+@pytest.mark.parametrize("agent", [7, [], "bad agent"])
+def test_manifest_rejects_invalid_agent_selector(agent: object) -> None:
+    """An unsafe programmatic selector must not reach mapping membership logic."""
+    with pytest.raises(FallbackManifestError, match="agent selector"):
+        load_fallback_manifest(
+            manifest_document(), agent  # type: ignore[arg-type]
+        )
 
 
 def test_manifest_rejects_invalid_agent_container_and_keys() -> None:
@@ -81,6 +92,26 @@ def test_manifest_rejects_non_object_candidate_and_unknown_keys() -> None:
     document = manifest_document()
     document["agents"]["noema"]["candidates"][0]["unknown"] = True
     with pytest.raises(FallbackManifestError, match="unknown candidate keys"):
+        load_fallback_manifest(document, "noema")
+
+
+@pytest.mark.parametrize(
+    ("field_name", "field_value", "message"),
+    [
+        ("candidate_id", 7, "candidate_id"),
+        ("provider", None, "provider"),
+        ("model", ["model"], "model"),
+    ],
+)
+def test_manifest_normalizes_non_string_candidate_identifiers(
+    field_name: str,
+    field_value: object,
+    message: str,
+) -> None:
+    """Wrong JSON scalar types must remain controlled manifest failures."""
+    document = manifest_document()
+    document["agents"]["noema"]["candidates"][0][field_name] = field_value
+    with pytest.raises(FallbackManifestError, match=message):
         load_fallback_manifest(document, "noema")
 
 

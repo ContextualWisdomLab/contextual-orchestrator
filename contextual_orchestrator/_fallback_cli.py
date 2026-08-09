@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import argparse
 import json
-import os
 from pathlib import Path
 from typing import Any, Mapping, Sequence
 
@@ -37,12 +36,11 @@ def _load_manifest_path(path: Path) -> Mapping[str, Any]:
     return document
 
 
-def _configured_credentials(names: Sequence[str]) -> frozenset[str]:
-    """Return names whose environment values are non-whitespace."""
-    validate_credentials(tuple(names))
-    return frozenset(
-        name for name in names if os.environ.get(name, "").strip()
-    )
+def _declared_credentials(names: Sequence[str]) -> frozenset[str]:
+    """Validate and return credential names declared available by the caller."""
+    normalized = tuple(names)
+    validate_credentials(normalized)
+    return frozenset(normalized)
 
 
 def _build_parser() -> argparse.ArgumentParser:
@@ -58,7 +56,7 @@ def _build_parser() -> argparse.ArgumentParser:
         default="public",
     )
     plan_parser.add_argument(
-        "--credential-env", action="append", default=[]
+        "--available-credential", action="append", default=[]
     )
     plan_parser.add_argument(
         "--required-capability", action="append", default=[]
@@ -83,7 +81,9 @@ def main(argv: Sequence[str] | None = None) -> int:
     candidates = load_fallback_manifest(document, args.agent)
     context = FallbackContext(
         repository_visibility=args.repository_visibility,
-        available_credentials=_configured_credentials(args.credential_env),
+        available_credentials=_declared_credentials(
+            args.available_credential
+        ),
         required_capabilities=frozenset(args.required_capability),
         allow_paid=not args.deny_paid,
     )

@@ -81,22 +81,24 @@ answer only after its existing schema and security checks pass.
 
 ## CLI integration
 
-The CLI checks only whether named environment variables are non-empty. It does
-not print their values.
+The trusted composition root determines which credential identities are
+available and passes only their validated names. The policy CLI never reads the
+corresponding environment variables or any other secret-value store.
 
 ```bash
 python -m contextual_orchestrator.model_fallback plan \
   --manifest config/llm-fallback-policy.json \
   --agent opencode-review \
   --repository-visibility public \
-  --credential-env NVIDIA_NIM_API_KEY \
-  --credential-env OPENAI_API_KEY \
+  --available-credential NVIDIA_NIM_API_KEY \
+  --available-credential OPENAI_API_KEY \
   --required-capability structured_output \
   --format models
 ```
 
 Use `--deny-paid` for an explicit free-only run. An empty eligible pool is a
-hard error, not an implicit success.
+hard error, not an implicit success. Credential names must satisfy the same
+strict identifier grammar as manifest credential requirements.
 
 ## Integration boundary
 
