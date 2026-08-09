@@ -328,6 +328,7 @@ class NoopUsageTelemetrySink:
     """Default sink for callers that do not wire telemetry yet."""
 
     def emit_usage(self, event: UsageTelemetryEvent) -> None:
+        """Ignore one prompt-safe usage event when export is not configured."""
         return None
 
 
@@ -340,12 +341,14 @@ class InMemoryUsageTelemetrySink:
         self._lock = threading.Lock()
 
     def emit_usage(self, event: UsageTelemetryEvent) -> None:
+        """Store one usage event and evict the oldest events above the limit."""
         with self._lock:
             self._events.append(event)
             if len(self._events) > self._max_events:
                 del self._events[: len(self._events) - self._max_events]
 
     def events(self) -> List[UsageTelemetryEvent]:
+        """Return a stable copy of the currently retained usage events."""
         with self._lock:
             return list(self._events)
 
@@ -361,6 +364,7 @@ class UsageTelemetryHealth:
     last_error_type: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
+        """Return counters as a prompt-safe dictionary for operator responses."""
         return {
             "records_accepted": self.records_accepted,
             "records_stored": self.records_stored,
@@ -440,6 +444,7 @@ class NonBlockingLedgerStore:
         return True
 
     def telemetry_health(self) -> Dict[str, Any]:
+        """Return a thread-safe snapshot of background ledger export health."""
         with self._lock:
             return self._health.as_dict()
 
@@ -583,8 +588,8 @@ class SqlLedgerStore:
         ph = self._placeholder()
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
-                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
+            cur.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder; the value is bound, not interpolated.
                 (name,),
             )
             if cur.fetchone() is None:
@@ -602,8 +607,8 @@ class SqlLedgerStore:
         placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(
-            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
+        cur.execute(  # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are the fixed _USAGE_COLUMNS constant; values are bound.
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
         self._conn.commit()
@@ -622,7 +627,7 @@ class SqlLedgerStore:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns/clauses are fixed templates, values bound. nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 
@@ -653,7 +658,7 @@ class CostLedger:
     ) -> None:
         self.price_book = price_book
         self.telemetry_sink = telemetry_sink or NoopUsageTelemetrySink()
-        base_store = store or InMemoryLedgerStore()
+        base_store = store if store is not None else InMemoryLedgerStore()
         should_wrap = bool(non_blocking_store)
         if should_wrap:
             self.store: LedgerStore = NonBlockingLedgerStore(
