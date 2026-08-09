@@ -112,7 +112,10 @@ sequenceDiagram
 ```
 
 Environment variables may select/connect/unlock the KV at bootstrap. They are
-not the request-time provider credential source.
+not the request-time provider credential source. The cross-process sequence
+requires the durable Postgres credential backend. With the default in-memory
+backend, the CLI process exits with its registry; registration must occur in the
+same long-lived process as provider use.
 
 ## Provider failover and circuit breaker
 
@@ -159,7 +162,7 @@ sequenceDiagram
     participant Backend as BatchBackend
 
     Caller->>Server: Request plus routing hints
-    Server->>Router: route_request(...)
+    Server->>Router: complete(...)
     Router->>Router: Policy and token estimate
     alt interactive or sync decision
         Router->>Orchestrator: run route or conduct
@@ -170,12 +173,17 @@ sequenceDiagram
     else latency-tolerant batch decision
         Router->>Backend: Submit bounded batch
         Backend-->>Router: Batch job identity
-        Router-->>Caller: Submitted state
+        Router-->>Server: Submitted state
+        Server-->>Caller: Submitted state
         Caller->>Server: Poll or retrieve
-        Server->>Backend: Poll or retrieve
-        Backend-->>Server: State or results
-        Server->>Router: Record qualified result usage
-        Server-->>Caller: Qualified job result
+        Server->>Router: poll_batch(...) or retrieve_batch(...)
+        Router->>Backend: poll(...) or retrieve(...)
+        Backend-->>Router: State or results
+        opt Retrieved completion results
+            Router->>Router: Record qualified result usage
+        end
+        Router-->>Server: State or qualified results
+        Server-->>Caller: State or qualified results
     end
 ```
 

@@ -70,7 +70,10 @@ answers, usage signals, and optional batch payload references.
 
 Control-plane changes may affect later requests but cannot rewrite the evidence
 attached to a completed run. Data-plane payloads must not be copied into broad
-usage telemetry. Trace access is a separate authority from inference access.
+usage telemetry. Protected main has only admin and inference bearer scopes: no
+dedicated trace scope exists, and an inference-scoped caller may request
+`include_orchestration_trace: true`. Purpose- and tenant-specific trace authority
+is an accepted boundary that still needs host RBAC or a dedicated runtime scope.
 
 ## Route and conduct
 
@@ -96,8 +99,9 @@ called by either routing layer.
 
 1. **Caller boundary:** bearer scope, bind policy, body/role/mode/rate/concurrency
    validation precede orchestration.
-2. **Context boundary:** access lists limit cross-step visibility; full traces
-   require explicit trusted authority.
+2. **Context boundary:** access lists limit cross-step visibility. Trace exposure
+   defaults off, but protected-main inference authority can opt in; dedicated
+   purpose/tenant trace RBAC remains `planned`.
 3. **Credential boundary:** provider secrets are names in model configuration
    and values in KV; environment is bootstrap transport only.
 4. **Provider boundary:** protected main requires HTTPS and globally routable

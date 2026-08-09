@@ -26,10 +26,10 @@ primary drivers; latency is a measured guardrail.
 ## Decision
 
 `TaskOrchestrator.complete()` chooses `route` or `conduct` from explicit caller
-mode and a versioned policy. Route selects one eligible worker. Conduct executes
-a bounded template or validated generated plan with explicit roles and access
-lists. New recursion, topology, or reasoning-effort knobs require hard call/token
-caps and comparable-budget ablations.
+mode and a snapshotted policy. Route selects one eligible worker. Conduct
+executes a bounded template or validated generated plan with explicit roles and
+access lists. New recursion, topology, or reasoning-effort knobs require hard
+call/token caps and comparable-budget ablations.
 
 ## Consequences
 

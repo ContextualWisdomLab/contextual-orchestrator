@@ -24,13 +24,17 @@ service.
 sync execution. Latency-tolerant work uses a `BatchBackend` or embedding backend.
 Local in-process implementations preserve offline/standalone behavior;
 `PgLlmBatchBackend` and configuration adapters preserve external ownership.
-Usage from both paths enters the same prompt-safe ledger contract.
+Usage from ordinary coordinator sync execution and coordinator-completed or
+retrieved batch results enters the same prompt-safe ledger contract. Passthrough
+and route streaming bypass that ledger on protected main; submit/poll alone does
+not record completion usage.
 
 ## Consequences
 
 Callers receive observable job states. External adapters add operational
 dependencies but do not remove the interactive path. Cost comparison can use
-one attribution vocabulary.
+one attribution vocabulary only for the coordinator paths that record usage.
+Coordinator job handles and replay guards remain process-local.
 
 ## Failure and recovery
 

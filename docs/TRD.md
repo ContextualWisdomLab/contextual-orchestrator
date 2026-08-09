@@ -98,6 +98,11 @@ batch polling by `GET` falls through the admin gate even though submit/results
 are inference-scoped. Treat that as an explicit compatibility/authorization
 decision before changing it.
 
+There is no dedicated trace scope on protected main. A caller with inference
+authority can set `include_orchestration_trace: true` on chat requests; separate
+tenant/purpose trace authority therefore belongs at the host/gateway boundary
+until runtime RBAC is added.
+
 The dispatcher in `server.py` is the current delivery truth. `OPENAPI_SPEC` in
 `api_contract.py` describes only a resource-oriented subset and omits
 implemented chat, Responses, health, spend, admin, and agent create/delete
@@ -177,6 +182,9 @@ adapter/service.
   transport to the registry.
 - Provider credentials are written with `register-credential` and retrieved by
   credential name.
+- Cross-process bootstrap requires the Postgres backend. The default in-memory
+  backend dies with the registering CLI process and is usable only when
+  registration and provider calls share one process.
 - Live autonomous-development/model tests use `NVIDIA_NIM_API_KEY` only in the
   bounded job that calls the model.
 - `COPILOT_GITHUB_TOKEN` is never a development-model credential.

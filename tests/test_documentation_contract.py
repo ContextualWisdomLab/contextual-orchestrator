@@ -1,7 +1,8 @@
 """Machine-check the canonical product and architecture documentation graph."""
 
-from pathlib import Path
+import ast
 import re
+from pathlib import Path
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -105,6 +106,20 @@ def canonical_text() -> str:
     return "\n".join(read_text(path) for path in CANONICAL_FILES)
 
 
+def class_method_names(relative_path: str, class_name: str) -> set[str]:
+    """Return methods declared directly on one runtime class."""
+
+    tree = ast.parse(read_text(relative_path))
+    for node in tree.body:
+        if isinstance(node, ast.ClassDef) and node.name == class_name:
+            return {
+                child.name
+                for child in node.body
+                if isinstance(child, (ast.FunctionDef, ast.AsyncFunctionDef))
+            }
+    raise AssertionError(f"{class_name} is absent from {relative_path}")
+
+
 def test_required_canonical_files_are_present_and_indexed() -> None:
     """Require one discoverable authority for every requested document family."""
 
@@ -199,6 +214,17 @@ def test_live_names_routes_and_physical_data_objects_are_not_stale() -> None:
     assert "contextual_orchestrator.orchestrator.Orchestrator" not in durable_text
     assert "Orchestrator.route_once" not in durable_text
 
+    uml_text = read_text("docs/UML.md")
+    coordinator_methods = class_method_names(
+        "contextual_orchestrator/cost_router.py", "CostRoutingCoordinator"
+    )
+    for method_name in ("complete", "poll_batch", "retrieve_batch"):
+        assert method_name in coordinator_methods
+        assert f"{method_name}(...)" in uml_text
+    assert "route_request(...)" not in uml_text
+    assert "Server->>Router: poll_batch(...) or retrieve_batch(...)" in uml_text
+    assert "Router->>Backend: poll(...) or retrieve(...)" in uml_text
+
     server_source = read_text("contextual_orchestrator/server.py")
     trd_text = read_text("docs/TRD.md")
     for endpoint in (
@@ -257,6 +283,28 @@ def test_current_evidence_gaps_are_not_promoted_into_capabilities() -> None:
         "not learned, price-aware, or load-balanced",
     ):
         assert term in text.lower()
+
+    architecture_text = " ".join(read_text("ARCHITECTURE.md").lower().split())
+    threat_text = " ".join(read_text("docs/THREAT_MODEL.md").lower().split())
+    readme_text = " ".join(read_text("README.md").lower().split())
+    assert "no dedicated trace scope" in architecture_text
+    assert "inference-scoped caller may request" in architecture_text
+    assert "no enforced provider-response byte cap" in threat_text
+    assert "default in-memory credential backend is process-local" in readme_text
+    assert "route-stream workflow runs remain memory-only" in readme_text
+    assert "budget precheck is process-local and non-atomic" in readme_text
+    assert "ordinary non-stream orchestrated calls" in readme_text
+
+    sync_batch_adr = " ".join(
+        read_text("docs/adr/0005-sync-batch-pg-llm-batch.md").lower().split()
+    )
+    assert "ordinary coordinator sync" in sync_batch_adr
+    assert "passthrough and route streaming bypass" in sync_batch_adr
+    route_conduct_adr = " ".join(
+        read_text("docs/adr/0001-route-conduct-test-time-compute.md").lower().split()
+    )
+    assert "snapshotted policy" in route_conduct_adr
+    assert "a versioned policy" not in route_conduct_adr
 
 
 def test_database_naming_exception_is_bounded() -> None:
