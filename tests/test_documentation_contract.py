@@ -491,5 +491,15 @@ def test_references_licensing_and_volatile_evidence_are_separated() -> None:
     assert sha_pattern.search(read_text("docs/TRACEABILITY.md")) is not None
 
 
+def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
+    """Keep the buyer-visible canonical documentation graph in release history."""
+
+    changelog = read_text("CHANGELOG.md")
+    assert (
+        "Establish a canonical status-qualified product documentation graph"
+        in changelog
+    )
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit("Run with pytest so every documentation contract executes.")
