@@ -47,6 +47,12 @@ A vulnerability is not considered remediated merely because a patch exists on a 
 
 This policy does not replace repository merge policy: qualifying independent review, unresolved-finding disposition, required checks, branch protection, packaging, provenance, and release-acceptance controls remain authoritative for security releases.
 
+The canonical [threat model](docs/THREAT_MODEL.md) defines assets, trust zones,
+abuse cases, controls, and residual risk. The [incident
+runbook](docs/INCIDENT_RUNBOOK.md) defines triage, containment, evidence
+preservation, recovery, and post-incident acceptance. Neither document claims
+an external certification or attestation.
+
 ## Automated Checks
 
 The `Security` GitHub Actions workflow runs CodeQL, dependency review, pip-audit against the hash-pinned `requirements.lock`, CycloneDX SBOM generation, Trivy filesystem scanning, and OpenSSF Scorecard checks on the configured branch, pull request, schedule, and manual triggers. Third-party GitHub Actions and Python security-tool installers in `requirements-security-ci.txt` are pinned to reviewed commit SHAs or hash-locked package requirements with source files kept for maintenance.

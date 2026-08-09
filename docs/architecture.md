@@ -1,15 +1,21 @@
 # Architecture Notes
 
+**Document state:** `superseded` as system authority; retained as a research
+mapping. See [root architecture](../ARCHITECTURE.md) for current implementation
+and trust boundaries.
+
 ## Sources Read
 
 - Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
-- Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+- Sakana Fugu Technical Report: https://doi.org/10.48550/arXiv.2606.21228
 - TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
 - Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
 
 ## What The Architecture Is
 
-The public shape is a single model API. The internal shape is a model pool plus a learned coordinator that decides when to answer directly, when to delegate, how much context each worker receives, when to verify, and how to synthesize the final answer.
+The cited papers' public shape is a single model API. Their internal shape can
+include learned coordination. Protected main instead uses deterministic policy;
+it does not claim a learned coordinator.
 
 The useful split is quality-latency, not separate products:
 
@@ -31,9 +37,10 @@ The Fugu report combines these ideas into production constraints:
 
 This repository implements the interface and control plane, not the trained coordinator.
 
-- `contextual_orchestrator.orchestrator.Agent`: one configured worker model.
-- `Orchestrator.route_once`: the low-latency routing path.
-- `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
+- `contextual_orchestrator.orchestrator.ModelAgent`: one configured worker model.
+- `TaskOrchestrator.route_once`: the low-latency routing path.
+- `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
+- `CostRoutingCoordinator`: the separate sync-versus-batch and ledger layer.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.

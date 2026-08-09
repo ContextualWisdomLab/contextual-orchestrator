@@ -11,6 +11,8 @@ import socket
 import sys
 import urllib.error
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -59,6 +61,12 @@ def test_retry_recovers_from_transient_failures_with_backoff() -> None:
     assert client.attempts == 3  # 2 failures + 1 success
     assert len(delays) == 2  # one backoff between each retry
     assert all(0.0 <= d <= client.retry_backoff_cap for d in delays)
+
+
+def test_negative_retry_budget_is_rejected() -> None:
+    """A retry budget cannot disable the provider's mandatory first attempt."""
+    with pytest.raises(ValueError, match="max_retries must be at least zero"):
+        ModelClient(max_retries=-1)
 
 
 def test_permanent_error_is_not_retried() -> None:

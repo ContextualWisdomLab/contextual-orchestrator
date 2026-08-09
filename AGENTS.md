@@ -56,11 +56,10 @@ push or open a PR.
 - The reference implementation is xtrmLLMBatchPython's pgcrypto-encrypted
   Postgres credential registry (`get_credential(name)`); reuse that pattern (a
   DB-backed KV is fine) unless a dedicated KV is adopted.
-- **Known deviation to migrate:** this repo currently resolves provider API
-  keys from env — `ModelClient` reads `os.environ.get(agent.api_key_env)` in
-  `contextual_orchestrator/orchestrator.py` (and `CONTEXTUAL_ORCHESTRATOR_*`
-  tokens in `__main__.py`). Move these to KV-backed reads; keep env only as the
-  bootstrap path that seeds the KV.
+- Protected main resolves provider keys through `get_credential`; the legacy
+  `api_key_env` field is only a credential-name compatibility alias. Do not
+  reintroduce request-time environment fallback. Process/bind configuration
+  may still use explicit `CONTEXTUAL_ORCHESTRATOR_*` bootstrap inputs.
 
 ### This repo: the org LLM gateway
 
@@ -68,9 +67,9 @@ push or open a PR.
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
-- Its `ModelClient` currently reads `os.environ.get(agent.api_key_env)` — this
-  is the KV-principle deviation above. Resolve the API key (including the org
-  `OPENAI_API_KEY`) from the **KV / credential registry**, not env.
+- Its `ModelClient` resolves the credential name through the **KV / credential
+  registry**, including `OPENAI_API_KEY`; do not add ambient environment
+  fallback at request time.
 - The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
   do not change it.
 
@@ -109,3 +108,22 @@ push or open a PR.
   scheduling (e.g. LLM-cascade / model-routing and queueing/load-balancing
   papers).
 <!-- END cwl-agent-guidance -->
+
+## Canonical product documentation
+
+Start at [`docs/README.md`](docs/README.md). Root `ARCHITECTURE.md`, PRD, TRD,
+ERD, UML, ADRs, threat model, test strategy, operability, incident response,
+traceability, and references are one status-qualified graph. Behavior changes
+must update the affected authority and documentation contract test.
+
+## Execution continuity
+
+- Treat prompt edits, audits, status summaries, and documentation assessments
+  as intermediate work when the request also authorizes repository changes.
+- Continue the safe chain: verify live target state, repair the smallest
+  coherent authority set, run focused and full evidence, publish a reviewable
+  branch/PR, inspect its exact-head state, then take the next non-conflicting
+  authorized task while a control-plane check is pending.
+- Stop only for a real authority choice, destructive ambiguity, permission
+  boundary, or external dependency that blocks every safe continuation. Never
+  turn queued, absent, stale, synthetic, or status-only evidence into success.
