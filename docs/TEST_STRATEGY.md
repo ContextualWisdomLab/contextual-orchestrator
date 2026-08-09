@@ -11,7 +11,7 @@
 | Property/fuzz | Untrusted request, config, redaction, and orchestration seams. | Hypothesis and bounded Atheris workflows |
 | Security | CodeQL, dependency review, pip-audit, SBOM, Trivy, OSV, Scorecard, Semgrep under repository/central ownership. | Exact workflow jobs and security results |
 | Research contract | Turn primary-paper concepts into observable route/conduct, roles, and access-list behavior. | `tests/test_paper_contracts.py` |
-| Documentation fitness | Keep canonical documents, statuses, diagrams, ADRs, runtime class/method references, selected control-flow edges, and data ownership coherent. | `tests/test_documentation_contract.py` |
+| Documentation fitness | Keep canonical documents, statuses, supported Mermaid syntax, ADRs, runtime class/method references, selected control-flow edges, and data ownership coherent. | `tests/test_documentation_contract.py` |
 | Package/release | Build, install, import isolation, provenance, reproducibility, and release artifact identity. | Required before release; not inferred from unit tests |
 | Live-model evaluation | Comparable-budget route/conduct/fallback/effort cells with provenance and uncertainty. | Uses bounded `NVIDIA_NIM_API_KEY`; never required for offline unit tests |
 

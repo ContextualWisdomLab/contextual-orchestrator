@@ -120,6 +120,115 @@ def class_method_names(relative_path: str, class_name: str) -> set[str]:
     raise AssertionError(f"{class_name} is absent from {relative_path}")
 
 
+def validate_mermaid_subset(block: str, source_path: str) -> None:
+    """Parse the Mermaid subset used by the canonical architecture documents."""
+
+    lines = [line.strip() for line in block.splitlines() if line.strip()]
+    assert lines, f"{source_path} contains an empty Mermaid block"
+    diagram_type, body = lines[0], lines[1:]
+    assert body, f"{source_path} contains an empty {diagram_type} diagram"
+    for line in body:
+        assert line.count('"') % 2 == 0, f"{source_path}: unbalanced quote in {line!r}"
+
+    if diagram_type.startswith("flowchart "):
+        assert re.fullmatch(r"flowchart (?:TB|TD|BT|LR|RL)", diagram_type)
+        node = r"[A-Za-z_][A-Za-z0-9_]*(?:\[[^\]]+\])?"
+        edge = re.compile(
+            rf"{node}\s+(?:-->(?:\|[^|]+\|)?|-\..+\.->)\s*{node}"
+        )
+        subgraph_depth = 0
+        for line in body:
+            if line.startswith("subgraph "):
+                assert re.fullmatch(rf"subgraph {node}", line), (
+                    f"{source_path}: unsupported subgraph syntax {line!r}"
+                )
+                subgraph_depth += 1
+            elif line == "end":
+                assert subgraph_depth > 0, f"{source_path}: unmatched flowchart end"
+                subgraph_depth -= 1
+            elif re.fullmatch(edge, line):
+                continue
+            else:
+                assert re.fullmatch(node, line), (
+                    f"{source_path}: unsupported flowchart statement {line!r}"
+                )
+        assert subgraph_depth == 0, f"{source_path}: unclosed flowchart subgraph"
+        return
+
+    if diagram_type == "sequenceDiagram":
+        participants: set[str] = set()
+        control_stack: list[str] = []
+        for line in body:
+            declaration = re.fullmatch(
+                r"(?:actor|participant)\s+([A-Za-z_][A-Za-z0-9_]*)(?:\s+as\s+.+)?",
+                line,
+            )
+            if declaration:
+                participants.add(declaration.group(1))
+                continue
+            control = re.match(r"(alt|opt|loop|par|critical|break|rect)\s+.+", line)
+            if control:
+                control_stack.append(control.group(1))
+                continue
+            if line.startswith("else "):
+                assert control_stack and control_stack[-1] == "alt", (
+                    f"{source_path}: else outside alt"
+                )
+                continue
+            if line == "end":
+                assert control_stack, f"{source_path}: unmatched sequence end"
+                control_stack.pop()
+                continue
+            message = re.fullmatch(
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*(?:->>|-->>)\s*"
+                r"([A-Za-z_][A-Za-z0-9_]*)\s*:\s*.+",
+                line,
+            )
+            assert message, f"{source_path}: unsupported sequence statement {line!r}"
+            sender, receiver = message.groups()
+            assert sender in participants, f"{source_path}: undeclared participant {sender}"
+            assert receiver in participants, f"{source_path}: undeclared participant {receiver}"
+        assert not control_stack, f"{source_path}: unclosed sequence control block"
+        return
+
+    if diagram_type == "stateDiagram-v2":
+        transition = re.compile(
+            r"(?:\[\*\]|[A-Za-z_][A-Za-z0-9_]*)\s+-->\s+"
+            r"(?:\[\*\]|[A-Za-z_][A-Za-z0-9_]*)(?::\s+.+)?"
+        )
+        for line in body:
+            assert re.fullmatch(transition, line), (
+                f"{source_path}: unsupported state statement {line!r}"
+            )
+        return
+
+    if diagram_type == "erDiagram":
+        in_entity = False
+        for line in body:
+            if re.fullmatch(r"[A-Z][A-Z0-9_]* \{", line):
+                assert not in_entity, f"{source_path}: nested ER entity"
+                in_entity = True
+            elif line == "}":
+                assert in_entity, f"{source_path}: unmatched ER entity close"
+                in_entity = False
+            elif in_entity:
+                assert re.fullmatch(
+                    r"[A-Za-z_][A-Za-z0-9_]*(?:\([^)]*\))?\s+"
+                    r"[A-Za-z_][A-Za-z0-9_]*(?:\s+.+)?",
+                    line,
+                ), f"{source_path}: invalid ER attribute {line!r}"
+            else:
+                assert re.fullmatch(
+                    r"[A-Z][A-Z0-9_]*\s+[|o{}]+--[|o{}]+\s+"
+                    r"[A-Z][A-Z0-9_]*\s*:\s*.+",
+                    line,
+                ), f"{source_path}: invalid ER relationship {line!r}"
+        assert not in_entity, f"{source_path}: unclosed ER entity"
+        return
+
+    raise AssertionError(f"{source_path}: unsupported Mermaid type {diagram_type!r}")
+
+
 def test_required_canonical_files_are_present_and_indexed() -> None:
     """Require one discoverable authority for every requested document family."""
 
@@ -185,8 +294,8 @@ def test_adr_index_and_schema_are_consistent() -> None:
     assert len(numbers) == len(set(numbers))
 
 
-def test_mermaid_blocks_are_balanced_and_cover_required_views() -> None:
-    """Require source-controlled component, sequence, state, and ER views."""
+def test_mermaid_blocks_parse_supported_syntax_and_cover_required_views() -> None:
+    """Parse the supported Mermaid subset and require all architecture views."""
 
     diagram_sources = {
         "ARCHITECTURE.md": "flowchart",
@@ -200,8 +309,21 @@ def test_mermaid_blocks_are_balanced_and_cover_required_views() -> None:
         blocks = re.findall(r"```mermaid\s*\n(.*?)```", source, flags=re.DOTALL)
         assert len(blocks) == source.count("```mermaid"), path
         assert any(block.lstrip().startswith(required_type) for block in blocks), path
+        for block in blocks:
+            validate_mermaid_subset(block, path)
         all_diagrams.extend(blocks)
     assert any(block.lstrip().startswith("stateDiagram-v2") for block in all_diagrams)
+
+    invalid_sequence = """sequenceDiagram
+        actor Caller
+        Caller->>Undeclared: request
+    """
+    try:
+        validate_mermaid_subset(invalid_sequence, "negative fixture")
+    except AssertionError:
+        pass
+    else:  # pragma: no cover - proves the validator is fail-closed
+        raise AssertionError("Mermaid validator accepted an undeclared participant")
 
 
 def test_live_names_routes_and_physical_data_objects_are_not_stale() -> None:
