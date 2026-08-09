@@ -31,14 +31,15 @@ include = ["contextual_orchestrator*"]
 
 [tool.coverage.run]
 source = ["contextual_orchestrator"]
-omit = ["contextual_orchestrator/__main__.py", "contextual_orchestrator/server.py"]
+branch = true
 
 [tool.coverage.report]
 show_missing = true
+fail_under = 100
 
 [tool.interrogate]
 exclude = ["tests"]
-fail-under = 80
+fail-under = 100
 ignore-init-method = true
 ignore-magic = true
 ignore-nested-functions = true

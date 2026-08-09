@@ -14,6 +14,8 @@ import sys
 import threading
 import urllib.request
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -24,13 +26,17 @@ from contextual_orchestrator.server import SecurityConfig, build_server  # noqa:
 class _FakeSSEProvider:
     """Emits a fixed list of raw SSE frame strings at POST /chat/completions."""
 
-    def __init__(self, frames: list[str]) -> None:
+    def __init__(
+        self,
+        frames: list[str],
+        content_type: str = "text/event-stream",
+    ) -> None:
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("content-length", 0))
                 self.rfile.read(length)
                 self.send_response(200)
-                self.send_header("content-type", "text/event-stream")
+                self.send_header("content-type", content_type)
                 self.end_headers()
                 for frame in frames:
                     self.wfile.write(frame.encode("utf-8"))
@@ -72,6 +78,93 @@ def test_stream_send_parses_real_provider_sse() -> None:
         deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
     assert deltas == ["Hello", " streamed", " world"]  # role delta skipped, [DONE] stops
     assert "".join(deltas) == "Hello streamed world"
+
+
+def test_stream_send_rejects_eof_before_done_marker() -> None:
+    """An interrupted OpenAI-compatible stream cannot be reported as complete."""
+    with _FakeSSEProvider([_delta("partial")]) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        with pytest.raises(RuntimeError, match="terminated before.*DONE"):
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+
+
+def test_stream_send_rejects_malformed_data_event() -> None:
+    """Malformed provider data frames fail closed instead of disappearing silently."""
+    frames = ["data: {not-json}\n\n", "data: [DONE]\n\n"]
+    with _FakeSSEProvider(frames) as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        with pytest.raises(RuntimeError, match="malformed provider stream event"):
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+
+
+def test_stream_send_rejects_non_event_stream_response() -> None:
+    """A 200 response with the wrong media type cannot masquerade as SSE success."""
+    frames = [_delta("should-not-publish"), "data: [DONE]\n\n"]
+    with _FakeSSEProvider(frames, content_type="application/json") as provider:
+        client = ModelClient()
+        agent = ModelAgent(
+            "worker_agent",
+            "gpt-x",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+        with pytest.raises(RuntimeError, match="event-stream content type"):
+            list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+
+
+class _IterableStreamResponse:
+    """Lightweight context response for exercising the documented test-double seam."""
+
+    def __init__(self, frames: list[bytes]) -> None:
+        self.frames = frames
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, exc_type, exc, traceback):
+        return False
+
+    def __iter__(self):
+        return iter(self.frames)
+
+
+def test_stream_send_stops_at_done_for_lightweight_response_double() -> None:
+    """The non-HTTP seam emits no provider data after the terminal marker."""
+    client = ModelClient()
+    client._open_provider = lambda _request: _IterableStreamResponse(  # type: ignore[method-assign]
+        [
+            _delta("accepted").encode(),
+            b"data: [DONE]\n\n",
+            _delta("must-not-escape").encode(),
+        ]
+    )
+    agent = ModelAgent("worker_agent", "gpt-x", base_url="https://provider.example")
+
+    assert list(client._stream_send(agent, {"model": "gpt-x", "stream": True})) == ["accepted"]
+
+
+def test_stream_send_rejects_malformed_event_from_lightweight_response_double() -> None:
+    """The non-HTTP seam enforces the same fail-closed JSON contract as live HTTP."""
+    client = ModelClient()
+    client._open_provider = lambda _request: _IterableStreamResponse(  # type: ignore[method-assign]
+        [b"data: {not-json}\n\n", b"data: [DONE]\n\n"]
+    )
+    agent = ModelAgent("worker_agent", "gpt-x", base_url="https://provider.example")
+
+    with pytest.raises(RuntimeError, match="malformed provider stream event"):
+        list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
 
 
 def test_stream_chat_mock_yields_chunks() -> None:

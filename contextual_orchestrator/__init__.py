@@ -1,4 +1,8 @@
-"""Public package exports for the contextual orchestration runtime."""
+"""Public package exports for the contextual orchestration runtime.
+
+Importing this module is intentionally side-effect free: provider transports and
+optional adapters are configured explicitly by their owning runtime components.
+"""
 
 from .batch_routing import (
     BatchJob,
@@ -49,11 +53,8 @@ from .model_fallback import (
     build_fallback_plan,
     load_fallback_manifest,
 )
-from .orchestrator import ModelAgent, ModelClient as _ModelClient, TaskOrchestrator, WorkflowStep, load_agents
-from .provider_transport import install_provider_transport as _install_provider_transport
+from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .token_counting import HeuristicTokenCounter, build_token_counter
-
-_install_provider_transport(_ModelClient)
 
 __all__ = [
     "ModelAgent",
