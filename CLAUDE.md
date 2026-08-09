@@ -13,6 +13,12 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 This file complements AGENTS.md with commands and architecture; where they differ, AGENTS.md wins.
 
+Canonical product and engineering authority is indexed at
+[`docs/README.md`](docs/README.md). Treat PR bodies, conversation history, and
+commercial evidence packets as supporting evidence rather than substitutes for
+the status-qualified PRD, TRD, architecture, ERD/UML, ADRs, security, test, and
+operability documents.
+
 ## Common commands
 
 ```bash

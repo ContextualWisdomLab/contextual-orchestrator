@@ -7,6 +7,11 @@ Stdlib Python lab for a single API that routes, delegates, verifies, and synthes
 
 This is not a Sakana AI product or a reproduction of their trained models. It is a small implementation of the public architecture pattern: expose one model-like interface while keeping the agent pool, routing, workflow, and verification logic behind it.
 
+Product, technical, security, data-model, operational, and decision authority
+is indexed in [docs/README.md](docs/README.md). Capability status is qualified
+there as shipped on protected main, active-PR, accepted architecture, planned,
+research-only, superseded, or externally owned.
+
 ## Quick Start
 
 ```bash
@@ -117,7 +122,9 @@ One fused orchestration loop:
 - Agent definitions are data, so provider preference, exclusions, privacy constraints, and mock testing do not require code changes.
 - Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
 
-See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the current system authority and
+[docs/architecture.md](docs/architecture.md) for the source-backed research
+mapping.
 
 ## Observability & spend
 
