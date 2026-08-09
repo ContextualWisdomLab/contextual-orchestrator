@@ -38,6 +38,26 @@ push or open a PR.
   code-scanning tools can't converge on one PR ref. Gating happens via the
   Security **job results**; do not add tools to the `code_scanning` rule.
 
+### Repository-writer lease and dependency authority
+
+- Enforce **one writer per repository branch**. Before every repository write,
+  refetch the **exact PR head and target blob SHA**. If either changed, inspect
+  the intervening work and reconcile once before editing; never overwrite an
+  independently moved branch from stale state.
+- Repositories outside `ContextualWisdomLab/contextual-orchestrator`, including
+  the central `ContextualWisdomLab/.github` control plane and repositories with
+  their own dedicated maintenance loops, are **read-only dependencies** unless
+  the task is explicitly assigned to that repository. Do not edit their
+  branches, dispatch **write-capable agents**, resolve their review threads, or
+  merge their PRs from this repository's loop.
+- Live GitHub state is authoritative. A predecessor-head, stale-head,
+  cancelled, absent, failed, queued, pending, skipped-required, or
+  synthetic-merge result is not current-head evidence and must never be reused
+  to approve or merge a later tree.
+- Do not create one-shot, self-modifying, encoded-patch, branch-local repair, or
+  temporary write-capable GitHub Actions workflows. Prefer direct reviewed
+  changes tied to the exact current head.
+
 ### Code exploration
 
 - This repo has **no `.codegraph/` index**, so use normal search
@@ -70,8 +90,12 @@ push or open a PR.
 - Its `ModelClient` resolves the credential name through the **KV / credential
   registry**, including `OPENAI_API_KEY`; do not add ambient environment
   fallback at request time.
-- The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
-  do not change it.
+- The **OpenCode review pipeline is separate and centrally governed** by
+  `ContextualWisdomLab/.github`. Do not hard-code or replace its provider pool,
+  reviewer identities, or credential chain from this repository. For live model
+  tests and autonomous development work owned by this repository, use
+  `NVIDIA_NIM_API_KEY`; never repurpose `COPILOT_GITHUB_TOKEN` as a model or
+  development-agent credential.
 
 ### This repo's role in the ecosystem
 
@@ -82,7 +106,7 @@ push or open a PR.
   email/PIM that DOM-decomposes emails/files into a persisted knowledge graph).
   Each component below is a **standalone program that must ALSO work as a git
   submodule**, grown separately and together:
-  - **waf-ids-ai-soc** — WAF / IDS / AI SOC / LB / APIM.
+  - **wardnet** — WAF / IDS / AI SOC / LB / APIM.
   - **clearfolio** — document viewer.
   - **pg-erd-cloud** — ERD tool.
   - **contextual-orchestrator** — this repo: LLM cost/perf/upstream-LB gateway
@@ -90,7 +114,7 @@ push or open a PR.
   - **codec-carver** — STT / omni-modal speech-video codec.
   - **fast-mlsirm** — LLM-as-a-Judge calibration + evaluation-item quality
     (uses aFIPC FIPC + kaefa item-fit).
-  - **feelanet-adfs** — passwordless SSO (OIDC/SCIM/ADFS/LDAP/FIDO2/OAuth2.1,
+  - **keyverse** — passwordless SSO (OIDC/SCIM/ADFS/LDAP/FIDO2/OAuth2.1,
     eliminate passwords).
   - **newsdom-api** — PDF→DOM sidecar.
   - **semantic-data-portal** — upper ontology / catalog / governance plane with

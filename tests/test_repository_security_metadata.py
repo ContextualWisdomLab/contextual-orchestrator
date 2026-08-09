@@ -101,6 +101,31 @@ def test_security_policy_documents_reporting_and_automation():
     assert "pinned to reviewed commit SHAs or hash-locked package requirements" in policy_text
 
 
+def test_agent_guidance_preserves_central_review_authority_and_nim_development_key():
+    for guidance_path in ("AGENTS.md", "CLAUDE.md"):
+        guidance_text = read_text(guidance_path)
+
+        assert "stays on **GitHub Models**" not in guidance_text
+        assert "stays on GitHub Models" not in guidance_text
+        assert "centrally governed" in guidance_text
+        assert "`NVIDIA_NIM_API_KEY`" in guidance_text
+        assert "`COPILOT_GITHUB_TOKEN`" in guidance_text
+
+
+def test_agent_guidance_enforces_writer_lease_and_read_only_dependencies():
+    required_tokens = (
+        "one writer per repository branch",
+        "exact PR head and target blob SHA",
+        "read-only dependencies",
+        "write-capable agents",
+        "stale-head",
+    )
+    for guidance_path in ("AGENTS.md", "CLAUDE.md"):
+        guidance_text = read_text(guidance_path)
+        for required_token in required_tokens:
+            assert required_token in guidance_text
+
+
 def test_database_design_avoids_plaintext_prompt_output_storage():
     database_text = read_text("docs/database_design.sql")
 
@@ -140,6 +165,8 @@ if __name__ == "__main__":  # pragma: no cover
     test_dependabot_tracks_actions_and_python_dependencies()
     test_codeowners_requires_repository_owner_review()
     test_security_policy_documents_reporting_and_automation()
+    test_agent_guidance_preserves_central_review_authority_and_nim_development_key()
+    test_agent_guidance_enforces_writer_lease_and_read_only_dependencies()
     test_database_design_avoids_plaintext_prompt_output_storage()
     test_python_lockfile_uses_hash_pinning()
     test_security_tool_lockfile_uses_hash_pinning()
