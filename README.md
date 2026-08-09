@@ -47,7 +47,7 @@ HTTP serving is hardened for local lab use:
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
 - State is in-memory by default. Pass `--state-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_STATE_DB`) to persist workflow runs, evaluation runs, audit, and analytics to a stdlib sqlite file so they survive a restart; without it, behavior is unchanged.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
-- `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
+- `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through a provider-native Batch API. Completion windows and discounts are provider-contract facts, not repository guarantees. The mock path answers synchronously.
 
 Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints. Provider secrets are resolved from a KV credential registry via `get_credential`, never from `os.getenv` at request time (see [docs/kv-credentials.md](docs/kv-credentials.md)):
 
@@ -151,12 +151,14 @@ These are process-local measured signals for a stdlib lab, not a billing system 
 
 ## Cost review + routing hub
 
-The orchestrator is the single control point for **LLM cost review** and
-**sync-vs-batch routing** (a LiteLLM-plus scope: cost optimiser + upstream load
-balancing + batch routing). All config — prices, thresholds, batch endpoints —
-is read from a **KV config store**, never `os.getenv`.
+`CostRoutingCoordinator` owns **sync-vs-batch routing** and its independent
+ledger; `TaskOrchestrator` separately owns **route-vs-conduct**, deterministic
+agent selection, and workflow-derived spend/budget. Routing prices, thresholds,
+and batch endpoints come from ConfigStore. Process/bind/bootstrap settings still
+have explicit environment/CLI inputs.
 
-- **Usage + cost ledger.** Every completion, sync *and* batch, builds a
+- **Usage + cost ledger.** Ordinary coordinator sync completions and retrieved
+  batch results build a
   prompt-safe usage record with generated IDs, token counts, cost, provider,
   model, channel, route mode, and attribution dimensions. Raw prompt and answer
   text are not part of the usage record or telemetry event. The default
@@ -168,6 +170,10 @@ is read from a **KV config store**, never `os.getenv`.
   service, upstream API/provider, model name, team, group, company**. Token
   counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is
   configured, and fall back to a deterministic heuristic otherwise.
+  Raw passthrough and route streaming currently bypass this ledger. Missing
+  ledger prices become zero, while workflow spend reports them as unknown; the
+  two authorities are not yet reconciled. This is not a billing or free-routing
+  claim.
 - **Reporting.** `GET /api/v1/cost_reports/rollup?dimension=team&start=&end=`
   rolls up cost + tokens by any dimension over any time window;
   `GET /api/v1/llm_usage_records` lists raw ledger rows;
@@ -184,6 +190,8 @@ is read from a **KV config store**, never `os.getenv`.
   Submit via `POST /api/v1/batch_routing_jobs`, poll
   `GET /api/v1/batch_routing_jobs/{id}`, retrieve
   `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
+  Coordinator handles are process-local and chat result replay is not yet
+  idempotent across restart.
 - **Batch embeddings.** Bulk, latency-tolerant embedding work (e.g. naruon's
   email-import backfill) submits to `POST /v1/batch/embeddings`
   (`{model, input|inputs:[...], endpoint, metadata|attribution}`) and polls

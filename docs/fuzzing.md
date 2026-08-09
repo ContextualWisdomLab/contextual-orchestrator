@@ -63,5 +63,5 @@ as artifacts.
 ## Background
 
 For the theory behind coverage-guided greybox fuzzing, see
-[`papers/fuzzing-art-science-engineering-manes-2019.pdf`](papers/fuzzing-art-science-engineering-manes-2019.pdf)
+[Manès et al., *The Art, Science, and Engineering of Fuzzing*](https://doi.org/10.1109/TSE.2019.2946563)
 (Manès et al., *The Art, Science, and Engineering of Fuzzing: A Survey*).

@@ -2,7 +2,6 @@
 
 from pathlib import Path
 import re
-import tomllib
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -41,30 +40,56 @@ REQUIRED_FILES = [
     "docs/README.md",
     "docs/PRD.md",
     "docs/TRD.md",
-    "docs/ERD.md",
     "docs/UML.md",
+    "docs/ERD.md",
+    "docs/TRACEABILITY.md",
     "docs/THREAT_MODEL.md",
     "docs/TEST_STRATEGY.md",
     "docs/OPERABILITY.md",
     "docs/INCIDENT_RUNBOOK.md",
-    "docs/TRACEABILITY.md",
     "docs/REFERENCES.md",
     "docs/adr/README.md",
     "SECURITY.md",
-] + [f"docs/adr/{name}" for name in ADR_FILES]
+] + [f"docs/adr/{filename}" for filename in ADR_FILES]
 
-ADR_SECTIONS = [
-    "Context",
-    "decision drivers",
-    "alternatives",
+ADR_HEADINGS = [
+    "## Status",
+    "## Context and decision drivers",
+    "## Considered alternatives",
     "## Decision",
     "## Consequences",
-    "Failure and recovery",
-    "Security, privacy, and governance",
-    "Compatibility and migration",
-    "Verification and acceptance",
-    "Rollback",
-    "supersession",
+    "## Failure and recovery",
+    "## Security, privacy, and governance impact",
+    "## Compatibility and migration",
+    "## Verification and acceptance",
+    "## Rollback and supersession",
+    "## References",
+]
+
+CANONICAL_FILES = [
+    "ARCHITECTURE.md",
+    "docs/README.md",
+    "docs/PRD.md",
+    "docs/TRD.md",
+    "docs/UML.md",
+    "docs/ERD.md",
+    "docs/THREAT_MODEL.md",
+    "docs/TEST_STRATEGY.md",
+    "docs/OPERABILITY.md",
+    "docs/INCIDENT_RUNBOOK.md",
+    "docs/REFERENCES.md",
+    "docs/adr/README.md",
+] + [f"docs/adr/{filename}" for filename in ADR_FILES]
+
+LINK_CHECK_FILES = CANONICAL_FILES + [
+    "AGENTS.md",
+    "CLAUDE.md",
+    "README.md",
+    "SECURITY.md",
+    "docs/TRACEABILITY.md",
+    "docs/architecture.md",
+    "docs/fuzzing.md",
+    "docs/papers/README.md",
 ]
 
 
@@ -77,186 +102,222 @@ def read_text(relative_path: str) -> str:
 def canonical_text() -> str:
     """Return durable canonical documents without the dated evidence appendix."""
 
-    paths = [
-        "ARCHITECTURE.md",
-        "docs/README.md",
-        "docs/PRD.md",
-        "docs/TRD.md",
-        "docs/ERD.md",
-        "docs/UML.md",
-        "docs/THREAT_MODEL.md",
-        "docs/TEST_STRATEGY.md",
-        "docs/OPERABILITY.md",
-        "docs/INCIDENT_RUNBOOK.md",
-        "docs/REFERENCES.md",
-    ] + [f"docs/adr/{name}" for name in ADR_FILES]
-    return "\n".join(read_text(path) for path in paths)
+    return "\n".join(read_text(path) for path in CANONICAL_FILES)
 
 
-def test_required_canonical_files_are_present_and_discoverable():
-    """Require the canonical graph and a README entry point."""
+def test_required_canonical_files_are_present_and_indexed() -> None:
+    """Require one discoverable authority for every requested document family."""
 
     missing = [path for path in REQUIRED_FILES if not (ROOT_DIR / path).is_file()]
     assert missing == []
 
     index_text = read_text("docs/README.md")
-    readme_text = read_text("README.md")
-    for path in (
-        "PRD.md",
-        "TRD.md",
-        "ERD.md",
-        "UML.md",
-        "adr/README.md",
-        "THREAT_MODEL.md",
-        "TEST_STRATEGY.md",
-        "OPERABILITY.md",
-        "INCIDENT_RUNBOOK.md",
-        "TRACEABILITY.md",
-        "REFERENCES.md",
+    for link in (
+        "[PRD](PRD.md)",
+        "[TRD](TRD.md)",
+        "[Architecture](../ARCHITECTURE.md)",
+        "[UML](UML.md)",
+        "[ERD](ERD.md)",
+        "[ADR index](adr/README.md)",
+        "[Traceability](TRACEABILITY.md)",
+        "[Threat model](THREAT_MODEL.md)",
+        "[Test strategy](TEST_STRATEGY.md)",
+        "[Operability](OPERABILITY.md)",
+        "[Incident runbook](INCIDENT_RUNBOOK.md)",
+        "[References](REFERENCES.md)",
     ):
-        assert path in index_text
-    assert "docs/README.md" in readme_text
+        assert index_text.count(link) == 1
+    assert "[docs/README.md](docs/README.md)" in read_text("README.md")
 
 
-def test_status_vocabulary_is_complete_and_shipped_claims_are_qualified():
-    """Keep shipped, proposed, research, and external claims distinguishable."""
+def test_status_vocabulary_product_scope_and_prompt_continuity_are_explicit() -> None:
+    """Keep shipped/proposed work distinct and prevent audit-only early stops."""
 
     index_text = read_text("docs/README.md")
     for status in STATUS_VOCABULARY:
         assert f"`{status}`" in index_text
 
     product_text = read_text("docs/PRD.md")
-    assert "Capability status" in product_text
-    for status in ("implemented_on_protected_main", "active_pr", "planned", "out_of_scope"):
+    for requirement_id in range(1, 11):
+        assert f"PRD-{requirement_id:03d}" in product_text
+    for status in (
+        "implemented_on_protected_main",
+        "active_pr",
+        "planned",
+        "out_of_scope",
+    ):
         assert f"`{status}`" in product_text
-    assert "does not claim certification" in canonical_text().lower()
+
+    prompt_text = read_text("AGENTS.md")
+    assert "## Execution continuity" in prompt_text
+    assert "intermediate work" in prompt_text
 
 
-def test_adr_index_and_required_decision_sections_are_consistent():
-    """Require every minimum decision to be indexed, status-bearing, and recoverable."""
+def test_adr_index_and_schema_are_consistent() -> None:
+    """Require every decision to be uniquely indexed, status-bearing, and recoverable."""
 
     index_text = read_text("docs/adr/README.md")
+    numbers = []
     for filename in ADR_FILES:
-        assert filename in index_text
+        number = filename.split("-", 1)[0]
+        numbers.append(number)
+        assert index_text.count(f"({filename})") == 1
         body = read_text(f"docs/adr/{filename}")
-        assert any(f"`{status}`" in body.split("## Context", 1)[0] for status in STATUS_VOCABULARY)
-        normalized = body.lower()
-        for section in ADR_SECTIONS:
-            assert section.lower() in normalized, f"{filename} lacks {section}"
+        for heading in ADR_HEADINGS:
+            assert heading in body, f"{filename} lacks {heading}"
+        status_section = body.split("## Status", 1)[1].split("\n## ", 1)[0]
+        assert any(f"`{status}`" in status_section for status in STATUS_VOCABULARY)
+    assert len(numbers) == len(set(numbers))
 
 
-def test_mermaid_blocks_are_balanced_and_cover_required_flows():
-    """Require parseable block boundaries and the named runtime/deployment flows."""
+def test_mermaid_blocks_are_balanced_and_cover_required_views() -> None:
+    """Require source-controlled component, sequence, state, and ER views."""
 
-    for path in ("ARCHITECTURE.md", "docs/UML.md", "docs/ERD.md", "docs/TRACEABILITY.md"):
-        text = read_text(path)
-        assert text.count("```mermaid") > 0
-        assert text.count("```") % 2 == 0
-
-    uml_text = read_text("docs/UML.md").lower()
-    for term in (
-        "component topology",
-        "route sequence",
-        "conduct sequence",
-        "access lists",
-        "credential bootstrap",
-        "provider failover and circuit breaker",
-        "sync-versus-batch",
-        "evidence and merge authority",
-        "deployment topology",
-        "degraded-mode topology",
-    ):
-        assert term in uml_text
+    diagram_sources = {
+        "ARCHITECTURE.md": "flowchart",
+        "docs/UML.md": "sequenceDiagram",
+        "docs/ERD.md": "erDiagram",
+        "docs/TRACEABILITY.md": "flowchart",
+    }
+    all_diagrams = []
+    for path, required_type in diagram_sources.items():
+        source = read_text(path)
+        blocks = re.findall(r"```mermaid\s*\n(.*?)```", source, flags=re.DOTALL)
+        assert len(blocks) == source.count("```mermaid"), path
+        assert any(block.lstrip().startswith(required_type) for block in blocks), path
+        all_diagrams.extend(blocks)
+    assert any(block.lstrip().startswith("stateDiagram-v2") for block in all_diagrams)
 
 
-def test_canonical_names_match_live_modules_api_and_data_ownership():
-    """Catch stale class names, invented endpoints, and ambiguous entity ownership."""
+def test_live_names_routes_and_physical_data_objects_are_not_stale() -> None:
+    """Tie architecture names and ERD claims to protected-main source strings."""
 
-    architecture_text = read_text("ARCHITECTURE.md")
-    for module_name in (
-        "orchestrator.py",
-        "server.py",
-        "credentials.py",
-        "cost_ledger.py",
-        "batch_routing.py",
-        "cost_router.py",
-        "token_counting.py",
-    ):
-        assert (ROOT_DIR / "contextual_orchestrator" / module_name).is_file()
-        assert f"`{module_name}`" in architecture_text
-    assert "contextual_orchestrator.orchestrator.Agent" not in canonical_text()
-    assert "contextual_orchestrator.orchestrator.Orchestrator" not in canonical_text()
+    durable_text = canonical_text()
+    assert "TaskOrchestrator" in durable_text
+    assert "CostRoutingCoordinator" in durable_text
+    assert "contextual_orchestrator.orchestrator.Agent" not in durable_text
+    assert "contextual_orchestrator.orchestrator.Orchestrator" not in durable_text
+    assert "Orchestrator.route_once" not in durable_text
 
-    api_source = read_text("contextual_orchestrator/api_contract.py")
     server_source = read_text("contextual_orchestrator/server.py")
     trd_text = read_text("docs/TRD.md")
-    assert "/v1/chat/completions" in server_source
-    assert "/v1/chat/completions" in trd_text
-    for endpoint in ("/api/v1/workflow_runs", "/api/v1/batch_routing_jobs"):
-        assert endpoint in api_source
+    for endpoint in (
+        "/healthz",
+        "/v1/chat/completions",
+        "/v1/responses",
+        "/v1/batch/embeddings",
+        "/api/v1/batch_routing_jobs",
+        "/api/v1/workflow_runs",
+    ):
+        assert endpoint in server_source
         assert endpoint in trd_text
 
+    physical_sources = "\n".join(
+        read_text(path)
+        for path in (
+            "contextual_orchestrator/orchestrator.py",
+            "contextual_orchestrator/credentials.py",
+            "contextual_orchestrator/cost_ledger.py",
+        )
+    )
     erd_text = read_text("docs/ERD.md")
-    for entity_name in (
-        "model_agent",
-        "workflow_run",
-        "workflow_step",
-        "step_dependency",
-        "access_grant",
-        "provider_credential",
-        "credential_backend",
-        "cost_ledger_entry",
-        "routing_decision",
-        "batch_request",
-        "batch_result",
-        "audit_event",
-        "fallback_candidate",
-        "check_evidence",
-        "release_evidence",
+    for object_name in (
+        "agent_pool",
+        "records",
+        "provider_credentials",
+        "cost_attribution_dimensions",
+        "llm_price_entries",
+        "llm_usage_records",
     ):
-        assert f"`{entity_name}`" in erd_text
-    for ownership in ("persisted_runtime", "in_memory", "external_owned", "accepted_target", "active_pr"):
-        assert f"`{ownership}`" in erd_text
+        assert f"CREATE TABLE IF NOT EXISTS {object_name}" in physical_sources
+        assert f"`{object_name}`" in erd_text
+    for classification in (
+        "persisted_runtime",
+        "in_memory",
+        "external_owned",
+        "accepted_target",
+        "active_pr",
+    ):
+        assert f"`{classification}`" in erd_text
 
 
-def test_runtime_version_credentials_and_authority_boundaries_are_current():
-    """Tie documentation claims to package metadata and current credential/host boundaries."""
-
-    project = tomllib.loads(read_text("pyproject.toml"))["project"]
-    trd_text = read_text("docs/TRD.md")
-    assert project["version"] in trd_text
-    assert project["requires-python"] in trd_text
+def test_current_evidence_gaps_are_not_promoted_into_capabilities() -> None:
+    """Keep cost, stream, batch, OpenAPI, and provider-selection gaps explicit."""
 
     text = canonical_text()
     for term in (
-        "NVIDIA_NIM_API_KEY",
-        "COPILOT_GITHUB_TOKEN",
-        "environment variables are bootstrap transport",
-        "independent review",
-        "standalone",
-        "host owns",
-        "pg-llm-batch",
-        "DNS",
-        "redirect",
-        "proxy",
-        "response",
-        "purpose",
-        "retention",
-        "SBOM",
+        "two unsynchronized cost authorities",
+        "missing price as zero",
+        "sql price table is dormant",
+        "passthrough",
+        "route streaming",
+        "process-local",
+        "openapi",
+        "cheapest_upstream()",
+        "not learned, price-aware, or load-balanced",
     ):
-        assert term.lower() in text.lower()
+        assert term in text.lower()
 
 
-def test_references_and_volatile_evidence_are_separated():
-    """Keep standards/research durable while confining revision IDs to the dated audit."""
+def test_database_naming_exception_is_bounded() -> None:
+    """Do not hide the one-word legacy table or normalize future ambiguity."""
+
+    erd_text = read_text("docs/ERD.md")
+    adr_text = read_text("docs/adr/0013-database-naming-and-migration.md")
+    for text in (erd_text, adr_text):
+        assert "two-or-more-word snake_case" in text
+        assert "`records`" in text
+        assert "technical debt" in text
+        assert "runtime_records" in text
+
+
+def test_local_markdown_links_resolve() -> None:
+    """Reject broken relative links in the canonical graph."""
+
+    link_pattern = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+    broken = []
+    for relative_path in LINK_CHECK_FILES:
+        source_path = ROOT_DIR / relative_path
+        for raw_target in link_pattern.findall(read_text(relative_path)):
+            target = raw_target.split("#", 1)[0].strip()
+            if not target or "://" in target or target.startswith(("#", "/")):
+                continue
+            resolved = (source_path.parent / target).resolve()
+            try:
+                resolved.relative_to(ROOT_DIR.resolve())
+            except ValueError:
+                broken.append((relative_path, raw_target))
+                continue
+            if not resolved.exists():
+                broken.append((relative_path, raw_target))
+    assert broken == []
+
+
+def test_references_licensing_and_volatile_evidence_are_separated() -> None:
+    """Keep research, licensing, and revision evidence under distinct authority."""
 
     references = read_text("docs/REFERENCES.md")
-    for term in ("Fugu", "Conductor", "TRINITY", "RFC 8259", "NIST", "ISO/IEC"):
+    for term in (
+        "Fugu",
+        "Conductor",
+        "TRINITY",
+        "RFC 8259",
+        "NIST SP 800-218A",
+        "42001:2023",
+        "OpenAPI Specification",
+        "3.1.0",
+        "CSAP",
+        "non-exclusive grant to arXiv",
+    ):
         assert term in references
 
-    durable = canonical_text()
+    assert list((ROOT_DIR / "docs" / "papers").glob("*.pdf")) == []
+    paper_index = read_text("docs/papers/README.md")
+    assert "does not itself grant downstream" in paper_index
+    assert "CC BY-NC-ND 4.0" in paper_index
+
     sha_pattern = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
-    assert sha_pattern.search(durable) is None
+    assert sha_pattern.search(canonical_text()) is None
     assert sha_pattern.search(read_text("docs/TRACEABILITY.md")) is not None
 
 

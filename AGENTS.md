@@ -115,3 +115,15 @@ Start at [`docs/README.md`](docs/README.md). Root `ARCHITECTURE.md`, PRD, TRD,
 ERD, UML, ADRs, threat model, test strategy, operability, incident response,
 traceability, and references are one status-qualified graph. Behavior changes
 must update the affected authority and documentation contract test.
+
+## Execution continuity
+
+- Treat prompt edits, audits, status summaries, and documentation assessments
+  as intermediate work when the request also authorizes repository changes.
+- Continue the safe chain: verify live target state, repair the smallest
+  coherent authority set, run focused and full evidence, publish a reviewable
+  branch/PR, inspect its exact-head state, then take the next non-conflicting
+  authorized task while a control-plane check is pending.
+- Stop only for a real authority choice, destructive ambiguity, permission
+  boundary, or external dependency that blocks every safe continuation. Never
+  turn queued, absent, stale, synthetic, or status-only evidence into success.
