@@ -719,3 +719,117 @@ def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit("Run with pytest so every documentation contract executes.")
+
+
+def test_usage_evidence_adrs_define_one_mode_complete_contract() -> None:
+    """Keep every execution mode on one qualified usage-evidence contract."""
+
+    routing_adr = read_text("docs/adr/0005-sync-batch-pg-llm-batch.md")
+    evidence_adr = read_text("docs/adr/0006-honest-cost-and-benchmark-evidence.md")
+    for mode in ("sync completion", "batch retrieval", "passthrough", "route streaming"):
+        assert mode in routing_adr
+    for status in ("unknown", "not_recorded"):
+        assert chr(96) + status + chr(96) in routing_adr
+    assert "excluded from cost comparison" in routing_adr
+
+    for dimension in (
+        "account",
+        "service",
+        "upstream_api",
+        "model_name",
+        "team",
+        "group",
+        "company",
+    ):
+        assert chr(96) + dimension + chr(96) in evidence_adr
+    assert "mode-by-mode completeness tests" in evidence_adr
+    assert "writer and export path" in evidence_adr
+
+
+def test_access_grant_model_is_directional_and_predecessor_bounded() -> None:
+    """Require consumer-to-producer access without bidirectional visibility."""
+
+    erd = read_text("docs/ERD.md")
+    for term in (
+        "ACCESS_GRANT {",
+        "consumer_step_id",
+        "producer_step_id",
+        "authorized producer",
+        "earlier workflow step",
+        "does not grant bidirectional visibility",
+    ):
+        assert term in erd
+    assert "WORKFLOW_STEP }o--o{ WORKFLOW_STEP : exposes_by_access_list" not in erd
+
+
+def test_planned_web_dependencies_are_not_presented_as_package_extras() -> None:
+    """Keep unshipped web-client frameworks explicitly planned."""
+
+    i18n = read_text("docs/i18n_design.md")
+    assert "i18next and React-admin are planned adoption candidates" in i18n
+    assert "i18next and React-admin are optional compatibility extras" not in i18n
+
+
+def test_hybrid_llm_source_and_license_authority_are_linked() -> None:
+    """Link paper provenance separately from arXiv license evidence."""
+
+    paper_index = read_text("docs/papers/README.md")
+    references = read_text("docs/REFERENCES.md")
+    license_authority = "https://arxiv.org/abs/2404.14618"
+    assert license_authority in paper_index
+    assert license_authority in references
+    assert "https://openreview.net/forum?id=02f3mUtqnM" in paper_index
+    assert "https://openreview.net/forum?id=02f3mUtqnM" in references
+
+
+def test_prd_and_trd_require_all_coverage_dimensions() -> None:
+    """Align product and technical release gates with ADR-0016."""
+
+    required_contract = "statement, branch, function, and line coverage"
+    assert required_contract in read_text("docs/PRD.md")
+    assert required_contract in read_text("docs/TRD.md")
+    assert required_contract in read_text(
+        "docs/adr/0016-complete-coverage-docstrings.md"
+    )
+
+
+def test_canonical_authority_state_cells_use_only_status_vocabulary() -> None:
+    """Reject descriptive prose in the canonical authority state column."""
+
+    index_text = read_text("docs/README.md")
+    rows = [
+        line
+        for line in index_text.splitlines()
+        if line.startswith("| ") and not line.startswith("|---")
+    ]
+    authority_rows = [line for line in rows if "[" in line and "](" in line]
+    assert authority_rows
+    for row in authority_rows:
+        cells = [cell.strip() for cell in row.strip("|").split("|")]
+        assert len(cells) == 5
+        state = cells[3].strip(chr(96))
+        assert state in STATUS_VOCABULARY, row
+
+
+def test_provider_failure_uml_separates_caller_and_provider_failures() -> None:
+    """Keep caller rejection terminal while documenting eligible provider failover."""
+
+    uml = read_text("docs/UML.md")
+    for line in (
+        "alt caller validation error",
+        "Orchestrator-->>Orchestrator: Terminate without provider dispatch",
+        "alt transient provider failure",
+        "else permanent provider or configuration error",
+        "Orchestrator->>Fallback: Invoke eligible candidate without client retry",
+    ):
+        assert line in uml
+
+
+def test_deployment_uml_keeps_credentials_behind_provider_adapter() -> None:
+    """Keep credential retrieval out of the orchestration-policy boundary."""
+
+    uml = read_text("docs/UML.md")
+    assert 'provider_adapter["Provider adapter"]' in uml
+    assert "policy --> provider_adapter" in uml
+    assert "provider_adapter --> kv" in uml
+    assert "policy --> kv" not in uml
