@@ -93,6 +93,24 @@ LINK_CHECK_FILES = CANONICAL_FILES + [
     "docs/papers/README.md",
 ]
 
+AUDITED_OPEN_PR_NUMBERS = {
+    63,
+    66,
+    69,
+    71,
+    75,
+    82,
+    83,
+    84,
+    90,
+    94,
+    96,
+    99,
+    104,
+    105,
+    107,
+}
+
 
 def read_text(relative_path: str) -> str:
     """Return one repository file as UTF-8 text."""
@@ -489,6 +507,31 @@ def test_references_licensing_and_volatile_evidence_are_separated() -> None:
     sha_pattern = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
     assert sha_pattern.search(canonical_text()) is None
     assert sha_pattern.search(read_text("docs/TRACEABILITY.md")) is not None
+
+
+def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
+    """Keep the sole volatile evidence ledger aligned with its dated audit."""
+
+    traceability = read_text("docs/TRACEABILITY.md")
+    assert "**Audit date:** 2026-08-11 (Asia/Seoul)" in traceability
+    snapshot = traceability.split("## Dated open-PR snapshot", 1)[1].split(
+        "## Dependency order from live refs", 1
+    )[0]
+    observed = {
+        int(number)
+        for number in re.findall(r"^\| #(\d+) \|", snapshot, flags=re.MULTILINE)
+    }
+    assert observed == AUDITED_OPEN_PR_NUMBERS
+    assert "#80" not in snapshot
+    assert "#88" not in snapshot
+    for current_head in (
+        "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
+        "f5b9acc7256fd3e33d015b7ad020d4908aba38f6",  # PR #105
+        "0fc208eb185e1306dbaad065a516a3e4cd2dbee4",  # PR #104
+        "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
+        "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
+    ):
+        assert current_head in snapshot
 
 
 def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
