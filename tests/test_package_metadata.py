@@ -12,17 +12,31 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
 
-def test_metadata_parser_supports_declared_python_floor() -> None:
-    """Use a TOML parser available on the declared minimum Python version."""
+def test_test_toml_parsers_support_declared_python_floor() -> None:
+    """Keep every test module importable on the declared minimum Python."""
 
-    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    for path in sorted((REPOSITORY_ROOT / "tests").glob("test*.py")):
+        tree = ast.parse(path.read_text(encoding="utf-8"))
+        direct_stdlib_import = any(
+            (
+                isinstance(node, ast.Import)
+                and any(
+                    alias.name == "tomllib" and alias.asname is None
+                    for alias in node.names
+                )
+            )
+            or (isinstance(node, ast.ImportFrom) and node.module == "tomllib")
+            for node in ast.walk(tree)
+        )
+        assert not direct_stdlib_import, path
+
+    this_module = ast.parse(Path(__file__).read_text(encoding="utf-8"))
     imports = {
         (alias.name, alias.asname)
-        for node in ast.walk(tree)
+        for node in ast.walk(this_module)
         if isinstance(node, ast.Import)
         for alias in node.names
     }
-    assert ("tomllib", None) not in imports
     assert ("tomli", "tomllib") in imports
 
 
