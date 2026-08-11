@@ -278,6 +278,14 @@ each OA citation either has a byte-verified parent attachment or has a
 documented, authorised retrieval route available to a write-capable Zotero
 client.
 
+An Internet Archive capture of the canonical De Gruyter PDF was also
+revalidated on 2026-08-12 as a 19-page PDF (1,074,249 bytes, MD5
+`263d2effa1d7cc5bdc2748878e7f32d4`) captured from the publisher URL on
+2024-04-13. It is a retrievable published-PDF capture, but not yet a Zotero
+parent attachment and not evidence that the current publisher endpoint is
+available; it must remain clearly labelled as an archive capture until a
+write-capable local Zotero path stores it under `MYPNHHWJ`.
+
 Primary sources:
 
 * https://arxiv.org/abs/2506.22316
@@ -285,6 +293,7 @@ Primary sources:
 * https://aclanthology.org/2024.findings-naacl.130/
 * https://www.anthropic.com/research/towards-understanding-sycophancy-in-language-models
 * https://www.degruyterbrill.com/document/doi/10.1515/ijb-2021-0013/html
+* https://web.archive.org/web/20240413073305id_/https://www.degruyter.com/document/doi/10.1515/ijb-2021-0013/pdf
 * https://journals.sagepub.com/doi/10.1177/2158244013489691
 * https://journals.sagepub.com/doi/pdf/10.1177/2158244013489691
 * https://www.iris.unina.it/handle/11588/877609
