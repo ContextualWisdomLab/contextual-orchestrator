@@ -80,8 +80,37 @@ def test_key_only_split_tokens_select_split_mode() -> None:
         set_backend(None)
 
 
+def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
+    invalid_options = (
+        (["--local-concurrency", "0"], "positive integer"),
+        (["--local-concurrency", "-1"], "positive integer"),
+        (["--chat-template-args", "[]"], "JSON object"),
+        (["--chat-template-args", "null"], "JSON object"),
+        (["--chat-template-args", "{"], "valid JSON object"),
+    )
+
+    for options, expected_message in invalid_options:
+        stderr = StringIO()
+        with (
+            patch.object(sys, "argv", ["contextual-orchestrator", *options]),
+            patch.object(sys, "stderr", stderr),
+            patch(
+                "contextual_orchestrator.__main__.ModelClient",
+                side_effect=AssertionError("invalid CLI input reached ModelClient"),
+            ),
+        ):
+            try:
+                main()
+            except SystemExit as exc:
+                assert exc.code == 2
+                assert expected_message in stderr.getvalue()
+            else:  # pragma: no cover
+                raise AssertionError("invalid local provider option was accepted")
+
+
 if __name__ == "__main__":
     test_auth_token_resolution_prefers_explicit_then_kv()
     test_partial_split_tokens_fail_before_kv_lookup()
     test_key_only_split_tokens_select_split_mode()
+    test_invalid_local_provider_options_fail_at_parser_boundary()
     print("ok")
