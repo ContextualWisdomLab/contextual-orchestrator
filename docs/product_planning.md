@@ -56,7 +56,7 @@ Enterprise teams want the benefit of collective model intelligence without makin
 - No learned coordinator training. Keep deterministic routing until there is an evaluation set proving it is the bottleneck.
 - No visual workflow builder. Tables and trace details are enough until operators need to author complex topologies.
 - No recursive topology UI. Conductor recursion is a future scaling knob, not an MVP control.
-- No billing, SSO, or RBAC implementation in the stdlib lab. Document the need; add it with the enterprise stack.
+- No billing or SSO implementation. The standalone runtime exposes coarse admin and inference bearer scopes, but no tenant-aware RBAC; the host owns enterprise identity and tenancy.
 
 ## Acceptance Criteria
 

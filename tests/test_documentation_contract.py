@@ -356,6 +356,17 @@ def test_root_readme_uses_current_buyer_facing_product_identity() -> None:
     )
 
 
+def test_product_planning_qualifies_enterprise_identity_and_authorization() -> None:
+    """Prevent supporting product plans from overstating the auth boundary."""
+
+    planning = read_text("docs/product_planning.md").lower()
+
+    assert "stdlib lab" not in planning
+    assert "coarse admin and inference bearer scopes" in planning
+    assert "no tenant-aware rbac" in planning
+    assert "host owns enterprise identity and tenancy" in planning
+
+
 def test_adr_index_and_schema_are_consistent() -> None:
     """Require every decision to be uniquely indexed, status-bearing, and recoverable."""
 
@@ -592,8 +603,8 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     for audited_head in (
         "8760993cb8262922a771948845c8dfd2afefb773",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
-        "12e868b53d32971a9642148217dfc0ad77535f5c",  # PR #105
-        "9e3138c29fba70190daef6b61927391cae449ec0",  # PR #104
+        "7630125307afae9b9c0cbdb1fd8f78ff347c8346",  # PR #105
+        "ec8669d8aeaece607bdceb167836aaf59f04dba9",  # PR #104
         "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
