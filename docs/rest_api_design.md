@@ -1,5 +1,8 @@
 # REST API Design
 
+**Document state:** `implemented_on_protected_main` for current endpoints and
+`planned` for the adoption candidate described below.
+
 ## Rules
 
 - API version prefix: `/api/v1`.
@@ -58,7 +61,7 @@
 
 ## Product Planning Additions (Implemented)
 
-These product surfaces are now implemented in this prototype:
+These product surfaces are implemented in the standalone runtime:
 
 | Method | Path | Purpose | Paper Basis |
 |---|---|---|---|
@@ -93,6 +96,9 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
 
-## Production Library Target
+## Planned adoption candidate
 
-FastAPI should replace the current stdlib HTTP adapter when the API needs authentication, richer OpenAPI schema generation, dependency injection, and typed request/response models.
+FastAPI is one of the optional compatibility extras. Adopt it only when the API
+needs richer OpenAPI generation, dependency injection, and typed request and
+response models, with migration, rollback, and contract evidence. It does not
+own the current HTTP call path.
