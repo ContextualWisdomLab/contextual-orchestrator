@@ -12,6 +12,11 @@ from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
 
+DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
+DEFAULT_ADMIN_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
+DEFAULT_INFERENCE_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+
+
 def _resolve_auth_token(explicit: str, credential_name: str) -> str:
     """Resolve a server bearer token from an explicit local value or the KV."""
     if explicit:
@@ -83,11 +88,11 @@ def main() -> None:
     parser.add_argument("--auth-token", default="", help="Explicit local-development bearer token; prefer a KV token name.")
     parser.add_argument("--admin-token", default="", help="Explicit local-development admin token; prefer a KV token name.")
     parser.add_argument("--inference-token", default="", help="Explicit local-development inference token; prefer a KV token name.")
-    parser.add_argument("--auth-token-key", default="CONTEXTUAL_ORCHESTRATOR_TOKEN",
+    parser.add_argument("--auth-token-key", default=None,
                         help="KV credential name for the single server bearer token.")
-    parser.add_argument("--admin-token-key", default="CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN",
+    parser.add_argument("--admin-token-key", default=None,
                         help="KV credential name for the admin bearer token.")
-    parser.add_argument("--inference-token-key", default="CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN",
+    parser.add_argument("--inference-token-key", default=None,
                         help="KV credential name for the inference bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
@@ -138,15 +143,32 @@ def main() -> None:
         return
 
     if args.serve:
-        split_requested = bool(args.admin_token or args.inference_token)
-        if args.auth_token and split_requested:
+        single_requested = bool(args.auth_token or args.auth_token_key)
+        split_requested = bool(
+            args.admin_token or args.inference_token or args.admin_token_key or args.inference_token_key
+        )
+        if single_requested and split_requested:
             parser.error("choose either --auth-token or the split --admin-token/--inference-token mode")
-        if split_requested and not (args.admin_token and args.inference_token):
+        if split_requested and not (
+            (args.admin_token or args.admin_token_key) and (args.inference_token or args.inference_token_key)
+        ):
             parser.error("split token mode requires both --admin-token and --inference-token")
         try:
-            auth_token = _resolve_auth_token(args.auth_token, args.auth_token_key) if not split_requested else ""
-            admin_token = _resolve_auth_token(args.admin_token, args.admin_token_key) if split_requested else ""
-            inference_token = _resolve_auth_token(args.inference_token, args.inference_token_key) if split_requested else ""
+            auth_token = (
+                _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_TOKEN_KEY)
+                if not split_requested
+                else ""
+            )
+            admin_token = (
+                _resolve_auth_token(args.admin_token, args.admin_token_key or DEFAULT_ADMIN_TOKEN_KEY)
+                if split_requested
+                else ""
+            )
+            inference_token = (
+                _resolve_auth_token(args.inference_token, args.inference_token_key or DEFAULT_INFERENCE_TOKEN_KEY)
+                if split_requested
+                else ""
+            )
         except ValueError as exc:
             parser.error(str(exc))
         if not (auth_token or admin_token or inference_token):

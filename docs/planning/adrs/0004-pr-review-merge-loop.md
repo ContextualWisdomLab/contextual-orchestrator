@@ -33,11 +33,11 @@ asr_triggers:
     note: "No credential or branch protection bypass is part of the loop."
 success_criteria:
   - metric: "PR verification"
-    target: "all required checks pass on the exact head commit before merge"
+    target: "every named required check-run passes on the exact PR head SHA before merge; local commands are supplementary"
     measurement_window: "each PR lifecycle"
     source: "GitHub Actions checks and local reproducible commands"
   - metric: "review remediation"
-    target: "every actionable review comment is resolved or explicitly documented before merge"
+    target: "every actionable security or correctness comment is fixed and revalidated; only non-blocking risk may be explicitly accepted before merge"
     measurement_window: "each review iteration"
     source: "PR conversation, diff, and follow-up commit history"
 ---
@@ -80,6 +80,30 @@ Chosen option: "Repeatable exact-head review and merge loop".
 
 The maintainer creates a codex/ branch, commits coherent changes, pushes a PR, inspects the diff and current checks, records/replies to actionable review findings, applies fixes, reruns tests and checks, and merges only when the PR head is the verified commit. If the platform disallows self-approval, the maintainer must not fake approval; it waits for or requests an authorized reviewer while continuing all safe local verification.
 
+### Exact merge-gate contract
+
+The required check-run names are read from each protected `main` branch and must be
+green on one recorded `verified_head_sha` immediately before merge. For
+`contextual-orchestrator`, the required contexts are `Hypothesis property tests`,
+`Atheris coverage-guided`, `CodeQL analysis`, `Python supply chain`,
+`dependency-review`, `osv-scan`, `trivy-fs`, `scorecard`, `coverage-evidence`,
+`opencode-review`, `strix`, and `scan-pr-queue`. For `fast-mlsirm`, they are
+`Analyze (actions)`, `close-empty`, `scan-pr-queue`, `dependency-review`,
+`osv-scan`, `trivy-fs`, `scorecard`, `strix`, `required-workflow-bootstrap`,
+`coverage-evidence`, `opencode-review`, `python`, `rust`, `package`, and `fuzz`.
+The repository-local job names are defined in `.github/workflows/`; central
+contexts remain required even when their workflow file is outside the repository.
+Local pytest, Ruff, package, and fuzz commands are reproducible supporting
+evidence only; they never replace a required GitHub check-run.
+
+The maintainer records the PR head SHA and the SHA attached to every required
+check-run. If the PR head, any check SHA, or the reviewed diff changes, the merge
+stops and the complete gate is re-evaluated on the new head. A documentation-only
+note cannot resolve an actionable security or correctness finding; it remains a
+merge blocker until code/test remediation and revalidation are complete. A
+non-blocking risk may be accepted only with an owner, rationale, tracking issue,
+and expiry date.
+
 ### Consequences
 
 * Good, because every new concern becomes a reviewable code/test/ADR item.
@@ -116,8 +140,14 @@ For each repository, record branch, commit, PR URL, review result, check result,
 | Finding | Direction | State |
 | --- | --- | --- |
 | Local tests alone cannot validate PR integration. | Push a PR and observe required CI/security checks. | Required for completion |
-| Review feedback may reveal new quality/security problems. | Apply every actionable comment, extend Goal/ADR, rerun tests, and repeat. | Required for completion |
+| Review feedback may reveal new quality/security problems. | Apply every actionable comment, extend Goal/ADR, rerun tests, and repeat; documentation alone never clears a security/correctness blocker. | Required for completion |
 | A stale green commit can be merged accidentally. | Check exact PR head and merge only that SHA. | Required for completion |
+| Required contexts can drift between local workflow files and protected-branch rules. | Read the protected-branch context list, record each check SHA, and treat local commands as supplementary. | Required for completion |
+| CLI key-only split-token mode can silently select the single-token path. | Treat explicit `--admin-token-key`/`--inference-token-key` as split-mode selectors and test KV resolution before startup. | Required for completion |
+| DNS can change between provider validation and connection. | Return the validated sockaddr and connect directly to it while preserving hostname-based TLS SNI and Host semantics. | Required for completion |
+| Model-judge output can contain wrappers, extra fields, duplicate keys, or parser-stressing input. | Require one bounded duplicate-free JSON object with exactly `decision` and `reason`; fail closed and cover Hypothesis/Atheris paths. | Required for completion |
+| Container startup can expose a bearer secret through env/argv instead of the KV boundary. | Pass a credential name (`--auth-token-key`) and keep secret material in the Keyverse/KV adapter. | Required for completion |
+| External Keyverse/OIDC verification can be marked unavailable by sales readiness. | Treat the explicit external bearer verifier mode as authenticated while preserving fail-closed scope checks. | Required for completion |
 | Self-approval may be disallowed or misleading. | Never fabricate approval; use authorized review or leave the PR unmerged with an explicit reason. | Required for completion |
 | Two repositories can drift. | Use linked PRs/commits and run contextual + fast-mlsirm tests before each merge. | Required for completion |
 | Secrets can leak through PR logs or ADRs. | Run secret scans, redact outputs, and keep Keyverse/KV credentials outside commits. | Required for completion |

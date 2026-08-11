@@ -121,7 +121,8 @@ Run the external-verifier security test and inspect readiness_profile()["auth_mo
 | CLI had legacy token environment defaults. | Resolve named auth tokens from KV; remove token env defaults from the Python CLI. | Implemented |
 | RP registration and client secret placement were absent. | Add a deployment-controller integration using Keyverse preflight/reconcile and approved secret storage; never put secrets in this repo. | Required follow-up |
 | JWT validation library/issuer/JWKS contract is deployment-specific. | Select and review one adapter, including rotation, claims, TLS, clock skew, and negative tests before production. | Required follow-up |
-| Partial or mixed CLI token modes could trigger an unrelated KV lookup before reporting the configuration error. | Reject single/split mode mixing and incomplete split credentials before resolving any KV entry. | Implemented |
+| Partial or mixed CLI token modes could trigger an unrelated KV lookup before reporting the configuration error. | Treat explicit `--admin-token-key`/`--inference-token-key` as split-mode selectors and reject mixing/incompleteness before resolving any KV entry. | Implemented |
+| Container startup passed `CONTEXTUAL_ORCHESTRATOR_TOKEN` as secret argv/env material, bypassing the KV boundary. | Pass `--auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN`; let the Keyverse/KV deployment adapter resolve the value at runtime. | Implemented |
 | Public API may be reachable without the identity edge. | Keep auth mandatory; deny when no static token or external verifier is configured. | Implemented |
 
 ## Risks and Mitigations

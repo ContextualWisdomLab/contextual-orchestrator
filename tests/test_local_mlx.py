@@ -34,7 +34,7 @@ def test_mlx_loopback_uses_http_without_a_credential() -> None:
     client = ModelClient(max_retries=0, temperature=0.0, chat_template_args={"enable_thinking": False})
     seen = []
 
-    def open_provider(request):
+    def open_provider(request, _destination=None):
         seen.append(request)
         return _Response({
             "choices": [{"message": {"content": "local-ok"}}],

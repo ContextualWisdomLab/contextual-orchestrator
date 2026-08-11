@@ -40,7 +40,35 @@ def test_partial_split_tokens_fail_before_kv_lookup() -> None:
                 raise AssertionError("partial split token mode must be rejected")
 
 
+def test_key_only_split_tokens_select_split_mode() -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set("admin_key", "admin-from-kv")
+    backend.set("inference_key", "inference-from-kv")
+    set_backend(backend)
+    try:
+        with patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--serve",
+                "--admin-token-key",
+                "admin_key",
+                "--inference-token-key",
+                "inference_key",
+            ],
+        ), patch("contextual_orchestrator.__main__.serve") as serve:
+            main()
+        security = serve.call_args.kwargs["security"]
+        assert security.auth_token == ""
+        assert security.admin_token == "admin-from-kv"
+        assert security.inference_token == "inference-from-kv"
+    finally:
+        set_backend(None)
+
+
 if __name__ == "__main__":
     test_auth_token_resolution_prefers_explicit_then_kv()
     test_partial_split_tokens_fail_before_kv_lookup()
+    test_key_only_split_tokens_select_split_mode()
     print("ok")

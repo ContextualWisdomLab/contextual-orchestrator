@@ -91,6 +91,18 @@ def test_plain_keyword_reply_is_rejected() -> None:
     assert result["answer"] == "step-output(2)"
 
 
+def test_judge_rejects_wrapped_extra_and_duplicate_json() -> None:
+    for reply in (
+        'prefix {"decision":"ACCEPT","reason":"valid"}',
+        '{"decision":"ACCEPT","reason":"valid","extra":true}',
+        '{"decision":"ACCEPT","decision":"REJECT","reason":"ambiguous"}',
+    ):
+        orchestrator, _ = _orch(reply)
+        result = orchestrator.conduct(MESSAGES)
+        assert result["verification"]["accepted"] is False
+        assert "invalid structured verdict" in result["verification"]["reason"]
+
+
 def test_judge_failure_fails_closed() -> None:
     class _FailingJudge(_ScriptedClient):
         def chat(self, agent: ModelAgent, messages: list, temperature: float | None = None) -> str:  # type: ignore[override]

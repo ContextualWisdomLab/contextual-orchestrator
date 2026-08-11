@@ -77,7 +77,7 @@ Chosen option: "Require a structured model verdict and fail closed".
 | Runtime integration | cheap but bypasses semantics | extra call | normal _invoke path with usage |
 | Evaluation truthfulness | cache-sensitive | cache-sensitive | cache-bypassed comparison |
 
-The judge returns {"decision":"ACCEPT"|"REJECT","reason":"brief evidence-based reason"}. JSON extraction is bounded to one object; missing fields, extra protocol ambiguity, provider failure, or an empty verifier report reject the workflow. The fast-mlsirm judge adapter also calls an injected contextual-orchestrator object and never calls a provider directly.
+The judge returns exactly one bounded, duplicate-free JSON object with `{"decision":"ACCEPT"|"REJECT","reason":"brief evidence-based reason"}`. Wrapper text, extra fields, duplicate keys, missing fields, parser-stressing input, provider failure, or an empty verifier report reject the workflow. The fast-mlsirm judge adapter also calls an injected contextual-orchestrator object and never calls a provider directly.
 
 ### Consequences
 
@@ -119,6 +119,7 @@ Run python3 tests/test_model_judge.py, the full contextual test suite, and the f
 | compare_to_baseline could measure cache hits instead of provider work. | Use _dispatch directly for both measured arms. | Implemented |
 | Core orchestration has no gold-answer quality metric. | Keep structural latency metrics honest and inject fast-mlsirm for rubric quality; do not invent a lexical proxy. | Adapter implemented; benchmark gate ongoing |
 | Judge prompt/output can be malformed or truncated. | Use bounded JSON extraction, actionable mlx template guidance, and fail closed. | Implemented |
+| A model can wrap a verdict, add fields, duplicate keys, or send parser-stressing text. | Parse the complete bounded response with an exact duplicate-free schema and exercise the parser with Hypothesis and Atheris; never repair or keyword-match it. | Implemented |
 | Local model capacity can make four workflow steps too slow. | Benchmark route/conduct and expose concurrency/template controls; optimize only from measured traces. | Ongoing |
 
 ## Risks and Mitigations

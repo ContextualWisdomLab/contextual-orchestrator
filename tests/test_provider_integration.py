@@ -11,8 +11,10 @@ from __future__ import annotations
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 from pathlib import Path
+import socket
 import sys
 import threading
+import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -78,6 +80,20 @@ def test_send_real_http_round_trip_and_usage_capture() -> None:
         result = client._send(_agent(provider.base_url), {"model": "gpt-x"})
     assert result == "live answer"  # real POST + JSON parse over the wire
     assert client._local.usage == usage  # provider-reported usage captured from a real response
+
+
+def test_open_provider_uses_validated_destination_without_dns_relookup() -> None:
+    with _FakeProvider([(200, _completion("pinned"))]) as provider:
+        port = provider._server.server_address[1]
+        request = urllib.request.Request(
+            f"http://provider.example:{port}/chat/completions",
+            data=b"{}",
+            headers={"content-type": "application/json"},
+            method="POST",
+        )
+        with ModelClient()._open_provider(request, (socket.AF_INET, ("127.0.0.1", port))) as response:
+            assert json.loads(response.read())["choices"][0]["message"]["content"] == "pinned"
+        assert provider.request_count == 1
 
 
 def test_transient_5xx_retries_then_succeeds_over_http() -> None:

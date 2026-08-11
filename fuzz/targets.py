@@ -8,7 +8,7 @@ and asserts the invariants that must hold *for arbitrary input*:
   ``AttributeError``, ``RecursionError``, ``SystemError`` or a hang; and
 * structural invariants on any successful result (shape, types, idempotence).
 
-CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
+CodeGraph (``codegraph explore``) surfaced these five surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
@@ -18,6 +18,8 @@ consume untrusted bytes/JSON:
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
+5. ``orchestrator._parse_model_judge_reply`` -- strict parsing of untrusted
+   model-generated verdicts.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -31,6 +33,7 @@ from contextual_orchestrator import server
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
+    _parse_model_judge_reply,
     chat_completion_chunks,
     redact_text,
     redact_value,
@@ -188,3 +191,13 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
             continue
         assert frame.startswith("data: ")
         json.loads(frame[len("data: "):])
+
+
+def exercise_model_judge_reply(reply: str) -> None:
+    """Drive strict model-judge parsing over arbitrary untrusted text."""
+    try:
+        decision, reason = _parse_model_judge_reply(reply)
+    except ValueError:
+        return
+    assert decision in {"ACCEPT", "REJECT"}
+    assert isinstance(reason, str) and reason.strip()

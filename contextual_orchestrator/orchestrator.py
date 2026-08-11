@@ -33,6 +33,7 @@ from .credentials import NotConfigured, get_credential
 
 
 ChatMessage = dict[str, str]
+ProviderDestination = tuple[int, tuple[Any, ...]]
 
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
@@ -63,6 +64,35 @@ SECRET_PATTERNS = (
 )
 
 DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
+MAX_MODEL_JUDGE_REPLY_CHARACTERS = 32_000
+
+
+def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
+    """Parse one exact, duplicate-free model-judge verdict."""
+    if not isinstance(reply, str) or len(reply) > MAX_MODEL_JUDGE_REPLY_CHARACTERS:
+        raise ValueError("judge response is missing or exceeds the maximum size")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("judge response contains duplicate object keys")
+            result[key] = value
+        return result
+
+    try:
+        decision = json.loads(reply.strip(), object_pairs_hook=reject_duplicate_keys)
+    except (json.JSONDecodeError, RecursionError, TypeError) as exc:
+        raise ValueError("judge response is not valid JSON") from exc
+    if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
+        raise ValueError("judge response must match the exact verdict schema")
+    decision_value = decision["decision"]
+    if not isinstance(decision_value, str) or decision_value not in {"ACCEPT", "REJECT"}:
+        raise ValueError("judge decision is not an allowed enum value")
+    reason = decision["reason"]
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("judge reason is missing")
+    return decision_value, reason.strip()
 
 
 @dataclass(frozen=True)
@@ -275,7 +305,7 @@ class ModelClient:
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
-        self._validate_provider(agent)  # pragma: no cover
+        destination = self._validate_provider(agent)  # pragma: no cover
         api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)  # pragma: no cover
         if not _is_local_provider_url(agent.base_url) and not api_key:  # pragma: no cover
             raise NotConfigured(
@@ -291,14 +321,16 @@ class ModelClient:
         }
         if _is_local_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
-        return self._send_with_retry(agent, payload)
+        return self._send_with_retry(agent, payload, destination)
 
-    def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
+    def _send_with_retry(
+        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+    ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                return self._send(agent, payload)
+                return self._send(agent, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= self.max_retries or not is_transient_error(exc):
@@ -312,7 +344,9 @@ class ModelClient:
         ceiling = min(self.retry_backoff_cap, self.retry_backoff * (2 ** attempt))
         return random.uniform(0.0, ceiling)
 
-    def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
+    def _send(
+        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+    ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
         api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
         headers = {"content-type": "application/json"}
@@ -324,7 +358,7 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             data = json.loads(response.read().decode("utf-8"))
         usage = data.get("usage")
         if isinstance(usage, dict):
@@ -346,7 +380,37 @@ class ModelClient:
             )
         raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
 
-    def _open_provider(self, request: urllib.request.Request) -> Any:
+    @staticmethod
+    def _connect_validated(
+        destination: ProviderDestination, timeout: float | None, source_address: tuple[str, int] | None
+    ) -> socket.socket:
+        """Connect to one already-resolved address without performing another DNS lookup."""
+        family, sockaddr = destination
+        connection = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            connection.settimeout(timeout)
+            if source_address is not None:
+                connection.bind(source_address)
+            connection.connect(sockaddr)
+            return connection
+        except Exception:
+            connection.close()
+            raise
+
+    @staticmethod
+    def _resolve_addresses(hostname: str, port: int) -> list[ProviderDestination]:
+        try:
+            addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
+        resolved = [(family, sockaddr) for family, _type, _proto, _canonname, sockaddr in addresses]
+        if not resolved:
+            raise RuntimeError(f"provider host {hostname!r} has no stream address")
+        return resolved
+
+    def _open_provider(
+        self, request: urllib.request.Request, destination: ProviderDestination | None = None
+    ) -> Any:
         """Open a validated HTTP(S) request without generic URL-handler dispatch."""
         parsed = urlparse(request.full_url)
         if (
@@ -361,6 +425,8 @@ class ModelClient:
             port = parsed.port or (443 if parsed.scheme == "https" else 80)
         except ValueError as exc:
             raise RuntimeError("provider request URL has an invalid port") from exc
+        if destination is None:
+            destination = self._resolve_addresses(parsed.hostname, port)[0]
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
@@ -372,6 +438,11 @@ class ModelClient:
             )
         else:
             connection = http.client.HTTPConnection(parsed.hostname, port, timeout=self.timeout)
+        connection._create_connection = (  # type: ignore[attr-defined]
+            lambda _address, timeout, source_address: self._connect_validated(
+                destination, timeout, source_address
+            )
+        )
         target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
         try:
             connection.request(
@@ -413,7 +484,7 @@ class ModelClient:
                 yield answer[start : start + 24]
             return
 
-        self._validate_provider(agent)  # pragma: no cover
+        destination = self._validate_provider(agent)  # pragma: no cover
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
@@ -423,9 +494,11 @@ class ModelClient:
         }
         if _is_local_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
-        yield from self._stream_send(agent, payload)  # pragma: no cover
+        yield from self._stream_send(agent, payload, destination)  # pragma: no cover
 
-    def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
+    def _stream_send(
+        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+    ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
@@ -437,7 +510,7 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             for raw in response:
                 line = raw.decode("utf-8").strip()
                 if not line.startswith("data:"):
@@ -465,17 +538,21 @@ class ModelClient:
         """Passthrough a full request to one agent, returning the raw provider JSON."""
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, endpoint, payload)
-        self._validate_provider(agent)  # pragma: no cover
-        return self._send_raw_with_retry(agent, endpoint, payload)  # pragma: no cover
+        destination = self._validate_provider(agent)  # pragma: no cover
+        return self._send_raw_with_retry(agent, endpoint, payload, destination)  # pragma: no cover
 
     def _send_raw_with_retry(
-        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
         for attempt in range(self.max_retries + 1):
             try:
-                return self._send_raw(agent, endpoint, payload)
+                return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= self.max_retries or not is_transient_error(exc):
@@ -484,7 +561,11 @@ class ModelClient:
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
 
     def _send_raw(
-        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
         api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
@@ -497,7 +578,7 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _mock_raw(
@@ -538,8 +619,8 @@ class ModelClient:
             "echo": echoed,
         }
 
-    def _validate_provider(self, agent: ModelAgent) -> None:
-        """Reject unsafe remote model endpoints before any egress happens."""
+    def _validate_provider(self, agent: ModelAgent) -> ProviderDestination:
+        """Reject unsafe model endpoints and return the exact address to connect to."""
         # Runtime secret must be resolvable from the KV — never an env var name,
         # never a silent os.getenv fallback. (Legacy api_key_env, if set, is used
         # only as the credential NAME; see ModelAgent.credential_name.)
@@ -547,7 +628,10 @@ class ModelClient:
             parsed = urlparse(agent.base_url)
             if parsed.username or parsed.password or parsed.query or parsed.fragment:
                 raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
-            return
+            addresses = self._resolve_addresses(parsed.hostname or "", parsed.port or 80)
+            if any(not ipaddress.ip_address(sockaddr[0]).is_loopback for _family, sockaddr in addresses):
+                raise RuntimeError(f"{agent.id} local provider resolves to a non-loopback address")
+            return addresses[0]
         if get_credential(agent.credential_name) is None:
             raise NotConfigured(
                 f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
@@ -566,8 +650,9 @@ class ModelClient:
         hostname = parsed.hostname.lower()
         if allowed_hosts and hostname not in allowed_hosts:
             raise RuntimeError(f"{agent.id} provider host is not allowlisted")
-        for address in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM):
-            ip_address = ipaddress.ip_address(address[4][0])
+        addresses = self._resolve_addresses(hostname, parsed.port or 443)
+        for _family, sockaddr in addresses:
+            ip_address = ipaddress.ip_address(sockaddr[0])
             if (
                 ip_address.is_private
                 or ip_address.is_loopback
@@ -576,6 +661,7 @@ class ModelClient:
                 or ip_address.is_reserved
             ):
                 raise RuntimeError(f"{agent.id} provider resolves to non-public address")
+        return addresses[0]
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""
@@ -624,8 +710,8 @@ class ModelClient:
             }
         if _is_local_provider_url(agent.base_url):
             return self._local_batch_chat(agent, requests, temperature)
-        self._validate_provider(agent)  # pragma: no cover
-        return self._batch_run(agent, requests, temperature, poll_interval, poll_timeout)  # pragma: no cover
+        destination = self._validate_provider(agent)  # pragma: no cover
+        return self._batch_run(agent, requests, temperature, poll_interval, poll_timeout, destination)  # pragma: no cover
 
     def _local_batch_chat(
         self,
@@ -651,6 +737,7 @@ class ModelClient:
         temperature: float,
         poll_interval: float,
         poll_timeout: float,
+        destination: ProviderDestination | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
         lines = [
@@ -667,15 +754,15 @@ class ModelClient:
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]
-        input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"))
+        input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"), destination)
         batch_id = self._batch_json(agent, "POST", "/batches", {
             "input_file_id": input_file_id,
             "endpoint": "/v1/chat/completions",
             "completion_window": "24h",
-        })["id"]
+        }, destination)["id"]
         deadline = time.monotonic() + poll_timeout
         while True:
-            batch = self._batch_json(agent, "GET", f"/batches/{batch_id}")
+            batch = self._batch_json(agent, "GET", f"/batches/{batch_id}", destination=destination)
             status = batch.get("status")
             if status == "completed":
                 break
@@ -684,7 +771,7 @@ class ModelClient:
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"batch {batch_id} still {status} after {poll_timeout}s")
             self._sleep(poll_interval)
-        raw = self._batch_raw(agent, f"/files/{batch['output_file_id']}/content")
+        raw = self._batch_raw(agent, f"/files/{batch['output_file_id']}/content", destination)
         results: dict[str, dict[str, Any]] = {}
         for line in raw.decode("utf-8").splitlines():
             if not line.strip():
@@ -698,7 +785,9 @@ class ModelClient:
             }
         return results
 
-    def _batch_upload(self, agent: ModelAgent, payload: bytes) -> str:
+    def _batch_upload(
+        self, agent: ModelAgent, payload: bytes, destination: ProviderDestination | None = None
+    ) -> str:
         """Upload a JSONL batch input via multipart/form-data; returns the file id."""
         boundary = f"co-batch-{uuid.uuid4().hex}"
         api_key = get_credential(agent.credential_name) or ""
@@ -716,10 +805,17 @@ class ModelClient:
             },
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             return json.loads(response.read().decode("utf-8"))["id"]
 
-    def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _batch_json(
+        self,
+        agent: ModelAgent,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        destination: ProviderDestination | None = None,
+    ) -> dict[str, Any]:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
@@ -730,17 +826,17 @@ class ModelClient:
             },
             method=method,
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
+    def _batch_raw(self, agent: ModelAgent, path: str, destination: ProviderDestination | None = None) -> bytes:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
             headers={"authorization": f"Bearer {api_key}"},
             method="GET",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             return response.read()
 
 
@@ -1754,16 +1850,8 @@ class TaskOrchestrator:
             }
 
         try:
-            start, end = reply.find("{"), reply.rfind("}")
-            if start < 0 or end <= start:
-                raise ValueError("judge response contains no JSON object")
-            decision = json.loads(reply[start : end + 1])
-            if not isinstance(decision, dict) or decision.get("decision") not in {"ACCEPT", "REJECT"}:
-                raise ValueError("judge decision is not an allowed enum value")
-            reason = decision.get("reason")
-            if not isinstance(reason, str) or not reason.strip():
-                raise ValueError("judge reason is missing")
-        except (ValueError, json.JSONDecodeError):
+            decision_value, reason = _parse_model_judge_reply(reply)
+        except ValueError:
             return {
                 "accepted": False,
                 "reason": "model judge returned an invalid structured verdict; verification failed closed",
@@ -1772,8 +1860,8 @@ class TaskOrchestrator:
             }
 
         result: dict[str, Any] = {
-            "accepted": decision["decision"] == "ACCEPT",
-            "reason": reason.strip(),
+            "accepted": decision_value == "ACCEPT",
+            "reason": reason,
             "verifier_output": verifier_output,
             "judge": "model",
         }
@@ -8191,7 +8279,7 @@ class TaskOrchestrator:
         warnings: list[str] = []
         if auth_mode == "single_token":
             warnings.append("single bearer token shared by admin and inference scopes")
-        elif auth_mode != "split_token":
+        elif auth_mode not in {"split_token", "external_bearer_verifier"}:
             issues.append("no bearer token configured outside loopback-only development")
         if security_profile.get("allow_public_bind"):
             issues.append("public bind is enabled")
@@ -8212,7 +8300,12 @@ class TaskOrchestrator:
             remediation = "For enterprise pilots, split admin and inference tokens before customer evaluation."
         else:
             status = "pass"
-            evidence = "split tokens, private bind default, hidden traces, rate limits, and run limits are configured"
+            auth_evidence = (
+                "external bearer verifier"
+                if auth_mode == "external_bearer_verifier"
+                else "split tokens"
+            )
+            evidence = f"{auth_evidence}, private bind default, hidden traces, rate limits, and run limits are configured"
             remediation = "Keep these controls enabled for customer-facing pilots."
 
         return self._criterion("security_posture", "Security posture", status, evidence, remediation)

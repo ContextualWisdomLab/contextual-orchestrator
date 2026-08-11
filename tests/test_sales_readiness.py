@@ -111,6 +111,24 @@ def test_sales_readiness_report_marks_enterprise_pilot_ready() -> None:
         assert {"criterion_name", "status", "label", "evidence", "remediation"}.issubset(row)
 
 
+def test_sales_readiness_accepts_external_bearer_verifier() -> None:
+    orchestrator = build()
+    exercise_runtime(orchestrator)
+    report = orchestrator.sales_readiness_report(
+        locale_bundles=ADMIN_TRANSLATIONS,
+        security_profile={
+            "auth_mode": "external_bearer_verifier",
+            "allow_public_bind": False,
+            "expose_trace_by_default": False,
+            "rate_limit_requests": 60,
+            "max_concurrent_runs": 8,
+        },
+    )
+    rows = criteria_by_name(report)
+    assert rows["security_posture"]["status"] == "pass"
+    assert report["readiness_summary"]["fail"] == 0
+
+
 def test_sales_readiness_warns_for_single_token_local_deployment() -> None:
     orchestrator = build()
     exercise_runtime(orchestrator)

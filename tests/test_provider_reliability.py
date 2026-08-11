@@ -46,7 +46,7 @@ def test_retry_recovers_from_transient_failures_with_backoff() -> None:
             self._sleep = delays.append  # capture backoff instead of sleeping
             self.attempts = 0
 
-        def _send(self, agent: ModelAgent, payload: dict) -> str:  # type: ignore[override]
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
             if self.attempts < 3:
                 raise _http_error(503)
@@ -67,7 +67,7 @@ def test_permanent_error_is_not_retried() -> None:
             super().__init__(max_retries=5, retry_backoff=0.0)
             self.attempts = 0
 
-        def _send(self, agent: ModelAgent, payload: dict) -> str:  # type: ignore[override]
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
             raise _http_error(400)
 

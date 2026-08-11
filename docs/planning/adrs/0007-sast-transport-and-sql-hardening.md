@@ -90,8 +90,11 @@ Remote transport always uses a verifying SSL context; custom CA bundles remain
 supported, but TLS verification cannot be disabled. The CLI option that offered
 an insecure TLS bypass is removed. Provider I/O uses `http.client` after
 validating the request URL as HTTP(S), with the existing agent-level HTTPS,
-loopback, DNS, and credential checks remaining in force. The local `mlx://`
-scheme is translated to loopback HTTP only by the validated provider URL path.
+loopback, DNS, and credential checks remaining in force. The validated sockaddr
+is carried into the connection so the socket does not resolve the hostname a
+second time; the original hostname remains the TLS SNI and HTTP Host identity.
+The local `mlx://` scheme is translated to loopback HTTP only by the validated
+provider URL path.
 
 `SqlLedgerStore` accepts only `qmark` and `pyformat`. Select/insert statements
 use fixed SQL templates for each parameter style and fixed column lists; start
@@ -123,6 +126,7 @@ verification or URL validation.
 | `ssl._create_unverified_context` made an insecure remote mode executable. | Remove the bypass and keep `ssl.create_default_context` or a validated custom CA bundle. | Implemented |
 | `urllib.request.urlopen` accepted a dynamically assembled request URL. | Use `http.client` with scheme/host/userinfo validation at the final I/O boundary. | Implemented |
 | Semgrep flagged the reviewed `HTTPSConnection` API despite its explicit verifying context. | Keep the verifying context and add only the exact rule-specific suppression at that call site; retain transport regression tests. | Implemented |
+| DNS could return a safe address during validation and a different address during connection. | Return the validated sockaddr and pin every HTTP, HTTPS, streaming, passthrough, and batch connection to it while retaining hostname SNI/Host semantics. | Implemented |
 | A scanner-clean result could regress without a transport test. | Add a non-HTTP rejection regression and rerun the full SAST/CI gate. | Implemented / ongoing CI confirmation |
 
 ## Risks and Mitigations
