@@ -19,7 +19,7 @@ def has_direct_stdlib_tomllib_import(source: str) -> bool:
         (
             isinstance(node, ast.Import)
             and any(
-                alias.name == "tomllib" and alias.asname is None
+                alias.name == "tomllib"
                 for alias in node.names
             )
         )
