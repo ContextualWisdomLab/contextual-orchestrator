@@ -1,7 +1,7 @@
 # Documentation and implementation traceability
 
 **Document state:** `active_pr`; the audit describes protected-main evidence,
-while this canonical documentation repair is not shipped until protected merge  
+while this canonical documentation repair is not shipped until protected merge<br>
 **Audit date:** 2026-08-11 (Asia/Seoul)
 **Protected-main revision audited:** `6841b71935e0b7cb98fb52bcb4709cc5100c8d87`
 
