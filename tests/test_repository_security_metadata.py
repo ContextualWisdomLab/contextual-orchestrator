@@ -97,9 +97,12 @@ def test_review_adr_requires_enforced_exact_head_merge_controls():
         "terminal successful required checks",
         "structured same-head Strix evidence",
         "final re-fetch immediately before",
+        "one recorded `verified_head_sha`",
+        "the PR head, any check SHA, or the reviewed diff changes",
+        "the merge stops and the complete gate is re-evaluated on the new head",
     ]
     for required_control in required_controls:
-        assert required_control in adr_text
+        assert required_control in normalized_adr_text
 
     assert (
         "Branch protection and the central scheduler must each reject direct and "
