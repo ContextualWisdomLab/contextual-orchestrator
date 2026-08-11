@@ -1,6 +1,9 @@
 """Verify distribution metadata needed for licensing and buyer due diligence."""
 
+import subprocess
+import tarfile
 import tomllib
+import zipfile
 from pathlib import Path
 
 
@@ -40,6 +43,70 @@ def test_distribution_declares_spdx_license_and_includes_license_file() -> None:
     license_text = (REPOSITORY_ROOT / "LICENSE").read_text(encoding="utf-8")
     assert license_text.startswith("MIT License\n")
     assert "Copyright (c) 2026 ContextualWisdomLab" in license_text
+
+def test_normal_wheel_and_sdist_carry_pep639_metadata(tmp_path: Path) -> None:
+    """Build normal artifacts and inspect their emitted licensing authority."""
+
+    subprocess.run(
+        ["uv", "build", "--out-dir", str(tmp_path)],
+        cwd=REPOSITORY_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+    wheels = list(tmp_path.glob("*.whl"))
+    sdists = list(tmp_path.glob("*.tar.gz"))
+    assert len(wheels) == 1
+    assert len(sdists) == 1
+
+    expected_license = (REPOSITORY_ROOT / "LICENSE").read_bytes()
+    expected_headers = {
+        "License-Expression: MIT",
+        "License-File: LICENSE",
+        *{
+            f"Project-URL: {label}, {url}"
+            for label, url in project_metadata()["urls"].items()
+        },
+    }
+
+    with zipfile.ZipFile(wheels[0]) as wheel:
+        wheel_names = set(wheel.namelist())
+        metadata_name = next(
+            name for name in wheel_names if name.endswith(".dist-info/METADATA")
+        )
+        metadata_headers = set(
+            wheel.read(metadata_name).decode("utf-8").splitlines()
+        )
+        assert expected_headers <= metadata_headers
+        license_name = next(
+            name
+            for name in wheel_names
+            if name.endswith(".dist-info/licenses/LICENSE")
+        )
+        assert wheel.read(license_name) == expected_license
+
+    with tarfile.open(sdists[0], mode="r:gz") as sdist:
+        sdist_names = set(sdist.getnames())
+        metadata_name = next(
+            name for name in sdist_names if name.endswith("/PKG-INFO")
+        )
+        metadata_file = sdist.extractfile(metadata_name)
+        assert metadata_file is not None
+        metadata_headers = set(
+            metadata_file.read().decode("utf-8").splitlines()
+        )
+        assert expected_headers <= metadata_headers
+        license_name = next(
+            name
+            for name in sdist_names
+            if name.endswith("/LICENSE") and name.count("/") == 1
+        )
+        license_file = sdist.extractfile(license_name)
+        assert license_file is not None
+        assert license_file.read() == expected_license
+
+    changelog = (REPOSITORY_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert "Build and inspect normal wheel and sdist artifacts" in changelog
 
 
 def test_distribution_exposes_authoritative_project_urls() -> None:
