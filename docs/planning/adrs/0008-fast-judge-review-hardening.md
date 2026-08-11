@@ -29,8 +29,8 @@ related:
     relation: influenced-by
 asr_triggers:
   - kind: security
-    evidence: "Review found predictable prompt delimiters around untrusted judge input and direct result construction that could produce invalid IRT categories."
-    note: "Keep model-controlled content data-only and fail closed before IRT projection."
+    evidence: "Review found predictable prompt delimiters around untrusted judge input, substring extraction that accepted wrapped model output, and direct result construction that could produce invalid IRT categories."
+    note: "Keep model-controlled content data-only, require one complete JSON value, and fail closed before IRT projection."
   - kind: maintainability
     evidence: "Review found inconsistent exception types, coercive mapping normalization, mutable ADR links, and missing malformed-output tests."
     note: "Make the public contract explicit, use documented ValueError validation for malformed criterion inputs, reject conversion-hook numeric subclasses, and pin documentation to immutable evidence."
@@ -104,8 +104,10 @@ object rather than predictable open/close tags. The system instruction still
 requires the model to ignore instructions inside those values. Failure-path
 tests cover missing answer, missing rationale, and non-mapping completions;
 category-bound tests cover invalid `n_categories`; and import ordering plus
-the test regex are kept lint-clean. README ADR links use the immutable
-contextual commit that contains ADR 0005 and ADR 0006.
+the test regex are kept lint-clean. The response parser now passes the complete
+bounded answer to `json.loads` and rejects prefixes, suffixes, and Markdown
+fences instead of extracting the first and last braces. README ADR links use
+the immutable contextual commit that contains ADR 0005 and ADR 0006.
 
 ## Problem Register and Remediation Directions
 
@@ -117,6 +119,7 @@ contextual commit that contains ADR 0005 and ADR 0006.
 | Direct criterion scores could produce a negative or non-integral IRT category. | Validate scores with the same bounded score contract and clamp the projection to the legal category range. | Implemented |
 | Missing model answer/rationale used generic `ValueError`. | Translate model-controlled bounded-text failures to `JudgeFormatError`. | Implemented |
 | Predictable XML tags could be closed by untrusted answer text. | Serialize evaluation inputs as one JSON data payload. | Implemented |
+| Response parsing extracted a brace-delimited substring and accepted wrappers/fences around model JSON. | Parse the complete bounded answer as exactly one JSON object and reject any surrounding text or Markdown fence. | Implemented |
 | Parsed advisory `accepted` name was overwritten by derived acceptance. | Rename the advisory field and derive acceptance only from the validated score. | Implemented |
 | Public export order and a regex assertion were lint-fragile. | Reorder `__all__` and escape the literal test pattern. | Implemented |
 | Invalid `n_categories` and malformed completion paths lacked tests. | Add focused `pytest.raises` coverage and preserve the multi-item checks. | Implemented |
