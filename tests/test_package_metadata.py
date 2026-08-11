@@ -3,7 +3,7 @@
 import ast
 import subprocess
 import tarfile
-import tomllib
+import tomli as tomllib
 import zipfile
 from pathlib import Path
 
