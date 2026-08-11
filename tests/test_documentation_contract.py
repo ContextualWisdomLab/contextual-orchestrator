@@ -112,6 +112,7 @@ AUDITED_OPEN_PR_NUMBERS = {
     105,
     107,
     108,
+    109,
 }
 
 
@@ -678,6 +679,7 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     assert "#80" not in snapshot
     assert "#88" not in snapshot
     for audited_head in (
+        "ada372df205271c74ad095e898644588c7156075",  # PR #109
         "8760993cb8262922a771948845c8dfd2afefb773",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
         "828ca54f2b96a3bdd7adec24a26c0d8164df47d1",  # PR #105
