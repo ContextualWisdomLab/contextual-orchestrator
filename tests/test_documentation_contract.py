@@ -4,6 +4,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
@@ -842,10 +844,9 @@ def test_deployment_uml_keeps_credentials_behind_provider_adapter() -> None:
     assert "policy --> kv" not in uml
 
 
-def test_independent_review_evidence_fails_closed() -> None:
-    """Require canonical review evidence to reject incomplete aggregate gates."""
+def _assert_independent_review_evidence_fails_closed(decision: str) -> None:
+    """Assert that ADR-0010 retains its review-evidence vocabulary."""
 
-    decision = read_text("docs/adr/0010-independent-review-and-evidence.md")
     for required_term in (
         "reviewDecision",
         "APPROVED",
@@ -854,3 +855,40 @@ def test_independent_review_evidence_fails_closed() -> None:
         "structured same-head Strix",
     ):
         assert required_term in decision
+
+
+def test_independent_review_evidence_fails_closed() -> None:
+    """Require canonical review evidence to reject incomplete aggregate gates."""
+
+    decision = read_text("docs/adr/0010-independent-review-and-evidence.md")
+    _assert_independent_review_evidence_fails_closed(decision)
+
+    semantic_regressions = (
+        (
+            "blocks the mutation even when branch protection currently allows "
+            "zero approvals",
+            "is advisory when branch protection currently allows zero approvals",
+        ),
+        (
+            "An eligible independent non-author approval must also be present",
+            "An eligible independent non-author approval is optional",
+        ),
+        (
+            "structured same-head Strix report is separately required",
+            "structured same-head Strix report is advisory",
+        ),
+        (
+            "block merge",
+            "may permit merge",
+        ),
+        (
+            "automation disables that queued mutation",
+            "automation retains that queued mutation",
+        ),
+    )
+    normalized = " ".join(decision.split())
+    for required_control, weakened_control in semantic_regressions:
+        assert required_control in normalized
+        weakened = normalized.replace(required_control, weakened_control, 1)
+        with pytest.raises(AssertionError):
+            _assert_independent_review_evidence_fails_closed(weakened)
