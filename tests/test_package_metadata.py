@@ -25,6 +25,17 @@ def test_metadata_parser_supports_declared_python_floor() -> None:
     assert ("tomllib", None) not in imports
     assert ("tomli", "tomllib") in imports
 
+
+def test_tests_workflow_executes_declared_python_floor() -> None:
+    """Run the suite on the minimum and current supported interpreters."""
+
+    workflow = (REPOSITORY_ROOT / ".github/workflows/tests.yml").read_text(
+        encoding="utf-8"
+    )
+    assert 'python-version: ["3.10", "3.12"]' in workflow
+    assert "python-version: ${{ matrix.python-version }}" in workflow
+
+
 def packaging_document() -> dict[str, object]:
     """Return the parsed packaging configuration from ``pyproject.toml``."""
 
