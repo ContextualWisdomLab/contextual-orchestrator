@@ -1,6 +1,5 @@
-from pathlib import Path
 import re
-
+from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
@@ -74,6 +73,7 @@ def test_dependabot_tracks_actions_and_python_dependencies():
     assert "package-ecosystem: github-actions" in dependabot_text
     assert "package-ecosystem: pip" in dependabot_text
     assert "timezone: Asia/Seoul" in dependabot_text
+    assert dependabot_text.count("default-days: 7") == 2
 
 
 def test_codeowners_requires_repository_owner_review():
