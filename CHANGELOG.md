@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Replace the competitor-centric README disclaimer with an affirmative independent-implementation, third-party-model-weight, proprietary-artifact, and provider-boundary statement for commercial provenance review.
 - Replace legacy lab framing in the root README with the current buyer-facing provider-neutral orchestration-control-plane identity and local-deployment boundary.
 - Add a canonical release, migration, and rollback guide that binds protected-source identity, reproducible build and artifact provenance, state migration, publication, rollback, and protected-main operational acceptance without presenting Draft evidence as shipped.
 - Establish a canonical status-qualified product documentation graph spanning PRD, TRD, architecture, UML, ERD, ADRs, threat model, test strategy, operability, incident response, traceability, standards/research references, and machine-checked authority boundaries without promoting active or planned work as shipped.
