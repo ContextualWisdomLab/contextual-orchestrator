@@ -15,7 +15,7 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 def test_test_toml_parsers_support_declared_python_floor() -> None:
     """Keep every test module importable on the declared minimum Python."""
 
-    test_paths = sorted((REPOSITORY_ROOT / "tests").glob("test*.py"))
+    test_paths = sorted((REPOSITORY_ROOT / "tests").rglob("test*.py"))
     assert REPOSITORY_ROOT / "tests/fuzz/test_fuzz_properties.py" in test_paths
 
     for path in test_paths:
