@@ -329,6 +329,22 @@ def test_status_vocabulary_product_scope_and_prompt_continuity_are_explicit() ->
     assert "intermediate work" in prompt_text
 
 
+def test_root_readme_uses_current_buyer_facing_product_identity() -> None:
+    """Keep the entry point aligned with the governed orchestration product."""
+
+    readme = read_text("README.md")
+    normalized_readme = " ".join(readme.split())
+    assert (
+        "Provider-neutral OpenAI-compatible orchestration control plane that "
+        "routes, conducts, verifies, and synthesizes work across governed model "
+        "agents."
+        in normalized_readme
+    )
+    assert "Stdlib Python lab for a single API" not in readme
+    assert "hardened for local deployment" in readme
+    assert "hardened for local lab use" not in readme
+
+
 def test_adr_index_and_schema_are_consistent() -> None:
     """Require every decision to be uniquely indexed, status-bearing, and recoverable."""
 
@@ -565,8 +581,8 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     for audited_head in (
         "8760993cb8262922a771948845c8dfd2afefb773",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
-        "d13b5974bf67b5fa3c82ecc84bf3d0f269698d7d",  # PR #105
-        "19cba12f54785ee1d6ca68c7d719abdd8797bcb4",  # PR #104
+        "d0a6ac8dc131a3db185265209286150b57b1c848",  # PR #105
+        "4c2beb3fd8d683e500bd012ebe219c3460e13de2",  # PR #104
         "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
@@ -594,6 +610,7 @@ def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
         in changelog
     )
     assert "Add a canonical release, migration, and rollback guide" in changelog
+    assert "Replace legacy lab framing in the root README" in changelog
 
 
 if __name__ == "__main__":  # pragma: no cover
