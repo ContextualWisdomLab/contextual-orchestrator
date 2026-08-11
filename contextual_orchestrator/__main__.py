@@ -16,6 +16,28 @@ DEFAULT_ADMIN_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
 
 
+def _positive_int(value: str) -> int:
+    """Parse a strictly positive integer for an argparse option."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("positive integer required") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("positive integer required")
+    return parsed
+
+
+def _json_object(value: str) -> dict[str, object]:
+    """Parse a JSON object for an argparse option, rejecting other JSON values."""
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError("valid JSON object required") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("JSON object required")
+    return parsed
+
+
 def _resolve_auth_token(explicit: str, credential_name: str) -> str:
     """Resolve a server bearer token from an explicit local value or the KV."""
     if explicit:
@@ -106,9 +128,9 @@ def main() -> None:
                         help="Default provider sampling temperature (default: 0.2).")
     parser.add_argument("--max-output-tokens", type=int, default=2048,
                         help="Default provider output token cap (default: 2048).")
-    parser.add_argument("--local-concurrency", type=int, default=1,
+    parser.add_argument("--local-concurrency", type=_positive_int, default=1,
                         help="Concurrent requests for explicit mlx:// local batch work (default: 1).")
-    parser.add_argument("--chat-template-args", type=json.loads, default={},
+    parser.add_argument("--chat-template-args", type=_json_object, default={},
                         help="JSON kwargs forwarded to local mlx-lm chat templates, e.g. '{\"enable_thinking\":false}'.")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")

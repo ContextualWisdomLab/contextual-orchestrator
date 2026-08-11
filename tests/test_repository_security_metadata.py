@@ -81,7 +81,7 @@ def test_dependabot_tracks_actions_and_python_dependencies():
     assert set(entries) == {"github-actions", "pip"}
     for entry in entries.values():
         assert "timezone: Asia/Seoul" in entry
-        assert re.search(r"(?m)^    cooldown:\\n      default-days: 7$", entry)
+        assert re.search(r"(?m)^    cooldown:\n      default-days: 7$", entry)
 
 
 def test_codeowners_requires_repository_owner_review():
