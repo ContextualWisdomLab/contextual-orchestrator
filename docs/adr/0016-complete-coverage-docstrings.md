@@ -22,9 +22,11 @@ beginner-readable contracts, not a threshold detached from behavior.
 
 ## Decision
 
-Release acceptance requires exact 100% owned production statement and branch
-coverage, and 100% function/line coverage where the selected tooling reports
-them. Every public class, method, and function has a beginner-readable
+Release acceptance requires exact 100% owned production statement, branch,
+function, and line coverage where the selected tooling reports each dimension.
+Statement and branch coverage remain mandatory in the current gate; unavailable
+function or line metrics must be recorded as absent evidence rather than
+inferred from another dimension. Every public class, method, and function has a beginner-readable
 docstring. The owned-source manifest and checked-out revision are evidence, so a
 synthetic merge, predecessor head, stale source tree, skipped-required check, or
 status alone is not contributor-head success.

@@ -4,6 +4,8 @@ import ast
 import re
 from pathlib import Path
 
+import pytest
+
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
@@ -112,6 +114,7 @@ AUDITED_OPEN_PR_NUMBERS = {
     105,
     107,
     108,
+    109,
 }
 
 
@@ -678,6 +681,7 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     assert "#80" not in snapshot
     assert "#88" not in snapshot
     for audited_head in (
+        "ada372df205271c74ad095e898644588c7156075",  # PR #109
         "8760993cb8262922a771948845c8dfd2afefb773",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
         "828ca54f2b96a3bdd7adec24a26c0d8164df47d1",  # PR #105
@@ -719,3 +723,202 @@ def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit("Run with pytest so every documentation contract executes.")
+
+
+def test_usage_evidence_adrs_define_one_mode_complete_contract() -> None:
+    """Keep every execution mode on one qualified usage-evidence contract."""
+
+    routing_adr = " ".join(
+        read_text("docs/adr/0005-sync-batch-pg-llm-batch.md").lower().split()
+    )
+    evidence_adr = " ".join(
+        read_text("docs/adr/0006-honest-cost-and-benchmark-evidence.md").lower().split()
+    )
+    for mode in ("sync completion", "batch retrieval", "passthrough", "route streaming"):
+        assert mode in routing_adr
+    for status in ("unknown", "not_recorded"):
+        assert chr(96) + status + chr(96) in routing_adr
+    assert "excluded from cost comparison" in routing_adr
+
+    for dimension in (
+        "account",
+        "service",
+        "upstream_api",
+        "model_name",
+        "team",
+        "group",
+        "company",
+    ):
+        assert chr(96) + dimension + chr(96) in evidence_adr
+    assert "mode-by-mode completeness tests" in evidence_adr
+    assert "writer and export path" in evidence_adr
+
+
+def test_access_grant_model_is_directional_and_predecessor_bounded() -> None:
+    """Require consumer-to-producer access without bidirectional visibility."""
+
+    erd = " ".join(read_text("docs/ERD.md").split())
+    for term in (
+        "ACCESS_GRANT {",
+        "consumer_step_id",
+        "producer_step_id",
+        "authorized producer",
+        "earlier workflow step",
+        "does not grant bidirectional visibility",
+    ):
+        assert term in erd
+    assert "WORKFLOW_STEP }o--o{ WORKFLOW_STEP : exposes_by_access_list" not in erd
+
+
+def test_planned_web_dependencies_are_not_presented_as_package_extras() -> None:
+    """Keep unshipped web-client frameworks explicitly planned."""
+
+    i18n = read_text("docs/i18n_design.md")
+    assert "i18next and React-admin are planned adoption candidates" in i18n
+    assert "i18next and React-admin are optional compatibility extras" not in i18n
+
+
+def test_hybrid_llm_source_and_license_authority_are_linked() -> None:
+    """Link paper provenance separately from arXiv license evidence."""
+
+    paper_index = read_text("docs/papers/README.md")
+    references = read_text("docs/REFERENCES.md")
+    license_authority = "https://arxiv.org/abs/2404.14618"
+    assert license_authority in paper_index
+    assert license_authority in references
+    assert "https://openreview.net/forum?id=02f3mUtqnM" in paper_index
+    assert "https://openreview.net/forum?id=02f3mUtqnM" in references
+
+
+def test_prd_and_trd_require_all_coverage_dimensions() -> None:
+    """Align product and technical release gates with ADR-0016."""
+
+    required_contract = "statement, branch, function, and line coverage"
+    for path in (
+        "docs/PRD.md",
+        "docs/TRD.md",
+        "docs/adr/0016-complete-coverage-docstrings.md",
+    ):
+        assert required_contract in " ".join(read_text(path).split())
+
+
+def test_canonical_authority_state_cells_use_only_status_vocabulary() -> None:
+    """Reject descriptive prose in the canonical authority state column."""
+
+    index_text = read_text("docs/README.md")
+    rows = [
+        line
+        for line in index_text.splitlines()
+        if line.startswith("| ") and not line.startswith("|---")
+    ]
+    authority_rows = [line for line in rows if "[" in line and "](" in line]
+    assert authority_rows
+    for row in authority_rows:
+        cells = [cell.strip() for cell in row.strip("|").split("|")]
+        assert len(cells) == 5
+        state = cells[3].strip(chr(96))
+        assert state in STATUS_VOCABULARY, row
+
+
+def test_provider_failure_uml_separates_caller_and_provider_failures() -> None:
+    """Keep caller rejection terminal while documenting eligible provider failover."""
+
+    uml = read_text("docs/UML.md")
+    for line in (
+        "alt caller validation error",
+        "Orchestrator-->>Orchestrator: Terminate without provider dispatch",
+        "alt transient provider failure",
+        "else permanent provider or configuration error",
+        "Orchestrator->>Fallback: Invoke eligible candidate without client retry",
+    ):
+        assert line in uml
+
+
+def test_deployment_uml_keeps_credentials_behind_provider_adapter() -> None:
+    """Keep credential retrieval out of the orchestration-policy boundary."""
+
+    uml = read_text("docs/UML.md")
+    assert 'provider_adapter["Provider adapter"]' in uml
+    assert "policy --> provider_adapter" in uml
+    assert "provider_adapter --> kv" in uml
+    assert "policy --> kv" not in uml
+
+
+def _assert_independent_review_evidence_fails_closed(decision: str) -> None:
+    """Assert that ADR-0010 retains every fail-closed review control."""
+
+    normalized = " ".join(decision.split())
+    required_controls = (
+        "`reviewDecision` must be `APPROVED` for the unchanged head",
+        (
+            "A missing decision, `REVIEW_REQUIRED`, or `CHANGES_REQUESTED` "
+            "blocks the mutation even when branch protection currently allows "
+            "zero approvals"
+        ),
+        "An eligible independent non-author approval must also be present",
+        (
+            "the aggregate field is evidence of the combined repository state, "
+            "not a substitute reviewer"
+        ),
+        (
+            "A completed, successful, structured same-head Strix report is "
+            "separately required"
+        ),
+        (
+            "Queued, in-progress, neutral/no-report, cancelled, skipped, absent, "
+            "or predecessor-head Strix states block merge"
+        ),
+        (
+            "If the aggregate review state regresses or a required check becomes "
+            "incomplete after auto-merge is queued, automation disables that "
+            "queued mutation and starts exact-head verification again"
+        ),
+    )
+    for required_control in required_controls:
+        assert required_control in normalized
+
+
+def test_independent_review_evidence_fails_closed() -> None:
+    """Require canonical review evidence to reject incomplete aggregate gates."""
+
+    decision = read_text("docs/adr/0010-independent-review-and-evidence.md")
+    _assert_independent_review_evidence_fails_closed(decision)
+
+    semantic_regressions = (
+        (
+            "blocks the mutation even when branch protection currently allows "
+            "zero approvals",
+            "is advisory when branch protection currently allows zero approvals",
+        ),
+        (
+            "An eligible independent non-author approval must also be present",
+            "An eligible independent non-author approval is optional",
+        ),
+        (
+            "structured same-head Strix report is separately required",
+            "structured same-head Strix report is advisory",
+        ),
+        (
+            "block merge",
+            "may permit merge",
+        ),
+        (
+            "automation disables that queued mutation",
+            "automation retains that queued mutation",
+        ),
+    )
+    normalized = " ".join(decision.split())
+    for required_control, weakened_control in semantic_regressions:
+        assert required_control in normalized
+        weakened = normalized.replace(required_control, weakened_control, 1)
+        with pytest.raises(AssertionError):
+            _assert_independent_review_evidence_fails_closed(weakened)
+
+def test_canonical_documentation_has_no_trailing_whitespace() -> None:
+    """Keep canonical Markdown compatible with diff-integrity gates."""
+
+    for path in REQUIRED_FILES:
+        document = read_text(path)
+        assert not document.endswith("\n\n"), f"{path}: final blank line"
+        for line_number, line in enumerate(document.splitlines(), start=1):
+            assert line == line.rstrip(), f"{path}:{line_number}"

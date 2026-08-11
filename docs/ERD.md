@@ -123,7 +123,12 @@ erDiagram
     MODEL_AGENT ||--o{ WORKFLOW_STEP : executes
     ORCHESTRATION_POLICY ||--o{ WORKFLOW_RUN : governs
     WORKFLOW_RUN ||--o{ WORKFLOW_STEP : contains
-    WORKFLOW_STEP }o--o{ WORKFLOW_STEP : exposes_by_access_list
+    ACCESS_GRANT {
+        integer consumer_step_id
+        integer producer_step_id
+    }
+    WORKFLOW_STEP ||--o{ ACCESS_GRANT : consumes
+    WORKFLOW_STEP ||--o{ ACCESS_GRANT : produces
     WORKFLOW_RUN ||--o{ AUDIT_EVENT : emits
     WORKFLOW_RUN ||--o{ ANALYTICS_EVENT : emits
     WORKFLOW_RUN ||--o{ USAGE_RECORD : attributes
@@ -131,7 +136,10 @@ erDiagram
     MODEL_AGENT ||--o| CIRCUIT_STATE : has
 ```
 
-This is a conceptual ERD; these entities are not all physical tables.
+Each `ACCESS_GRANT` links a consumer step to an authorized producer only when
+the producer is an earlier workflow step. The directional grant does not grant
+bidirectional visibility. This is a conceptual ERD; these entities are not all
+physical tables.
 
 Spend analytics, access reports, admin state, readiness resources, and
 commercial packets are derived response documents, not durable entities.

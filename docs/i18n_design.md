@@ -30,6 +30,6 @@ UI messages are locale bundles:
 
 ## Planned adoption candidate
 
-i18next and React-admin are optional compatibility extras. Adopt them for a
+i18next and React-admin are planned adoption candidates. Adopt them for a
 separately built web client only with migration, rollback, and parity evidence;
 they do not own the current inline admin call path.

@@ -42,4 +42,3 @@ the replacement, and preserve migration and rollback evidence. Each ADR covers
 context and drivers, alternatives, decision, consequences, failure/recovery,
 security/privacy/governance, compatibility/migration, verification/acceptance,
 rollback, and supersession.
-

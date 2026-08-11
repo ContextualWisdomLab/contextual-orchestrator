@@ -16,6 +16,7 @@ Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Rühle, V.,
 Lakshmanan, L. V. S., & Awadallah, A. H. (2024). Hybrid LLM: Cost-efficient
 and quality-aware query routing. In *The Twelfth International Conference on
 Learning Representations*. https://openreview.net/forum?id=02f3mUtqnM
+Source-license authority: https://arxiv.org/abs/2404.14618
 
 Ding, D., Mallick, A., Zhang, S., Wang, C., Madrigal, D., Garcia, M. D. C. H.,
 Xia, M., Lakshmanan, L. V. S., Wu, Q., & Rühle, V. (2025). *BEST-Route:

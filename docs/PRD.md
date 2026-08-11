@@ -1,7 +1,7 @@
 # Product Requirements Document
 
-**Product:** Contextual Orchestrator  
-**Document state:** `accepted_architecture`  
+**Product:** Contextual Orchestrator<br>
+**Document state:** `accepted_architecture`<br>
 **Audience:** product owners, platform operators, API consumers, security and
 privacy reviewers, reliability engineers, and acquisition reviewers
 
@@ -79,7 +79,7 @@ shipped. The capability table below supplies implementation status.
 | PRD-007 | P1 | hardening | Batch owner | Support explicit sync/batch decisions and classifiable, restart-safe, idempotent job lifecycle without coupling interactive availability to an external backend. |
 | PRD-008 | P1 | production hardening | Data owner | Keep persistence opt-in and recoverable; enabled stores pass restart/restore tests and production claims wait for retention, encryption, tenancy, and backup evidence. |
 | PRD-009 | P0 | next accepted stack | Security owner | Complete the DNS-pinned, proxy/redirect-safe, bounded response boundary in PR #96; acceptance requires exact-head gates and protected merge. |
-| PRD-010 | P0 | every release | Release owner | Publish only one unchanged protected revision with complete functional, security, fuzz, coverage, package, SBOM/provenance, rollback, and independent-review evidence. |
+| PRD-010 | P0 | every release | Release owner | Publish only one unchanged protected revision with complete functional, security, fuzz, 100% owned production statement, branch, function, and line coverage, public-docstring, package, SBOM/provenance, rollback, and independent-review evidence. |
 
 ## Capability status
 
