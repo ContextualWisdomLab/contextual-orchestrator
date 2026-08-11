@@ -84,6 +84,29 @@ def test_dependabot_tracks_actions_and_python_dependencies():
         assert re.search(r"(?m)^    cooldown:\n      default-days: 7$", entry)
 
 
+def test_review_adr_requires_enforced_exact_head_merge_controls():
+    adr_text = read_text("docs/planning/adrs/0004-pr-review-merge-loop.md")
+    normalized_adr_text = " ".join(adr_text.split())
+
+    required_controls = [
+        "`requiredApprovals >= 1`",
+        "`enforce_admins=true`",
+        "`reviewDecision=APPROVED`",
+        "independent current-head approval",
+        "zero active unresolved threads",
+        "terminal successful required checks",
+        "structured same-head Strix evidence",
+        "final re-fetch immediately before",
+    ]
+    for required_control in required_controls:
+        assert required_control in adr_text
+
+    assert (
+        "Branch protection and the central scheduler must each reject direct and "
+        "auto merge when any control is absent or non-passing."
+    ) in normalized_adr_text
+
+
 def test_codeowners_requires_repository_owner_review():
     codeowners_text = read_text(".github/CODEOWNERS")
 
