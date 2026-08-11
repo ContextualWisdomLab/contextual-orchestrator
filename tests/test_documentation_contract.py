@@ -111,6 +111,7 @@ AUDITED_OPEN_PR_NUMBERS = {
     104,
     105,
     107,
+    108,
 }
 
 
@@ -562,13 +563,26 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     assert "#80" not in snapshot
     assert "#88" not in snapshot
     for audited_head in (
+        "1921dc865a2df46b85a463e4f5ea1bbe92aad9bb",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
-        "f5b9acc7256fd3e33d015b7ad020d4908aba38f6",  # PR #105
-        "0fc208eb185e1306dbaad065a516a3e4cd2dbee4",  # PR #104
+        "3744016506a3385ed643bc640f4ea6a8ee79535a",  # PR #105
+        "44445dadb29a61d5e4e52d2f945e70cbb20b1872",  # PR #104
         "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
         assert audited_head in snapshot
+
+
+def test_dated_central_prerequisite_snapshot_is_fail_closed() -> None:
+    """Keep incomplete central dependencies distinct from accepted authority."""
+
+    traceability = read_text("docs/TRACEABILITY.md")
+    assert '.github PR #929 JSON repair: test-only RED' in traceability
+    assert '.github issue #907 wrapper repair: no completing PR' in traceability
+    assert "#906 had ten green" in traceability
+    assert "no formal review or qualifying approval" in traceability
+    assert "no production repair or associated workflow run" in traceability
+    assert "None of those states is protected integration" in traceability
 
 
 def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
