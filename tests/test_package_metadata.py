@@ -37,7 +37,9 @@ def test_tomllib_alias_is_rejected_at_the_python_floor() -> None:
 def discover_test_modules(test_root: Path) -> list[Path]:
     """Return modules matching the repository's pytest filename contract."""
 
-    return sorted(test_root.rglob("test*.py"))
+    prefix_named = set(test_root.rglob("test*.py"))
+    suffix_named = set(test_root.rglob("*_test.py"))
+    return sorted(prefix_named | suffix_named)
 
 
 def test_pytest_suffix_named_modules_are_scanned(tmp_path: Path) -> None:
