@@ -73,7 +73,7 @@ def test_dependabot_tracks_actions_and_python_dependencies():
     entries = {
         match.group(1): match.group(2)
         for match in re.finditer(
-            r"(?ms)^  - package-ecosystem:\\s+([^\\n]+)\\n(.*?)(?=^  - package-ecosystem:|\\Z)",
+            r"(?ms)^  - package-ecosystem:\s+([^\n]+)\n(.*?)(?=^  - package-ecosystem:|\Z)",
             dependabot_text,
         )
     }
