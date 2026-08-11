@@ -148,7 +148,7 @@ def test_figma_artifacts_are_recorded_without_code_connect() -> None:
         assert expected_text in artifacts
 
 
-def test_ponytail_packaging_decision_keeps_commercial_product_unified() -> None:
+def test_packaging_decision_keeps_commercial_product_unified() -> None:
     research = read_text("docs/library_research.md")
 
     for expected_text in [
@@ -157,9 +157,11 @@ def test_ponytail_packaging_decision_keeps_commercial_product_unified() -> None:
         "Do not split the",
         "Git submodule",
         "Extraction triggers",
-        "single-repo product",
+        "single-repository product",
     ]:
         assert expected_text in research
+
+    assert "Ponytail" not in research
 
 
 def test_commercial_plugin_operating_model_defines_plugin_execution_scope() -> None:
