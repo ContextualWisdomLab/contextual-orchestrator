@@ -3,4 +3,4 @@ owner: ContextualWisdomLab
 default_status: proposed
 decision_id_format: NNNN
 template_source: madr-v4
-last_decision_id: '0006'
+last_decision_id: '0007'

@@ -553,6 +553,46 @@ _USAGE_COLUMNS = (
     "cost_amount",
     "currency_code",
 )
+_USAGE_COLUMNS_SQL = ", ".join(_USAGE_COLUMNS)
+_DIMENSION_SELECT_SQL = {
+    "qmark": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?",
+    "pyformat": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s",
+}
+_DIMENSION_INSERT_SQL = {
+    "qmark": (
+        "INSERT INTO cost_attribution_dimensions "
+        "(dimension_name, dimension_label, dimension_order) VALUES (?, ?, ?)"
+    ),
+    "pyformat": (
+        "INSERT INTO cost_attribution_dimensions "
+        "(dimension_name, dimension_label, dimension_order) VALUES (%s, %s, %s)"
+    ),
+}
+_USAGE_INSERT_SQL = {
+    "qmark": (
+        f"INSERT INTO llm_usage_records ({_USAGE_COLUMNS_SQL}) VALUES "
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ),
+    "pyformat": (
+        f"INSERT INTO llm_usage_records ({_USAGE_COLUMNS_SQL}) VALUES "
+        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    ),
+}
+_USAGE_SELECT_SQL = f"SELECT {_USAGE_COLUMNS_SQL} FROM llm_usage_records"
+_USAGE_QUERY_SQL = {
+    (style, has_start, has_end): query
+    for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
+    for has_start, has_end, query in (
+        (False, False, _USAGE_SELECT_SQL),
+        (True, False, f"{_USAGE_SELECT_SQL} WHERE created_at >= {placeholder}"),
+        (False, True, f"{_USAGE_SELECT_SQL} WHERE created_at < {placeholder}"),
+        (
+            True,
+            True,
+            f"{_USAGE_SELECT_SQL} WHERE created_at >= {placeholder} AND created_at < {placeholder}",
+        ),
+    )
+}
 
 
 class SqlLedgerStore:
@@ -564,13 +604,12 @@ class SqlLedgerStore:
     """
 
     def __init__(self, connection: Any, paramstyle: str = "qmark") -> None:
+        if paramstyle not in ("qmark", "pyformat"):
+            raise ValueError("paramstyle must be qmark or pyformat")
         self._conn = connection
         self._paramstyle = paramstyle
         self._create_schema()
         self._seed_dimension_catalog()
-
-    def _placeholder(self) -> str:
-        return "?" if self._paramstyle == "qmark" else "%s"
 
     def _create_schema(self) -> None:
         cur = self._conn.cursor()
@@ -580,17 +619,15 @@ class SqlLedgerStore:
         self._conn.commit()
 
     def _seed_dimension_catalog(self) -> None:
-        ph = self._placeholder()
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
             cur.execute(
-                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
+                _DIMENSION_SELECT_SQL[self._paramstyle],
                 (name,),
             )
             if cur.fetchone() is None:
                 cur.execute(
-                    "INSERT INTO cost_attribution_dimensions "
-                    f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
+                    _DIMENSION_INSERT_SQL[self._paramstyle],
                     (name, label, order),
                 )
         self._conn.commit()
@@ -598,31 +635,25 @@ class SqlLedgerStore:
     def append(self, record: UsageRecord) -> None:
         """Insert a usage record row."""
         row = record.as_dict()
-        ph = self._placeholder()
-        placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
-        columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
         cur.execute(
-            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
+            _USAGE_INSERT_SQL[self._paramstyle],
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
         self._conn.commit()
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return record rows in the optional half-open window."""
-        ph = self._placeholder()
-        clauses: List[str] = []
         params: List[Any] = []
         if start is not None:
-            clauses.append(f"created_at >= {ph}")
             params.append(start)
         if end is not None:
-            clauses.append(f"created_at < {ph}")
             params.append(end)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        cur.execute(
+            _USAGE_QUERY_SQL[(self._paramstyle, start is not None, end is not None)],
+            tuple(params),
+        )
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 

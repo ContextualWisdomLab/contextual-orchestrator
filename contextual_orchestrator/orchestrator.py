@@ -9,6 +9,8 @@ import copy
 from dataclasses import dataclass, replace
 from functools import wraps
 import hashlib
+import http.client
+import io
 import ipaddress
 import json
 import os
@@ -244,15 +246,14 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
-        # TLS trust for provider egress. Default verifies against the system trust store;
-        # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
-        # explicit dev-only opt-out (insecure) for self-signed endpoints.
-        self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+        if not verify_tls:
+            raise ValueError("provider TLS verification cannot be disabled; configure a trusted ca_bundle")
+        # TLS trust for provider egress. The system trust store is the default;
+        # ca_bundle points at a custom CA for a reviewed corporate gateway.
+        self._ssl_context = self._build_ssl_context(ca_bundle)
 
     @staticmethod
-    def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
-        if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+    def _build_ssl_context(ca_bundle: str | None) -> ssl.SSLContext:
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -346,12 +347,57 @@ class ModelClient:
         raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
-            request,
-            timeout=self.timeout,
-            context=self._ssl_context,
-        )
+        """Open a validated HTTP(S) request without generic URL-handler dispatch."""
+        parsed = urlparse(request.full_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+        ):
+            raise RuntimeError("provider request URL must be an HTTP(S) URL without userinfo or fragments")
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError as exc:
+            raise RuntimeError("provider request URL has an invalid port") from exc
+        connection: http.client.HTTPConnection
+        if parsed.scheme == "https":
+            connection = http.client.HTTPSConnection(
+                parsed.hostname,
+                port,
+                timeout=self.timeout,
+                context=self._ssl_context,
+            )
+        else:
+            connection = http.client.HTTPConnection(parsed.hostname, port, timeout=self.timeout)
+        target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+        try:
+            connection.request(
+                request.get_method(),
+                target,
+                body=request.data,
+                headers=dict(request.header_items()),
+            )
+            response = connection.getresponse()
+            if response.status >= 400:
+                body = response.read()
+                status = response.status
+                reason = response.reason
+                headers = response.headers
+                response.close()
+                connection.close()
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    status,
+                    reason,
+                    headers,
+                    io.BytesIO(body),
+                )
+            return response
+        except Exception:
+            connection.close()
+            raise
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
@@ -509,6 +555,8 @@ class ModelClient:
         parsed = urlparse(agent.base_url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise RuntimeError(f"{agent.id} base_url must use https")
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
         allowed_hosts = {
             host.strip().lower()
             for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")

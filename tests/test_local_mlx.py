@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import urllib.request
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -75,6 +76,17 @@ def test_remote_http_is_still_rejected() -> None:
         assert "https" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("plain http provider must remain rejected")
+
+
+def test_provider_transport_rejects_non_http_url_before_io() -> None:
+    client = ModelClient(max_retries=0)
+    request = urllib.request.Request("file:///tmp/not-a-provider", method="GET")
+    try:
+        client._open_provider(request)
+    except RuntimeError as exc:
+        assert "HTTP(S) URL" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("non-HTTP provider URL must be rejected")
 
 
 def test_local_batch_preserves_ids_and_usage() -> None:

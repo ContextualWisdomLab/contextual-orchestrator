@@ -98,8 +98,6 @@ def main() -> None:
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
-    parser.add_argument("--insecure-skip-tls-verify", action="store_true",
-                        help="Dev only: do not verify provider TLS certificates (insecure).")
     parser.add_argument("--temperature", type=float, default=0.2,
                         help="Default provider sampling temperature (default: 0.2).")
     parser.add_argument("--max-output-tokens", type=int, default=2048,
@@ -120,7 +118,6 @@ def main() -> None:
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
-        verify_tls=not args.insecure_skip_tls_verify,
         temperature=args.temperature,
         max_output_tokens=args.max_output_tokens,
         local_concurrency=args.local_concurrency,

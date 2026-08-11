@@ -243,6 +243,15 @@ def test_sql_ledger_store_on_sqlite_creates_objects_and_rolls_up() -> None:
     assert by_company["acme"]["cost_amount"] == 15.0  # 6 + 9
 
 
+def test_sql_ledger_rejects_unknown_parameter_style() -> None:
+    try:
+        SqlLedgerStore(sqlite3.connect(":memory:"), paramstyle="named")
+    except ValueError as exc:
+        assert "paramstyle must be qmark or pyformat" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("unknown DB-API parameter style must be rejected")
+
+
 def test_ledger_table_names_follow_two_word_snake_case() -> None:
     for name in ("llm_usage_records", "cost_attribution_dimensions", "llm_price_entries"):
         assert is_two_word_snake_case(name)
