@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
 from contextvars import ContextVar
+from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
@@ -21,7 +22,7 @@ import threading
 import time
 import uuid
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
@@ -158,17 +159,18 @@ class OrchestrationPolicy:
     route_p95_seconds: float = 2.5
     conduct_hint_threshold: int = 2
     verifier_required: bool = True
-    verifier_positive_terms: tuple[str, ...] = ("verified", "accepted", "confirmed", "pass", "good", "ok")
-    verifier_negative_terms: tuple[str, ...] = ("reject", "disagree", "conflict", "unsafe", "fails", "error", "risky")
     # Conductor-style planning (arXiv:2512.04388): "generated" asks the planner model to
     # emit the workflow (subtasks, worker assignment, access lists); "template" keeps the
     # fixed 4-step plan. Generated plans that fail validation fall back to the template.
     workflow_planning: str = "template"
     max_workflow_steps: int = 6
-    # Verifier verdict: "terms" (default) matches accept/reject vocabulary in the verifier
-    # report; "model" asks a verifier-selected model to reply ACCEPT/REJECT (fixes the
-    # known term-matching false negative on risk-vocabulary verifier outputs).
-    verifier_judge: str = "terms"
+    # Verifier verdicts are structured model judgments. Keyword matching is intentionally
+    # unsupported: it cannot handle negation, language, or a report that quotes a risk.
+    verifier_judge: str = "model"
+
+    def __post_init__(self) -> None:
+        if self.verifier_judge != "model":
+            raise ValueError("keyword-based verifier_judge modes are unsupported; use 'model'")
 
     def as_dict(self) -> dict[str, Any]:
         """Return the API-safe policy snapshot for workflow records."""
@@ -188,6 +190,18 @@ class OrchestrationPolicy:
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
+LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _is_local_provider_url(base_url: str) -> bool:
+    """Return whether a provider uses the explicit loopback-only local scheme."""
+    parsed = urlparse(base_url)
+    try:
+        parsed.port
+    except ValueError:
+        return False
+    return parsed.scheme in LOCAL_PROVIDER_SCHEMES and parsed.hostname in LOCAL_PROVIDER_HOSTS
 
 
 def is_transient_error(exc: BaseException) -> bool:
@@ -210,6 +224,9 @@ class ModelClient:
         max_retries: int = 2,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
+        temperature: float = 0.2,
+        local_concurrency: int = 1,
+        chat_template_args: dict[str, Any] | None = None,
         ca_bundle: str | None = None,
         verify_tls: bool = True,
     ) -> None:
@@ -218,6 +235,11 @@ class ModelClient:
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
+        self.temperature = temperature
+        if isinstance(local_concurrency, bool) or local_concurrency < 1:
+            raise ValueError("local_concurrency must be >= 1")
+        self.local_concurrency = int(local_concurrency)
+        self.chat_template_args = dict(chat_template_args or {})
         # Seam so tests can observe/skip real sleeping during backoff.
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
@@ -246,15 +268,15 @@ class ModelClient:
         self._local.usage = None
         return usage
 
-    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
+    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
         self._local.usage = None
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
         self._validate_provider(agent)  # pragma: no cover
-        api_key = get_credential(agent.credential_name)  # pragma: no cover
-        if not api_key:  # pragma: no cover
+        api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)  # pragma: no cover
+        if not _is_local_provider_url(agent.base_url) and not api_key:  # pragma: no cover
             raise NotConfigured(
                 f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV"
             )
@@ -262,10 +284,12 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": self.temperature if temperature is None else temperature,
             "stream": False,
             "max_tokens": self.max_output_tokens,
         }
+        if _is_local_provider_url(agent.base_url) and self.chat_template_args:
+            payload["chat_template_kwargs"] = self.chat_template_args
         return self._send_with_retry(agent, payload)
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
@@ -279,7 +303,8 @@ class ModelClient:
                 if attempt >= self.max_retries or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        raise RuntimeError(f"provider {agent.id} request failed") from last_error
+        detail = f": {last_error}" if last_error else ""
+        raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
 
     def _backoff_delay(self, attempt: int) -> float:
         """Full-jitter exponential backoff, capped, so retries do not thundering-herd a provider."""
@@ -288,14 +313,14 @@ class ModelClient:
 
     def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
-        api_key = get_credential(agent.credential_name) or ""
+        api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
+        headers = {"content-type": "application/json"}
+        if api_key:
+            headers["authorization"] = f"Bearer {api_key}"
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-            },
+            headers=headers,
             method="POST",
         )
         with self._open_provider(request) as response:
@@ -303,7 +328,22 @@ class ModelClient:
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
-        return data["choices"][0]["message"]["content"]
+        return self._response_content(agent, data)
+
+    @staticmethod
+    def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
+        """Extract text and explain provider responses that contain reasoning only."""
+        choices = data.get("choices")
+        message = choices[0].get("message") if isinstance(choices, list) and choices else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            return content
+        if isinstance(message, dict) and message.get("reasoning"):
+            raise RuntimeError(
+                f"provider {agent.id} returned reasoning without content; "
+                "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
+            )
+        raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
@@ -313,7 +353,7 @@ class ModelClient:
             context=self._ssl_context,
         )
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
@@ -330,23 +370,24 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
+        if _is_local_provider_url(agent.base_url) and self.chat_template_args:
+            payload["chat_template_kwargs"] = self.chat_template_args
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
-        api_key = get_credential(agent.credential_name) or ""
+        api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
+        headers = {"content-type": "application/json", "accept": "text/event-stream"}
+        if api_key:
+            headers["authorization"] = f"Bearer {api_key}"
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-                "accept": "text/event-stream",
-            },
+            headers=headers,
             method="POST",
         )
         with self._open_provider(request) as response:
@@ -399,14 +440,14 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
-        api_key = get_credential(agent.credential_name) or ""
+        api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
+        headers = {"content-type": "application/json"}
+        if api_key:
+            headers["authorization"] = f"Bearer {api_key}"
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-            },
+            headers=headers,
             method="POST",
         )
         with self._open_provider(request) as response:
@@ -455,6 +496,11 @@ class ModelClient:
         # Runtime secret must be resolvable from the KV — never an env var name,
         # never a silent os.getenv fallback. (Legacy api_key_env, if set, is used
         # only as the credential NAME; see ModelAgent.credential_name.)
+        if _is_local_provider_url(agent.base_url):
+            parsed = urlparse(agent.base_url)
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
+            return
         if get_credential(agent.credential_name) is None:
             raise NotConfigured(
                 f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
@@ -485,11 +531,17 @@ class ModelClient:
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""
         parsed = urlparse(agent.base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        if _is_local_provider_url(agent.base_url):
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
+            base_url = urlunsplit(("http", parsed.netloc, parsed.path.rstrip("/"), "", ""))
+        elif parsed.scheme in {"http", "https"} and parsed.hostname:
+            base_url = agent.base_url.rstrip("/")
+        else:
             raise RuntimeError(f"{agent.id} base_url must be an http(s) provider URL")
         if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
             raise RuntimeError("provider path must be a single absolute URL path")
-        return f"{agent.base_url.rstrip('/')}{path}"
+        return f"{base_url}{path}"
 
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
@@ -506,7 +558,7 @@ class ModelClient:
         self,
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
-        temperature: float = 0.2,
+        temperature: float | None = None,
         poll_interval: float = 5.0,
         poll_timeout: float = 3600.0,
     ) -> dict[str, dict[str, Any]]:
@@ -521,8 +573,27 @@ class ModelClient:
                 custom_id: {"content": self._mock(agent, messages), "usage": None}
                 for custom_id, messages in requests.items()
             }
+        if _is_local_provider_url(agent.base_url):
+            return self._local_batch_chat(agent, requests, temperature)
         self._validate_provider(agent)  # pragma: no cover
         return self._batch_run(agent, requests, temperature, poll_interval, poll_timeout)  # pragma: no cover
+
+    def _local_batch_chat(
+        self,
+        agent: ModelAgent,
+        requests: dict[str, list[ChatMessage]],
+        temperature: float | None,
+    ) -> dict[str, dict[str, Any]]:
+        """Run local OpenAI-compatible requests concurrently through mlx-lm."""
+        def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
+            content = self.chat(agent, messages, temperature=temperature)
+            return custom_id, {"content": content, "usage": self.take_usage()}
+
+        if self.local_concurrency == 1 or len(requests) <= 1:
+            return dict(complete(custom_id, messages) for custom_id, messages in requests.items())
+        with ThreadPoolExecutor(max_workers=min(self.local_concurrency, len(requests))) as pool:
+            futures = [pool.submit(complete, custom_id, messages) for custom_id, messages in requests.items()]
+            return dict(future.result() for future in futures)
 
     def _batch_run(
         self,
@@ -541,7 +612,7 @@ class ModelClient:
                 "body": {
                     "model": agent.model,
                     "messages": messages,
-                    "temperature": temperature,
+                    "temperature": self.temperature if temperature is None else temperature,
                     "max_tokens": self.max_output_tokens,
                 },
             }, ensure_ascii=False)
@@ -1151,7 +1222,9 @@ class TaskOrchestrator:
             messages = [{"role": "user", "content": prompt}]
 
             start = time.perf_counter()
-            orchestrated = self.complete(messages, mode=mode)
+            # Evaluation must measure provider work, not a cache hit from a prior request.
+            # The normal completion path still honors the configured response cache.
+            orchestrated = self._dispatch(messages, mode)
             orchestrated_latency = round((time.perf_counter() - start) * 1000, 2)
 
             start = time.perf_counter()
@@ -1296,9 +1369,9 @@ class TaskOrchestrator:
             raise ValueError(f"agent {agent.id} already exists")
         if not agent.base_url.startswith("mock://"):
             parsed = urlparse(agent.base_url)
-            if parsed.scheme != "https" or not parsed.hostname:
-                raise ValueError("non-mock agents must use an https base_url")
-            if not agent.credential_name:
+            if not _is_local_provider_url(agent.base_url) and (parsed.scheme != "https" or not parsed.hostname):
+                raise ValueError("non-mock remote agents must use an https base_url; local agents use mlx://loopback")
+            if not _is_local_provider_url(agent.base_url) and not agent.credential_name:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
         self.agents = [*self.agents, agent]
         if self._pool_store is not None:
@@ -1603,58 +1676,70 @@ class TaskOrchestrator:
         return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
-        """Ask a model to judge the verifier report (fixes term-matching false negatives).
-
-        The judge must answer ACCEPT or REJECT; an ambiguous reply or a judge failure
-        keeps the term-based fallback verdict — the judge can only refine, never break.
-        """
+        """Ask a model for a strict structured verdict and fail closed on uncertainty."""
         verifier_output = fallback.get("verifier_output", "")
         if not verifier_output:
-            return fallback
-        judge = self._select_agent(task, "verifier")
-        try:
-            reply = self.client.chat(judge, [
-                {"role": "system", "content": (
-                    "You are the verification judge. Read the verifier report about the task. "
-                    "Reply with exactly one word: ACCEPT if the verified work is sound, "
-                    "REJECT if it has disqualifying problems."
-                )},
-                {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
-            ])
-        except Exception:  # noqa: BLE001 - judge failure must not break the request
-            return fallback
-        upper = (reply or "").strip().upper()
-        if "ACCEPT" in upper and "REJECT" not in upper:
-            return {"accepted": True, "reason": "model judge accepted the verifier report",
-                    "verifier_output": verifier_output, "judge": "model"}
-        if "REJECT" in upper and "ACCEPT" not in upper:
-            return {"accepted": False, "reason": "model judge rejected the verifier report",
-                    "verifier_output": verifier_output, "judge": "model"}
-        return fallback
-
-    def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
-        lowered = verifier_output.lower()
-        if any(term in lowered for term in self.policy.verifier_negative_terms):  # pragma: no cover
             return {
                 "accepted": False,
-                "reason": "verifier output flagged disagreement or risk",
+                "reason": "model judge requires a non-empty verifier report",
                 "verifier_output": verifier_output,
+                "judge": "model",
             }
-        if any(term in lowered for term in self.policy.verifier_positive_terms):  # pragma: no cover
+        judge = self._select_agent(task, "verifier")
+        try:
+            reply, served_id, usage = self._invoke(judge, [
+                {"role": "system", "content": (
+                    "You are the verification judge. Assess the verifier report against the task, "
+                    "including negation and quoted risks. Return ONLY a JSON object with this exact "
+                    'shape: {"decision":"ACCEPT"|"REJECT","reason":"brief evidence-based reason"}. '
+                    "Do not include markdown or any other fields."
+                )},
+                {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
+            ], text=task, role="verifier")
+        except Exception:  # noqa: BLE001 - judge failure must not break the request
             return {
-                "accepted": True,
-                "reason": "verifier output accepted the synthesized result",
+                "accepted": False,
+                "reason": "model judge unavailable; verification failed closed",
                 "verifier_output": verifier_output,
+                "judge": "model",
             }
-        if thinker_output and worker_output:
+
+        try:
+            start, end = reply.find("{"), reply.rfind("}")
+            if start < 0 or end <= start:
+                raise ValueError("judge response contains no JSON object")
+            decision = json.loads(reply[start : end + 1])
+            if not isinstance(decision, dict) or decision.get("decision") not in {"ACCEPT", "REJECT"}:
+                raise ValueError("judge decision is not an allowed enum value")
+            reason = decision.get("reason")
+            if not isinstance(reason, str) or not reason.strip():
+                raise ValueError("judge reason is missing")
+        except (ValueError, json.JSONDecodeError):
             return {
-                "accepted": True,
-                "reason": "fallback acceptance from available planner and worker output",
+                "accepted": False,
+                "reason": "model judge returned an invalid structured verdict; verification failed closed",
                 "verifier_output": verifier_output,
+                "judge": "model",
             }
-        return {  # pragma: no cover
+
+        result: dict[str, Any] = {
+            "accepted": decision["decision"] == "ACCEPT",
+            "reason": reason.strip(),
+            "verifier_output": verifier_output,
+            "judge": "model",
+        }
+        if served_id != judge.id:
+            result["judge_agent_id"] = served_id
+        if usage is not None:
+            result["judge_usage"] = usage
+        return result
+
+    def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
+        """Prepare evidence for the model judge without making a heuristic decision."""
+        del thinker_output, worker_output
+        return {
             "accepted": False,
-            "reason": "fallback verifier disagreement with missing upstream outputs",
+            "reason": "model judgment required; keyword matching is disabled",
             "verifier_output": verifier_output,
         }
 
@@ -8104,6 +8189,8 @@ class TaskOrchestrator:
         remote = []
         for agent in self.agents:
             if agent.base_url.startswith("mock://"):
+                continue
+            if _is_local_provider_url(agent.base_url):
                 continue
             remote.append(agent.id)
             parsed = urlparse(agent.base_url)

@@ -86,7 +86,7 @@ def test_conduct_config_stays_serial_even_with_use_batch() -> None:
         [{"name": "conduct_cfg", "orchestrator": _orch(client), "mode": "conduct"}],
         TASKS[:1], lambda task, answer: 1.0, use_batch=True)
     assert client.batch_calls == 0  # multi-step cannot batch
-    assert client.chat_calls == 4  # thinker/worker/verifier/synthesizer
+    assert client.chat_calls == 5  # thinker/worker/verifier/synthesizer/model judge
 
 
 def test_mock_default_batch_route_works_without_usage() -> None:

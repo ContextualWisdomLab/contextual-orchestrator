@@ -1,9 +1,8 @@
-"""Model-based verifier judge — the recorded fix for term-matching false negatives.
+"""Structured model-based verifier judging.
 
-A verifier report that *discusses* risks tripped the term matcher (observed on the
-real-OpenAI generated-workflow run). With verifier_judge="model", a verifier-selected
-model replies ACCEPT/REJECT; ambiguous replies or judge failures keep the term verdict.
-Default "terms" is unchanged (no extra model call).
+Keyword matching is deliberately rejected: verifier reports can quote risks,
+use negation, or be written in another language. The judge must return an
+explicit structured verdict and uncertainty must fail closed.
 """
 
 from __future__ import annotations
@@ -29,63 +28,72 @@ class _ScriptedClient(ModelClient):
         self.judge_reply = judge_reply
         self.calls = 0
 
-    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+    def chat(self, agent: ModelAgent, messages: list, temperature: float | None = None) -> str:  # type: ignore[override]
         self.calls += 1
         if self.calls == 3:
-            return RISKY_VERIFIER_REPORT  # term matcher sees "risk"/"error" -> would reject
+            return RISKY_VERIFIER_REPORT
         if self.calls == 5:
             return self.judge_reply
         return f"step-output({self.calls})"
 
 
-def _orch(judge_reply: str, judge_mode: str = "model") -> tuple[TaskOrchestrator, _ScriptedClient]:
+def _orch(judge_reply: str) -> tuple[TaskOrchestrator, _ScriptedClient]:
     client = _ScriptedClient(judge_reply)
     orchestrator = TaskOrchestrator(
         [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing", "planning", "research"))],
         client=client,
     )
-    orchestrator.policy = replace(orchestrator.policy, verifier_judge=judge_mode)
     return orchestrator, client
 
 
 MESSAGES = [{"role": "user", "content": "design and verify the migration plan"}]
 
 
-def test_terms_judge_false_negatives_on_risk_vocabulary() -> None:
-    # Baseline showing the problem the model judge fixes.
-    orchestrator, client = _orch("unused", judge_mode="terms")
-    result = orchestrator.conduct(MESSAGES)
-    assert result["verification"]["accepted"] is False  # term matcher trips on "risks"/"error"
-    assert client.calls == 4  # no judge call in terms mode
+def test_keyword_matching_never_decides() -> None:
+    orchestrator, _ = _orch("unused")
+    result = orchestrator._judge_verifier_output("verified and good", "planner", "worker")
+    assert result["accepted"] is False
+    assert "keyword matching" in result["reason"]
 
 
-def test_model_judge_accept_overrides_term_false_negative() -> None:
-    orchestrator, client = _orch("ACCEPT")
+def test_legacy_keyword_policy_is_rejected() -> None:
+    orchestrator, _ = _orch("unused")
+    try:
+        replace(orchestrator.policy, verifier_judge="terms")
+    except ValueError as exc:
+        assert "keyword-based" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("keyword-based verifier policy was accepted")
+
+
+def test_structured_model_judge_accepts() -> None:
+    orchestrator, client = _orch('{"decision":"ACCEPT","reason":"The report supports the answer."}')
     result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is True
     assert result["verification"]["judge"] == "model"
-    assert client.calls == 5  # exactly one extra judge call
-    assert result["answer"] == "step-output(4)"  # synthesizer answers when accepted
+    assert client.calls == 5
+    assert result["answer"] == "step-output(4)"
 
 
-def test_model_judge_reject_is_respected() -> None:
-    orchestrator, _ = _orch("REJECT — the migration plan loses writes.")
+def test_structured_model_judge_rejects() -> None:
+    orchestrator, _ = _orch('{"decision":"REJECT","reason":"The migration plan loses writes."}')
     result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is False
     assert result["verification"]["judge"] == "model"
-    assert result["answer"] == "step-output(2)"  # falls back to the worker output
+    assert result["answer"] == "step-output(2)"
 
 
-def test_ambiguous_judge_reply_keeps_term_verdict() -> None:
-    orchestrator, _ = _orch("well, it depends on many factors")
+def test_plain_keyword_reply_is_rejected() -> None:
+    orchestrator, _ = _orch("ACCEPT because the report looks fine")
     result = orchestrator.conduct(MESSAGES)
-    assert result["verification"]["accepted"] is False  # term verdict retained
-    assert "judge" not in result["verification"]
+    assert result["verification"]["accepted"] is False
+    assert "invalid structured verdict" in result["verification"]["reason"]
+    assert result["answer"] == "step-output(2)"
 
 
-def test_judge_failure_keeps_term_verdict() -> None:
+def test_judge_failure_fails_closed() -> None:
     class _FailingJudge(_ScriptedClient):
-        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+        def chat(self, agent: ModelAgent, messages: list, temperature: float | None = None) -> str:  # type: ignore[override]
             self.calls += 1
             if self.calls == 3:
                 return RISKY_VERIFIER_REPORT
@@ -98,10 +106,11 @@ def test_judge_failure_keeps_term_verdict() -> None:
         [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing", "planning", "research"))],
         client=client,
     )
-    orchestrator.policy = replace(orchestrator.policy, verifier_judge="model")
     result = orchestrator.conduct(MESSAGES)
-    assert result["verification"]["accepted"] is False  # fallback, request not broken
-    assert "judge" not in result["verification"]
+    assert result["verification"]["accepted"] is False
+    assert result["verification"]["judge"] == "model"
+    assert "failed closed" in result["verification"]["reason"]
+    assert result["answer"] == "step-output(2)"
 
 
 if __name__ == "__main__":

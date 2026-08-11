@@ -147,6 +147,21 @@ principle **"No os.getenv, values from KV"**, that source moves to the KV:
 
 `api_key_env` is retained only as a back-compat *credential name* alias.
 
+## Server authentication and Keyverse
+
+Provider credentials and gateway bearer authentication are separate concerns.
+The CLI resolves named server tokens from this KV when `--auth-token-key`,
+`--admin-token-key`, or `--inference-token-key` is used; it does not read the
+legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment variables at request time.
+Explicit token flags remain local-development escape hatches.
+
+For production ecosystem access, construct `SecurityConfig` with a reviewed
+`bearer_verifier` that validates Keyverse-issued OIDC tokens. The adapter must
+own issuer/audience/signature/expiry/scope validation and key rotation; do not
+decode JWTs with a string split or place Keycloak admin credentials in this
+repository. Keyverse RP registration, desired-state reconciliation, and
+confidential-client secret placement remain deployment-controller operations.
+
 ## Gateway direction
 
 This credential seam is the durable first step of growing

@@ -17,8 +17,9 @@ python -m contextual_orchestrator "Summarize why model orchestration helps long 
 Run the OpenAI-compatible subset:
 
 ```bash
-export CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000
+local_token="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000 \
+  --auth-token "$local_token"
 ```
 
 Admin console:
@@ -29,14 +30,15 @@ http://127.0.0.1:8000/admin
 
 ```bash
 curl -s http://127.0.0.1:8000/v1/chat/completions \
-  -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+  -H "authorization: Bearer $local_token" \
   -H 'content-type: application/json' \
   -d '{"model":"contextual-orchestrator","messages":[{"role":"user","content":"Analyze this code review task and verify the answer."}]}' | jq .
 ```
 
 HTTP serving is hardened for local lab use:
 
-- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
+- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token-key` and `--inference-token-key` to resolve split tokens from the KV, or `--auth-token-key` for one token. Explicit `--auth-token`/split-token values are local-development escape hatches; the CLI no longer reads auth secrets from environment variables.
+- A production deployment that uses the ecosystem identity plane must inject a reviewed `bearer_verifier` into `SecurityConfig` to validate Keyverse-issued OIDC tokens (issuer, audience, signature, expiry, and scope). The core does not hand-roll JWT parsing or hold Keycloak admin credentials; a static bearer token is not a Keyverse integration.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
@@ -60,6 +62,24 @@ Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints.
 }
 ```
 
+For a local `mlx-lm` OpenAI-compatible server, use the explicit `mlx://` scheme. It is loopback-only, does not require a credential, and is translated to HTTP only after the loopback check:
+
+```json
+{
+  "agents": [
+    {
+      "id": "local_fast_agent",
+      "model": "mlx-community/llama-3.2-3b-instruct-4bit",
+      "base_url": "mlx://127.0.0.1:8080/v1",
+      "provider_name": "mlx-lm",
+      "tags": ["reasoning", "coding", "verification"]
+    }
+  ]
+}
+```
+
+Run an evaluation against that server with `--temperature 0` for repeatable judging. For reasoning-capable mlx models, pass `--chat-template-args '{"enable_thinking":false}'` when a short structured judge response is required. `--local-concurrency N` enables bounded concurrent local batch requests; keep interactive route/conduct requests on the default sequential path.
+
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
 
 Seed the credential into the KV once at bootstrap:
@@ -67,6 +87,12 @@ Seed the credential into the KV once at bootstrap:
 ```bash
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
 ```
+
+For a persistent KV-backed server token, seed a credential such as
+`CONTEXTUAL_ORCHESTRATOR_TOKEN` and start with
+`--auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN`. The in-memory credential
+backend is process-local and is suitable only for tests; production auth
+registration and OIDC client secrets belong to the deployment/KV boundary.
 
 Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
 
@@ -125,7 +151,7 @@ Local spend observability, aggregated from in-memory workflow runs. It is honest
 
 ```bash
 curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
-  -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN" | jq '.totals, .by_model, .budget'
+  -H "authorization: Bearer $local_token" | jq '.totals, .by_model, .budget'
 ```
 
 - **Tokens.** `by_model[].output_tokens` uses the provider-reported `usage.completion_tokens` when a real worker returns it, and falls back to a `~4 chars/token` estimate otherwise. Each row carries `usage_source`: `reported` (all steps reported), `mixed`, or `estimated`. `estimated_output_tokens` is always the estimate, kept alongside for comparison. `measurement_status` is `local_runtime_estimate`, not production telemetry.

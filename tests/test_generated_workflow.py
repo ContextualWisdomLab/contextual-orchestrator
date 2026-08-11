@@ -41,6 +41,8 @@ class _PlannerClient(ModelClient):
         self.calls.append(messages)
         if len(self.calls) == 1:
             return self.plan_text
+        if len(self.calls) == 6:
+            return '{"decision":"ACCEPT","reason":"scripted verifier evidence is sufficient"}'
         return f"step-output({len(self.calls) - 1})"
 
 
@@ -61,7 +63,7 @@ def test_generated_plan_executes_with_natural_language_subtasks() -> None:
     assert result["plan_source"] == "generated"
     assert [row["subtask"] for row in result["trace"]] == [s["subtask"] for s in PLAN["steps"]]
     assert result["answer"] == "step-output(4)"  # the synthesizer (last step) answers
-    assert len(client.calls) == 5  # 1 planner call + 4 steps
+    assert len(client.calls) == 6  # 1 planner call + 4 steps + model judge
 
 
 def test_access_lists_actually_isolate_context() -> None:

@@ -9,7 +9,7 @@ import secrets
 import threading
 import time
 import urllib.parse
-from typing import Any
+from typing import Any, Callable
 import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
@@ -90,6 +90,10 @@ class SecurityConfig:
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
+    # Deployment may inject a real OIDC/JWT verifier (for example a Keyverse
+    # relying-party adapter). The core deliberately does not decode JWTs with
+    # an unsafe hand-rolled parser or own Keycloak admin credentials.
+    bearer_verifier: Callable[[str, str], bool] | None = None
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -106,14 +110,21 @@ class SecurityConfig:
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
         """Validate bearer token for admin or inference scope."""
-        if not (self.auth_token or self.admin_token or self.inference_token):
+        if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
         raw = headers.get("authorization", "")
         if not raw.lower().startswith("bearer "):
             raise RequestError(401, "unauthorized", "bearer token is required")
         token = raw.split(" ", 1)[1].strip()
-        expected = self.auth_token or (self.admin_token if scope == "admin" else self.inference_token)
-        if not expected or not secrets.compare_digest(token, expected):
+        if self.bearer_verifier is not None:
+            try:
+                valid = bool(self.bearer_verifier(token, scope))
+            except Exception:  # noqa: BLE001 - an auth adapter failure is an auth denial
+                valid = False
+        else:
+            expected = self.auth_token or (self.admin_token if scope == "admin" else self.inference_token)
+            valid = bool(expected) and secrets.compare_digest(token, expected)
+        if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
 
     def check_rate_limit(self, key: str) -> None:
@@ -138,7 +149,9 @@ class SecurityConfig:
 
     def readiness_profile(self) -> dict[str, Any]:
         """Return a secret-free security profile for sales-readiness evidence."""
-        if self.admin_token and self.inference_token:
+        if self.bearer_verifier is not None:
+            auth_mode = "external_bearer_verifier"
+        elif self.admin_token and self.inference_token:
             auth_mode = "split_token"
         elif self.auth_token:
             auth_mode = "single_token"

@@ -7,9 +7,19 @@ import json
 import os
 import sys
 
-from .credentials import register_credential
+from .credentials import get_credential, register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
+
+
+def _resolve_auth_token(explicit: str, credential_name: str) -> str:
+    """Resolve a server bearer token from an explicit local value or the KV."""
+    if explicit:
+        return explicit
+    token = get_credential(credential_name)
+    if not token:
+        raise ValueError(f"server auth credential '{credential_name}' is not configured in the KV")
+    return token
 
 
 def _register_credential_command(argv: list[str]) -> None:
@@ -70,9 +80,15 @@ def main() -> None:
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--auth-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_TOKEN", ""))
-    parser.add_argument("--admin-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN", ""))
-    parser.add_argument("--inference-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN", ""))
+    parser.add_argument("--auth-token", default="", help="Explicit local-development bearer token; prefer a KV token name.")
+    parser.add_argument("--admin-token", default="", help="Explicit local-development admin token; prefer a KV token name.")
+    parser.add_argument("--inference-token", default="", help="Explicit local-development inference token; prefer a KV token name.")
+    parser.add_argument("--auth-token-key", default="CONTEXTUAL_ORCHESTRATOR_TOKEN",
+                        help="KV credential name for the single server bearer token.")
+    parser.add_argument("--admin-token-key", default="CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN",
+                        help="KV credential name for the admin bearer token.")
+    parser.add_argument("--inference-token-key", default="CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN",
+                        help="KV credential name for the inference bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
@@ -84,6 +100,14 @@ def main() -> None:
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
     parser.add_argument("--insecure-skip-tls-verify", action="store_true",
                         help="Dev only: do not verify provider TLS certificates (insecure).")
+    parser.add_argument("--temperature", type=float, default=0.2,
+                        help="Default provider sampling temperature (default: 0.2).")
+    parser.add_argument("--max-output-tokens", type=int, default=2048,
+                        help="Default provider output token cap (default: 2048).")
+    parser.add_argument("--local-concurrency", type=int, default=1,
+                        help="Concurrent requests for explicit mlx:// local batch work (default: 1).")
+    parser.add_argument("--chat-template-args", type=json.loads, default={},
+                        help="JSON kwargs forwarded to local mlx-lm chat templates, e.g. '{\"enable_thinking\":false}'.")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
     parser.add_argument("--budget-max-cost-usd", type=float, default=None,
@@ -94,7 +118,14 @@ def main() -> None:
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
-    client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
+    client = ModelClient(
+        ca_bundle=args.provider_ca_bundle,
+        verify_tls=not args.insecure_skip_tls_verify,
+        temperature=args.temperature,
+        max_output_tokens=args.max_output_tokens,
+        local_concurrency=args.local_concurrency,
+        chat_template_args=args.chat_template_args,
+    )
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),
         client=client,
@@ -110,23 +141,27 @@ def main() -> None:
         return
 
     if args.serve:
-        if not (args.auth_token or args.admin_token or args.inference_token):
-            parser.error(
-                "--serve requires --auth-token, split --admin-token/--inference-token, "
-                "or matching CONTEXTUAL_ORCHESTRATOR_* environment variables"
-            )
-        if not args.auth_token and (args.admin_token or args.inference_token) and not (
-            args.admin_token and args.inference_token
-        ):
+        split_requested = bool(args.admin_token or args.inference_token)
+        if args.auth_token and split_requested:
+            parser.error("choose either --auth-token or the split --admin-token/--inference-token mode")
+        if split_requested and not (args.admin_token and args.inference_token):
             parser.error("split token mode requires both --admin-token and --inference-token")
+        try:
+            auth_token = _resolve_auth_token(args.auth_token, args.auth_token_key) if not split_requested else ""
+            admin_token = _resolve_auth_token(args.admin_token, args.admin_token_key) if split_requested else ""
+            inference_token = _resolve_auth_token(args.inference_token, args.inference_token_key) if split_requested else ""
+        except ValueError as exc:
+            parser.error(str(exc))
+        if not (auth_token or admin_token or inference_token):
+            parser.error("--serve requires a KV auth credential or explicit local token")
         serve(
             orchestrator,
             host=args.host,
             port=args.port,
             security=SecurityConfig(
-                auth_token=args.auth_token,
-                admin_token=args.admin_token,
-                inference_token=args.inference_token,
+                auth_token=auth_token,
+                admin_token=admin_token,
+                inference_token=inference_token,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
             ),

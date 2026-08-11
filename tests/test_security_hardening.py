@@ -20,6 +20,25 @@ def build() -> TaskOrchestrator:
     return TaskOrchestrator([ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))])
 
 
+def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def verify(token: str, scope: str) -> bool:
+        seen.append((token, scope))
+        return token == "keyverse-token" and scope == "inference"
+
+    security = SecurityConfig(bearer_verifier=verify)
+    security.authorize({"authorization": "Bearer keyverse-token"}, "inference", "127.0.0.1")
+    try:
+        security.authorize({"authorization": "Bearer keyverse-token"}, "admin", "127.0.0.1")
+    except Exception as exc:
+        assert "invalid" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("external verifier accepted the wrong scope")
+    assert seen == [("keyverse-token", "inference"), ("keyverse-token", "admin")]
+    assert security.readiness_profile()["auth_mode"] == "external_bearer_verifier"
+
+
 def post_json(url: str, payload: dict[str, object], token: str | None = None) -> tuple[int, dict[str, object]]:
     headers = {"content-type": "application/json", "connection": "close"}
     if token:
