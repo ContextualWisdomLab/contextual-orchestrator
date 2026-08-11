@@ -108,9 +108,27 @@ def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
                 raise AssertionError("invalid local provider option was accepted")
 
 
+def test_sampling_temperature_uses_descriptive_name_and_legacy_alias() -> None:
+    for option in ("--sampling-temperature", "--temperature"):
+        with (
+            patch.object(
+                sys,
+                "argv",
+                ["contextual-orchestrator", "--serve", "--auth-token", "token", option, "0.7"],
+            ),
+            patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
+            patch("contextual_orchestrator.__main__.ModelClient") as model_client,
+            patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+            patch("contextual_orchestrator.__main__.serve"),
+        ):
+            main()
+        assert model_client.call_args.kwargs["temperature"] == 0.7
+
+
 if __name__ == "__main__":
     test_auth_token_resolution_prefers_explicit_then_kv()
     test_partial_split_tokens_fail_before_kv_lookup()
     test_key_only_split_tokens_select_split_mode()
     test_invalid_local_provider_options_fail_at_parser_boundary()
+    test_sampling_temperature_uses_descriptive_name_and_legacy_alias()
     print("ok")
