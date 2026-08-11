@@ -155,6 +155,7 @@ For each repository, record branch, commit, PR URL, review result, check result,
 | Secrets can leak through PR logs or ADRs. | Run secret scans, redact outputs, and keep Keyverse/KV credentials outside commits. | Required for completion |
 | Central Strix can fail before producing a report when its external model provider is rate-limited or unavailable (observed NVIDIA NIM 429 and GitHub Models 410 brownout). | Keep the security gate fail-closed; record the provider/model error, retry the same verified HEAD after provider recovery, and never treat missing reports as a clean scan. | Required for completion |
 | The two repositories' central Strix gate versions classified the same provider outage differently: `fast-mlsirm` reported a neutral pass without a structured report while `contextual-orchestrator` failed closed. | Align the trusted gate contract across repositories; until it is aligned, treat every neutral/no-report result as a blocking failure and merge only after a structured report proves the scan completed. This ADR defines no security-owner override for missing evidence; retry the same verified HEAD after provider recovery. | Required follow-up |
+| Branch protection permits `requiredApprovals=0`, and the central scheduler merged fast-mlsirm PR #733 at `914127b` while its review decision remained `CHANGES_REQUESTED` and Strix was a neutral/no-report pass. | Treat `CHANGES_REQUESTED`/`REVIEW_REQUIRED` and neutral, cancelled, or no-report Strix states as hard scheduler blockers; require an independent current-head approval plus structured Strix evidence before either linked PR can merge, regardless of branch-protection approval count. Audit the central scheduler before contextual-orchestrator merge. | Required follow-up |
 
 ## Risks and Mitigations
 
@@ -165,6 +166,7 @@ For each repository, record branch, commit, PR URL, review result, check result,
 | Merge permission is unavailable. | medium | medium | Continue local/remote checks, preserve the PR, and report the exact permission state; do not bypass protection. | repository admin |
 | Security-provider outage delays a required scan. | medium | high | Preserve the failed evidence, do not weaken the gate, and rerun the exact HEAD when an authorized provider is available. | CI owner |
 | Gate-version drift creates inconsistent no-report semantics across linked PRs. | medium | high | Pin/upgrade the shared trusted gate together, require structured-report evidence for both repositories, and keep the discrepancy visible in the PR/ADR. | CI owner |
+| Central scheduler policy is weaker than this ADR when branch protection requires zero approvals. | medium | critical | Keep auto-merge disabled, require independent current-head review and structured Strix evidence in the operational checklist, and do not treat a completed required check as sufficient when its semantic result is neutral/no-report. | repository/CI owner |
 
 ## Rollback / Exit Strategy
 
