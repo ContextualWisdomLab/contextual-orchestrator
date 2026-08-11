@@ -579,6 +579,7 @@ def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
         "Establish a canonical status-qualified product documentation graph"
         in changelog
     )
+    assert "Add a canonical release, migration, and rollback guide" in changelog
 
 
 if __name__ == "__main__":  # pragma: no cover
