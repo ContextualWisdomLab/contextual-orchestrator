@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from io import StringIO
+from pathlib import Path
 from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator.__main__ import _resolve_auth_token, main  # noqa: E402
-from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
+from contextual_orchestrator.__main__ import _resolve_auth_token, main
+from contextual_orchestrator.credentials import (
+    InMemoryCredentialBackend,
+    set_backend,
+)
 
 
 def test_auth_token_resolution_prefers_explicit_then_kv() -> None:
@@ -30,14 +34,23 @@ def test_auth_token_resolution_prefers_explicit_then_kv() -> None:
 
 
 def test_partial_split_tokens_fail_before_kv_lookup() -> None:
-    with patch.object(sys, "argv", ["contextual-orchestrator", "--serve", "--admin-token", "admin"]):
-        with patch("contextual_orchestrator.__main__.get_credential", side_effect=AssertionError("KV lookup was premature")):
-            try:
-                main()
-            except SystemExit as exc:
-                assert exc.code == 2
-            else:  # pragma: no cover
-                raise AssertionError("partial split token mode must be rejected")
+    stderr = StringIO()
+    with (
+        patch.object(sys, "argv", ["contextual-orchestrator", "--serve", "--admin-token", "admin"]),
+        patch.object(sys, "stderr", stderr),
+        patch(
+            "contextual_orchestrator.__main__.get_credential",
+            side_effect=AssertionError("KV lookup was premature"),
+        ),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 2
+            assert "--admin-token-key" in stderr.getvalue()
+            assert "--inference-token-key" in stderr.getvalue()
+        else:  # pragma: no cover
+            raise AssertionError("partial split token mode must be rejected")
 
 
 def test_key_only_split_tokens_select_split_mode() -> None:

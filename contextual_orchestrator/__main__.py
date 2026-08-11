@@ -11,7 +11,6 @@ from .credentials import get_credential, register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
-
 DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
@@ -152,7 +151,11 @@ def main() -> None:
         if split_requested and not (
             (args.admin_token or args.admin_token_key) and (args.inference_token or args.inference_token_key)
         ):
-            parser.error("split token mode requires both --admin-token and --inference-token")
+            parser.error(
+                "split token mode requires admin and inference tokens, "
+                "provided by --admin-token/--inference-token or "
+                "--admin-token-key/--inference-token-key"
+            )
         try:
             auth_token = (
                 _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_TOKEN_KEY)
