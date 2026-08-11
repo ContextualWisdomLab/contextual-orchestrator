@@ -124,8 +124,14 @@ def main() -> None:
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
-    parser.add_argument("--temperature", type=float, default=0.2,
-                        help="Default provider sampling temperature (default: 0.2).")
+    parser.add_argument(
+        "--sampling-temperature",
+        "--temperature",
+        dest="sampling_temperature",
+        type=float,
+        default=0.2,
+        help="Default provider sampling temperature (default: 0.2; --temperature is a compatibility alias).",
+    )
     parser.add_argument("--max-output-tokens", type=int, default=2048,
                         help="Default provider output token cap (default: 2048).")
     parser.add_argument("--local-concurrency", type=_positive_int, default=1,
@@ -144,7 +150,7 @@ def main() -> None:
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
-        temperature=args.temperature,
+        temperature=args.sampling_temperature,
         max_output_tokens=args.max_output_tokens,
         local_concurrency=args.local_concurrency,
         chat_template_args=args.chat_template_args,
