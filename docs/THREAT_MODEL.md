@@ -1,6 +1,6 @@
 # Threat model
 
-**Document state:** `accepted_architecture`  
+**Document state:** `accepted_architecture`<br>
 **Scope:** standalone runtime, optional adapters, and CWL composition boundary
 
 ## Assets
