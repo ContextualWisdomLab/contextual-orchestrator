@@ -332,6 +332,34 @@ def test_status_vocabulary_product_scope_and_prompt_continuity_are_explicit() ->
     assert "intermediate work" in prompt_text
 
 
+def test_active_local_mlx_work_is_status_qualified_across_canonical_docs() -> None:
+    """Keep the active local-provider slice distinct from shipped behavior."""
+
+    canonical_paths = (
+        "ARCHITECTURE.md",
+        "docs/PRD.md",
+        "docs/TRD.md",
+        "docs/TRACEABILITY.md",
+    )
+    for path in canonical_paths:
+        matching_lines = [
+            line
+            for line in read_text(path).splitlines()
+            if "PR #109" in line and "MLX" in line
+        ]
+        assert matching_lines, f"{path} must trace the PR #109 MLX slice"
+        assert any("`active_pr`" in line for line in matching_lines), (
+            f"{path} must label the PR #109 MLX slice active_pr"
+        )
+
+    trd_lines = [
+        line
+        for line in read_text("docs/TRD.md").splitlines()
+        if "PR #109" in line and "MLX" in line
+    ]
+    assert any("FR-015" in line for line in trd_lines)
+
+
 def test_root_readme_uses_current_buyer_facing_product_identity() -> None:
     """Keep the entry point aligned with the governed orchestration product."""
 

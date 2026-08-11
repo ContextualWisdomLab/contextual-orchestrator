@@ -42,6 +42,7 @@ explicit gaps below. Agent definitions remain configuration data.
 | FR-012 | Record or explicitly qualify workflow, persistence, budget, and usage evidence consistently across plain, passthrough, streaming, and batch paths. | `accepted_architecture` | mode-by-mode integration matrix required |
 | FR-013 | Use one price/cost authority in which unknown price remains unknown and cost-based selection is claimed only when invoked. | `accepted_architecture` | ledger/spend reconciliation and unknown-price tests required |
 | FR-014 | Preserve restart-safe, idempotent batch job identity and usage recording. | `accepted_architecture` | restart/retrieval/replay tests required |
+| FR-015 | Support a bounded local loopback MLX provider and fail-closed audited model judgment without granting the local transport broader credential or egress authority. | `active_pr` | PR #109 tests and planning ADR; no protected-main authority until merge |
 
 ### Quality and safety requirements
 
