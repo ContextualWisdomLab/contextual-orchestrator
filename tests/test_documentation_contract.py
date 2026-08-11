@@ -517,6 +517,10 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     snapshot = traceability.split("## Dated open-PR snapshot", 1)[1].split(
         "## Dependency order from live refs", 1
     )[0]
+    normalized_snapshot = " ".join(snapshot.split())
+    assert "Audited contributor head (pre-write)" in snapshot
+    assert "publishing this ledger necessarily advances" in normalized_snapshot
+    assert "not post-write current-head claims" in normalized_snapshot
     observed = {
         int(number)
         for number in re.findall(r"^\| #(\d+) \|", snapshot, flags=re.MULTILINE)
@@ -524,14 +528,14 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     assert observed == AUDITED_OPEN_PR_NUMBERS
     assert "#80" not in snapshot
     assert "#88" not in snapshot
-    for current_head in (
+    for audited_head in (
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
         "f5b9acc7256fd3e33d015b7ad020d4908aba38f6",  # PR #105
         "0fc208eb185e1306dbaad065a516a3e4cd2dbee4",  # PR #104
         "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
-        assert current_head in snapshot
+        assert audited_head in snapshot
 
 
 def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
