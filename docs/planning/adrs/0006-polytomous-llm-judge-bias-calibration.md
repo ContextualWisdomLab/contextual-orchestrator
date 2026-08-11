@@ -264,6 +264,20 @@ retrievable file. The four attached PDFs above remain the only attachments
 counted as verified originals until each additional file passes a PDF magic
 header, size, checksum, and Zotero attachment-parent check.
 
+Revalidation on 2026-08-12 confirmed the four attachment records and their
+local files: `TVZMTEB8`, `J44YVR37`, `S5KQCN97`, and `47VH4PC7` each have a
+matching PDF file size and MD5 recorded by the Zotero Local API. The running
+client reports `X-Zotero-Version: 9.0.6`, so its Local API is read-only and
+cannot perform the write/file-upload phase needed for the two remaining
+attachments. Direct retries against the official Iannario PDF URL returned
+HTTP 202 with zero bytes, while the official Jones--Loe PDF URL returned HTTP
+403. The OA landing pages and canonical PDF URLs remain recorded below; web
+crawler text, an HTML error page, a regenerated PDF, or an unauthorised mirror
+must not be counted as the original. The Goal therefore remains open until
+each OA citation either has a byte-verified parent attachment or has a
+documented, authorised retrieval route available to a write-capable Zotero
+client.
+
 Primary sources:
 
 * https://arxiv.org/abs/2506.22316
