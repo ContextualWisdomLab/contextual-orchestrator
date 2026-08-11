@@ -918,5 +918,7 @@ def test_canonical_documentation_has_no_trailing_whitespace() -> None:
     """Keep canonical Markdown compatible with diff-integrity gates."""
 
     for path in REQUIRED_FILES:
-        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+        document = read_text(path)
+        assert not document.endswith("\n\n"), f"{path}: final blank line"
+        for line_number, line in enumerate(document.splitlines(), start=1):
             assert line == line.rstrip(), f"{path}:{line_number}"
