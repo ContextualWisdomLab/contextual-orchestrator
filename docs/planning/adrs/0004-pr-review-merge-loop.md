@@ -152,6 +152,7 @@ For each repository, record branch, commit, PR URL, review result, check result,
 | Two repositories can drift. | Use linked PRs/commits and run contextual + fast-mlsirm tests before each merge. | Required for completion |
 | Secrets can leak through PR logs or ADRs. | Run secret scans, redact outputs, and keep Keyverse/KV credentials outside commits. | Required for completion |
 | Central Strix can fail before producing a report when its external model provider is rate-limited or unavailable (observed NVIDIA NIM 429 and GitHub Models 410 brownout). | Keep the security gate fail-closed; record the provider/model error, retry the same verified HEAD after provider recovery, and never treat missing reports as a clean scan. | Required for completion |
+| The two repositories' central Strix gate versions classified the same provider outage differently: `fast-mlsirm` reported a neutral pass without a structured report while `contextual-orchestrator` failed closed. | Align the trusted gate contract across repositories; until it is aligned, treat a neutral/no-report pass as insufficient security evidence and do not merge on it without an authorized security-owner decision. | Required follow-up |
 
 ## Risks and Mitigations
 
@@ -161,6 +162,7 @@ For each repository, record branch, commit, PR URL, review result, check result,
 | Review loop churns without convergence. | medium | medium | Keep each iteration scoped to evidence, add a regression test, and stop only at a concrete acceptance gate. | maintainer |
 | Merge permission is unavailable. | medium | medium | Continue local/remote checks, preserve the PR, and report the exact permission state; do not bypass protection. | repository admin |
 | Security-provider outage delays a required scan. | medium | high | Preserve the failed evidence, do not weaken the gate, and rerun the exact HEAD when an authorized provider is available. | CI owner |
+| Gate-version drift creates inconsistent no-report semantics across linked PRs. | medium | high | Pin/upgrade the shared trusted gate together, require structured-report evidence for both repositories, and keep the discrepancy visible in the PR/ADR. | CI owner |
 
 ## Rollback / Exit Strategy
 
