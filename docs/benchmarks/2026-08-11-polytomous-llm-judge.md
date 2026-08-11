@@ -72,6 +72,13 @@ rejects non-integral values, missing IDs, out-of-range values, and arrays. It
 still fails closed; it never repairs a response using keywords or criterion
 position.
 
+The replication also exposed a redundant-field shape failure: the Llama 3B
+judge emitted an object-valued top-level `score` while emitting integer
+criterion categories. Category-derived scoring now validates that redundant
+`score` is itself a finite number in `0..1` and then deliberately derives the
+effective score from the validated categories; malformed top-level fields are
+rejected rather than ignored.
+
 ## Required follow-up
 
 Before production or scientific IRT claims, add repeated paired cases with
