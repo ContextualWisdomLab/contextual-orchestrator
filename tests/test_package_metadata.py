@@ -7,13 +7,27 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+def packaging_document() -> dict[str, object]:
+    """Return the parsed packaging configuration from ``pyproject.toml``."""
+
+    return tomllib.loads(
+        (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+
+
 def project_metadata() -> dict[str, object]:
     """Return the static PEP 621 project metadata from ``pyproject.toml``."""
 
-    document = tomllib.loads(
-        (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
-    )
-    return document["project"]
+    return packaging_document()["project"]
+
+
+def test_build_backend_is_exact_and_supports_pep639_metadata() -> None:
+    """Use one reviewed backend version that understands the license contract."""
+
+    assert packaging_document()["build-system"] == {
+        "requires": ["setuptools==83.0.0"],
+        "build-backend": "setuptools.build_meta",
+    }
 
 
 def test_distribution_declares_spdx_license_and_includes_license_file() -> None:
@@ -44,5 +58,6 @@ def test_distribution_metadata_change_is_recorded_for_release_review() -> None:
     changelog = (REPOSITORY_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert (
         "Declare the MIT SPDX license, packaged license file, and authoritative "
-        "project URLs in distribution metadata."
+        "project URLs in distribution metadata, and pin the PEP 639-capable "
+        "setuptools build backend."
     ) in changelog
