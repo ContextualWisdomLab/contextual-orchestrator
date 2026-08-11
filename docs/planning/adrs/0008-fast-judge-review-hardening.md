@@ -33,7 +33,7 @@ asr_triggers:
     note: "Keep model-controlled content data-only and fail closed before IRT projection."
   - kind: maintainability
     evidence: "Review found inconsistent exception types, coercive mapping normalization, mutable ADR links, and missing malformed-output tests."
-    note: "Make the public contract explicit, use documented ValueError validation for malformed criterion inputs, and pin documentation to immutable evidence."
+    note: "Make the public contract explicit, use documented ValueError validation for malformed criterion inputs, reject conversion-hook numeric subclasses, and pin documentation to immutable evidence."
 success_criteria:
   - metric: "judge trust-boundary validation"
     target: "untrusted task/answer/reference data is serialized as JSON, malformed model fields raise JudgeFormatError, and criterion inputs reject invalid runtime types with documented ValueError failures"
@@ -113,6 +113,7 @@ contextual commit that contains ADR 0005 and ADR 0006.
 | --- | --- | --- |
 | Criterion fields could raise incidental `TypeError` or accept coercive mapping values. | Validate runtime types explicitly and stop string/float coercion in `_criteria`. | Implemented |
 | Invalid public criterion field types exposed inconsistent `TypeError` failures. | Normalize malformed criterion field validation to documented `ValueError` failures and test both direct and mapping inputs. | Implemented |
+| Numeric weight subclasses could execute a custom `__float__` hook during validation. | Accept only exact built-in `int`/`float` weights before conversion and test a hooked subclass remains uncalled. | Implemented |
 | Direct criterion scores could produce a negative or non-integral IRT category. | Validate scores with the same bounded score contract and clamp the projection to the legal category range. | Implemented |
 | Missing model answer/rationale used generic `ValueError`. | Translate model-controlled bounded-text failures to `JudgeFormatError`. | Implemented |
 | Predictable XML tags could be closed by untrusted answer text. | Serialize evaluation inputs as one JSON data payload. | Implemented |
