@@ -26,9 +26,21 @@ Each candidate records contributor head, live base, checkout identity, job
 conclusion, review identity, unresolved threads, and merge authority separately.
 Queued, pending, skipped-required, cancelled, absent, failed, predecessor-head,
 stale-base, author-only, status-only, synthetic-merge, rate-limited, and
-infrastructure-only results are not exact-head success. Qualifying independent
-non-author approval and zero valid unresolved findings are required in addition
-to repository checks; GitHub's protected operation is the final merge authority.
+infrastructure-only results are not exact-head success.
+
+Before any merge or auto-merge mutation, GitHub's live aggregate
+`reviewDecision` must be `APPROVED` for the unchanged head. A missing decision,
+`REVIEW_REQUIRED`, or `CHANGES_REQUESTED` blocks the mutation even when branch
+protection currently allows zero approvals. An eligible independent non-author
+approval must also be present; the aggregate field is evidence of the combined
+repository state, not a substitute reviewer. A completed, successful,
+structured same-head Strix report is separately required. Queued, in-progress,
+neutral/no-report, cancelled, skipped, absent, or predecessor-head Strix states
+block merge.
+
+Zero valid unresolved findings and every required exact-head check are required
+in addition to those review and security gates. GitHub's protected operation is
+the final merge authority.
 
 ## Consequences
 
@@ -39,8 +51,11 @@ the gate or fabricating evidence.
 ## Failure and recovery
 
 Stale or ambiguous evidence blocks merge only. A new head invalidates evidence
-according to repository policy and reacquires it. Review outages are retried
-later; workflows do not rewrite themselves or reduce required contexts.
+according to repository policy and reacquires it. If the aggregate review state
+regresses or a required check becomes incomplete after auto-merge is queued,
+automation disables that queued mutation and starts exact-head verification
+again. Review and Strix outages are retried later; workflows do not rewrite
+themselves or reduce required contexts.
 
 ## Security, privacy, and governance impact
 
