@@ -1,0 +1,48 @@
+"""Verify distribution metadata needed for licensing and buyer due diligence."""
+
+import tomllib
+from pathlib import Path
+
+
+REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
+
+
+def project_metadata() -> dict[str, object]:
+    """Return the static PEP 621 project metadata from ``pyproject.toml``."""
+
+    document = tomllib.loads(
+        (REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    )
+    return document["project"]
+
+
+def test_distribution_declares_spdx_license_and_includes_license_file() -> None:
+    """Bind the built distribution to the repository's exact MIT license text."""
+
+    metadata = project_metadata()
+
+    assert metadata["license"] == "MIT"
+    assert metadata["license-files"] == ["LICENSE"]
+    license_text = (REPOSITORY_ROOT / "LICENSE").read_text(encoding="utf-8")
+    assert license_text.startswith("MIT License\n")
+    assert "Copyright (c) 2026 ContextualWisdomLab" in license_text
+
+
+def test_distribution_exposes_authoritative_project_urls() -> None:
+    """Keep package-registry links anchored to the governed repository."""
+
+    assert project_metadata()["urls"] == {
+        "Homepage": "https://github.com/ContextualWisdomLab/contextual-orchestrator",
+        "Repository": "https://github.com/ContextualWisdomLab/contextual-orchestrator",
+        "Issues": "https://github.com/ContextualWisdomLab/contextual-orchestrator/issues",
+    }
+
+
+def test_distribution_metadata_change_is_recorded_for_release_review() -> None:
+    """Keep the buyer-visible package identity change in release history."""
+
+    changelog = (REPOSITORY_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
+    assert (
+        "Declare the MIT SPDX license, packaged license file, and authoritative "
+        "project URLs in distribution metadata."
+    ) in changelog

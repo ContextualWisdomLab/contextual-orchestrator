@@ -23,6 +23,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Declare the MIT SPDX license, packaged license file, and authoritative project URLs in distribution metadata.
 - Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
 - Run repository Tests, Fuzz, and Security workflows for stacked pull requests targeting any branch, bind every checkout to the literal contributor-head SHA, and keep checkout credentials non-persistent so local evidence cannot silently become absent or synthetic-merge-only evidence.
 
