@@ -98,6 +98,13 @@ use fixed SQL templates for each parameter style and fixed column lists; start
 and end windows select one of four fixed query templates. Values remain DB-API
 parameters and never become SQL text.
 
+The final Semgrep run identified the stdlib `HTTPSConnection` call itself even
+though the code passes the already reviewed verifying SSL context. A
+rule-specific `nosemgrep` annotation is retained at that one call site, with
+the transport and TLS tests remaining the source-of-truth checks. This is a
+documented false-positive boundary, not a suppression of certificate
+verification or URL validation.
+
 ### Consequences
 
 * Good, because the remote SAST gate checks the same invariant the runtime uses.
@@ -115,6 +122,7 @@ parameters and never become SQL text.
 | `paramstyle` accepted arbitrary values and silently selected pyformat. | Reject styles other than qmark and pyformat at construction. | Implemented |
 | `ssl._create_unverified_context` made an insecure remote mode executable. | Remove the bypass and keep `ssl.create_default_context` or a validated custom CA bundle. | Implemented |
 | `urllib.request.urlopen` accepted a dynamically assembled request URL. | Use `http.client` with scheme/host/userinfo validation at the final I/O boundary. | Implemented |
+| Semgrep flagged the reviewed `HTTPSConnection` API despite its explicit verifying context. | Keep the verifying context and add only the exact rule-specific suppression at that call site; retain transport regression tests. | Implemented |
 | A scanner-clean result could regress without a transport test. | Add a non-HTTP rejection regression and rerun the full SAST/CI gate. | Implemented / ongoing CI confirmation |
 
 ## Risks and Mitigations
