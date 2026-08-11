@@ -151,6 +151,7 @@ For each repository, record branch, commit, PR URL, review result, check result,
 | Self-approval may be disallowed or misleading. | Never fabricate approval; use authorized review or leave the PR unmerged with an explicit reason. | Required for completion |
 | Two repositories can drift. | Use linked PRs/commits and run contextual + fast-mlsirm tests before each merge. | Required for completion |
 | Secrets can leak through PR logs or ADRs. | Run secret scans, redact outputs, and keep Keyverse/KV credentials outside commits. | Required for completion |
+| Central Strix can fail before producing a report when its external model provider is rate-limited or unavailable (observed NVIDIA NIM 429 and GitHub Models 410 brownout). | Keep the security gate fail-closed; record the provider/model error, retry the same verified HEAD after provider recovery, and never treat missing reports as a clean scan. | Required for completion |
 
 ## Risks and Mitigations
 
@@ -159,6 +160,7 @@ For each repository, record branch, commit, PR URL, review result, check result,
 | CI passes before a later force-push. | low | high | Re-check exact head immediately before merge. | maintainer |
 | Review loop churns without convergence. | medium | medium | Keep each iteration scoped to evidence, add a regression test, and stop only at a concrete acceptance gate. | maintainer |
 | Merge permission is unavailable. | medium | medium | Continue local/remote checks, preserve the PR, and report the exact permission state; do not bypass protection. | repository admin |
+| Security-provider outage delays a required scan. | medium | high | Preserve the failed evidence, do not weaken the gate, and rerun the exact HEAD when an authorized provider is available. | CI owner |
 
 ## Rollback / Exit Strategy
 
