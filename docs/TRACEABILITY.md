@@ -57,9 +57,14 @@ ownership were not joined into one status-disciplined graph.
 ## Dated open-PR snapshot
 
 All PR facts below were refetched during this audit. `base tip` is the live
-branch ref, not the historical base snapshot stored in PR metadata.
+branch ref, not the historical base snapshot stored in PR metadata. The table
+records the live state immediately before the evidence commit. Because PR #105
+contains this ledger and PR #104 is stacked on it, publishing this ledger
+necessarily advances those two branch refs. Their rows are therefore pre-write
+audited identities, not post-write current-head claims. Later acceptance must
+refetch both refs rather than treating this dated table as merge authority.
 
-| PR | Contributor head | Base branch → live tip | Draft / mergeable | Observed gate summary | Unresolved threads |
+| PR | Audited contributor head (pre-write) | Base branch → live tip | Draft / mergeable | Observed gate summary | Unresolved threads |
 |---:|---|---|---|---|---:|
 | #107 | `28088b9fc86d975b43637b7758d25e20d61c5786` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
 | #105 | `f5b9acc7256fd3e33d015b7ad020d4908aba38f6` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
