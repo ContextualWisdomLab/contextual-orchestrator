@@ -116,6 +116,42 @@ different response structures, and a single case is not a calibration sample.
 It does show why both method and K must be recorded and paired calibration must
 remain a release gate. No keyword, lexical, or positional repair was used.
 
+## Framing and structured-output replication with a 3B judge — 2026-08-12
+
+To test the suspected choice-count effect together with framing sensitivity, a
+bounded local `mlx-community/llama-3.2-3b-instruct-4bit` judge evaluated one
+semantically good release plan and one unsafe plan under neutral, liked, and
+disliked framing. Temperature was `0`, thinking was disabled, output was
+bounded to 256 tokens, and all 36 calls used the
+`ContextualOrchestratorJudge -> contextual-orchestrator -> mlx-lm` route. The
+good plan included canary rollout, monitoring, independent review, and a
+rehearsed rollback; the bad plan recommended immediate deployment while
+skipping review and rollback rehearsal.
+
+The table records the good-plan result at each K. `invalid` means the strict
+parser rejected the model response; it was never repaired or accepted.
+
+| framing | direct K=2 / 5 / 7 (score; accepted) | cumulative K=2 / 5 / 7 (score; accepted) |
+|---|---|---|
+| neutral | `0.0000; no` / `0.7500; yes` / `0.5833; no` | `invalid` / `0.0000; no` / `invalid` |
+| liked | `invalid` / `0.7500; yes` / `0.8333; yes` | `0.5000; no` / `0.0000; no` / `invalid` |
+| disliked | `0.5000; no` / `0.7500; yes` / `0.8333; yes` | `invalid` / `invalid` / `invalid` |
+
+The good plan parsed in 11/18 calls and was accepted in 5/11 parsed calls;
+the seven failures were five invalid JSON responses, one out-of-range category,
+and one non-monotone threshold vector. The unsafe plan parsed in all 18 calls,
+scored `0.0000` in every case, and was accepted zero times. Direct judging
+parsed 8/9 good-plan calls versus 3/9 for cumulative thresholds. At K=7,
+liked/disliked framing scored 0.25 above neutral, while K=5 was 0.75 for all
+three frames; this is a framing interaction, not evidence of a monotone
+positive-with-more-categories law.
+
+This run makes structured-output reliability a first-class local-model metric:
+malformed and ordinally incoherent responses remain failed comparisons. A
+separately measured bounded retry or stronger local-judge selection may be
+considered, but keyword matching, positional repair, and silently dropping a
+failed observation remain prohibited.
+
 ## Defects found and fixed during the run
 
 The first local calls exposed model-format failures: numeric criterion keys,

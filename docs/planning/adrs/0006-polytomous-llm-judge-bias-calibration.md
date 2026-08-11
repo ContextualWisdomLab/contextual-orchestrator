@@ -164,6 +164,18 @@ threshold scores were 1.0000, 1.0000, 0.5000, and 0.3333 respectively, with
 acceptance changing from yes to no at K=5. This is a useful replication of
 category-method sensitivity, not evidence of a universal directional bias.
 
+A second 2026-08-12 replication used the cached local Llama 3B judge under
+neutral, liked, and disliked framing for one good and one unsafe release plan.
+The good plan parsed in 11/18 calls and was accepted in 5/11 parsed calls; the
+unsafe plan parsed in all 18 calls and was rejected in every case. Direct K-way
+judging parsed 8/9 good-plan calls, while cumulative thresholds parsed 3/9.
+The good-plan direct scores were framing-sensitive at K=7 (neutral `0.5833`,
+liked/disliked `0.8333`) but equal at K=5 (`0.7500`), and the K=2/K=7 path was
+not monotone. Seven good-plan failures were retained as failures: five invalid
+JSON responses, one out-of-range category, and one non-monotone threshold
+vector. This is evidence of local-model format and framing sensitivity, not a
+universal positive-choice-count law.
+
 ### Consequences
 
 * Good, because the suspected positive drift becomes measurable and
@@ -226,6 +238,7 @@ category-method sensitivity, not evidence of a universal directional bias.
 | A single judge call can hide model drift. | Preserve contextual-orchestrator trace, model identity, prompt variant, category count, and usage in benchmark records. | Implemented in adapter trace and the 2026-08-11 benchmark artifact |
 | A one-person, two-item matrix can pass a shape check while remaining insufficient for IRT estimation. | Require multiple persons, item-information, and factor-coverage checks before fitting or interpreting an IRT model. | Required next |
 | A larger local judge can preserve the aggregate score while moving criterion categories, and a cached 32B judge timed out before producing structured output. | Gate model comparisons on bounded latency, timeout rate, strict-parse success, token usage, category occupancy, and score/acceptance drift; never treat a timeout as a missing or positive result. | Implemented in the 2026-08-12 benchmark; reliability calibration ongoing |
+| A cached local 3B judge failed to emit valid or ordinally coherent structured output in 7/18 good-plan calls, and framing changed some K=7 scores. | Keep every malformed/monotonicity failure in the denominator; compare a separately measured bounded retry or stronger local judge only through contextual-orchestrator, and never add keyword, positional, or silent-drop repair. | Recorded in the 2026-08-12 benchmark; reliability/framing calibration required |
 | OA metadata does not guarantee that the original PDF can be downloaded into the local Zotero library: Zotero 9 exposes read-only Local API reads, SAGE returned anti-bot `403` for the Jones--Loe PDF, and the Iannario repository exposed a request-only copy while the publisher returned an empty `202`. | Record the official landing/PDF URL and retrieval evidence, attach only byte-verified original PDFs through the local Connector/API, and retry inaccessible OA sources from an authorized route or a Zotero version with local write/file-upload support. Never regenerate, OCR-rebuild, or substitute a PDF while claiming it is the original. | Required follow-up |
 
 ## Risks and Mitigations

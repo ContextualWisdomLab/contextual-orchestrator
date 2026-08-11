@@ -143,6 +143,7 @@ calibration supports them.
 | README ADR links targeted mutable/nonexistent `main` paths. | Pin links to the immutable contextual-orchestrator commit containing the referenced ADRs. | Implemented |
 | A polytomous K-way choice can expose the judge to score-ID and category-count effects. | Add an opt-in cumulative-threshold mode with explicit K, exact criterion IDs, Boolean boundary vectors, monotonicity validation, derived categories, and focused IRT-row tests. | Implemented on fast-mlsirm follow-up branch; exact-head review pending |
 | Threshold output can be syntactically valid but ordinally incoherent, or can disagree with direct K-way output. | Fail closed on non-monotone thresholds and record category method, K, score, acceptance, parse status, trace, and token usage in paired MLX calibration runs; do not claim bias removal. | Implemented in adapter/tests and 2026-08-12 exploratory run; calibration ongoing |
+| The cached local Llama 3B judge failed strict structured parsing in 7/18 good-plan calls, including invalid JSON, an out-of-range category, and a non-monotone threshold vector; framing also shifted some K=7 scores. | Keep failures in the reliability denominator and test any bounded retry or stronger local-judge selection as a separate contextual-orchestrator experiment. Never repair by keyword/position or silently omit a failed call. | Recorded in 2026-08-12 benchmark; required calibration follow-up |
 
 ## Risks and Mitigations
 
