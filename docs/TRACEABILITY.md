@@ -52,6 +52,7 @@ ownership were not joined into one status-disciplined graph.
 | Free-first fallback | `active_pr` | PR #94 | ADR-0007 | Evidence remains PR-bound |
 | Adaptive reasoning effort | `active_pr` | PR #99 stacked on #94 | ADR-0003 | Evidence remains PR-bound |
 | NIM all-modality benchmark | `active_pr` | PR #90 stacked on #96 | ADR-0006 | Evidence remains PR-bound |
+| Local loopback MLX provider and audited model judgment | `active_pr` | PR #109 independently targets protected main | PR #109 planning ADR and tests | Evidence remains PR-bound |
 | PRD-010 independent review and release | `accepted_architecture` | GitHub rules/workflows and human governance | ADR-0010, ADR-0011, ADR-0016, test strategy | Exact-head and protected-main evidence |
 | Purpose-bound PII handling | `accepted_architecture` | Host plus runtime audience boundaries | ADR-0009, threat model | Privacy/telemetry/trace tests and deployment evidence |
 

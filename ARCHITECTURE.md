@@ -193,6 +193,8 @@ explicit interfaces and retain their own data and authorization boundaries.
 - PR #90: `active_pr` NIM discovery/benchmark evidence.
 - PR #94: `active_pr` free-first fallback.
 - PR #99: `active_pr` adaptive reasoning controls stacked on #94.
+- PR #109: `active_pr` local loopback MLX provider and audited model judgment,
+  independently targeting protected main.
 - PR #82: `active_pr` dependency bootstrap stacked on #96 and not independently
   mergeable first.
 

@@ -96,6 +96,7 @@ shipped. The capability table below supplies implementation status.
 | Evidence-grade NVIDIA NIM discovery and modality benchmark | `active_pr` | PR #90; benchmark evidence is not product acceptance until its stack and gates pass. |
 | Free-first fallback policy | `active_pr` | PR #94. |
 | Adaptive provider reasoning-effort control | `active_pr` | PR #99, stacked on #94. |
+| Local loopback MLX provider and audited model judgment | `active_pr` | PR #109; neither local-provider nor judgment behavior is protected-main product behavior until merged. |
 | Synchronous embeddings and KV-only bootstrap expansion | `active_pr` | PR #66 on a separate historical stack. |
 | Learned routing/coordinator | `planned` | Requires a versioned evaluation set and comparable-budget proof over deterministic policy. |
 | Rust/GPU mathematical or psychometric compute layer | `out_of_scope` | Required only if orchestration begins owning such arithmetic; domain services should own their scientific kernels. |
