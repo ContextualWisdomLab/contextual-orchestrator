@@ -343,6 +343,8 @@ def test_root_readme_uses_current_buyer_facing_product_identity() -> None:
     assert "Stdlib Python lab for a single API" not in readme
     assert "hardened for local deployment" in readme
     assert "hardened for local lab use" not in readme
+    assert "stdlib lab" not in readme.lower()
+    assert "standalone deployment" in readme.lower()
     assert "This is not a Sakana AI product" not in readme
     assert (
         "independently implemented from published orchestration concepts"
@@ -590,8 +592,8 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     for audited_head in (
         "8760993cb8262922a771948845c8dfd2afefb773",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
-        "3418993f48538f3a02c360648932eff4de8b3244",  # PR #105
-        "8e617b3220981fd03b980da5fd420a7d6bf42f81",  # PR #104
+        "12e868b53d32971a9642148217dfc0ad77535f5c",  # PR #105
+        "9e3138c29fba70190daef6b61927391cae449ec0",  # PR #104
         "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
@@ -621,6 +623,7 @@ def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
     assert "Add a canonical release, migration, and rollback guide" in changelog
     assert "Replace legacy lab framing in the root README" in changelog
     assert "Replace the competitor-centric README disclaimer" in changelog
+    assert "Remove the remaining stdlib-lab qualifier" in changelog
 
 
 if __name__ == "__main__":  # pragma: no cover
