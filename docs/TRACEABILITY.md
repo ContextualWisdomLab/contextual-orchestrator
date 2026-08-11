@@ -2,7 +2,7 @@
 
 **Document state:** `active_pr`; the audit describes protected-main evidence,
 while this canonical documentation repair is not shipped until protected merge  
-**Audit date:** 2026-08-09 (Asia/Seoul)  
+**Audit date:** 2026-08-11 (Asia/Seoul)
 **Protected-main revision audited:** `6841b71935e0b7cb98fb52bcb4709cc5100c8d87`
 
 This file is the only canonical location for volatile audit SHAs and run IDs.
@@ -61,21 +61,21 @@ branch ref, not the historical base snapshot stored in PR metadata.
 
 | PR | Contributor head | Base branch → live tip | Draft / mergeable | Observed gate summary | Unresolved threads |
 |---:|---|---|---|---|---:|
-| #88 | `a7f78f5674d9425be7f5f3bf355df431274d0944` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz success; historical OpenCode changes requested | 0 |
-| #69 | `e0b3bcf31b42e284e8d0519751cfa0e775cfa32b` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, Security Scan success; Semgrep failure | 0 |
-| #104 | `4137aaff5ef16f6db381c7c790f9061c6b169973` | `main` → `6841b71935e0b7cb98fb52bcb4709cc5100c8d87` | yes / yes | Tests, Security, Fuzz, Security Scan success; Semgrep failure | 0 |
-| #84 | `269daa41fd0c664f8b78c084781471176753371b` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, Security Scan success; Semgrep failure | 0 |
-| #63 | `dd4e62b46fbc651a6696cb04438751122e161d8c` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, Security Scan success; Semgrep failure | 0 |
-| #66 | `e7020795c6c5cbaac884dbcee3e0a37c409ab360` | `claude/contextualwisdomlab-audit-governance-fb7470` → `8bc91f370eefc2a907170303ae27315ec567bf74` | yes / no | Five named workflows success; stack is not mergeable | 0 |
-| #96 | `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | `main` → `6841b71935e0b7cb98fb52bcb4709cc5100c8d87` | yes / yes | Named workflows success; Security Scan/Semgrep include synthetic-tree evidence; no qualifying approval | 0 |
-| #75 | `8bc91f370eefc2a907170303ae27315ec567bf74` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / no | Five named workflows success; stale stack and review state | 0 |
-| #99 | `99ba6d478ac71c22782df583025e3933f40e24aa` | `feat/free-first-model-fallback-policy` → `5104ea1805ffb6a3bc82df583025e3933f40e24aa` | yes / yes | Reasoning-control quality success only; dependent stack | 0 |
-| #94 | `5104ea1805ffb6a3bc82df583025e3933f40e24aa` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / no | No contributor-head workflow runs returned by the current connector snapshot | 0 |
-| #82 | `f56337f4cc9a170ba999b82419666be5027497d1` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / no | Tests, Security, Fuzz, Security Scan success; Semgrep failure; pre-refresh evidence | 0 |
-| #90 | `26f8d8dc5634f0371fad0801056e9a3450c78bff` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / no | Tests, Security, Fuzz success; other exact-head evidence absent | 1 |
-| #71 | `2f4ec9fed753927d1ebc83638db68683736e6fad` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, Security Scan success; Semgrep failure | 0 |
-| #80 | `ee9e08acb2f3b864c02048f9f7ebe046dab44a61` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, Security Scan success; Semgrep failure | 0 |
-| #83 | `fa3a30bda3b3209025d55c5526a037f3086f0f07` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, Security Scan success; Semgrep failure | 0 |
+| #107 | `28088b9fc86d975b43637b7758d25e20d61c5786` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
+| #105 | `f5b9acc7256fd3e33d015b7ad020d4908aba38f6` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
+| #104 | `0fc208eb185e1306dbaad065a516a3e4cd2dbee4` | `docs/canonical-product-architecture` → `f5b9acc7256fd3e33d015b7ad020d4908aba38f6` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
+| #99 | `2502915a8e90059074167e6306b47148a1d40fdc` | `feat/free-first-model-fallback-policy` → `73ed3a077f88a2f03cf734f1067bee2dcce2467f` | yes / yes | Exact-head quality, Tests, Security, and Fuzz success; no formal approval | 0 |
+| #94 | `73ed3a077f88a2f03cf734f1067bee2dcce2467f` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head quality, Tests, Security, and Fuzz success; prior OpenCode findings dismissed | 0 |
+| #96 | `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | `main` → `6841b71935e0b7cb98fb52bcb4709cc5100c8d87` | yes / yes | Exact-head Tests, Security, and Fuzz success; Security Scan/Semgrep are integration evidence; central prerequisite and qualifying approval absent | 0 |
+| #90 | `26f8d8dc5634f0371fad0801056e9a3450c78bff` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / no | Exact-head Tests, Security, and Fuzz success; one addressed thread remains open pending every required gate | 1 |
+| #82 | `f56337f4cc9a170ba999b82419666be5027497d1` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / no | Pre-refresh Tests, Security, Fuzz, and Security Scan success; Semgrep failure; evidence does not transfer | 0 |
+| #75 | `8bc91f370eefc2a907170303ae27315ec567bf74` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / no | Named workflows success; stale stack awaits post-#96 reconstruction | 0 |
+| #66 | `e7020795c6c5cbaac884dbcee3e0a37c409ab360` | `claude/contextualwisdomlab-audit-governance-fb7470` → `8bc91f370eefc2a907170303ae27315ec567bf74` | yes / no | Named workflows success; downstream stack awaits accepted #75 result | 0 |
+| #71 | `2f4ec9fed753927d1ebc83638db68683736e6fad` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
+| #69 | `e0b3bcf31b42e284e8d0519751cfa0e775cfa32b` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
+| #83 | `fa3a30bda3b3209025d55c5526a037f3086f0f07` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
+| #84 | `269daa41fd0c664f8b78c084781471176753371b` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
+| #63 | `dd4e62b46fbc651a6696cb04438751122e161d8c` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
 
 All 15 PRs were Draft. No PR in the snapshot was eligible for immediate
 protected merge. A successful workflow name or CodeRabbit status was not
@@ -89,10 +89,15 @@ than a reconstructed list.
 ```mermaid
 flowchart TB
     main["protected main"] --> pr96["PR #96 provider and Atheris boundary"]
+    pr96 --> pr107["PR #107 CodeQL action update"]
+    pr96 --> pr105["PR #105 canonical documentation"]
+    pr105 --> pr104["PR #104 disclosure lifecycle"]
     pr96 --> pr82["PR #82 pip bootstrap"]
     pr96 --> pr90["PR #90 NIM benchmark"]
     pr96 --> pr94["PR #94 free-first fallback"]
     pr94 --> pr99["PR #99 adaptive reasoning"]
+    pr96 --> pr75["PR #75 coverage and latent fixes"]
+    pr75 --> pr66["PR #66 embeddings and KV bootstrap"]
 ```
 
 PR #96 supersedes closed-unmerged #76. PR #82 must remain Draft until #96 has
