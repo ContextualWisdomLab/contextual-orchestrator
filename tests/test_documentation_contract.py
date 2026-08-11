@@ -367,6 +367,29 @@ def test_product_planning_qualifies_enterprise_identity_and_authorization() -> N
     assert "host owns enterprise identity and tenancy" in planning
 
 
+def test_library_research_uses_current_stack_and_status_vocabulary() -> None:
+    """Supporting library research must describe the live stack without lab names."""
+
+    research = read_text("docs/library_research.md")
+
+    for stale_term in ("current lab", "current stdlib prototype", "Ponytail"):
+        assert stale_term not in research
+
+    for required_term in (
+        "implemented_on_protected_main",
+        "accepted_architecture",
+        "planned",
+        "ThreadingHTTPServer",
+        "handwritten OpenAPI",
+        "static admin UI",
+        "optional `api` extra",
+        "does not dispatch through FastAPI",
+        "optional `db` extra",
+        "does not use SQLAlchemy ORM or Alembic migrations",
+    ):
+        assert required_term in research
+
+
 def test_adr_index_and_schema_are_consistent() -> None:
     """Require every decision to be uniquely indexed, status-bearing, and recoverable."""
 
@@ -603,8 +626,8 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     for audited_head in (
         "8760993cb8262922a771948845c8dfd2afefb773",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
-        "7630125307afae9b9c0cbdb1fd8f78ff347c8346",  # PR #105
-        "ec8669d8aeaece607bdceb167836aaf59f04dba9",  # PR #104
+        "8ce282ddf6c43bcb49301e95c8d9c12f1a72cd72",  # PR #105
+        "4e22a9b0883d3f6acbe6ddee302fa623c66a44cf",  # PR #104
         "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
@@ -635,6 +658,7 @@ def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
     assert "Replace legacy lab framing in the root README" in changelog
     assert "Replace the competitor-centric README disclaimer" in changelog
     assert "Remove the remaining stdlib-lab qualifier" in changelog
+    assert "Replace stale lab/prototype and internal-name language" in changelog
 
 
 if __name__ == "__main__":  # pragma: no cover
