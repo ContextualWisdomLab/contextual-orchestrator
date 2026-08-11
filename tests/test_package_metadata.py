@@ -52,12 +52,22 @@ def test_distribution_exposes_authoritative_project_urls() -> None:
     }
 
 
+def test_distribution_description_matches_buyer_facing_product_identity() -> None:
+    """Describe the governed product instead of the historical lab prototype."""
+
+    assert project_metadata()["description"] == (
+        "Provider-neutral OpenAI-compatible orchestration control plane for "
+        "governed routing and multi-agent conduct."
+    )
+
+
 def test_distribution_metadata_change_is_recorded_for_release_review() -> None:
     """Keep the buyer-visible package identity change in release history."""
 
     changelog = (REPOSITORY_ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
     assert (
-        "Declare the MIT SPDX license, packaged license file, and authoritative "
-        "project URLs in distribution metadata, and pin the PEP 639-capable "
-        "setuptools build backend."
+        "Declare the MIT SPDX license, packaged license file, authoritative project "
+        "URLs, and current provider-neutral orchestration-control-plane description "
+        "in distribution metadata, and pin the PEP 639-capable setuptools build "
+        "backend."
     ) in changelog
