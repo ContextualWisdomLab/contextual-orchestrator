@@ -563,10 +563,10 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     assert "#80" not in snapshot
     assert "#88" not in snapshot
     for audited_head in (
-        "1921dc865a2df46b85a463e4f5ea1bbe92aad9bb",  # PR #108
+        "8760993cb8262922a771948845c8dfd2afefb773",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
-        "3744016506a3385ed643bc640f4ea6a8ee79535a",  # PR #105
-        "44445dadb29a61d5e4e52d2f945e70cbb20b1872",  # PR #104
+        "d13b5974bf67b5fa3c82ecc84bf3d0f269698d7d",  # PR #105
+        "19cba12f54785ee1d6ca68c7d719abdd8797bcb4",  # PR #104
         "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
