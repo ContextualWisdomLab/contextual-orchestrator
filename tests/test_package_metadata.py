@@ -15,7 +15,10 @@ REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 def test_test_toml_parsers_support_declared_python_floor() -> None:
     """Keep every test module importable on the declared minimum Python."""
 
-    for path in sorted((REPOSITORY_ROOT / "tests").glob("test*.py")):
+    test_paths = sorted((REPOSITORY_ROOT / "tests").glob("test*.py"))
+    assert REPOSITORY_ROOT / "tests/fuzz/test_fuzz_properties.py" in test_paths
+
+    for path in test_paths:
         tree = ast.parse(path.read_text(encoding="utf-8"))
         direct_stdlib_import = any(
             (
