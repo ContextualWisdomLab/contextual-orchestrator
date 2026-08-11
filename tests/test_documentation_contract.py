@@ -724,8 +724,12 @@ if __name__ == "__main__":  # pragma: no cover
 def test_usage_evidence_adrs_define_one_mode_complete_contract() -> None:
     """Keep every execution mode on one qualified usage-evidence contract."""
 
-    routing_adr = read_text("docs/adr/0005-sync-batch-pg-llm-batch.md")
-    evidence_adr = read_text("docs/adr/0006-honest-cost-and-benchmark-evidence.md")
+    routing_adr = " ".join(
+        read_text("docs/adr/0005-sync-batch-pg-llm-batch.md").lower().split()
+    )
+    evidence_adr = " ".join(
+        read_text("docs/adr/0006-honest-cost-and-benchmark-evidence.md").lower().split()
+    )
     for mode in ("sync completion", "batch retrieval", "passthrough", "route streaming"):
         assert mode in routing_adr
     for status in ("unknown", "not_recorded"):
@@ -749,7 +753,7 @@ def test_usage_evidence_adrs_define_one_mode_complete_contract() -> None:
 def test_access_grant_model_is_directional_and_predecessor_bounded() -> None:
     """Require consumer-to-producer access without bidirectional visibility."""
 
-    erd = read_text("docs/ERD.md")
+    erd = " ".join(read_text("docs/ERD.md").split())
     for term in (
         "ACCESS_GRANT {",
         "consumer_step_id",
@@ -786,11 +790,12 @@ def test_prd_and_trd_require_all_coverage_dimensions() -> None:
     """Align product and technical release gates with ADR-0016."""
 
     required_contract = "statement, branch, function, and line coverage"
-    assert required_contract in read_text("docs/PRD.md")
-    assert required_contract in read_text("docs/TRD.md")
-    assert required_contract in read_text(
-        "docs/adr/0016-complete-coverage-docstrings.md"
-    )
+    for path in (
+        "docs/PRD.md",
+        "docs/TRD.md",
+        "docs/adr/0016-complete-coverage-docstrings.md",
+    ):
+        assert required_contract in " ".join(read_text(path).split())
 
 
 def test_canonical_authority_state_cells_use_only_status_vocabulary() -> None:
