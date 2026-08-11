@@ -158,7 +158,7 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
   Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. For requests that execute through `TaskOrchestrator.run()`, once accounted spend reaches a cap, the next precheck is refused — `run()` raises `BudgetExceededError` and the ordinary coordinator-backed `/v1/chat/completions` path returns HTTP `429 budget_exceeded`. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, `spent_*`, `remaining_*`, `exceeded`). The budget precheck is process-local and non-atomic; compatible passthrough and route streaming bypass workflow-spend advancement, so this is not a universal provider quota. Cost caps require a price table; token caps do not.
 - **Admin.** The `/admin` **Observability** view renders the totals and the per-model table (unpriced models show an `unpriced` chip).
 
-These are process-local measured signals for a stdlib lab, not a billing system or production compliance data.
+These are process-local measured signals for a standalone deployment, not a billing system or production compliance data.
 
 ## Cost review + routing hub
 
