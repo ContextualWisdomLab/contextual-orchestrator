@@ -48,6 +48,7 @@ REQUIRED_FILES = [
     "docs/TEST_STRATEGY.md",
     "docs/OPERABILITY.md",
     "docs/INCIDENT_RUNBOOK.md",
+    "docs/RELEASE_GUIDE.md",
     "docs/REFERENCES.md",
     "docs/adr/README.md",
     "SECURITY.md",
@@ -78,6 +79,7 @@ CANONICAL_FILES = [
     "docs/TEST_STRATEGY.md",
     "docs/OPERABILITY.md",
     "docs/INCIDENT_RUNBOOK.md",
+    "docs/RELEASE_GUIDE.md",
     "docs/REFERENCES.md",
     "docs/adr/README.md",
 ] + [f"docs/adr/{filename}" for filename in ADR_FILES]
@@ -266,10 +268,41 @@ def test_required_canonical_files_are_present_and_indexed() -> None:
         "[Test strategy](TEST_STRATEGY.md)",
         "[Operability](OPERABILITY.md)",
         "[Incident runbook](INCIDENT_RUNBOOK.md)",
+        "[Release guide](RELEASE_GUIDE.md)",
         "[References](REFERENCES.md)",
     ):
         assert index_text.count(link) == 1
     assert "[docs/README.md](docs/README.md)" in read_text("README.md")
+
+
+def test_release_guide_binds_source_artifact_migration_and_operations() -> None:
+    """Require an executable release handoff without claiming branch evidence shipped."""
+
+    release_text = read_text("docs/RELEASE_GUIDE.md")
+    for heading in (
+        "## Authority and release identity",
+        "## Admission checklist",
+        "## Build and provenance procedure",
+        "## Migration and rollback procedure",
+        "## Publication and deployment procedure",
+        "## Protected-main operational acceptance",
+        "## Abort and recovery conditions",
+    ):
+        assert heading in release_text
+    for required_term in (
+        "protected `main`",
+        "exact source commit",
+        "CycloneDX SBOM",
+        "provenance",
+        "reproducible",
+        "independent non-author approval",
+        "expand/backfill/contract",
+        "rollback",
+        "artifact digest",
+        "protected-main",
+        "does not claim",
+    ):
+        assert required_term in release_text
 
 
 def test_status_vocabulary_product_scope_and_prompt_continuity_are_explicit() -> None:

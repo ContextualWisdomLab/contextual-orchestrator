@@ -36,6 +36,7 @@ in Traceability rather than copied into durable documents.
 | Verification strategy and evidence taxonomy | [Test strategy](TEST_STRATEGY.md) | Quality owner | `accepted_architecture` | Test layer, coverage, review, or release gate changes. |
 | Operations, degraded modes, recovery, and SLO entry criteria | [Operability](OPERABILITY.md) | Service owner | `accepted_architecture` | Dependency, signal, SLO, incident, recovery, or rollout changes. |
 | Incident triage, containment, recovery, and evidence preservation | [Incident runbook](INCIDENT_RUNBOOK.md) | Incident commander | `accepted_architecture` | Severity, containment, recovery, or closure authority changes. |
+| Release admission, build, migration, publication, rollback, and operational acceptance | [Release guide](RELEASE_GUIDE.md) | Release owner | `accepted_architecture` | Packaging, version, provenance, deployment, migration, rollback, or release evidence changes. |
 | Primary research and authoritative standards | [References](REFERENCES.md) | Architecture owner | `research_only` | A cited primary source or governing standard changes. |
 | Coordinated vulnerability disclosure | [Security policy](../SECURITY.md) | Security owner | repository policy | Reporting or response process changes. |
 

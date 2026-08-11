@@ -21,6 +21,7 @@ Other architecture documents describe durable contracts.
 | Threat model | `MISSING` | `SECURITY.md` provided disclosure and scanner policy, not assets, zones, abuse cases, controls, and residual risk. | `docs/THREAT_MODEL.md` |
 | Test strategy | `PARTIAL` | Tests and fuzz docs existed, but no exact-head evidence taxonomy or release-wide test contract. | `docs/TEST_STRATEGY.md` |
 | Operability/runbook | `PARTIAL` | Commercial packets mentioned gaps; no canonical degraded-mode and recovery authority existed. | `docs/OPERABILITY.md`, `docs/INCIDENT_RUNBOOK.md` |
+| Release operations | `PARTIAL` | ADR-0011 defined the decision and gates, but no canonical operator sequence joined exact source identity, artifact provenance, migration/rollback, publication, and protected-main acceptance. | `docs/RELEASE_GUIDE.md` |
 | Research/standards | `PARTIAL` | Paper PDFs and an architecture note existed, but APA 7 and current official standards were not indexed together. | `docs/REFERENCES.md` |
 | Documentation index | `MISSING` | Buyers and maintainers could not discover which artifact was authoritative. | `docs/README.md` |
 | Documentation fitness test | `MISSING` | Existing tests checked selected keywords and could pass while canonical families were absent or stale. | `tests/test_documentation_contract.py` |
