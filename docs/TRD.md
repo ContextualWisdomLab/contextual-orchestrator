@@ -1,8 +1,8 @@
 # Technical Requirements Document
 
-**Document state:** `accepted_architecture`  
+**Document state:** `accepted_architecture`<br>
 **Implementation baseline:** protected `main`; volatile evidence is recorded in
-the dated audit in `TRACEABILITY.md`  
+the dated audit in `TRACEABILITY.md`<br>
 **Package baseline:** version `0.1.0`; Python `>=3.10`
 
 ## System context
