@@ -126,6 +126,7 @@ the immutable contextual commit that contains ADR 0005 and ADR 0006.
 | Missing model answer/rationale used generic `ValueError`. | Translate model-controlled bounded-text failures to `JudgeFormatError`. | Implemented |
 | Predictable XML tags could be closed by untrusted answer text. | Serialize evaluation inputs as one JSON data payload. | Implemented |
 | Response parsing extracted a brace-delimited substring and accepted wrappers/fences around model JSON. | Parse the complete bounded answer as exactly one JSON object and reject any surrounding text or Markdown fence. | Implemented |
+| The fast adapter's `json.loads` accepted duplicate object members with last-value-wins semantics and ignored unknown top-level fields, weakening the strict judge contract. | Parse with a duplicate-rejecting `object_pairs_hook`, require the exact mode-specific top-level field set including the advisory boolean, and add top-level plus nested duplicate/unknown-field regressions. | Implemented on fast-mlsirm follow-up branch; retain exact-schema tests |
 | Parsed advisory `accepted` name was overwritten by derived acceptance. | Rename the advisory field and derive acceptance only from the validated score. | Implemented |
 | Public export order and a regex assertion were lint-fragile. | Reorder `__all__` and escape the literal test pattern. | Implemented |
 | Invalid `n_categories` and malformed completion paths lacked tests. | Add focused `pytest.raises` coverage and preserve the multi-item checks. | Implemented |
