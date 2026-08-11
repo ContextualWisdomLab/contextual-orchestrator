@@ -363,9 +363,8 @@ class ModelClient:
             raise RuntimeError("provider request URL has an invalid port") from exc
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
-            # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
             # The explicit verifying context is the security control for this reviewed API.
-            connection = http.client.HTTPSConnection(
+            connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
                 parsed.hostname,
                 port,
                 timeout=self.timeout,
