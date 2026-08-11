@@ -87,6 +87,35 @@ K=2 call. The sweep was stopped after that timeout, so no quality comparison is
 claimed for that model. Timeout and structured-output failure rate are therefore
 part of the performance gate alongside score drift and IRT shape validation.
 
+## Direct K-way versus cumulative thresholds — 2026-08-12
+
+The follow-up adapter was tested on the same fixed release-readiness case with
+the same two criteria, `mlx-community/gemma-4-e4b-it-4bit` judge,
+temperature `0`, disabled thinking, bounded output, and the same
+`ContextualOrchestratorJudge -> contextual-orchestrator -> mlx-lm` path. Each
+K/method pair was repeated twice. Every response parsed strictly, used one
+orchestration trace step, and produced a two-item row accepted by
+`validate_irt_response_matrix(..., item_type="polytomous", n_categories=K)`.
+
+| method | K | scores (two repeats) | accepted | mean seconds | tokens/call |
+|---|---:|---:|:---:|---:|---:|
+| direct | 2 | `(1.0000, 1.0000)` | `2/2` | 2.511 | 593 |
+| direct | 3 | `(1.0000, 1.0000)` | `2/2` | 2.355 | 593 |
+| direct | 5 | `(1.0000, 1.0000)` | `2/2` | 2.405 | 600 |
+| direct | 7 | `(1.0000, 1.0000)` | `2/2` | 2.459 | 608 |
+| cumulative threshold | 2 | `(1.0000, 1.0000)` | `2/2` | 2.540 | 605 |
+| cumulative threshold | 3 | `(1.0000, 1.0000)` | `2/2` | 2.655 | 610 |
+| cumulative threshold | 5 | `(0.5000, 0.5000)` | `0/2` | 2.844 | 629 |
+| cumulative threshold | 7 | `(0.3333, 0.3333)` | `0/2` | 2.939 | 640 |
+
+This fixed case shows a material category-method difference: direct K-way
+selection stayed maximally positive while cumulative thresholds became more
+conservative as K increased. It does not prove that direct judging is
+positively biased or that cumulative thresholds remove bias; the prompts have
+different response structures, and a single case is not a calibration sample.
+It does show why both method and K must be recorded and paired calibration must
+remain a release gate. No keyword, lexical, or positional repair was used.
+
 ## Defects found and fixed during the run
 
 The first local calls exposed model-format failures: numeric criterion keys,
@@ -111,9 +140,9 @@ Before production or scientific IRT claims, add repeated paired cases with
 balanced rubric/criterion order, score identifiers, reference presence,
 answer-option order, and positive/negative/neutral framing. Record category
 occupancy, score and acceptance deltas, agreement, and deterministic or human
-gold differences. The cumulative-threshold ordinal design remains the next
-implementation direction because a single K-way choice can retain score-ID and
-category-count bias.
+gold differences. The cumulative-threshold ordinal design is now available as
+an opt-in implementation, but it remains an experimental mitigation because a
+different response structure can introduce its own calibration drift.
 
 The calibration rationale and local Zotero records/PDF attachments are tracked
 in [ADR 0006](../planning/adrs/0006-polytomous-llm-judge-bias-calibration.md).

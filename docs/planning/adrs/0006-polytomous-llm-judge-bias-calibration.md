@@ -147,10 +147,22 @@ so the comparison was stopped and no quality conclusion was drawn for it.
 This adds a reliability gate: the largest or most capable-looking local model
 is not a performance win if it cannot return a bounded, parseable judge result.
 
-For future high-stakes polytomous use, add cumulative threshold judgments or
-another ordinal construction that does not ask the model to pick one of many
-score IDs. This is a follow-up implementation direction, not a claim that
-equal-width bins are unbiased.
+For high-stakes polytomous use, the fast adapter now provides an opt-in
+`category_method="cumulative_threshold"` mode with an explicit `category_count`.
+It asks the model whether each criterion clears each ordered boundary, validates
+that the Boolean boundary vector is monotone, and derives the category from the
+number of cleared thresholds. This reduces dependence on one K-way score-ID
+choice, but it does not make the judge unbiased: the same answer must still be
+calibrated across K, prompt perturbations, models, and gold labels.
+
+The first direct-versus-threshold extension run on 2026-08-12 used the same
+Gemma 4 e4b MLX judge, worker answer, two criteria, disabled thinking,
+temperature 0, two repeats per K, and the same contextual-orchestrator route.
+All 16 responses parsed and produced two-item polytomous rows accepted by the
+ADR 0005 validator. Direct K-way scores were 1.0000 at K=2,3,5,7; cumulative
+threshold scores were 1.0000, 1.0000, 0.5000, and 0.3333 respectively, with
+acceptance changing from yes to no at K=5. This is a useful replication of
+category-method sensitivity, not evidence of a universal directional bias.
 
 ### Consequences
 
@@ -208,6 +220,8 @@ equal-width bins are unbiased.
 | Score IDs and rubric order can change absolute judgments. | Randomize or balance labels/order and record signed perturbation deltas. | Required next |
 | User framing can induce positive or negative sycophantic feedback. | Add neutral, liked, disliked, and authored framing controls; compare to content-only gold. | Required next |
 | Equal-width score bins can create artificial polytomous thresholds. | Implement cumulative threshold judging or calibrated category mapping before production IRT use. | Ongoing |
+| A K-way prompt can make the model choose among many score identifiers even when the underlying evidence is unchanged. | Expose opt-in cumulative-threshold judging with explicit K, exact Boolean arrays, monotonicity validation, derived categories, and the same multi-item IRT validator; keep direct K-way output experimental until paired calibration supports it. | Implemented on fast-mlsirm follow-up PR; calibration ongoing |
+| A cumulative-threshold prompt can still produce inconsistent or non-monotone boundary judgments, and its score can differ from direct K-way output. | Reject non-Boolean, wrong-length, or false-then-true vectors; record category method, K, trace, usage, parse success, score, acceptance, and perturbation deltas in every benchmark. | Implemented in adapter/tests; calibration ongoing |
 | Multiple criteria can still be correlated or cover one latent dimension poorly. | Require item coverage review, factor anchors, and sample-size checks before interpreting IRT fit. | Required next |
 | A single judge call can hide model drift. | Preserve contextual-orchestrator trace, model identity, prompt variant, category count, and usage in benchmark records. | Implemented in adapter trace and the 2026-08-11 benchmark artifact |
 | A one-person, two-item matrix can pass a shape check while remaining insufficient for IRT estimation. | Require multiple persons, item-information, and factor-coverage checks before fitting or interpreting an IRT model. | Required next |

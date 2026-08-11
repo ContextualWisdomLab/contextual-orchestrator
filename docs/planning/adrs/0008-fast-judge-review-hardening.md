@@ -74,6 +74,7 @@ unpinned ADR links and missing failure-path coverage.
 * Keep the contextual-orchestrator-only LLM-as-a-Judge path strict and fail closed.
 * Prevent untrusted evaluation text from changing prompt structure.
 * Preserve the dichotomous-or-polytomous multi-item IRT contract.
+* Provide an ordinal polytomous path that does not rely only on one K-way score-ID choice.
 * Make type, exception, test, and documentation behavior reproducible.
 
 ## Considered Options
@@ -113,6 +114,15 @@ bounded answer to `json.loads` and rejects prefixes, suffixes, and Markdown
 fences instead of extracting the first and last braces. README ADR links use
 the immutable contextual commit that contains ADR 0005 and ADR 0006.
 
+The follow-up polytomous path adds opt-in `category_method="cumulative_threshold"`.
+With an explicit category count, the model returns one Boolean decision for each
+ordered boundary of each criterion. The adapter rejects wrong-length,
+non-Boolean, and false-then-true vectors, derives the category and weighted
+score itself, and retains the existing exact-schema, contextual-orchestrator,
+and multi-item IRT requirements. Direct K-way categories remain available for
+compatibility but stay experimental until category-method and prompt-perturbation
+calibration supports them.
+
 ## Problem Register and Remediation Directions
 
 | Finding | Direction | State |
@@ -131,6 +141,8 @@ the immutable contextual commit that contains ADR 0005 and ADR 0006.
 | Public export order and a regex assertion were lint-fragile. | Reorder `__all__` and escape the literal test pattern. | Implemented |
 | Invalid `n_categories` and malformed completion paths lacked tests. | Add focused `pytest.raises` coverage and preserve the multi-item checks. | Implemented |
 | README ADR links targeted mutable/nonexistent `main` paths. | Pin links to the immutable contextual-orchestrator commit containing the referenced ADRs. | Implemented |
+| A polytomous K-way choice can expose the judge to score-ID and category-count effects. | Add an opt-in cumulative-threshold mode with explicit K, exact criterion IDs, Boolean boundary vectors, monotonicity validation, derived categories, and focused IRT-row tests. | Implemented on fast-mlsirm follow-up branch; exact-head review pending |
+| Threshold output can be syntactically valid but ordinally incoherent, or can disagree with direct K-way output. | Fail closed on non-monotone thresholds and record category method, K, score, acceptance, parse status, trace, and token usage in paired MLX calibration runs; do not claim bias removal. | Implemented in adapter/tests and 2026-08-12 exploratory run; calibration ongoing |
 
 ## Risks and Mitigations
 
