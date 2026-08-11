@@ -840,3 +840,17 @@ def test_deployment_uml_keeps_credentials_behind_provider_adapter() -> None:
     assert "policy --> provider_adapter" in uml
     assert "provider_adapter --> kv" in uml
     assert "policy --> kv" not in uml
+
+
+def test_independent_review_evidence_fails_closed() -> None:
+    """Require canonical review evidence to reject incomplete aggregate gates."""
+
+    decision = read_text("docs/adr/0010-independent-review-and-evidence.md")
+    for required_term in (
+        "reviewDecision",
+        "APPROVED",
+        "REVIEW_REQUIRED",
+        "CHANGES_REQUESTED",
+        "structured same-head Strix",
+    ):
+        assert required_term in decision
