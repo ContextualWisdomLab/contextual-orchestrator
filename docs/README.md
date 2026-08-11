@@ -30,15 +30,15 @@ in Traceability rather than copied into durable documents.
 | System boundaries and component ownership | [Architecture](../ARCHITECTURE.md) | Architecture owner | `accepted_architecture` | Component, trust boundary, integration, or failure domain changes. |
 | Runtime interactions and state transitions | [UML](UML.md) | Architecture owner | `accepted_architecture` | Control flow, actor, state, or deployment topology changes. |
 | Persisted, in-memory, external, and target data | [ERD](ERD.md) | Data owner | `accepted_architecture` | Object, relationship, retention, migration, or ownership changes. |
-| Architecture decisions | [ADR index](adr/README.md) | Affected context owner | mixed, per ADR | A durable choice or supersession condition changes. |
-| Requirement-to-code-to-test mapping and dated audit | [Traceability](TRACEABILITY.md) | Release evidence owner | dated audit | Requirement status, protected revision, PR stack, or evidence changes. |
+| Architecture decisions | [ADR index](adr/README.md) | Affected context owner | `accepted_architecture` | A durable choice, record status, or supersession condition changes; each ADR retains its own status. |
+| Requirement-to-code-to-test mapping and dated audit | [Traceability](TRACEABILITY.md) | Release evidence owner | `active_pr` | Requirement status, protected revision, PR stack, or evidence changes. |
 | Security abuse cases and controls | [Threat model](THREAT_MODEL.md) | Security owner | `accepted_architecture` | Asset, zone, threat, control, or residual risk changes. |
 | Verification strategy and evidence taxonomy | [Test strategy](TEST_STRATEGY.md) | Quality owner | `accepted_architecture` | Test layer, coverage, review, or release gate changes. |
 | Operations, degraded modes, recovery, and SLO entry criteria | [Operability](OPERABILITY.md) | Service owner | `accepted_architecture` | Dependency, signal, SLO, incident, recovery, or rollout changes. |
 | Incident triage, containment, recovery, and evidence preservation | [Incident runbook](INCIDENT_RUNBOOK.md) | Incident commander | `accepted_architecture` | Severity, containment, recovery, or closure authority changes. |
 | Release admission, build, migration, publication, rollback, and operational acceptance | [Release guide](RELEASE_GUIDE.md) | Release owner | `accepted_architecture` | Packaging, version, provenance, deployment, migration, rollback, or release evidence changes. |
 | Primary research and authoritative standards | [References](REFERENCES.md) | Architecture owner | `research_only` | A cited primary source or governing standard changes. |
-| Coordinated vulnerability disclosure | [Security policy](../SECURITY.md) | Security owner | repository policy | Reporting or response process changes. |
+| Coordinated vulnerability disclosure | [Security policy](../SECURITY.md) | Security owner | `implemented_on_protected_main` | Reporting or response process changes. |
 
 ## Supporting evidence
 

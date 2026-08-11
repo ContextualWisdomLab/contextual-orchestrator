@@ -30,6 +30,13 @@ versioned tasks and scorers, repeated cells, comparable call/token budgets, and
 full model/provider/policy assignments. Repository results never claim a live
 price, contractual bill, certification, or general superiority.
 
+The accepted evidence vocabulary carries the same seven attribution dimensions
+through every writer and export path: `account`, `service`, `upstream_api`,
+`model_name`, `team`, `group`, and `company`. Mode-by-mode completeness
+tests cover sync completion, batch retrieval, passthrough, and route streaming;
+a mode that cannot supply a fact records qualified missingness instead of
+silently omitting the dimension.
+
 Protected main does not yet satisfy the whole decision. Workflow-derived
 spend/budget and `CostLedger` are separate authorities; the active `PriceBook`
 uses ConfigStore while SQL `llm_price_entries` is dormant; missing ledger price

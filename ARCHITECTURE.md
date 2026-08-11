@@ -149,7 +149,7 @@ explicit interfaces and retain their own data and authorization boundaries.
 
 | Domain | Isolation and degraded behavior |
 |---|---|
-| One provider/model | Bounded transient retry, eligible failover, circuit breaker; permanent errors fail fast. |
+| One provider/model | Bounded transient client retry and eligible orchestration failover; permanent provider errors receive no same-client retry and fail when no eligible candidate remains. |
 | Credential registry | Non-mock execution fails closed; mock/offline operation remains available. |
 | Optional state store | Persistence evidence is unavailable; the service must not claim durable history. |
 | Cost export | Non-blocking store may degrade while prompt-safe health exposes the loss. |

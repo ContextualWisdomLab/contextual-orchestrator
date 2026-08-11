@@ -126,24 +126,29 @@ sequenceDiagram
     participant Primary as Primary provider
     participant Circuit as Circuit state
     participant Fallback as Eligible fallback
-    Orchestrator->>Circuit: Check primary availability
-    Circuit-->>Orchestrator: Closed or half-open
-    Orchestrator->>Client: Invoke primary
-    Client->>Primary: Bounded request
-    alt transient failure
-        Primary-->>Client: timeout, 429, or 5xx
-        Client-->>Orchestrator: Retry budget exhausted
-        Orchestrator->>Circuit: Record failure/open threshold
-        Orchestrator->>Fallback: Invoke eligible candidate
-        Fallback-->>Orchestrator: Valid response or classified failure
-    else permanent caller/provider error
-        Primary-->>Client: Stable 4xx without client retry
-        Client-->>Orchestrator: Classified permanent failure
-        Orchestrator->>Fallback: Fail over without retry storm
-    else success
-        Primary-->>Client: Valid response
-        Client-->>Orchestrator: Answer and optional usage
-        Orchestrator->>Circuit: Reset failure state
+    Orchestrator->>Orchestrator: Validate caller request and bounds
+    alt caller validation error
+        Orchestrator-->>Orchestrator: Terminate without provider dispatch
+    else admitted request
+        Orchestrator->>Circuit: Check primary availability
+        Circuit-->>Orchestrator: Closed or half-open
+        Orchestrator->>Client: Invoke primary
+        Client->>Primary: Bounded request
+        alt transient provider failure
+            Primary-->>Client: timeout, 429, or 5xx
+            Client-->>Orchestrator: Retry budget exhausted
+            Orchestrator->>Circuit: Record failure/open threshold
+            Orchestrator->>Fallback: Invoke eligible candidate
+            Fallback-->>Orchestrator: Valid response or classified failure
+        else permanent provider or configuration error
+            Primary-->>Client: Stable provider 4xx or configuration failure
+            Client-->>Orchestrator: Classified failure without client retry
+            Orchestrator->>Fallback: Invoke eligible candidate without client retry
+        else success
+            Primary-->>Client: Valid response
+            Client-->>Orchestrator: Answer and optional usage
+            Orchestrator->>Circuit: Reset failure state
+        end
     end
 ```
 
@@ -250,10 +255,12 @@ flowchart TB
     subgraph Orchestrator["Contextual Orchestrator"]
         api["Compatible API"]
         policy["Orchestration policy"]
+        provider_adapter["Provider adapter"]
         evidence["Trace, cost, and audit evidence"]
     end
     subgraph Dependencies["Optional dependencies"]
         kv["Credential registry"]
+        provider["OpenAI-compatible provider"]
         batch["pg-llm-batch"]
         viewer["Clearfolio"]
     end
@@ -261,7 +268,9 @@ flowchart TB
     tenancy --> api
     api --> policy
     policy --> evidence
-    policy --> kv
+    policy --> provider_adapter
+    provider_adapter --> kv
+    provider_adapter --> provider
     policy --> batch
     evidence --> viewer
     business -. purpose-bound request .-> ingress

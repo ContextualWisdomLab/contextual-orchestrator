@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Align the canonical cost, access-grant, internationalization, research-license, coverage, failure-flow, credential-authority, and status contracts with exact-head automated review findings and machine-check them.
 - Status-qualify the analytics, REST API, and internationalization guides, replacing legacy prototype labels and distinguishing current standalone paths from optional planned framework adoption.
 - Align Claude and conductor guidance with the current provider-neutral product and status-qualified dependency-adoption boundary, removing legacy lab and internal gate names.
 - Replace stale lab/prototype and internal-name language in library research with machine-checked current-stack and adoption-status boundaries for the stdlib HTTP/admin path and optional API/database extras.

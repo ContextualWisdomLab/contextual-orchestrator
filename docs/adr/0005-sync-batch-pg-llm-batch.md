@@ -24,10 +24,15 @@ service.
 sync execution. Latency-tolerant work uses a `BatchBackend` or embedding backend.
 Local in-process implementations preserve offline/standalone behavior;
 `PgLlmBatchBackend` and configuration adapters preserve external ownership.
-Usage from ordinary coordinator sync execution and coordinator-completed or
-retrieved batch results enters the same prompt-safe ledger contract. Passthrough
-and route streaming bypass that ledger on protected main; submit/poll alone does
-not record completion usage.
+Usage from ordinary coordinator sync completion and coordinator-completed
+batch retrieval enters the same prompt-safe ledger contract. The accepted
+target requires sync completion, batch retrieval, passthrough, and route
+streaming to use one qualified usage-evidence contract. Missing provider usage
+is `unknown`; a path that bypasses the evidence writer is `not_recorded`.
+Either status is excluded from cost comparison until reconciled. On protected
+main, passthrough and route streaming bypass the ledger, and submit/poll alone
+does not record completion usage; the unified target is not presented as
+shipped.
 
 ## Consequences
 

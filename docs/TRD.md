@@ -49,7 +49,7 @@ explicit gaps below. Agent definitions remain configuration data.
 |---|---|
 | NFR-001 | The standalone mock path is deterministic, offline, and installable without provider credentials. |
 | NFR-002 | Public APIs and database objects use two-or-more-word snake_case except external-standard fields and documented paper roles. |
-| NFR-003 | Owned production code maintains 100% statement and branch coverage and beginner-readable public docstrings before release. |
+| NFR-003 | Owned production code maintains 100% statement, branch, function, and line coverage where tooling exposes each dimension, plus beginner-readable public docstrings, before release. |
 | NFR-004 | Concurrency bounds, body bounds, output-token bounds, timeouts, retries, cache limits, and budgets are explicit. |
 | NFR-005 | A degraded optional store or integration cannot silently falsify success or cost evidence. |
 | NFR-006 | Every measurement identifies its source as reported, measured, configured, estimated, unknown, or external. |
