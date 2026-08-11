@@ -1,5 +1,6 @@
 """Verify distribution metadata needed for licensing and buyer due diligence."""
 
+import ast
 import subprocess
 import tarfile
 import tomllib
@@ -9,6 +10,20 @@ from pathlib import Path
 
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
+
+
+def test_metadata_parser_supports_declared_python_floor() -> None:
+    """Use a TOML parser available on the declared minimum Python version."""
+
+    tree = ast.parse(Path(__file__).read_text(encoding="utf-8"))
+    imports = {
+        (alias.name, alias.asname)
+        for node in ast.walk(tree)
+        if isinstance(node, ast.Import)
+        for alias in node.names
+    }
+    assert ("tomllib", None) not in imports
+    assert ("tomli", "tomllib") in imports
 
 def packaging_document() -> dict[str, object]:
     """Return the parsed packaging configuration from ``pyproject.toml``."""
