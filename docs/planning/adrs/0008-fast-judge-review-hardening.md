@@ -29,8 +29,8 @@ related:
     relation: influenced-by
 asr_triggers:
   - kind: security
-    evidence: "Review found predictable prompt delimiters around untrusted judge input, substring extraction that accepted wrapped model output, and direct result construction that could produce invalid IRT categories."
-    note: "Keep model-controlled content data-only, require one complete JSON value, and fail closed before IRT projection."
+    evidence: "Review found predictable prompt delimiters around untrusted judge input, substring extraction that accepted wrapped model output, malformed public result mappings that could break IRT projection, and an unbounded criteria iterable."
+    note: "Keep model-controlled content data-only, require one complete JSON value, validate mapping boundaries before sorting or set comparison, and bound iterable consumption."
   - kind: maintainability
     evidence: "Review found inconsistent exception types, coercive mapping normalization, mutable ADR links, and missing malformed-output tests."
     note: "Make the public contract explicit, use documented ValueError validation for malformed criterion inputs, reject conversion-hook numeric subclasses, and pin documentation to immutable evidence."
@@ -57,9 +57,11 @@ The first fast-mlsirm PR added a provider-neutral judge routed through
 contextual-orchestrator and a multi-item IRT projection. Its automated review
 then identified several small but real weaknesses: model-controlled missing
 fields escaped as generic `ValueError`, direct `LLMJudgeResult` construction
-could project a negative category, mapping inputs were silently coerced, and
-predictable XML-like prompt tags could be closed by answer text. The same
-review also found unpinned ADR links and missing failure-path coverage.
+could project a negative category, malformed public result mappings could fail
+before the intended `JudgeFormatError`, criteria iterables were not bounded
+during consumption, mapping inputs were silently coerced, and predictable
+XML-like prompt tags could be closed by answer text. The same review also found
+unpinned ADR links and missing failure-path coverage.
 
 > The review found two actionable comments and additional lint, test, prompt-boundary, and documentation findings.
 >
@@ -93,11 +95,13 @@ Chosen option: "Harden the existing provider-neutral judge with small explicit b
 
 `JudgeCriterion` now rejects non-string identifiers/descriptions and non-numeric
 weights without coercion or incidental exception leakage; malformed criterion
-inputs use documented `ValueError` failures. IRT projection validates direct criterion scores and
-keeps category indices within bounds while retaining the requirement for at
-least two criteria. Model-controlled answer and rationale failures are
-translated to `JudgeFormatError`; the caller's task and answer validation
-remains ordinary input validation.
+inputs use documented `ValueError` failures. IRT projection validates direct
+criterion-score and category mapping boundaries before sorting or set
+comparison, then keeps category indices within bounds while retaining the
+requirement for at least two criteria. Criteria are bounded while the iterable
+is consumed. Model-controlled answer and rationale failures are translated to
+`JudgeFormatError`; the caller's task and answer validation remains ordinary
+input validation.
 
 The user prompt carries task, answer, reference, and rubric as one JSON data
 object rather than predictable open/close tags. The system instruction still
@@ -117,6 +121,8 @@ the immutable contextual commit that contains ADR 0005 and ADR 0006.
 | Invalid public criterion field types exposed inconsistent `TypeError` failures. | Normalize malformed criterion field validation to documented `ValueError` failures and test both direct and mapping inputs. | Implemented |
 | Numeric weight subclasses could execute a custom `__float__` hook during validation. | Accept only exact built-in `int`/`float` weights before conversion and test a hooked subclass remains uncalled. | Implemented |
 | Direct criterion scores could produce a negative or non-integral IRT category. | Validate scores with the same bounded score contract and clamp the projection to the legal category range. | Implemented |
+| Public result mappings could be non-mappings or have non-string keys, causing incidental `TypeError` during IRT projection. | Validate `criterion_scores` and `criterion_categories` mapping/key boundaries before sorting or set comparison and fail with `JudgeFormatError`. | Implemented |
+| A caller-controlled criteria iterable could exceed the configured maximum before validation completed. | Enforce `MAX_JUDGE_CRITERIA` during iteration, before normalizing an additional value. | Implemented |
 | Missing model answer/rationale used generic `ValueError`. | Translate model-controlled bounded-text failures to `JudgeFormatError`. | Implemented |
 | Predictable XML tags could be closed by untrusted answer text. | Serialize evaluation inputs as one JSON data payload. | Implemented |
 | Response parsing extracted a brace-delimited substring and accepted wrappers/fences around model JSON. | Parse the complete bounded answer as exactly one JSON object and reject any surrounding text or Markdown fence. | Implemented |
