@@ -15,6 +15,7 @@ affected_components:
   - ".github/workflows/tests.yml"
   - ".github/workflows/security.yml"
   - "repository branches and pull requests"
+  - "ContextualWisdomLab/.github central merge scheduler"
   - "docs/planning/adrs/"
 effort: M
 supersedes: null
@@ -156,6 +157,7 @@ For each repository, record branch, commit, PR URL, review result, check result,
 | Central Strix can fail before producing a report when its external model provider is rate-limited or unavailable (observed NVIDIA NIM 429 and GitHub Models 410 brownout). | Keep the security gate fail-closed; record the provider/model error, retry the same verified HEAD after provider recovery, and never treat missing reports as a clean scan. | Required for completion |
 | The two repositories' central Strix gate versions classified the same provider outage differently: `fast-mlsirm` reported a neutral pass without a structured report while `contextual-orchestrator` failed closed. | Align the trusted gate contract across repositories; until it is aligned, treat every neutral/no-report result as a blocking failure and merge only after a structured report proves the scan completed. This ADR defines no security-owner override for missing evidence; retry the same verified HEAD after provider recovery. | Required follow-up |
 | Branch protection permits `requiredApprovals=0`, and the central scheduler merged fast-mlsirm PR #733 at `914127b` while its review decision remained `CHANGES_REQUESTED` and Strix was a neutral/no-report pass. | Treat `CHANGES_REQUESTED`/`REVIEW_REQUIRED` and neutral, cancelled, or no-report Strix states as hard scheduler blockers; require an independent current-head approval plus structured Strix evidence before either linked PR can merge, regardless of branch-protection approval count. Audit the central scheduler before contextual-orchestrator merge. | Required follow-up |
+| Central scheduler `inspect_pr()` (trusted source `ContextualWisdomLab/.github` at `6eb06cdd`) gates only the latest OpenCode review state before direct/auto merge and does not independently reject GitHub's aggregate `reviewDecision` of `CHANGES_REQUESTED`/`REVIEW_REQUIRED`. | Add a live aggregate-review gate before every merge mutation: reject `CHANGES_REQUESTED`, `REVIEW_REQUIRED`, missing review data, and stale/non-current-head approvals; require `reviewDecision=APPROVED`, an independent current-head approval, zero active unresolved threads, required checks, and structured same-head Strix evidence. Add scheduler self-tests for each aggregate-review state and keep this PR on hold until the trusted scheduler is fixed or an equivalent protected rule is active. | Required follow-up |
 
 ## Risks and Mitigations
 
