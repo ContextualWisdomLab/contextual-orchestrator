@@ -67,10 +67,10 @@ refetch both refs rather than treating this dated table as merge authority.
 
 | PR | Audited contributor head (pre-write) | Base branch → live tip | Draft / mergeable | Observed gate summary | Unresolved threads |
 |---:|---|---|---|---|---:|
-| #108 | `1921dc865a2df46b85a463e4f5ea1bbe92aad9bb` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; package license/SBOM evidence present; no formal review or qualifying approval | 0 |
+| #108 | `8760993cb8262922a771948845c8dfd2afefb773` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; 571 tests and 100% statement/branch/docstring evidence; built package identity, license, and SBOM evidence present; no formal review or qualifying approval | 0 |
 | #107 | `28088b9fc86d975b43637b7758d25e20d61c5786` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
-| #105 | `3744016506a3385ed643bc640f4ea6a8ee79535a` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
-| #104 | `44445dadb29a61d5e4e52d2f945e70cbb20b1872` | `docs/canonical-product-architecture` → `3744016506a3385ed643bc640f4ea6a8ee79535a` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
+| #105 | `d13b5974bf67b5fa3c82ecc84bf3d0f269698d7d` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
+| #104 | `19cba12f54785ee1d6ca68c7d719abdd8797bcb4` | `docs/canonical-product-architecture` → `d13b5974bf67b5fa3c82ecc84bf3d0f269698d7d` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
 | #99 | `2502915a8e90059074167e6306b47148a1d40fdc` | `feat/free-first-model-fallback-policy` → `73ed3a077f88a2f03cf734f1067bee2dcce2467f` | yes / yes | Exact-head quality, Tests, Security, and Fuzz success; no formal approval | 0 |
 | #94 | `73ed3a077f88a2f03cf734f1067bee2dcce2467f` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head quality, Tests, Security, and Fuzz success; prior OpenCode findings dismissed | 0 |
 | #96 | `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | `main` → `6841b71935e0b7cb98fb52bcb4709cc5100c8d87` | yes / yes | Exact-head Tests, Security, and Fuzz success; Security Scan/Semgrep are integration evidence; central prerequisite and qualifying approval absent | 0 |
@@ -102,7 +102,7 @@ flowchart TB
     central907 -. protected integration required .-> pr96
     main["protected main"] --> pr96["PR #96 provider and Atheris boundary"]
     pr96 --> pr107["PR #107 CodeQL action update"]
-    pr96 --> pr108["PR #108 package license authority"]
+    pr96 --> pr108["PR #108 package identity and license authority"]
     pr96 --> pr105["PR #105 canonical documentation"]
     pr105 --> pr104["PR #104 disclosure lifecycle"]
     pr96 --> pr82["PR #82 pip bootstrap"]
