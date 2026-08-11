@@ -1,0 +1,145 @@
+---
+id: "0008"
+title: "Harden the fast-mlsirm contextual judge after review"
+status: accepted
+proposed_date: "2026-08-11"
+accepted_date: "2026-08-11"
+deciders:
+  - "repository maintainer"
+consulted:
+  - "fast-mlsirm CodeRabbit review"
+  - "fast-mlsirm judge and IRT callers"
+informed:
+  - "contributors"
+affected_components:
+  - "fast-mlsirm/python/fast_mlsirm/llm_judge.py"
+  - "fast-mlsirm/python/fast_mlsirm/irt_contract.py"
+  - "fast-mlsirm/tests/test_llm_judge.py"
+  - "fast-mlsirm/tests/test_irt_contract.py"
+  - "fast-mlsirm/README.md"
+effort: S
+supersedes: null
+superseded-by: null
+related:
+  - path: "docs/planning/adrs/0005-irt-response-matrix-contract.md"
+    relation: influenced-by
+  - path: "docs/planning/adrs/0006-polytomous-llm-judge-bias-calibration.md"
+    relation: influenced-by
+  - path: "docs/planning/adrs/0007-sast-transport-and-sql-hardening.md"
+    relation: influenced-by
+asr_triggers:
+  - kind: security
+    evidence: "Review found predictable prompt delimiters around untrusted judge input and direct result construction that could produce invalid IRT categories."
+    note: "Keep model-controlled content data-only and fail closed before IRT projection."
+  - kind: maintainability
+    evidence: "Review found inconsistent exception types, coercive mapping normalization, mutable ADR links, and missing malformed-output tests."
+    note: "Make the public contract explicit and pin documentation to immutable evidence."
+success_criteria:
+  - metric: "judge trust-boundary validation"
+    target: "untrusted task/answer/reference data is serialized as JSON, malformed model fields raise JudgeFormatError, and criterion inputs reject invalid runtime types"
+    measurement_window: "every fast-mlsirm judge test and PR review"
+    source: "tests/test_llm_judge.py and CodeRabbit review"
+  - metric: "IRT-safe projection"
+    target: "dichotomous and polytomous rows contain only validated categories and retain the multi-item contract"
+    measurement_window: "every judge-to-IRT conversion"
+    source: "tests/test_llm_judge.py and tests/test_irt_contract.py"
+  - metric: "documentation reproducibility"
+    target: "ADR links resolve through an immutable contextual-orchestrator commit"
+    measurement_window: "every README review"
+    source: "fast-mlsirm README"
+---
+
+# Harden the fast-mlsirm contextual judge after review
+
+## Context
+
+The first fast-mlsirm PR added a provider-neutral judge routed through
+contextual-orchestrator and a multi-item IRT projection. Its automated review
+then identified several small but real weaknesses: model-controlled missing
+fields escaped as generic `ValueError`, direct `LLMJudgeResult` construction
+could project a negative category, mapping inputs were silently coerced, and
+predictable XML-like prompt tags could be closed by answer text. The same
+review also found unpinned ADR links and missing failure-path coverage.
+
+> The review found two actionable comments and additional lint, test, prompt-boundary, and documentation findings.
+>
+> The user requires every plausible problem to become an explicit remediation direction, not a keyword or positional fallback.
+>
+> The fast-mlsirm PR must continue through review, remediation, re-test, and exact-head merge rather than stopping at a green local run.
+
+## Decision Drivers
+
+* Keep the contextual-orchestrator-only LLM-as-a-Judge path strict and fail closed.
+* Prevent untrusted evaluation text from changing prompt structure.
+* Preserve the dichotomous-or-polytomous multi-item IRT contract.
+* Make type, exception, test, and documentation behavior reproducible.
+
+## Considered Options
+
+* Treat review comments as optional style suggestions and keep the implementation.
+* Add broad schema and prompt dependencies for the judge boundary.
+* Apply small stdlib-only validation, JSON serialization, explicit error translation, and focused tests.
+
+## Decision Outcome
+
+Chosen option: "Harden the existing provider-neutral judge with small explicit boundary checks".
+
+| Driver | Defer review findings | Add broad dependency | Explicit validation and focused tests |
+| --- | --- | --- | --- |
+| Model-output fail-closed behavior | Inconsistent | Depends on schema runtime | Preserved with `JudgeFormatError` |
+| Prompt data boundary | Predictable tags remain | More operational surface | JSON payload with system-level data instruction |
+| IRT category safety | Negative direct scores can leak | Hidden in dependency | `_score` plus bounded category projection |
+| Reproducibility and maintenance | Mutable links and weak tests | Higher dependency cost | Immutable links and targeted regression tests |
+
+`JudgeCriterion` now rejects non-string identifiers/descriptions and non-numeric
+weights without coercion. IRT projection validates direct criterion scores and
+keeps category indices within bounds while retaining the requirement for at
+least two criteria. Model-controlled answer and rationale failures are
+translated to `JudgeFormatError`; the caller's task and answer validation
+remains ordinary input validation.
+
+The user prompt carries task, answer, reference, and rubric as one JSON data
+object rather than predictable open/close tags. The system instruction still
+requires the model to ignore instructions inside those values. Failure-path
+tests cover missing answer, missing rationale, and non-mapping completions;
+category-bound tests cover invalid `n_categories`; and import ordering plus
+the test regex are kept lint-clean. README ADR links use the immutable
+contextual commit that contains ADR 0005 and ADR 0006.
+
+## Problem Register and Remediation Directions
+
+| Finding | Direction | State |
+| --- | --- | --- |
+| Criterion fields could raise incidental `TypeError` or accept coercive mapping values. | Validate runtime types explicitly and stop string/float coercion in `_criteria`. | Implemented |
+| Direct criterion scores could produce a negative or non-integral IRT category. | Validate scores with the same bounded score contract and clamp the projection to the legal category range. | Implemented |
+| Missing model answer/rationale used generic `ValueError`. | Translate model-controlled bounded-text failures to `JudgeFormatError`. | Implemented |
+| Predictable XML tags could be closed by untrusted answer text. | Serialize evaluation inputs as one JSON data payload. | Implemented |
+| Parsed advisory `accepted` name was overwritten by derived acceptance. | Rename the advisory field and derive acceptance only from the validated score. | Implemented |
+| Public export order and a regex assertion were lint-fragile. | Reorder `__all__` and escape the literal test pattern. | Implemented |
+| Invalid `n_categories` and malformed completion paths lacked tests. | Add focused `pytest.raises` coverage and preserve the multi-item checks. | Implemented |
+| README ADR links targeted mutable/nonexistent `main` paths. | Pin links to the immutable contextual-orchestrator commit containing the referenced ADRs. | Implemented |
+
+## Risks and Mitigations
+
+| risk | likelihood | impact | mitigation | owner |
+| --- | --- | --- | --- | --- |
+| A model treats JSON string content as instructions despite the data boundary. | medium | high | Keep the system instruction explicit, never use model output as executable content, and review perturbation results. | maintainer |
+| Clamping masks a caller-created invalid score. | low | medium | `_score` rejects non-finite/out-of-range values before the bounded projection; production results still originate from strict judge parsing. | maintainer |
+| Immutable documentation ref becomes hard to update. | low | low | Add a new pinned link when the contextual ADR set changes; do not return to mutable `main` links. | documentation owner |
+
+## Rollback / Exit Strategy
+
+If a downstream caller depends on coercive criterion values, migrate that caller
+to explicit `JudgeCriterion` construction rather than restoring silent coercion.
+If a future structured message API is introduced, retain the JSON data contract
+or an equivalent typed payload and keep `JudgeFormatError` as the fail-closed
+boundary. Do not restore keyword matching, positional repair, or one-item IRT
+conversion.
+
+## Affected Components
+
+* fast-mlsirm/python/fast_mlsirm/llm_judge.py
+* fast-mlsirm/python/fast_mlsirm/irt_contract.py
+* fast-mlsirm/tests/test_llm_judge.py
+* fast-mlsirm/tests/test_irt_contract.py
+* fast-mlsirm/README.md
