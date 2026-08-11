@@ -33,10 +33,10 @@ asr_triggers:
     note: "Keep model-controlled content data-only and fail closed before IRT projection."
   - kind: maintainability
     evidence: "Review found inconsistent exception types, coercive mapping normalization, mutable ADR links, and missing malformed-output tests."
-    note: "Make the public contract explicit and pin documentation to immutable evidence."
+    note: "Make the public contract explicit, use documented ValueError validation for malformed criterion inputs, and pin documentation to immutable evidence."
 success_criteria:
   - metric: "judge trust-boundary validation"
-    target: "untrusted task/answer/reference data is serialized as JSON, malformed model fields raise JudgeFormatError, and criterion inputs reject invalid runtime types"
+    target: "untrusted task/answer/reference data is serialized as JSON, malformed model fields raise JudgeFormatError, and criterion inputs reject invalid runtime types with documented ValueError failures"
     measurement_window: "every fast-mlsirm judge test and PR review"
     source: "tests/test_llm_judge.py and CodeRabbit review"
   - metric: "IRT-safe projection"
@@ -92,7 +92,8 @@ Chosen option: "Harden the existing provider-neutral judge with small explicit b
 | Reproducibility and maintenance | Mutable links and weak tests | Higher dependency cost | Immutable links and targeted regression tests |
 
 `JudgeCriterion` now rejects non-string identifiers/descriptions and non-numeric
-weights without coercion. IRT projection validates direct criterion scores and
+weights without coercion or incidental exception leakage; malformed criterion
+inputs use documented `ValueError` failures. IRT projection validates direct criterion scores and
 keeps category indices within bounds while retaining the requirement for at
 least two criteria. Model-controlled answer and rationale failures are
 translated to `JudgeFormatError`; the caller's task and answer validation
@@ -111,6 +112,7 @@ contextual commit that contains ADR 0005 and ADR 0006.
 | Finding | Direction | State |
 | --- | --- | --- |
 | Criterion fields could raise incidental `TypeError` or accept coercive mapping values. | Validate runtime types explicitly and stop string/float coercion in `_criteria`. | Implemented |
+| Invalid public criterion field types exposed inconsistent `TypeError` failures. | Normalize malformed criterion field validation to documented `ValueError` failures and test both direct and mapping inputs. | Implemented |
 | Direct criterion scores could produce a negative or non-integral IRT category. | Validate scores with the same bounded score contract and clamp the projection to the legal category range. | Implemented |
 | Missing model answer/rationale used generic `ValueError`. | Translate model-controlled bounded-text failures to `JudgeFormatError`. | Implemented |
 | Predictable XML tags could be closed by untrusted answer text. | Serialize evaluation inputs as one JSON data payload. | Implemented |
