@@ -67,9 +67,10 @@ refetch both refs rather than treating this dated table as merge authority.
 
 | PR | Audited contributor head (pre-write) | Base branch → live tip | Draft / mergeable | Observed gate summary | Unresolved threads |
 |---:|---|---|---|---|---:|
+| #108 | `1921dc865a2df46b85a463e4f5ea1bbe92aad9bb` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; package license/SBOM evidence present; no formal review or qualifying approval | 0 |
 | #107 | `28088b9fc86d975b43637b7758d25e20d61c5786` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
-| #105 | `f5b9acc7256fd3e33d015b7ad020d4908aba38f6` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
-| #104 | `0fc208eb185e1306dbaad065a516a3e4cd2dbee4` | `docs/canonical-product-architecture` → `f5b9acc7256fd3e33d015b7ad020d4908aba38f6` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
+| #105 | `3744016506a3385ed643bc640f4ea6a8ee79535a` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
+| #104 | `44445dadb29a61d5e4e52d2f945e70cbb20b1872` | `docs/canonical-product-architecture` → `3744016506a3385ed643bc640f4ea6a8ee79535a` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
 | #99 | `2502915a8e90059074167e6306b47148a1d40fdc` | `feat/free-first-model-fallback-policy` → `73ed3a077f88a2f03cf734f1067bee2dcce2467f` | yes / yes | Exact-head quality, Tests, Security, and Fuzz success; no formal approval | 0 |
 | #94 | `73ed3a077f88a2f03cf734f1067bee2dcce2467f` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head quality, Tests, Security, and Fuzz success; prior OpenCode findings dismissed | 0 |
 | #96 | `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | `main` → `6841b71935e0b7cb98fb52bcb4709cc5100c8d87` | yes / yes | Exact-head Tests, Security, and Fuzz success; Security Scan/Semgrep are integration evidence; central prerequisite and qualifying approval absent | 0 |
@@ -83,7 +84,7 @@ refetch both refs rather than treating this dated table as merge authority.
 | #84 | `269daa41fd0c664f8b78c084781471176753371b` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
 | #63 | `dd4e62b46fbc651a6696cb04438751122e161d8c` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
 
-All 15 PRs were Draft. No PR in the snapshot was eligible for immediate
+All 16 PRs were Draft. No PR in the snapshot was eligible for immediate
 protected merge. A successful workflow name or CodeRabbit status was not
 promoted into independent approval or exact-head success. Live ruleset detail
 was not returned by the connector used for this audit, so the repository's
@@ -94,8 +95,14 @@ than a reconstructed list.
 
 ```mermaid
 flowchart TB
+    centralMain["read-only .github protected main"] --> central906[".github PR #906 direct redaction repair"]
+    central906 --> central929[".github PR #929 JSON repair: test-only RED"]
+    central906 --> central907[".github issue #907 wrapper repair: no completing PR"]
+    central929 -. protected integration required .-> pr96
+    central907 -. protected integration required .-> pr96
     main["protected main"] --> pr96["PR #96 provider and Atheris boundary"]
     pr96 --> pr107["PR #107 CodeQL action update"]
+    pr96 --> pr108["PR #108 package license authority"]
     pr96 --> pr105["PR #105 canonical documentation"]
     pr105 --> pr104["PR #104 disclosure lifecycle"]
     pr96 --> pr82["PR #82 pip bootstrap"]
@@ -105,6 +112,14 @@ flowchart TB
     pr96 --> pr75["PR #75 coverage and latent fixes"]
     pr75 --> pr66["PR #66 embeddings and KV bootstrap"]
 ```
+
+The central dependency is read-only here. At audit time, #906 had ten green
+exact-head workflows but no formal review or qualifying approval. Its own scope
+left wrapper operands (#907) and multiline/duplicate-key JSON (#908)
+unresolved. Stacked #929 held the #908 test-first contract at a **test-only
+RED** head with no production repair or associated workflow run, while #907
+had **no current completing PR**. None of those states is protected integration
+or transferable acceptance evidence for PR #96.
 
 PR #96 supersedes closed-unmerged #76. PR #82 must remain Draft until #96 has
 one accepted stable head or protected merge, then preserve only its unique pip
