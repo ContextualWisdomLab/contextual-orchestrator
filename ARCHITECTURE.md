@@ -1,6 +1,6 @@
 # Contextual Orchestrator architecture
 
-**Document state:** `accepted_architecture`  
+**Document state:** `accepted_architecture`<br>
 **Canonical role:** current component, trust-boundary, and deployment authority
 
 `docs/architecture.md` remains a research-to-product note. This document is the
