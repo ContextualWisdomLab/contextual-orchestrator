@@ -11,6 +11,28 @@ from pathlib import Path
 REPOSITORY_ROOT = Path(__file__).resolve().parents[1]
 
 
+def has_direct_stdlib_tomllib_import(source: str) -> bool:
+    """Return whether Python source imports the 3.11-only stdlib parser."""
+
+    tree = ast.parse(source)
+    return any(
+        (
+            isinstance(node, ast.Import)
+            and any(
+                alias.name == "tomllib" and alias.asname is None
+                for alias in node.names
+            )
+        )
+        or (isinstance(node, ast.ImportFrom) and node.module == "tomllib")
+        for node in ast.walk(tree)
+    )
+
+
+def test_tomllib_alias_is_rejected_at_the_python_floor() -> None:
+    """Reject aliased imports of the Python 3.11-only parser."""
+
+    assert has_direct_stdlib_tomllib_import("import tomllib as parser\n")
+
 
 def test_test_toml_parsers_support_declared_python_floor() -> None:
     """Keep every test module importable on the declared minimum Python."""
@@ -19,19 +41,9 @@ def test_test_toml_parsers_support_declared_python_floor() -> None:
     assert REPOSITORY_ROOT / "tests/fuzz/test_fuzz_properties.py" in test_paths
 
     for path in test_paths:
-        tree = ast.parse(path.read_text(encoding="utf-8"))
-        direct_stdlib_import = any(
-            (
-                isinstance(node, ast.Import)
-                and any(
-                    alias.name == "tomllib" and alias.asname is None
-                    for alias in node.names
-                )
-            )
-            or (isinstance(node, ast.ImportFrom) and node.module == "tomllib")
-            for node in ast.walk(tree)
-        )
-        assert not direct_stdlib_import, path
+        assert not has_direct_stdlib_tomllib_import(
+            path.read_text(encoding="utf-8")
+        ), path
 
     this_module = ast.parse(Path(__file__).read_text(encoding="utf-8"))
     imports = {
