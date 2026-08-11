@@ -61,6 +61,13 @@ def test_pytest_config_exposes_test_helpers_without_ci_path_injection() -> None:
     tests_workflow = (
         _REPOSITORY_ROOT / ".github" / "workflows" / "tests.yml"
     ).read_text(encoding="utf-8")
+    reasoning_workflow = (
+        _REPOSITORY_ROOT
+        / ".github"
+        / "workflows"
+        / "reasoning-workload-verify.yml"
+    ).read_text(encoding="utf-8")
 
     assert '[tool.pytest.ini_options]\npythonpath = ["tests"]' in project_config
     assert "PYTHONPATH:" not in tests_workflow
+    assert "PYTHONPATH:" not in reasoning_workflow
