@@ -417,6 +417,33 @@ def test_agent_and_cdd_guidance_use_current_product_and_adoption_language() -> N
         assert required_term.lower() in normalized
 
 
+def test_supporting_runtime_docs_use_status_qualified_product_language() -> None:
+    """Keep supporting runtime guides explicit about shipped and planned scope."""
+
+    analytics = read_text("docs/analytics_spec.md")
+    api_design = read_text("docs/rest_api_design.md")
+    i18n = read_text("docs/i18n_design.md")
+    combined = "\n".join((analytics, api_design, i18n))
+    normalized = " ".join(combined.split()).lower()
+
+    for stale_term in (
+        "prototype",
+        "Production Library Target",
+        "dependency-free",
+    ):
+        assert stale_term not in combined
+
+    assert combined.count("**Document state:**") == 3
+    for required_term in (
+        "implemented_on_protected_main",
+        "standalone runtime",
+        "not production telemetry",
+        "planned adoption candidate",
+        "optional compatibility extras",
+    ):
+        assert required_term.lower() in normalized
+
+
 def test_adr_index_and_schema_are_consistent() -> None:
     """Require every decision to be uniquely indexed, status-bearing, and recoverable."""
 
@@ -653,8 +680,8 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     for audited_head in (
         "8760993cb8262922a771948845c8dfd2afefb773",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
-        "12b65705b4657a677c54a8e520946067037eeb6a",  # PR #105
-        "8d537900b4179756ad16c8404fb17efce5f1e364",  # PR #104
+        "828ca54f2b96a3bdd7adec24a26c0d8164df47d1",  # PR #105
+        "8453f082672d96b564ff2c32d028b11e05d8729f",  # PR #104
         "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
@@ -687,6 +714,7 @@ def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
     assert "Remove the remaining stdlib-lab qualifier" in changelog
     assert "Replace stale lab/prototype and internal-name language" in changelog
     assert "Align Claude and conductor guidance" in changelog
+    assert "Status-qualify the analytics, REST API" in changelog
 
 
 if __name__ == "__main__":  # pragma: no cover
