@@ -105,6 +105,16 @@ merge blocker until code/test remediation and revalidation are complete. A
 non-blocking risk may be accepted only with an owner, rationale, tracking issue,
 and expiry date.
 
+Protected merge readiness additionally requires branch protection to report
+`requiredApprovals >= 1` and `enforce_admins=true`, GitHub's aggregate
+`reviewDecision=APPROVED`, an independent current-head approval, zero active
+unresolved threads, terminal successful required checks, structured same-head
+Strix evidence, and a final re-fetch immediately before any merge mutation.
+Branch protection and the central scheduler must each reject direct and auto
+merge when any control is absent or non-passing. A repository whose protection
+does not yet enforce these settings remains a required follow-up and cannot use
+an operational checklist as substitute merge evidence.
+
 ### Consequences
 
 * Good, because every new concern becomes a reviewable code/test/ADR item.
@@ -176,7 +186,7 @@ For each repository, record branch, commit, PR URL, review result, check result,
 | Merge permission is unavailable. | medium | medium | Continue local/remote checks, preserve the PR, and report the exact permission state; do not bypass protection. | repository admin |
 | Security-provider outage delays a required scan. | medium | high | Preserve the failed evidence, do not weaken the gate, and rerun the exact HEAD when an authorized provider is available. | CI owner |
 | Gate-version drift creates inconsistent no-report semantics across linked PRs. | medium | high | Pin/upgrade the shared trusted gate together, require structured-report evidence for both repositories, and keep the discrepancy visible in the PR/ADR. | CI owner |
-| Central scheduler policy is weaker than this ADR when branch protection requires zero approvals. | medium | critical | Keep auto-merge disabled, require independent current-head review and structured Strix evidence in the operational checklist, and do not treat a completed required check as sufficient when its semantic result is neutral/no-report. | repository/CI owner |
+| Central scheduler policy is weaker than this ADR when branch protection requires zero approvals. | medium | critical | Enforce the complete exact merge-gate contract in both branch protection and the scheduler; reject direct and auto merge whenever any required protection, approval, thread, check, Strix, identity, or final-refetch control is absent or non-passing. | repository/CI owner |
 
 ## Rollback / Exit Strategy
 
