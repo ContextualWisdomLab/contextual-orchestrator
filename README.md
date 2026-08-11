@@ -3,7 +3,8 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ContextualWisdomLab/contextual-orchestrator)
 [![Security](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/workflows/security.yml/badge.svg)](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/workflows/security.yml)
 
-Stdlib Python lab for a single API that routes, delegates, verifies, and synthesizes work across a configurable pool of OpenAI-compatible model agents.
+Provider-neutral OpenAI-compatible orchestration control plane that routes,
+conducts, verifies, and synthesizes work across governed model agents.
 
 This is not a Sakana AI product or a reproduction of their trained models. It is a small implementation of the public architecture pattern: expose one model-like interface while keeping the agent pool, routing, workflow, and verification logic behind it.
 
@@ -39,7 +40,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
   -d '{"model":"contextual-orchestrator","messages":[{"role":"user","content":"Analyze this code review task and verify the answer."}]}' | jq .
 ```
 
-HTTP serving is hardened for local lab use:
+HTTP serving is hardened for local deployment:
 
 - `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
