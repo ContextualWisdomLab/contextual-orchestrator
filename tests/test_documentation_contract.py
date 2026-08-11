@@ -913,3 +913,10 @@ def test_independent_review_evidence_fails_closed() -> None:
         weakened = normalized.replace(required_control, weakened_control, 1)
         with pytest.raises(AssertionError):
             _assert_independent_review_evidence_fails_closed(weakened)
+
+def test_canonical_documentation_has_no_trailing_whitespace() -> None:
+    """Keep canonical Markdown compatible with diff-integrity gates."""
+
+    for path in REQUIRED_FILES:
+        for line_number, line in enumerate(read_text(path).splitlines(), start=1):
+            assert line == line.rstrip(), f"{path}:{line_number}"
