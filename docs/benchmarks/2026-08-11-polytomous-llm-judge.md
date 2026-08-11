@@ -61,6 +61,32 @@ while K=7 was higher. Two repeated observations are not enough for uncertainty
 intervals or production calibration; balanced cases, prompt-order perturbations,
 and additional local judge models remain required.
 
+## Larger local judge comparison — 2026-08-12
+
+To test whether a larger local judge removes the category-count concern, a
+separate fixed case used three criteria (`factual_support`, `task_alignment`,
+and `risk_awareness`), a reference answer, temperature `0`, thinking disabled,
+and two repeats at each K. The answer asserted immediate shipment after a
+smoke test while the reference explicitly noted that rollback rehearsal, load
+testing, and independent review were absent. All eight Gemma 31B responses
+parsed through the same contextual-orchestrator path.
+
+| judge | K | repeats | scores | accepted | category rows (`factual_support`, `risk_awareness`, `task_alignment`) | total tokens | seconds |
+|---|---:|---:|:---:|:---:|:---|---:|---:|
+| `mlx-community/gemma-4-31b-it-4bit` | 2 | 2 | `(0.3333, 0.3333)` | `0/2` | `[(1,0,0), (1,0,0)]` | 1,256 | `56.288, 15.047` |
+| `mlx-community/gemma-4-31b-it-4bit` | 3 | 2 | `(0.3333, 0.3333)` | `0/2` | `[(1,0,1), (1,0,1)]` | 1,240 | `22.096, 13.138` |
+| `mlx-community/gemma-4-31b-it-4bit` | 5 | 2 | `(0.3333, 0.3333)` | `0/2` | `[(2,0,2), (2,0,2)]` | 1,252 | `23.581, 14.882` |
+| `mlx-community/gemma-4-31b-it-4bit` | 7 | 2 | `(0.3333, 0.3333)` | `0/2` | `[(4,0,2), (4,0,2)]` | 1,264 | `31.152, 20.346` |
+
+The larger Gemma kept the derived score and acceptance stable for this case,
+but changed criterion category placement as K grew; this is not evidence that
+larger models are unbiased. The cached
+`outlier-ai/deepseek-r1-distill-qwen-32b-mlx-4bit` judge did not return a
+structured response within the bounded 180-second request timeout on its first
+K=2 call. The sweep was stopped after that timeout, so no quality comparison is
+claimed for that model. Timeout and structured-output failure rate are therefore
+part of the performance gate alongside score drift and IRT shape validation.
+
 ## Defects found and fixed during the run
 
 The first local calls exposed model-format failures: numeric criterion keys,

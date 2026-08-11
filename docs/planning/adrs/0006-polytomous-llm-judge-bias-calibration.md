@@ -49,6 +49,10 @@ success_criteria:
     target: "only multi-item dichotomous or explicitly categorized polytomous rows reach fast-mlsirm"
     measurement_window: "every IRT conversion"
     source: "ADR 0005 validator and tests"
+  - metric: "local judge service reliability"
+    target: "every compared model reports bounded latency, timeout, structured-parse success, token usage, and score drift; a timeout or malformed response is a failed comparison, not an omitted datum"
+    measurement_window: "every local-model calibration benchmark"
+    source: "contextual-orchestrator traces and benchmark records"
 ---
 
 # Calibrate polytomous LLM judgment against category and prompt bias
@@ -134,6 +138,15 @@ K=2, 3, 5, and 7; acceptance counts were 0/2, 0/2, 0/2, and 2/2. The result
 reproduces category-count sensitivity but is non-monotonic, so it is not
 evidence for a universal positive-with-more-options law.
 
+A separate three-criterion case compared the cached Gemma 31B judge at the
+same K values. Its derived score stayed at 0.3333 and acceptance stayed 0/2 at
+every K, while the criterion categories moved with K; the eight responses all
+parsed successfully. The cached 32B DeepSeek judge did not produce a
+structured response within the 180-second request bound on its first K=2 call,
+so the comparison was stopped and no quality conclusion was drawn for it.
+This adds a reliability gate: the largest or most capable-looking local model
+is not a performance win if it cannot return a bounded, parseable judge result.
+
 For future high-stakes polytomous use, add cumulative threshold judgments or
 another ordinal construction that does not ask the model to pick one of many
 score IDs. This is a follow-up implementation direction, not a claim that
@@ -198,6 +211,7 @@ equal-width bins are unbiased.
 | Multiple criteria can still be correlated or cover one latent dimension poorly. | Require item coverage review, factor anchors, and sample-size checks before interpreting IRT fit. | Required next |
 | A single judge call can hide model drift. | Preserve contextual-orchestrator trace, model identity, prompt variant, category count, and usage in benchmark records. | Implemented in adapter trace and the 2026-08-11 benchmark artifact |
 | A one-person, two-item matrix can pass a shape check while remaining insufficient for IRT estimation. | Require multiple persons, item-information, and factor-coverage checks before fitting or interpreting an IRT model. | Required next |
+| A larger local judge can preserve the aggregate score while moving criterion categories, and a cached 32B judge timed out before producing structured output. | Gate model comparisons on bounded latency, timeout rate, strict-parse success, token usage, category occupancy, and score/acceptance drift; never treat a timeout as a missing or positive result. | Implemented in the 2026-08-12 benchmark; reliability calibration ongoing |
 | OA metadata does not guarantee that the original PDF can be downloaded into the local Zotero library: Zotero 9 exposes read-only Local API reads, SAGE returned anti-bot `403` for the Jones--Loe PDF, and the Iannario repository exposed a request-only copy while the publisher returned an empty `202`. | Record the official landing/PDF URL and retrieval evidence, attach only byte-verified original PDFs through the local Connector/API, and retry inaccessible OA sources from an authorized route or a Zotero version with local write/file-upload support. Never regenerate, OCR-rebuild, or substitute a PDF while claiming it is the original. | Required follow-up |
 
 ## Risks and Mitigations
@@ -208,6 +222,7 @@ equal-width bins are unbiased.
 | A prompt instruction suppresses but does not measure bias. | high | high | Keep perturbation experiments and report deltas; prompt wording alone is not evidence of neutrality. | evaluation owner |
 | Positive framing is confused with answer quality. | medium | high | Use content-only gold labels and neutral controls; keep sycophancy as a separate metric. | evaluation owner |
 | Category projection is used as a validated IRT instrument too early. | medium | high | ADR 0005 rejects scalar/one-item input and this ADR blocks uncalibrated category claims. | maintainer |
+| A large local model consumes device time or stalls before strict output. | medium | high | Use a bounded request timeout, record every timeout/parse failure, compare quality only on completed structured results, and keep a smaller verified fallback for exploratory work. | evaluation owner |
 
 ## Rollback / Exit Strategy
 
