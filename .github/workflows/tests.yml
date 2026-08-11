@@ -37,10 +37,6 @@ jobs:
           python -m pip install --require-hashes -r fuzz/requirements-property.txt
 
       - name: Run full test suite
-        env:
-          # Reasoning tests share deterministic fakes from tests/reasoning_fakes.py.
-          # Keep that test-only module importable without exposing it as package API.
-          PYTHONPATH: ${{ github.workspace }}/tests
         run: |
           python -m coverage erase
           python -m coverage run --branch -m pytest -q

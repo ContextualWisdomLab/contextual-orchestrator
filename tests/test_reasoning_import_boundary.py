@@ -53,3 +53,14 @@ assert ModelClient.chat is installed_chat
 """
     )
     assert result.returncode == 0, result.stderr
+
+
+def test_pytest_config_exposes_test_helpers_without_ci_path_injection() -> None:
+    """Plain local pytest must import shared fakes without workflow-only state."""
+    project_config = (_REPOSITORY_ROOT / "pyproject.toml").read_text(encoding="utf-8")
+    tests_workflow = (
+        _REPOSITORY_ROOT / ".github" / "workflows" / "tests.yml"
+    ).read_text(encoding="utf-8")
+
+    assert '[tool.pytest.ini_options]\npythonpath = ["tests"]' in project_config
+    assert "PYTHONPATH:" not in tests_workflow
