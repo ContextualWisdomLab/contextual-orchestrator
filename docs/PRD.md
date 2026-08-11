@@ -1,7 +1,7 @@
 # Product Requirements Document
 
-**Product:** Contextual Orchestrator  
-**Document state:** `accepted_architecture`  
+**Product:** Contextual Orchestrator<br>
+**Document state:** `accepted_architecture`<br>
 **Audience:** product owners, platform operators, API consumers, security and
 privacy reviewers, reliability engineers, and acquisition reviewers
 
