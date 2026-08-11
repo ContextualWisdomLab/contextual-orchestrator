@@ -34,10 +34,25 @@ def test_tomllib_alias_is_rejected_at_the_python_floor() -> None:
     assert has_direct_stdlib_tomllib_import("import tomllib as parser\n")
 
 
+def discover_test_modules(test_root: Path) -> list[Path]:
+    """Return modules matching the repository's pytest filename contract."""
+
+    return sorted(test_root.rglob("test*.py"))
+
+
+def test_pytest_suffix_named_modules_are_scanned(tmp_path: Path) -> None:
+    """Include pytest's suffix-style module naming convention."""
+
+    suffix_named_test = tmp_path / "metadata_test.py"
+    suffix_named_test.write_text("import tomllib as parser\n", encoding="utf-8")
+
+    assert suffix_named_test in discover_test_modules(tmp_path)
+
+
 def test_test_toml_parsers_support_declared_python_floor() -> None:
     """Keep every test module importable on the declared minimum Python."""
 
-    test_paths = sorted((REPOSITORY_ROOT / "tests").rglob("test*.py"))
+    test_paths = discover_test_modules(REPOSITORY_ROOT / "tests")
     assert REPOSITORY_ROOT / "tests/fuzz/test_fuzz_properties.py" in test_paths
 
     for path in test_paths:
