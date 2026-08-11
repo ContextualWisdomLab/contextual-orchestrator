@@ -6,7 +6,10 @@
 Provider-neutral OpenAI-compatible orchestration control plane that routes,
 conducts, verifies, and synthesizes work across governed model agents.
 
-This is not a Sakana AI product or a reproduction of their trained models. It is a small implementation of the public architecture pattern: expose one model-like interface while keeping the agent pool, routing, workflow, and verification logic behind it.
+Contextual Orchestrator is independently implemented from published
+orchestration concepts. It includes no third-party trained model weights or
+proprietary artifacts; operators supply models through provider-neutral
+OpenAI-compatible endpoints.
 
 Product, technical, security, data-model, operational, and decision authority
 is indexed in [docs/README.md](docs/README.md). Capability status is qualified
