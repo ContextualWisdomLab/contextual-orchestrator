@@ -198,6 +198,7 @@ equal-width bins are unbiased.
 | Multiple criteria can still be correlated or cover one latent dimension poorly. | Require item coverage review, factor anchors, and sample-size checks before interpreting IRT fit. | Required next |
 | A single judge call can hide model drift. | Preserve contextual-orchestrator trace, model identity, prompt variant, category count, and usage in benchmark records. | Implemented in adapter trace and the 2026-08-11 benchmark artifact |
 | A one-person, two-item matrix can pass a shape check while remaining insufficient for IRT estimation. | Require multiple persons, item-information, and factor-coverage checks before fitting or interpreting an IRT model. | Required next |
+| OA metadata does not guarantee that the original PDF can be downloaded into the local Zotero library: Zotero 9 exposes read-only Local API reads, SAGE returned anti-bot `403` for the Jones--Loe PDF, and the Iannario repository exposed a request-only copy while the publisher returned an empty `202`. | Record the official landing/PDF URL and retrieval evidence, attach only byte-verified original PDFs through the local Connector/API, and retry inaccessible OA sources from an authorized route or a Zotero version with local write/file-upload support. Never regenerate, OCR-rebuild, or substitute a PDF while claiming it is the original. | Required follow-up |
 
 ## Risks and Mitigations
 
@@ -239,6 +240,15 @@ local Connector could not download those two originals during this run
 They remain explicit follow-up attachment work rather than being represented
 by fabricated or regenerated PDFs.
 
+The Jones--Loe publisher page and PDF are marked open access/CC BY and the
+original PDF is independently readable through the web research path, but the
+local download path still returned 403. The Iannario institutional record
+labels the editorial PDF as public-domain metadata while requiring an
+authorized copy request; this is not sufficient evidence of a locally
+retrievable file. The four attached PDFs above remain the only attachments
+counted as verified originals until each additional file passes a PDF magic
+header, size, checksum, and Zotero attachment-parent check.
+
 Primary sources:
 
 * https://arxiv.org/abs/2506.22316
@@ -247,3 +257,7 @@ Primary sources:
 * https://www.anthropic.com/research/towards-understanding-sycophancy-in-language-models
 * https://www.degruyterbrill.com/document/doi/10.1515/ijb-2021-0013/html
 * https://journals.sagepub.com/doi/10.1177/2158244013489691
+* https://journals.sagepub.com/doi/pdf/10.1177/2158244013489691
+* https://www.iris.unina.it/handle/11588/877609
+* https://www.zotero.org/support/dev/web_api/v3/local_api
+* https://www.zotero.org/support/dev/web_api/v3/file_upload
