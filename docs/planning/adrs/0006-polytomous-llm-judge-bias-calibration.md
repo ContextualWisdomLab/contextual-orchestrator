@@ -126,6 +126,14 @@ exact literal schema containing the validated criterion IDs and explicit
 ordered anchors, accepts only mathematically integral category values, and
 rejects the rest without keyword or positional repair.
 
+After the prompt was made explicit about JSON-only output, no markdown fences,
+integer category values, and a numeric top-level score, the same Gemma 4B case
+was repeated twice at each K. All eight calls parsed successfully through the
+contextual-orchestrator route. Mean scores were 0.50, 0.50, 0.00, and 0.75 for
+K=2, 3, 5, and 7; acceptance counts were 0/2, 0/2, 0/2, and 2/2. The result
+reproduces category-count sensitivity but is non-monotonic, so it is not
+evidence for a universal positive-with-more-options law.
+
 For future high-stakes polytomous use, add cumulative threshold judgments or
 another ordinal construction that does not ask the model to pick one of many
 score IDs. This is a follow-up implementation direction, not a claim that
@@ -182,6 +190,7 @@ equal-width bins are unbiased.
 | A local category judge emitted numeric keys, instruction text as a key, and decimal category values. | Prompt an exact literal schema with criterion IDs and anchors; accept integral JSON numbers only and reject malformed output. | Implemented |
 | The positive-with-more-options hypothesis lacks a direct monotonic LLM proof. | Add K=2/3/5/7 paired calibration and treat positive drift as a gate failure. | Required next |
 | A real K=2/3/5/7 sweep changed the same case’s derived score and acceptance. | Keep category projection experimental, report the complete sweep, and block production IRT claims until replicated calibration is stable. | Implemented as benchmark; gate ongoing |
+| A prompt-hardened two-repeat K=2/3/5/7 sweep parsed reliably but remained non-monotonic (K=5 below K=2/3; K=7 above them). | Keep strict parsing and report replication variance; expand balanced cases, criterion/rubric order, answer-option count/order, framing, and model variants before drawing a directional bias conclusion. | Required next |
 | Score IDs and rubric order can change absolute judgments. | Randomize or balance labels/order and record signed perturbation deltas. | Required next |
 | User framing can induce positive or negative sycophantic feedback. | Add neutral, liked, disliked, and authored framing controls; compare to content-only gold. | Required next |
 | Equal-width score bins can create artificial polytomous thresholds. | Implement cumulative threshold judging or calibrated category mapping before production IRT use. | Ongoing |

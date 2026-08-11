@@ -38,6 +38,29 @@ the equal-width category-to-score mapping remains experimental, and the
 calibration gate in ADR 0006 is required before interpreting these values as a
 stable latent trait.
 
+## Prompt-hardening replication — 2026-08-12
+
+The strict judge prompt was then made explicit about one JSON object, no
+markdown fences, integer category values, and a decimal top-level score only.
+The same task, answer, reference, criteria, temperature `0`, disabled thinking,
+and `mlx-community/gemma-4-e4b-it-4bit` judge were run twice at each K. Every
+result remained on the required
+`fast-mlsirm.ContextualOrchestratorJudge -> contextual-orchestrator -> mlx-lm`
+path, and all eight responses parsed without repair or keyword matching.
+
+| K | repeats | scores | accepted | category rows | total judge tokens | mean seconds |
+|---:|---:|:---:|:---:|:---:|---:|---:|
+| 2 | 2 | `(0.5, 0.5)` | `0/2` | `[(1,0), (1,0)]` | 1,252 | 4.546 |
+| 3 | 2 | `(0.5, 0.5)` | `0/2` | `[(1,1), (1,1)]` | 1,244 | 2.647 |
+| 5 | 2 | `(0.0, 0.0)` | `0/2` | `[(0,0), (0,0)]` | 1,242 | 2.505 |
+| 7 | 2 | `(0.75, 0.75)` | `2/2` | `[(4,5), (4,5)]` | 1,282 | 2.882 |
+
+This replication strengthens the finding of category-count sensitivity but still
+does not establish a universal positive bias: K=5 was lower than K=2 and K=3,
+while K=7 was higher. Two repeated observations are not enough for uncertainty
+intervals or production calibration; balanced cases, prompt-order perturbations,
+and additional local judge models remain required.
+
 ## Defects found and fixed during the run
 
 The first local calls exposed model-format failures: numeric criterion keys,
