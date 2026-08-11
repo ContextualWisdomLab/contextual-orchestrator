@@ -553,7 +553,6 @@ _USAGE_COLUMNS = (
     "cost_amount",
     "currency_code",
 )
-_USAGE_COLUMNS_SQL = ", ".join(_USAGE_COLUMNS)
 _DIMENSION_SELECT_SQL = {
     "qmark": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?",
     "pyformat": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s",
@@ -570,15 +569,29 @@ _DIMENSION_INSERT_SQL = {
 }
 _USAGE_INSERT_SQL = {
     "qmark": (
-        f"INSERT INTO llm_usage_records ({_USAGE_COLUMNS_SQL}) VALUES "
+        "INSERT INTO llm_usage_records "
+        "(usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code) VALUES "
         "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ),
     "pyformat": (
-        f"INSERT INTO llm_usage_records ({_USAGE_COLUMNS_SQL}) VALUES "
+        "INSERT INTO llm_usage_records "
+        "(usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code) VALUES "
         "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
     ),
 }
-_USAGE_SELECT_SQL = f"SELECT {_USAGE_COLUMNS_SQL} FROM llm_usage_records"
+_USAGE_SELECT_SQL = (
+    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+    "route_mode, provider_name, model_name, account_name, service_name, "
+    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+    "completion_tokens, total_tokens, cost_amount, currency_code "
+    "FROM llm_usage_records"
+)
 _USAGE_QUERY_SQL = {
     (style, has_start, has_end): query
     for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))

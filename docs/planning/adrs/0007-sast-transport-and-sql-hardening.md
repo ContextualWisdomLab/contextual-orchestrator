@@ -52,7 +52,9 @@ The first remote PR security run found five blocking findings. Three were
 reported in the SQL ledger, one in the explicit TLS opt-out, and one in the
 provider request transport. The ledger already used fixed column names and
 bound values, but its f-strings made that safety difficult for the scanner and
-left the parameter-style boundary implicit.
+left the parameter-style boundary implicit. A follow-up scan showed that the
+first fixed-template change still interpolated the fixed column list, so Ruff
+S608 remained reproducible even though runtime values were bound.
 
 > Semgrep reported raw-query construction at the three fixed SQL execution sites in cost_ledger.py.
 >
@@ -121,7 +123,7 @@ verification or URL validation.
 
 | Finding | Direction | State |
 | --- | --- | --- |
-| Semgrep flagged three f-string SQL statements. | Replace them with fixed qmark/pyformat templates and continue binding all values. | Implemented |
+| Semgrep/Ruff flagged three f-string SQL statements that still interpolated a fixed column list. | Declare complete qmark/pyformat INSERT and SELECT templates as literals, keep all values bound, and add a pyformat regression covering seed, append, and all four query windows. | Implemented locally 2026-08-12; exact-head CI/SAST revalidation required |
 | `paramstyle` accepted arbitrary values and silently selected pyformat. | Reject styles other than qmark and pyformat at construction. | Implemented |
 | `ssl._create_unverified_context` made an insecure remote mode executable. | Remove the bypass and keep `ssl.create_default_context` or a validated custom CA bundle. | Implemented |
 | `urllib.request.urlopen` accepted a dynamically assembled request URL. | Use `http.client` with scheme/host/userinfo validation at the final I/O boundary. | Implemented |

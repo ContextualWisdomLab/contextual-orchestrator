@@ -38,6 +38,37 @@ class _FailingLedgerStore:
         return []
 
 
+class _PyformatCursor:
+    def __init__(self, connection) -> None:
+        self._connection = connection
+        self._cursor = connection._sqlite.cursor()
+
+    def execute(self, statement, params=()):
+        if statement.count("%s") != len(params):
+            raise AssertionError("pyformat placeholders and values diverged")
+        self._connection.executions.append((statement, tuple(params)))
+        self._cursor.execute(statement.replace("%s", "?"), tuple(params))
+        return self
+
+    def fetchone(self):
+        return self._cursor.fetchone()
+
+    def fetchall(self):
+        return self._cursor.fetchall()
+
+
+class _PyformatConnection:
+    def __init__(self) -> None:
+        self._sqlite = sqlite3.connect(":memory:")
+        self.executions = []
+
+    def cursor(self):
+        return _PyformatCursor(self)
+
+    def commit(self) -> None:
+        self._sqlite.commit()
+
+
 def test_price_computation_uses_per_1k_rates() -> None:
     ledger = _priced_ledger()
     # 1000 prompt * $2/1k + 500 completion * $4/1k = 2.0 + 2.0 = 4.0
@@ -250,6 +281,27 @@ def test_sql_ledger_rejects_unknown_parameter_style() -> None:
         assert "paramstyle must be qmark or pyformat" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("unknown DB-API parameter style must be rejected")
+
+
+def test_sql_ledger_store_pyformat_binds_all_query_windows() -> None:
+    connection = _PyformatConnection()
+    store = SqlLedgerStore(connection, paramstyle="pyformat")
+    ledger = _priced_ledger(store=store)
+    ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=1000,
+                        completion_tokens=0, created_at=100)
+    ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=2000,
+                        completion_tokens=0, created_at=200)
+    ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=3000,
+                        completion_tokens=0, created_at=300)
+
+    assert [row["created_at"] for row in store.query()] == [100, 200, 300]
+    assert [row["created_at"] for row in store.query(start=150)] == [200, 300]
+    assert [row["created_at"] for row in store.query(end=300)] == [100, 200]
+    assert [row["created_at"] for row in store.query(start=150, end=300)] == [200]
+    insert_calls = [call for call in connection.executions if "INSERT INTO llm_usage_records" in call[0]]
+    assert insert_calls[0][1][1] == 100
+    query_calls = [call for call in connection.executions if "SELECT usage_record_id" in call[0]]
+    assert [call[1] for call in query_calls[-4:]] == [(), (150,), (300,), (150, 300)]
 
 
 def test_ledger_table_names_follow_two_word_snake_case() -> None:
