@@ -845,16 +845,37 @@ def test_deployment_uml_keeps_credentials_behind_provider_adapter() -> None:
 
 
 def _assert_independent_review_evidence_fails_closed(decision: str) -> None:
-    """Assert that ADR-0010 retains its review-evidence vocabulary."""
+    """Assert that ADR-0010 retains every fail-closed review control."""
 
-    for required_term in (
-        "reviewDecision",
-        "APPROVED",
-        "REVIEW_REQUIRED",
-        "CHANGES_REQUESTED",
-        "structured same-head Strix",
-    ):
-        assert required_term in decision
+    normalized = " ".join(decision.split())
+    required_controls = (
+        "`reviewDecision` must be `APPROVED` for the unchanged head",
+        (
+            "A missing decision, `REVIEW_REQUIRED`, or `CHANGES_REQUESTED` "
+            "blocks the mutation even when branch protection currently allows "
+            "zero approvals"
+        ),
+        "An eligible independent non-author approval must also be present",
+        (
+            "the aggregate field is evidence of the combined repository state, "
+            "not a substitute reviewer"
+        ),
+        (
+            "A completed, successful, structured same-head Strix report is "
+            "separately required"
+        ),
+        (
+            "Queued, in-progress, neutral/no-report, cancelled, skipped, absent, "
+            "or predecessor-head Strix states block merge"
+        ),
+        (
+            "If the aggregate review state regresses or a required check becomes "
+            "incomplete after auto-merge is queued, automation disables that "
+            "queued mutation and starts exact-head verification again"
+        ),
+    )
+    for required_control in required_controls:
+        assert required_control in normalized
 
 
 def test_independent_review_evidence_fails_closed() -> None:
