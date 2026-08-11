@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Add a canonical release, migration, and rollback guide that binds protected-source identity, reproducible build and artifact provenance, state migration, publication, rollback, and protected-main operational acceptance without presenting Draft evidence as shipped.
 - Establish a canonical status-qualified product documentation graph spanning PRD, TRD, architecture, UML, ERD, ADRs, threat model, test strategy, operability, incident response, traceability, standards/research references, and machine-checked authority boundaries without promoting active or planned work as shipped.
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, and the supported-platform uncertainty boundary.
 - Add provider-response resource-bound doctoring covering the 8 MiB fail-closed limit, HTTP framing preflight, `text/event-stream` media-type enforcement, bounded SSE reads, OpenAI-compatible `[DONE]` completion evidence, malformed-event and premature-EOF handling, batch-output partitioning, incident handling, and operational rollback.
