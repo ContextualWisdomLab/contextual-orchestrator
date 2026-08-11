@@ -28,6 +28,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Align Claude and conductor guidance with the current provider-neutral product and status-qualified dependency-adoption boundary, removing legacy lab and internal gate names.
 - Replace stale lab/prototype and internal-name language in library research with machine-checked current-stack and adoption-status boundaries for the stdlib HTTP/admin path and optional API/database extras.
 - Correct the supporting product plan's enterprise-auth boundary: the standalone runtime has coarse admin/inference bearer scopes, not tenant-aware RBAC, while the host owns enterprise identity and tenancy.
 - Remove the remaining stdlib-lab qualifier from spend observability and describe the evidence boundary as a standalone deployment without promoting local signals to billing or compliance evidence.

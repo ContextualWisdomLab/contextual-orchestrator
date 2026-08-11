@@ -390,6 +390,33 @@ def test_library_research_uses_current_stack_and_status_vocabulary() -> None:
         assert required_term in research
 
 
+def test_agent_and_cdd_guidance_use_current_product_and_adoption_language() -> None:
+    """Keep agent and CDD guidance aligned with the current product authority."""
+
+    claude = read_text("CLAUDE.md")
+    workflow = read_text("conductor/workflow.md")
+    stack = read_text("conductor/tech-stack.md")
+    combined = "\n".join((claude, workflow, stack))
+    normalized = " ".join(combined.split()).lower()
+
+    for stale_term in (
+        "stdlib-Python lab",
+        "Ponytail design gate",
+        "Ponytail Design Gate",
+        "after this lab hardens",
+    ):
+        assert stale_term not in combined
+
+    for required_term in (
+        "provider-neutral OpenAI-compatible orchestration control plane",
+        "dependency-adoption gate",
+        "current implementation dependencies",
+        "planned adoption candidates",
+        "optional extras are installable compatibility surfaces",
+    ):
+        assert required_term.lower() in normalized
+
+
 def test_adr_index_and_schema_are_consistent() -> None:
     """Require every decision to be uniquely indexed, status-bearing, and recoverable."""
 
@@ -626,8 +653,8 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     for audited_head in (
         "8760993cb8262922a771948845c8dfd2afefb773",  # PR #108
         "28088b9fc86d975b43637b7758d25e20d61c5786",  # PR #107
-        "8ce282ddf6c43bcb49301e95c8d9c12f1a72cd72",  # PR #105
-        "4e22a9b0883d3f6acbe6ddee302fa623c66a44cf",  # PR #104
+        "12b65705b4657a677c54a8e520946067037eeb6a",  # PR #105
+        "8d537900b4179756ad16c8404fb17efce5f1e364",  # PR #104
         "2502915a8e90059074167e6306b47148a1d40fdc",  # PR #99
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
@@ -659,6 +686,7 @@ def test_canonical_documentation_change_is_recorded_in_changelog() -> None:
     assert "Replace the competitor-centric README disclaimer" in changelog
     assert "Remove the remaining stdlib-lab qualifier" in changelog
     assert "Replace stale lab/prototype and internal-name language" in changelog
+    assert "Align Claude and conductor guidance" in changelog
 
 
 if __name__ == "__main__":  # pragma: no cover

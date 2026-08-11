@@ -77,7 +77,12 @@ CI gates: `.github/workflows/security.yml` (CodeQL + pip-audit on `requirements.
 
 ## What this is
 
-A stdlib-Python lab implementing a single OpenAI-compatible API that routes, delegates, verifies, and synthesizes work across a configurable pool of model agents — plus the org's cost-review and sync-vs-batch routing hub. Runtime dependencies are the Python standard library only (Hypothesis is the sole listed dependency, for the property tests); FastAPI/SQLAlchemy/psycopg exist as *optional* extras for the hardened production target, not the current runtime.
+A provider-neutral OpenAI-compatible orchestration control plane that routes,
+conducts, verifies, and synthesizes work across governed model agents, plus the
+organization's cost-review and sync-versus-batch routing hub. The current HTTP
+and control path uses the Python standard library. The optional `api` and `db`
+extras are installable compatibility surfaces; they do not establish FastAPI,
+SQLAlchemy ORM, or Alembic as owners of a current production call path.
 
 ## Architecture
 
@@ -94,7 +99,7 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 
 - `orchestrator.py` — the domain heart: `ModelAgent`, `WorkflowStep`, `OrchestrationPolicy`, `ModelClient`, `TaskOrchestrator`, secret/PII redaction, budget enforcement, spend analytics, and the commercial-readiness report generators behind `/api/v1/*`. Domain code stays here until a second implementation forces extraction (see `docs/code_conventions.md`).
 - `server.py` — HTTP delivery adapter and `SecurityConfig`; all request validation lives here.
-- `admin.py` — static HTML/CSS/JS for the `/admin` operator console (stays inline while the product is dependency-free).
+- `admin.py` — static HTML/CSS/JS for the current `/admin` operator console.
 - `credentials.py` / `kv_config.py` — the KV seam: `get_credential`/`register_credential` over pluggable backends (`InMemoryCredentialBackend` default; pgcrypto-encrypted `PostgresCredentialBackend`, selected via `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`).
 - `cost_ledger.py` / `cost_router.py` / `batch_routing.py` / `token_counting.py` — the cost-review + routing hub: prompt-safe usage ledger with seven attribution dimensions, `RoutingPolicy` (sync vs batch from request hints + KV thresholds), and the [pg-llm-batch](https://github.com/ContextualWisdomLab/pg-llm-batch) batch/embeddings backends (a local in-process backend keeps the standalone path working with no external service).
 - `api_contract.py` / `conventions.py` — API-shape and naming-rule enforcement helpers.
@@ -104,12 +109,12 @@ Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/ag
 
 ### `conductor/` — context, not code
 
-`conductor/` is the CDD (context-driven development) directory, not a Python package: `product.md` (intent and non-goals), `tech-stack.md` (stdlib-only rationale), `workflow.md` (the TDD/DDD/CDD method and the Ponytail design gate), `tracks.md` (active tracks). Update it when scope, dependencies, workflow, or domain terms change.
+`conductor/` is the CDD (context-driven development) directory, not a Python package: `product.md` (intent and non-goals), `tech-stack.md` (current and planned dependency status), `workflow.md` (the TDD/DDD/CDD method and dependency-adoption gate), `tracks.md` (active tracks). Update it when scope, dependencies, workflow, or domain terms change.
 
 ## Key conventions
 
 - **TDD from papers**: paper claims (Fugu, TRINITY, Conductor — see `docs/architecture.md`) become executable contracts in `tests/` *before* implementation changes. Many tests assert doc/API contracts, so behavior changes usually require updating the matching `docs/*.md` in the same PR.
 - **Naming**: configurable, API, and DB object names must be lower snake_case with **two or more semantic words** (`agent_pool`, `workflow_run`; never `agent` or `agentPool`). Enforced by `conventions.require_object_name()` and `tests/test_conventions.py`. Paper role values (`thinker`, `worker`, `verifier`, `synthesizer`) are deliberate exceptions.
-- **Ponytail design gate**: before adding a dependency or designing a subsystem, research existing libraries and record the decision in `docs/library_research.md`. No new dependency when the stdlib or an already selected library covers the need; no interface or factory until a second real implementation exists.
+- **Dependency-adoption gate**: before adding a dependency or designing a subsystem, research existing libraries and record the decision in `docs/library_research.md`. No new dependency when the standard library or an already selected library covers the need; no interface or factory until a second real implementation exists.
 - **Honest metrics**: spend/analytics surfaces label estimates (`usage_source`, `measurement_status`) and never fabricate prices — preserve this when touching analytics.
 - **Fuzz seams**: untrusted-input parsers (request body, agent config, redaction, orchestration) share invariant checks in `fuzz/targets.py`, driven by both Hypothesis (`tests/fuzz/`) and Atheris (`fuzz/`). New parsing seams should get a target there (see `docs/fuzzing.md`).
