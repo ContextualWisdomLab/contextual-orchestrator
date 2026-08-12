@@ -16,8 +16,19 @@ Conductor into separate products.
 Figma Code Connect is not used for discovery, metadata, code generation, or
 artifact creation.
 
-Review process is not a blocker. Reviewer delay, review bot delay, queued model
-review, and pending checks without concrete failure remain non-blocking.
+**Product evidence** and **release authorization** are separate:
+
+| Surface | Meaning |
+|---|---|
+| `product_evidence_status` | Local/demo completeness of package artifacts and measured local endpoints. Useful for buyer walkthroughs even when release is not authorized. |
+| `release_authorization` | Fail-closed gate over exact protected-head identity, required checks on that head, independent non-author approval, and zero unresolved findings. |
+| `release_status` | Combined ship gate: blocked if product evidence is blocked **or** release authorization is incomplete. |
+
+Queued, pending, skipped-required, cancelled, neutral-required, stale-head,
+predecessor-head, author-only approval, absent evidence, and unresolved findings
+**block release authorization**. They never count as success. Warnings that are
+only production/buyer-specific caveats remain warnings for product evidence and
+do not authorize a protected release by themselves.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 the repository as one deployable product until a second product, independent
@@ -37,6 +48,7 @@ necessary.
 | Analytics snapshot | `/api/v1/analytics_snapshots/latest` | Local KPI and guardrail source. |
 | Admin console | `/admin` | Operator-visible release status. |
 | Repository packet | `README.md`, `docs/rest_api_design.md`, commercial docs | Distribution and due-diligence packet. |
+| Release authority (optional call arg) | CI/PR exact-head evidence | Fail-closed authorization identity. |
 
 ## Runtime Shape
 
@@ -44,9 +56,12 @@ necessary.
 
 - `release_status`: `commercial_release_ready`,
   `commercial_release_ready_with_warnings`, or `commercial_release_blocked`;
+- `product_evidence_status`: same enum, scoped to product/package evidence only;
+- `release_authorization`: `{authorization_status, blocker_reasons, evidence_identity}`;
 - `measurement_status`: `local_commercial_release_candidate`;
-- `release_summary`: artifact count, blocked count, warning count, and
-  `review_process_is_blocker=false`;
+- `release_summary`: artifact counts plus `review_process_is_blocker` (true when
+  release authorization is incomplete);
+- `release_authority_blockers`: machine-readable authorization blockers;
 - `release_artifacts`: acceptance check, runtime endpoint chain, repository
   distribution packet, security/package metadata, admin operator surface,
   verification evidence, Figma artifacts, review-process policy, and packaging
@@ -63,13 +78,39 @@ necessary.
 
 | Status | Rule |
 |---|---|
-| `commercial_release_ready` | All release artifacts are ready and no external gaps remain. |
-| `commercial_release_ready_with_warnings` | Release artifacts are ready, but production or buyer-specific evidence still needs review. |
-| `commercial_release_blocked` | Any release artifact is blocked or a concrete blocker exists. |
+| `commercial_release_ready` | Product artifacts ready, no external gaps, **and** release authorization authorized. |
+| `commercial_release_ready_with_warnings` | Product artifacts ready with only caveated external gaps, **and** release authorization authorized. |
+| `commercial_release_blocked` | Any product artifact is blocked, a concrete product blocker exists, **or** release authorization is incomplete. |
+
+## Fail-closed release authorization
+
+Callers (or a future CI binder) may pass `release_authority` into
+`TaskOrchestrator.commercial_release_candidate_report(...)` with:
+
+```json
+{
+  "protected_head_sha": "<integrated main SHA>",
+  "exact_head_sha": "<same SHA>",
+  "required_checks": [
+    {"check_name": "Full unit and contract suite", "conclusion": "success", "head_sha": "<same SHA>"}
+  ],
+  "independent_approvals": [
+    {"reviewer_login": "reviewer", "author_association": "MEMBER"}
+  ],
+  "unresolved_findings": [],
+  "author_login": "pr-author"
+}
+```
+
+Absence of that object is **not** success: authorization is blocked with
+`release_authority_evidence_absent` while product evidence remains readable.
+
+Governance alignment: release integrity evidence is fail-closed so buyers cannot
+treat pending review queues as authorized ship state (NIST, 2022).
 
 ## KRW 2B Commercial Release Candidate
 
-The release candidate is ready for buyer review when:
+The release candidate is **product-inspectable** when:
 
 - the commercial acceptance check has no concrete blockers;
 - runtime endpoint chain and admin surface are visible;
@@ -77,11 +118,17 @@ The release candidate is ready for buyer review when:
 - focused tests and `pytest -q` are named as verification evidence;
 - Figma artifacts are recorded and editable;
 - Code Connect exclusion is explicit;
-- review-process delay is not counted as a product blocker;
 - library split is deferred until a real extraction trigger exists.
 
-Warnings remain acceptable when they are explicitly labeled as
-`proposed_until_production` or `proposed_until_buyer_specific`.
+It is **release-authorized** only when product evidence is not blocked **and**
+exact-head release authority evidence is complete.
+
+## References
+
+NIST. (2022). *Secure software development framework (SSDF) version 1.1:
+Recommendations for mitigating the risk of software vulnerabilities*
+(NIST Special Publication 800-218). National Institute of Standards and
+Technology. https://doi.org/10.6028/NIST.SP.800-218
 
 ## Plugin Traceability
 

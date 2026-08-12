@@ -48,6 +48,163 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
+# Outcomes that never authorize a protected-head release, even when labeled "neutral".
+_RELEASE_CHECK_NON_PASS = frozenset({
+    "",
+    "queued",
+    "pending",
+    "in_progress",
+    "waiting",
+    "requested",
+    "skipped",
+    "cancelled",
+    "canceled",
+    "failed",
+    "failure",
+    "timed_out",
+    "action_required",
+    "stale",
+    "neutral",
+    "startup_failure",
+})
+_RELEASE_CHECK_PASS = frozenset({"success", "pass", "passed"})
+
+
+def evaluate_release_authorization(release_authority: dict[str, Any] | None) -> dict[str, Any]:
+    """Fail-closed gate for buyer-facing *release authorization* evidence.
+
+    Product/demo evidence may still be inspectable when this gate blocks. Absence,
+    pending, skipped-required, cancelled, stale-head, author-only approval, or any
+    unresolved finding is never treated as success. Credentials and private
+    reasoning must not appear in the returned structure.
+
+    Parameters
+    ----------
+    release_authority:
+        Optional machine-readable evidence for the exact integrated head. Expected
+        keys (all optional; missing keys become explicit blockers):
+
+        - ``protected_head_sha`` / ``exact_head_sha``: integrated commit identities
+        - ``required_checks``: ``[{check_name, conclusion, head_sha}]``
+        - ``independent_approvals``: ``[{reviewer_login, author_association}]``
+        - ``unresolved_findings``: ``[{finding_id, source_name}]`` (empty list ok)
+        - ``author_login``: PR author, used to reject self-approval
+
+    Returns
+    -------
+    dict
+        ``authorization_status`` (``release_authorized`` | ``release_authorization_blocked``),
+        ``blocker_reasons`` (stable snake_case codes), and redacted ``evidence_identity``.
+    """
+    if not isinstance(release_authority, dict) or not release_authority:
+        return {
+            "authorization_status": "release_authorization_blocked",
+            "blocker_reasons": ["release_authority_evidence_absent"],
+            "evidence_identity": {
+                "protected_head_sha": None,
+                "exact_head_sha": None,
+                "required_check_count": 0,
+                "passing_required_check_count": 0,
+                "independent_approval_count": 0,
+                "unresolved_finding_count": 0,
+            },
+        }
+
+    blockers: list[str] = []
+    protected = release_authority.get("protected_head_sha")
+    exact = release_authority.get("exact_head_sha")
+    if not isinstance(protected, str) or not protected.strip():
+        blockers.append("protected_head_identity_absent")
+        protected = None
+    else:
+        protected = protected.strip()
+    if not isinstance(exact, str) or not exact.strip():
+        blockers.append("exact_head_identity_absent")
+        exact = None
+    else:
+        exact = exact.strip()
+    if protected and exact and protected != exact:
+        blockers.append("exact_head_not_protected_head")
+
+    checks = release_authority.get("required_checks")
+    if not isinstance(checks, list) or not checks:
+        blockers.append("required_checks_absent")
+        checks = []
+    passing = 0
+    for index, check in enumerate(checks):
+        if not isinstance(check, dict):
+            blockers.append(f"required_check_invalid_{index}")
+            continue
+        conclusion = str(check.get("conclusion") or check.get("status") or "").strip().lower()
+        check_head = check.get("head_sha")
+        if conclusion in _RELEASE_CHECK_NON_PASS or conclusion not in _RELEASE_CHECK_PASS:
+            code = conclusion or "missing_conclusion"
+            blockers.append(f"required_check_not_passing:{code}")
+            continue
+        if exact and isinstance(check_head, str) and check_head.strip() and check_head.strip() != exact:
+            blockers.append("required_check_stale_or_predecessor_head")
+            continue
+        if exact and (not isinstance(check_head, str) or not check_head.strip()):
+            blockers.append("required_check_head_identity_absent")
+            continue
+        passing += 1
+
+    author = release_authority.get("author_login")
+    author_login = author.strip().lower() if isinstance(author, str) else ""
+    approvals = release_authority.get("independent_approvals")
+    if not isinstance(approvals, list):
+        blockers.append("independent_approvals_absent")
+        approvals = []
+    independent = 0
+    for approval in approvals:
+        if not isinstance(approval, dict):
+            continue
+        login = str(approval.get("reviewer_login") or "").strip().lower()
+        if not login:
+            continue
+        if author_login and login == author_login:
+            blockers.append("author_only_approval_insufficient")
+            continue
+        independent += 1
+    if independent < 1:
+        if "author_only_approval_insufficient" not in blockers and "independent_approvals_absent" not in blockers:
+            blockers.append("independent_approval_missing")
+
+    findings = release_authority.get("unresolved_findings")
+    if findings is None:
+        blockers.append("unresolved_findings_evidence_absent")
+        finding_count = 0
+    elif not isinstance(findings, list):
+        blockers.append("unresolved_findings_invalid")
+        finding_count = 0
+    else:
+        finding_count = len(findings)
+        if finding_count:
+            blockers.append("unresolved_findings_present")
+
+    # De-duplicate while preserving order for stable API output.
+    seen: set[str] = set()
+    unique_blockers: list[str] = []
+    for reason in blockers:
+        if reason not in seen:
+            seen.add(reason)
+            unique_blockers.append(reason)
+
+    authorized = not unique_blockers
+    return {
+        "authorization_status": "release_authorized" if authorized else "release_authorization_blocked",
+        "blocker_reasons": unique_blockers,
+        "evidence_identity": {
+            "protected_head_sha": protected,
+            "exact_head_sha": exact,
+            "required_check_count": len(checks),
+            "passing_required_check_count": passing,
+            "independent_approval_count": independent,
+            "unresolved_finding_count": finding_count,
+        },
+    }
+
+
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
     "commercial_report_cache",
     default=None,
@@ -3038,13 +3195,21 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return the local buyer-facing commercial release-candidate manifest."""
+        """Return the buyer-facing commercial release-candidate manifest.
+
+        Separates **product evidence** (local demo/readiness completeness) from
+        **release authorization** (fail-closed exact-head checks + independent
+        approval + zero unresolved findings). Missing authority evidence blocks
+        authorization without erasing inspectable product evidence fields.
+        """
         acceptance = self.commercial_acceptance_check_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
         )
+        authority = evaluate_release_authorization(release_authority)
         root = Path(__file__).resolve().parents[1]
 
         def has_file(path: str) -> bool:
@@ -3207,9 +3372,13 @@ class TaskOrchestrator:
                 "Deal owner",
                 ["docs/commercial_saleability_decision.md", "docs/commercial_release_candidate.md"],
                 "repository_artifact",
+                # Policy document presence is product evidence; authorization outcome is separate.
                 "ready",
-                "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers.",
-                "Block only on concrete security, API contract, document, or product defects.",
+                (
+                    "Fail-closed release authorization is documented separately from product evidence. "
+                    f"Current authorization_status={authority['authorization_status']}."
+                ),
+                "Supply exact-head check, approval, and finding evidence before release authorization.",
             ),
             self._buyer_evidence_item(
                 "packaging_decision",
@@ -3236,36 +3405,72 @@ class TaskOrchestrator:
             for item in acceptance["follow_up_items"]
         ]
         summary = self._buyer_manifest_summary(release_artifacts + external_release_gaps)
-        blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
+        product_blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
+        # Authority blockers on the review_process_policy artifact are product-visible
+        # package blocks; product_evidence_status still reports completeness without
+        # treating authorization as a demo telemetry success.
         warning_count = summary["by_completion_state"]["warning"]
-        if blocked_count:
+        if product_blocked_count:
+            product_evidence_status = "commercial_release_blocked"
+        elif warning_count:
+            product_evidence_status = "commercial_release_ready_with_warnings"
+        else:
+            product_evidence_status = "commercial_release_ready"
+
+        authority_blocked = authority["authorization_status"] != "release_authorized"
+        # Fail closed: release_status never says ready when authorization is incomplete.
+        if product_blocked_count or authority_blocked:
             release_status = "commercial_release_blocked"
         elif warning_count:
             release_status = "commercial_release_ready_with_warnings"
         else:
             release_status = "commercial_release_ready"
 
+        authority_blockers = [
+            {
+                "blocker_code": reason,
+                "blocker_class": "release_authorization",
+                "message": reason.replace(":", " — ").replace("_", " "),
+            }
+            for reason in authority["blocker_reasons"]
+        ]
+        release_process_policy = {
+            "is_blocker": authority_blocked,
+            "policy_name": "fail_closed_release_authorization",
+            "product_evidence_is_separate": True,
+            "rule": (
+                "Release authorization requires exact protected-head identity, required checks "
+                "passing on that head, independent non-author approval, and zero unresolved findings. "
+                "Queued, pending, skipped-required, cancelled, neutral-required, stale-head, and "
+                "absent evidence block authorization. Product evidence remains inspectable separately."
+            ),
+        }
+
         return {
             "release_status": release_status,
+            "product_evidence_status": product_evidence_status,
+            "release_authorization": authority,
             "target_contract_value_krw": target_contract_value_krw,
             "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
             "measurement_status": "local_commercial_release_candidate",
             "source_note": (
-                "Commercial release candidate packages local acceptance, runtime endpoints, repository "
-                "distribution documents, security metadata, admin visibility, verification commands, "
-                "Figma artifact records, review-process policy, packaging decision, and explicit external "
-                "release gaps; it is not a valuation guarantee, purchase commitment, or production "
-                "compliance certificate."
+                "Commercial release candidate packages local product evidence separately from "
+                "fail-closed release authorization (exact-head checks, independent approval, "
+                "zero unresolved findings). It is not a valuation guarantee, purchase commitment, "
+                "or production compliance certificate."
             ),
             "release_summary": {
                 "artifact_count": len(release_artifacts),
-                "blocked_count": blocked_count,
+                "blocked_count": product_blocked_count,
                 "warning_count": warning_count,
-                "review_process_is_blocker": acceptance["review_process_policy"]["is_blocker"],
+                "review_process_is_blocker": authority_blocked,
+                "product_evidence_status": product_evidence_status,
+                "release_authorization_status": authority["authorization_status"],
             },
             "release_artifacts": release_artifacts,
             "external_release_gaps": external_release_gaps,
             "concrete_blockers": concrete_blockers,
+            "release_authority_blockers": authority_blockers,
             "release_gates": [
                 {
                     "gate_name": "package",
@@ -3277,10 +3482,14 @@ class TaskOrchestrator:
                 },
                 {
                     "gate_name": "blocked",
-                    "rule": "security failure, API contract regression, missing distribution artifact, document mismatch, product defect, or Code Connect usage",
+                    "rule": "security failure, API contract regression, missing distribution artifact, document mismatch, product defect, Code Connect usage, or incomplete release authorization",
+                },
+                {
+                    "gate_name": "release_authorization",
+                    "rule": "exact protected head, required checks on that head, independent non-author approval, zero unresolved findings",
                 },
             ],
-            "review_process_policy": acceptance["review_process_policy"],
+            "review_process_policy": release_process_policy,
             "related_runtime_reports": {
                 "commercial_acceptance_status": acceptance["acceptance_status"],
                 **acceptance["related_runtime_reports"],
@@ -3301,14 +3510,19 @@ class TaskOrchestrator:
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return an owner/action register for commercial release-candidate gaps."""
+        """Return an owner/action register for commercial release-candidate gaps.
+
+        Gap rows track product/buyer/production inputs. Release-authorization
+        incompleteness is exposed via ``release_authorization`` and does not
+        by itself flip the gap register into a product-blocker status.
+        """
         release = self.commercial_release_candidate_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
         )
         concrete_blockers = release["concrete_blockers"]
-        release_blocked = release["release_status"] == "commercial_release_blocked"
+        product_blocked = release.get("product_evidence_status") == "commercial_release_blocked"
         gap_items = []
         for item in release["external_release_gaps"]:
             source_type = item["evidence_type"]
@@ -3334,7 +3548,7 @@ class TaskOrchestrator:
                 "is_blocker": False,
             })
 
-        blocked_count = len(concrete_blockers) + (1 if release_blocked else 0)
+        blocked_count = len(concrete_blockers) + (1 if product_blocked else 0)
         if blocked_count:
             gap_register_status = "commercial_gap_register_blocked"
         elif gap_items:
@@ -3359,7 +3573,11 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "blocked_count": blocked_count,
-                "review_process_is_blocker": release["review_process_policy"]["is_blocker"],
+                # Authorization incompleteness is a release gate, not a gap-row product defect.
+                "review_process_is_blocker": False,
+                "release_authorization_status": release.get("release_authorization", {}).get(
+                    "authorization_status"
+                ),
             },
             "gap_items": gap_items,
             "concrete_blockers": concrete_blockers,
@@ -3377,9 +3595,23 @@ class TaskOrchestrator:
                     "rule": "concrete security, API contract, document, product defect, or Code Connect usage blocks commercial release",
                 },
             ],
-            "review_process_policy": release["review_process_policy"],
+            "review_process_policy": {
+                "is_blocker": False,
+                "policy_name": "product_gap_register_non_blocking_review",
+                "rule": (
+                    "Product/buyer/production gap rows remain open without treating "
+                    "release-authorization incompleteness as a gap-register product defect."
+                ),
+            },
+            "release_authorization": release.get("release_authorization"),
             "related_runtime_reports": {
-                "commercial_release_status": release["release_status"],
+                # Product-facing status for downstream commercial reports.
+                "commercial_release_status": release.get(
+                    "product_evidence_status", release["release_status"]
+                ),
+                "commercial_release_authorization_status": release.get(
+                    "release_authorization", {}
+                ).get("authorization_status"),
                 **release["related_runtime_reports"],
             },
             "library_split_decision": release["library_split_decision"],
