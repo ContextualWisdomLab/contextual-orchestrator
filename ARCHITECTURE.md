@@ -204,8 +204,6 @@ explicit interfaces and retain their own data and authorization boundaries.
   protected authority until integration.
 - PR #114: `active_pr` equivalent-endpoint racing; issue acceptance remains
   incomplete.
-- PR #121: `active_pr` liveness/readiness, inbound framing, and trace-authority
-  hardening.
 - PR #66: `superseded` closed-unmerged synchronous-embeddings and KV-bootstrap
   evidence; the requirement remains planned.
 - PR #82: `superseded` closed-unmerged dependency-bootstrap evidence; rebuild
@@ -216,6 +214,9 @@ explicit interfaces and retain their own data and authorization boundaries.
   requirement remains planned.
 - PR #99: `superseded` closed-unmerged adaptive-reasoning evidence; the
   requirement remains planned.
+- PR #121: `superseded` closed-unmerged partial liveness/readiness, request-
+  framing, and trace-authority evidence. Issues #117, #118, and #119 remain
+  planned and require a complete test-first rebuild on the accepted #96 line.
 
 No active pull request is architecture authority until its exact head passes
 repository policy and reaches protected main. See `docs/TRACEABILITY.md` for the

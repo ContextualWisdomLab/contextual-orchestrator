@@ -97,7 +97,7 @@ shipped. The capability table below supplies implementation status.
 | Price-aware tie-breaking and administrator credential workflow | `active_pr` | PR #111; valid session-security, non-finite-price, inherited-SAST, and quality-evidence blockers remain. |
 | Fail-closed commercial release authorization | `active_pr` | PR #112; no release authority exists until the exact protected integration and independent approval succeed. |
 | Equivalent-endpoint racing | `active_pr` | PR #114; the full equivalence, validation, cancellation, accounting, and comparable-budget contract remains incomplete. |
-| Liveness/readiness split, inbound framing, and trace-authority hardening | `active_pr` | PR #121; exact-head evidence and independent approval remain required. |
+| Liveness/readiness split, inbound framing, and trace-authority hardening | `planned` | PR #121 is `superseded` closed-unmerged partial evidence; issues #117, #118, and #119 remain authoritative. |
 | Evidence-grade NVIDIA NIM discovery and modality benchmark | `planned` | PR #90 is `superseded` closed-unmerged evidence; issue #86 remains the requirement authority. |
 | Free-first fallback policy | `planned` | PR #94 is `superseded` closed-unmerged evidence. |
 | Adaptive provider reasoning-effort control | `planned` | PR #99 is `superseded` closed-unmerged evidence. |

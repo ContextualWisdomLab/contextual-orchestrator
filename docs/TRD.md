@@ -270,5 +270,6 @@ reviewing identity.
   not substitutes for deployed SLOs or external attestations.
 - Learned routing remains planned. Adaptive reasoning, free-first fallback, and
   NIM benchmark requirements are planned; PR #99, PR #94, and PR #90 are
-  `superseded` closed-unmerged evidence. Active PR #111, PR #112, PR #114, and
-  PR #121 remain unprotected implementation evidence.
+  `superseded` closed-unmerged evidence. Active PR #111, PR #112, and PR #114
+  remain unprotected implementation evidence. PR #121 is `superseded`
+  closed-unmerged partial evidence for issues #117, #118, and #119.

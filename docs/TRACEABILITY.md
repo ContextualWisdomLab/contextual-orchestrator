@@ -30,7 +30,7 @@ integration and operational acceptance succeed.
 | Price-aware tie-breaking and administrator credential workflow | `active_pr` | PR #111 independently targets protected main | PR #111 contracts and issue #116 | security, routing, session, and exact-head evidence |
 | Fail-closed commercial release authorization | `active_pr` | PR #112 | ADR-0010, ADR-0011, release guide | authority-state matrix and protected integration evidence |
 | Equivalent-endpoint racing | `active_pr` | PR #114 | issue #102, architecture, operability, threat model | equivalence, validation, cancellation, accounting, and ablation matrix |
-| Liveness/readiness, inbound framing, and trace authority | `active_pr` | PR #121 | issues #117, #118, and #119 | health, framing, trace-scope, and exact-head evidence |
+| Liveness/readiness, inbound framing, and trace authority | `planned` | PR #121 is `superseded` closed-unmerged partial evidence | issues #117, #118, and #119 | complete replacement acceptance matrix required |
 | Free-first fallback | `planned` | PR #94 is `superseded` closed-unmerged evidence | ADR-0007 | replacement implementation requires fresh protected-line evidence |
 | Adaptive reasoning effort | `planned` | PR #99 is `superseded` closed-unmerged evidence | ADR-0003 | comparable-budget replacement tests |
 | NIM all-modality benchmark | `planned` | PR #90 is `superseded` closed-unmerged evidence; issue #86 owns replacement | ADR-0006 | replacement benchmark evidence |
@@ -59,9 +59,11 @@ closed-unmerged bootstrap evidence; only its unique intent may be rebuilt after
 PR #96 reaches an accepted protected result. PR #105 carries this canonical
 documentation graph. PR #104 was merged into this documentation stack and is
 not protected-main authority until PR #105 reaches protected main. PR #109,
-PR #111, PR #112, PR #114, and PR #121 are independent `active_pr` slices and
-do not inherit PR #96 authority. No predecessor, author-only, status-only, or
-synthetic-merge evidence transfers between these branches.
+PR #111, PR #112, and PR #114 are independent `active_pr` slices and do not
+inherit PR #96 authority. PR #121 is `superseded` closed-unmerged partial
+evidence and supplies no active implementation authority. No predecessor,
+author-only, status-only, or synthetic-merge evidence transfers between these
+branches.
 
 ## Open product backlog relationships
 
@@ -73,8 +75,8 @@ synthetic-merge evidence transfers between these branches.
 - Issue #86 owns evidence-grade NIM model discovery and cost-quality evaluation;
   PR #90 and PR #115 are `superseded` closed-unmerged evidence, so there is no
   active implementation authority for that issue.
-- Issues #117, #118, and #119 are implemented by active PR #121 and close only
-  after exact protected integration.
+- Issues #117, #118, and #119 remain open requirement authorities. PR #121 is
+  `superseded` closed-unmerged partial evidence and does not close them.
 
 ## Documentation maintenance rule
 
