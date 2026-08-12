@@ -42,6 +42,21 @@ def test_closed_unmerged_stack_is_superseded_not_active(
     assert any("`superseded`" in line for line in matching_lines)
 
 
+def test_reopened_nim_scaffold_is_superseded_without_false_closed_state() -> None:
+    """Keep the reopened #115 scaffold outside active authority without calling it closed."""
+
+    traceability = _read("docs/TRACEABILITY.md")
+    matching_lines = [
+        line for line in traceability.splitlines() if "PR #115" in line
+    ]
+
+    assert matching_lines
+    assert all("`active_pr`" not in line for line in matching_lines)
+    assert any("`superseded`" in line for line in matching_lines)
+    assert all("closed-unmerged" not in line for line in matching_lines)
+    assert any("open scaffold" in line for line in matching_lines)
+
+
 def test_configured_postgres_kv_is_fail_closed_not_a_memory_fallback() -> None:
     """Keep canonical config authority aligned with the active #96 composition root."""
 
