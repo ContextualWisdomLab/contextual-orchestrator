@@ -63,6 +63,7 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "disabled",
     "provider_name",
     "provider_exclusions",
+    "model_group",
 }
 
 

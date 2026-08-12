@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import ContextVar
 import copy
 from dataclasses import dataclass, replace
@@ -79,9 +80,14 @@ class ModelAgent:
     disabled: bool = False
     provider_name: str = ""
     provider_exclusions: tuple[str, ...] = ()
+    # Non-empty: endpoints that share this group race for first valid completion
+    # when selected for the same role. Distinct roles/models stay independent.
+    model_group: str = ""
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+        if self.model_group:
+            require_object_name(self.model_group, "agent.model_group")
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -96,6 +102,7 @@ class ModelAgent:
             "disabled": self.disabled,
             "provider_name": self.provider_name,
             "provider_exclusions": list(self.provider_exclusions),
+            "model_group": self.model_group,
         }
 
     @property
@@ -123,6 +130,7 @@ class ModelAgent:
             disabled=bool(value.get("disabled", False)),
             provider_name=value.get("provider_name", ""),
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
+            model_group=str(value.get("model_group", "") or ""),
         )
 
 
@@ -230,7 +238,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +315,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -1540,14 +1548,23 @@ class TaskOrchestrator:
     def _invoke(
         self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
     ) -> tuple[str, str, dict[str, Any] | None]:
-        """Call the primary agent, failing over across capability-matched agents on error.
+        """Call the primary agent, failing over (or racing) capability-matched agents.
 
         Transient retry/backoff happens inside ``ModelClient``; this layer adds
         cross-agent failover plus a per-agent circuit breaker, and returns
         ``(output, served_agent_id, usage)`` — usage is the provider-reported token
         usage when available (else None), so spend analytics can prefer it.
+
+        When the primary declares a non-empty ``model_group``, peers that share the
+        same group race concurrently and the first valid completion wins (issue #102).
+        Distinct roles and ungrouped agents stay sequential so reasoning diversity
+        is preserved.
         """
         candidates = self._failover_candidates(primary, text, role)
+        if primary.model_group:
+            peers = [agent for agent in candidates if agent.model_group == primary.model_group]
+            if len(peers) >= 2:
+                return self._race_equivalent_endpoints(peers, messages, role=role)
         last_error: Exception | None = None
         for agent in candidates:
             try:
@@ -1560,6 +1577,54 @@ class TaskOrchestrator:
             usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
             return output, agent.id, usage
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+
+    def _race_equivalent_endpoints(
+        self,
+        peers: list[ModelAgent],
+        messages: list[ChatMessage],
+        *,
+        role: str,
+    ) -> tuple[str, str, dict[str, Any] | None]:
+        """Race operationally equivalent endpoints; return the first valid completion.
+
+        Losers are cancelled when the pool shuts down. Failures update circuit
+        breakers; at least one success is required or a RuntimeError is raised.
+        """
+
+        def _call(agent: ModelAgent) -> tuple[ModelAgent, str, dict[str, Any] | None]:
+            output = self.client.chat(agent, messages)
+            usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+            return agent, output, usage
+
+        last_error: Exception | None = None
+        # Bound concurrency to peer count; stdlib threads avoid event-loop coupling.
+        # Do not use the context-manager form: it waits for slow losers on exit and
+        # would re-introduce the tail latency race is meant to remove.
+        pool = ThreadPoolExecutor(max_workers=len(peers), thread_name_prefix="model_group_race")
+        futures = {pool.submit(_call, agent): agent for agent in peers}
+        try:
+            for future in as_completed(futures):
+                agent = futures[future]
+                try:
+                    served, output, usage = future.result()
+                except Exception as exc:  # noqa: BLE001 - peer failed; wait for others
+                    last_error = exc
+                    self._record_failure(agent.id)
+                    continue
+                self._record_success(served.id)
+                for pending in futures:
+                    if pending is not future:
+                        pending.cancel()
+                # wait=False so the first valid answer returns without joining losers.
+                pool.shutdown(wait=False, cancel_futures=True)
+                return output, served.id, usage
+        except Exception:
+            pool.shutdown(wait=False, cancel_futures=True)
+            raise
+        pool.shutdown(wait=False, cancel_futures=True)
+        raise RuntimeError(
+            f"all {len(peers)} equivalent model_group peers failed for role={role}"
+        ) from last_error
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)

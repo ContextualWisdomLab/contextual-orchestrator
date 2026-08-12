@@ -116,6 +116,66 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
 
 
+class _SlowOrFastClient(ModelClient):
+    """Slow primary + fast peer in the same model_group; race must prefer first valid."""
+
+    def __init__(self) -> None:
+        super().__init__(retry_backoff=0.0)
+        self.calls: list[str] = []
+        self._lock = __import__("threading").Lock()
+
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+        with self._lock:
+            self.calls.append(agent.id)
+        if agent.id == "slow_replica":
+            __import__("time").sleep(0.25)
+            return "[slow_replica] late"
+        if agent.id == "fast_replica":
+            return "[fast_replica] first"
+        raise RuntimeError(f"unexpected agent {agent.id}")
+
+
+def test_race_equivalent_model_group_returns_first_valid_completion() -> None:
+    """Issue #102: same model_group peers race; first valid completion wins (not sequential tail latency)."""
+    agents = [
+        ModelAgent(
+            "slow_replica",
+            "shared-model",
+            tags=("reasoning", "writing"),
+            priority=5,
+            model_group="gateway_pool_a",
+        ),
+        ModelAgent(
+            "fast_replica",
+            "shared-model",
+            tags=("reasoning", "writing"),
+            priority=4,
+            model_group="gateway_pool_a",
+        ),
+    ]
+    client = _SlowOrFastClient()
+    orchestrator = TaskOrchestrator(agents, client=client)
+    started = __import__("time").perf_counter()
+    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+    elapsed = __import__("time").perf_counter() - started
+    assert result["answer"] == "[fast_replica] first"
+    assert result["trace"][0]["served_agent_id"] == "fast_replica"
+    # Both peers should have been attempted (race), not sequential wait for slow then fast only.
+    assert set(client.calls) == {"slow_replica", "fast_replica"}
+    # Sequential would wait ~0.25s on slow first; race should finish near fast latency.
+    assert elapsed < 0.20
+
+
+def test_ungrouped_agents_do_not_race() -> None:
+    """Distinct ungrouped workers stay sequential failover (preserve role diversity)."""
+    orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
+    # Neither agent has model_group; sequential path only.
+    assert all(not agent.model_group for agent in orchestrator.agents)
+    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
+    assert client.calls == ["primary_worker", "backup_worker"]
+    assert result["trace"][0]["served_agent_id"] == "backup_worker"
+
+
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning",)),

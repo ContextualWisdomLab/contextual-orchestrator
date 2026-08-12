@@ -53,3 +53,13 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## Equivalent endpoint race (`model_group`)
+
+Agents that share a non-empty `model_group` are treated as operationally
+equivalent replicas of one model endpoint class. When the selected primary is
+in such a group, `_invoke` races group peers concurrently and returns the first
+valid completion (issue #102). Ungrouped agents and distinct roles continue to
+use sequential failover so thinker/worker/verifier/synthesizer diversity is
+preserved. This is **not** a latency-first quality tradeoff for multi-agent
+depth — it only removes replica tail latency inside one equivalence class.
