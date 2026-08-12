@@ -48,6 +48,7 @@ REQUIRED_FILES = [
     "docs/TRACEABILITY.md",
     "docs/evidence/README.md",
     "docs/evidence/2026-08-11-documentation-audit.md",
+    "docs/evidence/2026-08-12-continuation-audit.md",
     "docs/THREAT_MODEL.md",
     "docs/TEST_STRATEGY.md",
     "docs/OPERABILITY.md",
@@ -96,6 +97,7 @@ LINK_CHECK_FILES = CANONICAL_FILES + [
     "SECURITY.md",
     "docs/evidence/README.md",
     "docs/evidence/2026-08-11-documentation-audit.md",
+    "docs/evidence/2026-08-12-continuation-audit.md",
     "docs/architecture.md",
     "docs/fuzzing.md",
     "docs/papers/README.md",
@@ -135,6 +137,7 @@ def canonical_text() -> str:
 
 
 DATED_EVIDENCE_APPENDIX = "docs/evidence/2026-08-11-documentation-audit.md"
+LATEST_EVIDENCE_APPENDIX = "docs/evidence/2026-08-12-continuation-audit.md"
 
 
 def class_method_names(relative_path: str, class_name: str) -> set[str]:
@@ -747,6 +750,37 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
         "73ed3a077f88a2f03cf734f1067bee2dcce2467f",  # PR #94
     ):
         assert audited_head in snapshot
+
+
+def test_evidence_index_identifies_and_validates_the_latest_appendix() -> None:
+    """Make the latest volatile evidence discoverable without rewriting history."""
+
+    evidence_index = read_text("docs/evidence/README.md")
+    latest_name = Path(LATEST_EVIDENCE_APPENDIX).name
+    assert evidence_index.count(f"({latest_name})") == 1
+    assert "Latest collected evidence" in evidence_index
+
+    latest = read_text(LATEST_EVIDENCE_APPENDIX)
+    assert latest.startswith("# Continuation evidence audit — 2026-08-12\n")
+    assert "**Audit date:** 2026-08-12 (Asia/Seoul)" in latest
+    assert "**Document state:** `active_pr`" in latest
+    for heading in (
+        "## Evidence identity rules",
+        "## Protected and dependency authority",
+        "## Open pull-request continuation snapshot",
+        "## Open issue continuation snapshot",
+        "## Operational and release acceptance",
+        "## Next acceptance boundary",
+    ):
+        assert heading in latest
+
+    observed_prs = {
+        int(number)
+        for number in re.findall(r"^\| #(\d+) \|", latest, flags=re.MULTILINE)
+    }
+    assert observed_prs == AUDITED_OPEN_PR_NUMBERS
+    for status in ("exact_head_success", "blocked", "absent", "historical"):
+        assert f"`{status}`" in latest
 
 
 def test_dated_central_prerequisite_snapshot_is_fail_closed() -> None:
