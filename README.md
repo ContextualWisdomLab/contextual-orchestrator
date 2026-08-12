@@ -224,6 +224,7 @@ Grounding papers (LLM cost, routing, load balancing) live in
 - [Commercial evidence export](docs/commercial_evidence_export.md)
 - [Commercial acceptance check](docs/commercial_acceptance_check.md)
 - [Commercial release candidate](docs/commercial_release_candidate.md)
+- [Ecosystem connectors](docs/ecosystem.md)
 - [Commercial gap register](docs/commercial_gap_register.md)
 - [Commercial procurement readiness](docs/commercial_procurement_readiness.md)
 - [Commercial contract readiness](docs/commercial_contract_readiness.md)
