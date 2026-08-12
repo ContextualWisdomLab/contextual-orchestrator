@@ -60,3 +60,14 @@ Unauthenticated `GET /healthz` returns only process liveness (`status`, `service
 Operator inventory (agent counts, batch backends, usage counts) is on
 authenticated `GET /readyz` (admin scope). Inference callers cannot request
 orchestration traces without verified admin/trace authority.
+
+
+## Research citations (APA 7th)
+
+Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large language models while reducing cost and improving performance* (arXiv:2305.05176). https://doi.org/10.48550/arXiv.2305.05176
+
+Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with preference data* (arXiv:2406.18665). https://doi.org/10.48550/arXiv.2406.18665
+
+Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Rühle, V., Lakshmanan, L. V. S., & Awadallah, A. H. (2024). *Hybrid LLM: Cost-efficient and quality-aware query routing* (arXiv:2404.14618). https://doi.org/10.48550/arXiv.2404.14618
+
+National Institute of Standards and Technology. (2022). *Secure software development framework (SSDF) version 1.1* (NIST SP 800-218). https://doi.org/10.6028/NIST.SP.800-218
