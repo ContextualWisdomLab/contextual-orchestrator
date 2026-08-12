@@ -209,7 +209,8 @@ def test_admin_session_sets_secure_cookie_behind_https_proxy() -> None:
         thread.join(timeout=5)
 
 
-def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() -> None:
+def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage()
+    test_admin_session_table_evicts_oldest_when_at_capacity() -> None:
     """Browser path: POST /admin/session mints opaque HttpOnly cookie; admin calls use it."""
     server = build_server(
         build(),
@@ -255,6 +256,25 @@ def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() ->
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_admin_session_table_evicts_oldest_when_at_capacity() -> None:
+    """Bounded live sessions: minting beyond max_admin_sessions drops the oldest."""
+    security = SecurityConfig(
+        admin_token=_TEST_ADMIN_TOKEN,
+        inference_token=_TEST_INFERENCE_TOKEN,
+        max_admin_sessions=2,
+        admin_session_ttl_seconds=3600,
+    )
+    first = security.establish_admin_session(_TEST_ADMIN_TOKEN)
+    second = security.establish_admin_session(_TEST_ADMIN_TOKEN)
+    assert security._admin_session_is_active(first)
+    assert security._admin_session_is_active(second)
+    third = security.establish_admin_session(_TEST_ADMIN_TOKEN)
+    assert not security._admin_session_is_active(first)
+    assert security._admin_session_is_active(second)
+    assert security._admin_session_is_active(third)
+    assert len(security._admin_sessions) == 2
 
 
 def test_admin_session_expires_and_logout_revokes() -> None:
@@ -546,6 +566,7 @@ if __name__ == "__main__":
     test_admin_shell_is_public_so_browser_can_establish_session()
     test_admin_session_sets_secure_cookie_behind_https_proxy()
     test_admin_session_cookie_authorizes_admin_api_without_js_token_storage()
+    test_admin_session_table_evicts_oldest_when_at_capacity()
     test_admin_session_expires_and_logout_revokes()
     test_loopback_without_configured_token_is_rejected()
     test_http_api_validates_mode_and_request_shape()

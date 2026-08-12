@@ -71,6 +71,7 @@ ALLOWED_SESSION_KEYS = {"token"}
 # Cookie value is an opaque server-side session id, never the raw admin bearer.
 ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
+DEFAULT_MAX_ADMIN_SESSIONS = 32
 
 
 def request_uses_https(headers: Any) -> bool:
@@ -129,6 +130,7 @@ class SecurityConfig:
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
     admin_session_ttl_seconds: int = DEFAULT_ADMIN_SESSION_TTL_SECONDS
+    max_admin_sessions: int = DEFAULT_MAX_ADMIN_SESSIONS
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -141,6 +143,8 @@ class SecurityConfig:
             raise ValueError("split token mode requires both admin_token and inference_token")
         if self.admin_session_ttl_seconds < 1:
             raise ValueError("admin_session_ttl_seconds must be >= 1")
+        if self.max_admin_sessions < 1:
+            raise ValueError("max_admin_sessions must be >= 1")
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
 
     def check_bind(self, host: str) -> None:
@@ -204,6 +208,10 @@ class SecurityConfig:
         expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
         with self._session_lock:
             self._purge_expired_admin_sessions_locked(now=time.monotonic())
+            # Bound live sessions: drop soonest-to-expire ids when at capacity.
+            while len(self._admin_sessions) >= self.max_admin_sessions:
+                oldest = min(self._admin_sessions, key=self._admin_sessions.get)
+                self._admin_sessions.pop(oldest, None)
             self._admin_sessions[session_id] = expires_at
         return session_id
 
@@ -270,6 +278,7 @@ class SecurityConfig:
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
             "admin_session_ttl_seconds": self.admin_session_ttl_seconds,
+            "max_admin_sessions": self.max_admin_sessions,
             "admin_session_storage": "process_local",
         }
 

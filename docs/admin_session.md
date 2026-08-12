@@ -25,6 +25,8 @@ API bearer path.
 6. **Storage.** Session state is **process-local**. A process restart invalidates
    all browser sessions; operators re-authenticate. Multi-replica deployments
    need sticky routing or a shared session backend (not implemented yet).
+   Live sessions are also capped (`max_admin_sessions`, default 32); when full,
+   the soonest-to-expire session is dropped to make room.
 7. **CSRF.** State-changing admin calls rely on `SameSite=Strict` for
    cross-site request resistance. Cross-origin admin UIs must not be deployed
    against this cookie model without an additional CSRF token scheme.
