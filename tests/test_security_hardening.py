@@ -95,6 +95,42 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert "trace" not in inference_body["orchestration"]
 
 
+def test_admin_credential_endpoint_registers_into_kv_without_echoing_value() -> None:
+    set_backend(InMemoryCredentialBackend())
+    server = build_server(build(), port=0, security=SecurityConfig(admin_token="admin_secret", inference_token="inference_secret"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        inference_status, inference_body = post_json(
+            f"http://127.0.0.1:{port}/admin/api/credentials",
+            {"name": "LITELLM_API_KEY", "value": "sk-secret-value"},
+            token="inference_secret",
+        )
+        admin_status, admin_body = post_json(
+            f"http://127.0.0.1:{port}/admin/api/credentials",
+            {"name": "LITELLM_API_KEY", "value": "sk-secret-value"},
+            token="admin_secret",
+        )
+        bad_name_status, bad_name_body = post_json(
+            f"http://127.0.0.1:{port}/admin/api/credentials",
+            {"name": "not-upper-snake", "value": "sk-secret-value"},
+            token="admin_secret",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        set_backend(None)
+
+    assert inference_status == 401
+    assert admin_status == 201
+    assert admin_body == {"registered": "LITELLM_API_KEY"}
+    assert "sk-secret-value" not in json.dumps(admin_body)
+    assert bad_name_status == 400
+    assert bad_name_body["error"]["code"] == "invalid_credential_name"
+
+
 def test_loopback_without_configured_token_is_rejected() -> None:
     server = build_server(build(), port=0, security=SecurityConfig())
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -318,6 +354,7 @@ def test_redact_value_preserves_non_string_scalars() -> None:
 if __name__ == "__main__":
     test_http_api_requires_bearer_token_and_hides_trace_by_default()
     test_admin_and_inference_tokens_are_separate()
+    test_admin_credential_endpoint_registers_into_kv_without_echoing_value()
     test_loopback_without_configured_token_is_rejected()
     test_http_api_validates_mode_and_request_shape()
     test_http_api_rejects_unknown_request_fields()

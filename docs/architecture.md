@@ -42,6 +42,8 @@ The deliberate simplification is the policy. The paper systems learn routing and
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 
+Live routing (`_score_agent`/`_ranked_agents`) reuses the same "maximize quality, minimize cost" tradeoff `optimize_orchestration`/`_recommend_config` already apply offline: capability-tag match and operator priority decide the primary ranking (the honest, measurable "performance" proxy), and among agents tied on that ranking, the one with the lower operator-supplied `price_per_million` wins as a tie-break. This never invents a quality score — an unpriced agent (no `price_per_million` entry) never loses the tie-break, so behavior is unchanged for pools that supply no price data. Set prices via `TaskOrchestrator(price_per_million=...)` or the CLI's `--price-per-million` flag.
+
 ## Product Planning Interpretation
 
 The product is not a Fugu clone. It is a control-plane prototype for the same public shape: one compatible API with hidden orchestration. The enterprise value comes from exposing the hidden operating evidence:

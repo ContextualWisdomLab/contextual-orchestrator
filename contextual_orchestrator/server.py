@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 import secrets
 import threading
 import time
@@ -17,6 +18,7 @@ from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
 from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
+from .credentials import register_credential
 from .orchestrator import (
     BudgetExceededError,
     TaskOrchestrator,
@@ -64,6 +66,21 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "provider_name",
     "provider_exclusions",
 }
+ALLOWED_CREDENTIAL_KEYS = {"name", "value"}
+_CREDENTIAL_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
+
+
+def _validate_credential_registration(body: dict[str, Any]) -> tuple[str, str]:
+    """Validate a KV credential-save request; the caller must never echo ``value``."""
+    name = body.get("name")
+    if not isinstance(name, str) or not _CREDENTIAL_NAME_RE.fullmatch(name):
+        raise RequestError(
+            400, "invalid_credential_name", "name must be UPPER_SNAKE_CASE, 1-64 characters"
+        )
+    value = body.get("value")
+    if not isinstance(value, str) or not value.strip():
+        raise RequestError(400, "invalid_credential_value", "value must be a non-empty string")
+    return name, value
 
 
 class RequestError(Exception):
@@ -699,9 +716,24 @@ def build_server(
         def do_POST(self) -> None:  # noqa: N802
             try:
                 path = urllib.parse.urlparse(self.path).path
-                scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
+                scope = (
+                    "admin"
+                    if path in ("/admin/simulate", "/admin/api/credentials")
+                    or path.startswith("/api/v1/agent_pools/")
+                    else "inference"
+                )
                 self._authorize(scope)
                 body = self._read_json()
+
+                if path == "/admin/api/credentials":
+                    # Frontend -> KV credential registration (Keyverse boundary, ADR 0003):
+                    # this repo never owns OIDC identity; it only writes a named secret
+                    # into the existing KV registry. The value is never echoed back.
+                    _reject_unknown_keys(body, ALLOWED_CREDENTIAL_KEYS)
+                    name, value = _validate_credential_registration(body)
+                    register_credential(name, value)
+                    self._send({"registered": name}, 201)
+                    return
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]

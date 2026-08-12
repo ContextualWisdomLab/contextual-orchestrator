@@ -88,6 +88,10 @@ def main() -> None:
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
     parser.add_argument("--budget-max-cost-usd", type=float, default=None,
                         help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
+    parser.add_argument("--price-per-million", type=_json_object, default={},
+                        help="USD price per 1M output tokens by model, e.g. "
+                             "'{\"gpt-5.5-mini\": 0.5}'. Also makes live routing prefer the "
+                             "cheapest equally-capable agent for a role (default: no price data).")
     parser.add_argument("--cache-ttl", type=float, default=0.0,
                         help="Seconds to cache identical requests (default 0 = disabled).")
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
@@ -103,6 +107,7 @@ def main() -> None:
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
+        price_per_million=args.price_per_million,
     )
 
     if args.eval:

@@ -47,6 +47,37 @@ def test_trinity_contract_has_explicit_thinker_worker_verifier_roles() -> None:
     assert ["thinker", "worker", "verifier"] == [step["role"] for step in result["trace"][:3]]
 
 
+def test_fugu_contract_prefers_cheapest_equally_capable_agent() -> None:
+    # Same policy _recommend_config already documents for offline search
+    # (docs/architecture.md, Fugu report): maximize capability match first,
+    # minimize price as the tie-break among equally-capable agents.
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("pricey_agent", "model-expensive", tags=("coding",)),
+            ModelAgent("cheap_agent", "model-affordable", tags=("coding",)),
+        ],
+        price_per_million={"model-expensive": 10.0, "model-affordable": 1.0},
+    )
+
+    result = orchestrator.route_once([{"role": "user", "content": "fix this bug"}])
+
+    assert result["trace"][0]["agent_id"] == "cheap_agent"
+
+
+def test_fugu_contract_price_is_only_a_tie_break_not_a_priority_override() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("higher_priority_pricey_agent", "model-expensive", tags=("coding",), priority=5),
+            ModelAgent("lower_priority_cheap_agent", "model-affordable", tags=("coding",)),
+        ],
+        price_per_million={"model-expensive": 10.0, "model-affordable": 1.0},
+    )
+
+    result = orchestrator.route_once([{"role": "user", "content": "fix this bug"}])
+
+    assert result["trace"][0]["agent_id"] == "higher_priority_pricey_agent"
+
+
 def test_conductor_contract_uses_access_lists_to_control_context() -> None:
     client = RecordingClient()
     build(client).conduct([{"role": "user", "content": "Analyze, implement, verify, and synthesize."}])
@@ -63,5 +94,7 @@ def test_conductor_contract_uses_access_lists_to_control_context() -> None:
 if __name__ == "__main__":  # pragma: no cover
     test_fugu_contract_fuses_fast_route_and_deep_workflow()
     test_trinity_contract_has_explicit_thinker_worker_verifier_roles()
+    test_fugu_contract_prefers_cheapest_equally_capable_agent()
+    test_fugu_contract_price_is_only_a_tie_break_not_a_priority_override()
     test_conductor_contract_uses_access_lists_to_control_context()
     print("ok")
