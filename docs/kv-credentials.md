@@ -121,9 +121,14 @@ mutation endpoints stay admin-scoped. Establish a same-origin session once:
 2. `POST /admin/session` with `{"token":"..."}` (or `Authorization: Bearer …`).
 
 The response sets the HttpOnly cookie `contextual_orchestrator_session`
-(`SameSite=Strict`). Subsequent browser calls use `credentials: "same-origin"`
-and never keep the raw admin secret in JavaScript. Reverse proxies may instead
-inject `Authorization` on every request; both mechanisms are accepted.
+(`SameSite=Strict`, default `Max-Age` 12 hours). The cookie value is an
+**opaque server-side session id**, never the admin bearer itself — so the
+long-lived secret is not replayed on every browser request and cannot be used
+as `Authorization: Bearer` if stolen from cookie storage. `DELETE /admin/session`
+revokes the id and clears the cookie. Subsequent browser calls use
+`credentials: "same-origin"` and never keep the raw admin secret in JavaScript.
+Reverse proxies may instead inject `Authorization` on every request; both
+mechanisms are accepted.
 
 ### Registering a credential from the admin frontend
 

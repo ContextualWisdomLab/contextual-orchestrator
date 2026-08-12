@@ -140,8 +140,25 @@ def test_admin_credential_endpoint_registers_into_kv_without_echoing_value() -> 
     assert bad_name_body["error"]["code"] == "invalid_credential_name"
 
 
+def _establish_admin_session(port: int, token: str) -> tuple[str, str]:
+    """POST /admin/session and return (set-cookie header, cookie name=value pair)."""
+    session_req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/admin/session",
+        data=json.dumps({"token": token}).encode("utf-8"),
+        headers={"content-type": "application/json", "connection": "close"},
+        method="POST",
+    )
+    with urllib.request.urlopen(session_req, timeout=5) as response:
+        assert response.status == 200
+        set_cookie = response.headers.get("Set-Cookie") or response.headers.get("set-cookie") or ""
+        body = json.loads(response.read().decode("utf-8"))
+    assert body == {"session_status": "established"}
+    cookie_pair = set_cookie.split(";", 1)[0]
+    return set_cookie, cookie_pair
+
+
 def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() -> None:
-    """Browser path: POST /admin/session mints HttpOnly cookie; subsequent admin calls use it."""
+    """Browser path: POST /admin/session mints opaque HttpOnly cookie; admin calls use it."""
     backend = InMemoryCredentialBackend()
     set_backend(backend)
     server = build_server(
@@ -153,20 +170,14 @@ def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() ->
     thread.start()
     port = server.server_address[1]
     try:
-        session_req = urllib.request.Request(
-            f"http://127.0.0.1:{port}/admin/session",
-            data=json.dumps({"token": _TEST_ADMIN_TOKEN}).encode("utf-8"),
-            headers={"content-type": "application/json", "connection": "close"},
-            method="POST",
-        )
-        with urllib.request.urlopen(session_req, timeout=5) as response:
-            assert response.status == 200
-            set_cookie = response.headers.get("Set-Cookie") or response.headers.get("set-cookie") or ""
-            body = json.loads(response.read().decode("utf-8"))
-        assert body == {"session_status": "established"}
+        set_cookie, cookie_value = _establish_admin_session(port, _TEST_ADMIN_TOKEN)
         assert ADMIN_SESSION_COOKIE in set_cookie
         assert "HttpOnly" in set_cookie
-        cookie_value = set_cookie.split(";", 1)[0]
+        assert "SameSite=Strict" in set_cookie
+        session_id = cookie_value.split("=", 1)[1]
+        assert session_id != _TEST_ADMIN_TOKEN
+        assert _TEST_ADMIN_TOKEN not in set_cookie
+        assert _TEST_ADMIN_TOKEN not in session_id
         cred_req = urllib.request.Request(
             f"http://127.0.0.1:{port}/admin/api/credentials",
             data=json.dumps({"name": "LITELLM_API_KEY", "value": _TEST_CREDENTIAL_VALUE}).encode("utf-8"),
@@ -182,6 +193,105 @@ def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() ->
             cred_body = json.loads(response.read().decode("utf-8"))
         assert cred_body == {"registered": "LITELLM_API_KEY"}
         assert get_credential("LITELLM_API_KEY") == _TEST_CREDENTIAL_VALUE
+        # Opaque session id must not work as an Authorization bearer.
+        bearer_status, bearer_body = post_json(
+            f"http://127.0.0.1:{port}/admin/api/credentials",
+            {"name": "OTHER_KEY", "value": _TEST_CREDENTIAL_VALUE},
+            token=session_id,
+        )
+        assert bearer_status == 401
+        assert bearer_body["error"]["code"] == "unauthorized"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        set_backend(None)
+
+
+def test_admin_session_expires_and_logout_revokes() -> None:
+    """Expired sessions and DELETE /admin/session both stop authorizing admin APIs."""
+    backend = InMemoryCredentialBackend()
+    set_backend(backend)
+    security = SecurityConfig(
+        admin_token=_TEST_ADMIN_TOKEN,
+        inference_token=_TEST_INFERENCE_TOKEN,
+        admin_session_ttl_seconds=1,
+    )
+    server = build_server(build(), port=0, security=security)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        _, cookie_value = _establish_admin_session(port, _TEST_ADMIN_TOKEN)
+        session_id = cookie_value.split("=", 1)[1]
+
+        # Immediate logout path.
+        logout_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/session",
+            headers={"connection": "close", "cookie": cookie_value},
+            method="DELETE",
+        )
+        with urllib.request.urlopen(logout_req, timeout=5) as response:
+            assert response.status == 200
+            logout_body = json.loads(response.read().decode("utf-8"))
+            clear_cookie = response.headers.get("Set-Cookie") or response.headers.get("set-cookie") or ""
+        assert logout_body["session_status"] == "cleared"
+        assert logout_body["session_revoked"] is True
+        assert "Max-Age=0" in clear_cookie
+
+        denied = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/api/credentials",
+            data=json.dumps({"name": "AFTER_LOGOUT", "value": _TEST_CREDENTIAL_VALUE}).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "connection": "close",
+                "cookie": cookie_value,
+            },
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(denied, timeout=5)
+            raise AssertionError("revoked session should not authorize")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+
+        # Fresh short-TTL session then expire.
+        _, cookie2 = _establish_admin_session(port, _TEST_ADMIN_TOKEN)
+        import time as _time
+        _time.sleep(1.2)
+        expired = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/api/credentials",
+            data=json.dumps({"name": "AFTER_EXPIRY", "value": _TEST_CREDENTIAL_VALUE}).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "connection": "close",
+                "cookie": cookie2,
+            },
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(expired, timeout=5)
+            raise AssertionError("expired session should not authorize")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+
+        # Replaying the raw admin bearer as the cookie value is not a session.
+        raw_cookie = f"{ADMIN_SESSION_COOKIE}={_TEST_ADMIN_TOKEN}"
+        raw_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/api/credentials",
+            data=json.dumps({"name": "RAW_BEARER_COOKIE", "value": _TEST_CREDENTIAL_VALUE}).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "connection": "close",
+                "cookie": raw_cookie,
+            },
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(raw_req, timeout=5)
+            raise AssertionError("raw bearer cookie must not authorize")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+        assert not security._admin_session_is_active(session_id)
     finally:
         server.shutdown()
         thread.join(timeout=5)
