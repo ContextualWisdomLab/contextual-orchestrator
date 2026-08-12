@@ -27,6 +27,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .kv_config import allowed_provider_hosts
 
 
 ChatMessage = dict[str, str]
@@ -463,11 +464,8 @@ class ModelClient:
         parsed = urlparse(agent.base_url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise RuntimeError(f"{agent.id} base_url must use https")
-        allowed_hosts = {
-            host.strip().lower()
-            for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")
-            if host.strip()
-        }
+        # Host allowlist is KV-backed (provider/allowed_hosts); env is bootstrap-only.
+        allowed_hosts = allowed_provider_hosts()
         hostname = parsed.hostname.lower()
         if allowed_hosts and hostname not in allowed_hosts:
             raise RuntimeError(f"{agent.id} provider host is not allowlisted")

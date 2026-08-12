@@ -155,3 +155,23 @@ This credential seam is the durable first step of growing
 per-tenant scoping can grow behind without touching the routing engine. The
 Rust/Python hybrid gateway is a later, separately-approved effort and is **not**
 started here.
+
+## Non-secret runtime config (provider host allowlist)
+
+Operator tunables that are not secrets also resolve from the KV config store
+(`get_runtime_config_store` / `get_config_value`), never from `os.getenv` at
+request time.
+
+| Category | Key | Purpose |
+| -------- | --- | ------- |
+| `provider` | `allowed_hosts` | Comma-separated or list of HTTPS provider hostnames allowed for egress. Empty = no extra filter (public-IP checks still apply). |
+
+Bootstrap: if `provider/allowed_hosts` is unset, the first read may seed the store
+from `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` (env is transport into the
+KV only). After seeding, only the store is authoritative — live env mutations
+do not change request-time policy.
+
+```python
+from contextual_orchestrator.kv_config import set_config_value
+set_config_value("provider", "allowed_hosts", "api.openai.com,integrate.api.nvidia.com")
+```

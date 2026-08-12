@@ -147,3 +147,68 @@ def get_config_store(
         return adapter
     except Exception:  # pragma: no cover - fall back when deps/DB unavailable
         return InMemoryConfigStore(seed=seed)
+
+
+# Process-wide runtime config (mirrors credentials.set_backend for non-secret KV).
+_runtime_config_store: Optional[ConfigStore] = None
+
+
+def get_runtime_config_store() -> ConfigStore:
+    """Return the process runtime config store (never secrets).
+
+    Defaults to an empty in-memory store. Tests inject via
+    :func:`set_runtime_config_store`. Request-time code must read tunables from
+    here (or an injected store), not ``os.getenv``.
+    """
+    global _runtime_config_store
+    if _runtime_config_store is None:
+        _runtime_config_store = InMemoryConfigStore()
+    return _runtime_config_store
+
+
+def set_runtime_config_store(store: Optional[ConfigStore]) -> None:
+    """Install or clear the process runtime config store (tests / bootstrap)."""
+    global _runtime_config_store
+    _runtime_config_store = store
+
+
+def get_config_value(category: str, key: str, default: Any = None) -> Any:
+    """Read one runtime config value from the process KV store."""
+    return get_runtime_config_store().get(category, key, default)
+
+
+def set_config_value(category: str, key: str, value: Any) -> None:
+    """Write one runtime config value into the process KV store."""
+    get_runtime_config_store().set(category, key, value)
+
+
+PROVIDER_ALLOWED_HOSTS_KEY = "allowed_hosts"
+PROVIDER_CONFIG_CATEGORY = "provider"
+# Bootstrap-only env name: may seed the KV once, never used as the runtime source.
+ALLOWED_PROVIDER_HOSTS_ENV = "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"
+
+
+def allowed_provider_hosts() -> set[str]:
+    """Return the operator host allowlist from the runtime KV config store.
+
+    Empty set means no extra host filter (public-IP checks still apply). When the
+    KV has no value yet, a one-shot bootstrap may seed from
+    ``CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`` into the store and then
+    only the store is authoritative.
+    """
+    import os
+
+    store = get_runtime_config_store()
+    raw = store.get(PROVIDER_CONFIG_CATEGORY, PROVIDER_ALLOWED_HOSTS_KEY, None)
+    if raw is None:
+        env_val = os.environ.get(ALLOWED_PROVIDER_HOSTS_ENV, "")
+        if env_val.strip():
+            store.set(PROVIDER_CONFIG_CATEGORY, PROVIDER_ALLOWED_HOSTS_KEY, env_val.strip())
+            raw = env_val.strip()
+        else:
+            raw = ""
+    if isinstance(raw, (list, tuple, set)):
+        parts = [str(item) for item in raw]
+    else:
+        parts = str(raw).split(",")
+    return {part.strip().lower() for part in parts if part and str(part).strip()}

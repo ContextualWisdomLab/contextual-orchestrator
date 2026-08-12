@@ -36,7 +36,14 @@ from .cost_ledger import (
 )
 from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
-from .kv_config import InMemoryConfigStore, get_config_store
+from .kv_config import (
+    InMemoryConfigStore,
+    allowed_provider_hosts,
+    get_config_store,
+    get_config_value,
+    set_config_value,
+    set_runtime_config_store,
+)
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
@@ -67,6 +74,10 @@ __all__ = [
     # config / tokens
     "InMemoryConfigStore",
     "get_config_store",
+    "get_config_value",
+    "set_config_value",
+    "set_runtime_config_store",
+    "allowed_provider_hosts",
     "HeuristicTokenCounter",
     "build_token_counter",
     # routing / batch

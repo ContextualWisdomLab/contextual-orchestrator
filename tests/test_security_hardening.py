@@ -255,15 +255,21 @@ def test_external_provider_requires_resolvable_credential_and_public_https() -> 
 
 
 def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
+    from contextual_orchestrator.kv_config import (
+        InMemoryConfigStore,
+        set_config_value,
+        set_runtime_config_store,
+    )
+
     client = ModelClient()
     insecure_agent = ModelAgent("insecure_agent", "gpt-example", "http://api.openai.com/v1", "MODEL_KEY")
     unlisted_agent = ModelAgent("unlisted_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY")
-    previous = os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS")
-    os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = "example.com"
     # Register the credential so validation proceeds to the host-safety checks.
     backend = InMemoryCredentialBackend()
     backend.set("MODEL_KEY", "sk-host-check")
     set_backend(backend)
+    set_runtime_config_store(InMemoryConfigStore())
+    set_config_value("provider", "allowed_hosts", "example.com")
 
     try:
         try:
@@ -281,10 +287,7 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
             raise AssertionError("unlisted provider should fail")
     finally:
         set_backend(None)
-        if previous is None:
-            os.environ.pop("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", None)
-        else:
-            os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
+        set_runtime_config_store(None)
 
 
 def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:

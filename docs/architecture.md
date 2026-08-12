@@ -53,3 +53,7 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## Provider host allowlist (KV)
+
+`ModelClient._validate_provider` reads `provider/allowed_hosts` from the runtime config KV via `allowed_provider_hosts()`. Env `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` is bootstrap-only.
