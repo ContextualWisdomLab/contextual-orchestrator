@@ -53,3 +53,10 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## Health and readiness
+
+Unauthenticated `GET /healthz` returns only process liveness (`status`, `service`).
+Operator inventory (agent counts, batch backends, usage counts) is on
+authenticated `GET /readyz` (admin scope). Inference callers cannot request
+orchestration traces without verified admin/trace authority.
