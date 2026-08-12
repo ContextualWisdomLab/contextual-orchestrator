@@ -173,7 +173,16 @@ def test_partial_body_hits_read_deadline() -> None:
         with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=3) as sock:
             sock.sendall(request)
             sock.settimeout(3)
-            raw = sock.recv(4096)
+            chunks: list[bytes] = []
+            while True:
+                try:
+                    data = sock.recv(4096)
+                except TimeoutError:
+                    break
+                if not data:
+                    break
+                chunks.append(data)
+            raw = b"".join(chunks)
     finally:
         server.shutdown()
         thread.join(timeout=5)

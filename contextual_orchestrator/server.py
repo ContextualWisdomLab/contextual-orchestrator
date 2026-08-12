@@ -1176,12 +1176,16 @@ def build_server(
             self.connection.settimeout(security.request_body_timeout_seconds)
             try:
                 raw = self.rfile.read(body_size)
-            except socket.timeout as exc:
+            except (TimeoutError, socket.timeout) as exc:
+                # Fail closed: partial/hung bodies never proceed to JSON parse.
                 self.close_connection = True
                 raise RequestError(408, "request_body_timeout", "request body read deadline exceeded") from exc
             finally:
-                if not self.close_connection:
-                    self.connection.settimeout(previous_timeout)
+                try:
+                    if not self.close_connection:
+                        self.connection.settimeout(previous_timeout)
+                except OSError:
+                    pass
             if len(raw) != body_size:
                 raise RequestError(400, "incomplete_body", "request body shorter than Content-Length")
             return _coerce_json(raw) if raw else {}
