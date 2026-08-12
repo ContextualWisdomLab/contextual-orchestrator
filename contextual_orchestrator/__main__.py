@@ -58,7 +58,13 @@ def _register_credential_command(argv: list[str]) -> None:
 
 def _discover_nim_models_command(argv: list[str]) -> None:
     """List NIM model IDs via KV credential and print agent-pool JSON candidates."""
-    from .nim_discovery import discover_nim_models, models_to_agent_pool_entries
+    from .nim_discovery import (
+        DEFAULT_NIM_MODELS_URL,
+        NimDiscoveryError,
+        discover_nim_models,
+        models_to_agent_pool_entries,
+        validate_nim_models_url,
+    )
 
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator discover-nim-models",
@@ -66,8 +72,12 @@ def _discover_nim_models_command(argv: list[str]) -> None:
     )
     parser.add_argument(
         "--models-url",
-        default=None,
-        help="Override models listing URL (default: integrate.api.nvidia.com/v1/models).",
+        default=DEFAULT_NIM_MODELS_URL,
+        help=(
+            "HTTPS NVIDIA catalog URL (default: integrate.api.nvidia.com/v1/models). "
+            "Only allowlisted NVIDIA hosts with path /v1/models are accepted; "
+            "the API key is never sent to other origins."
+        ),
     )
     parser.add_argument(
         "--as-agent-pool",
@@ -75,10 +85,11 @@ def _discover_nim_models_command(argv: list[str]) -> None:
         help="Emit agent-pool JSON entries instead of the discovery report.",
     )
     args = parser.parse_args(argv)
-    kwargs = {}
-    if args.models_url:
-        kwargs["models_url"] = args.models_url
-    report = discover_nim_models(**kwargs)
+    try:
+        models_url = validate_nim_models_url(args.models_url)
+    except NimDiscoveryError as exc:
+        parser.error(str(exc))
+    report = discover_nim_models(models_url=models_url)
     if args.as_agent_pool:
         print(json.dumps(models_to_agent_pool_entries(report.get("model_ids") or []), ensure_ascii=False, indent=2))
     else:

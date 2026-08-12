@@ -588,7 +588,7 @@ class SqlLedgerStore:
                 (name,),
             )
             if cur.fetchone() is None:
-                cur.execute(
+                cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: only DB-API placeholder chars are interpolated; values are bound.
                     "INSERT INTO cost_attribution_dimensions "
                     f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
                     (name, label, order),

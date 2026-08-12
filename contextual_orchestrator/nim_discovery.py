@@ -108,7 +108,7 @@ def discover_nim_models(
             "credential_name": credential_name,
         }
 
-    request = urllib.request.Request(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    request = urllib.request.Request(  # nosemgrep -- dynamic-urllib-use: URL validated by validate_nim_models_url allowlist before auth header is attached.
         safe_url,
         headers={
             "authorization": f"Bearer {api_key}",
@@ -122,7 +122,7 @@ def discover_nim_models(
         status = "offline_fixture"
     else:
         context = ssl.create_default_context()
-        with urllib.request.urlopen(  # nosec B310 - URL validated by validate_nim_models_url (HTTPS allowlist).  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+        with urllib.request.urlopen(  # nosec B310 - URL validated by validate_nim_models_url (HTTPS allowlist).  # nosemgrep -- dynamic-urllib-use: URL validated by validate_nim_models_url allowlist before auth header is attached.
             request, timeout=timeout_seconds, context=context
         ) as response:
             raw = response.read()

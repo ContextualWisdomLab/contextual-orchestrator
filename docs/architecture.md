@@ -59,9 +59,13 @@ See [product_planning.md](product_planning.md) for the product reboot.
 `contextual_orchestrator.nim_discovery` lists models from a NIM-compatible
 OpenAI `/models` endpoint using the KV credential `NVIDIA_NIM_API_KEY` (bootstrap
 may seed the KV from process env; request-time resolution stays on `get_credential`).
-Discovered IDs convert to agent-pool entries for cost-aware routing and optional
-`model_group` race once that lands. Live catalog tests use the real key when
-present; CI uses offline fixtures so measurement_status stays honest.
+Authenticated catalog requests only target allowlisted NVIDIA HTTPS hosts with
+path `/v1/models` (`validate_nim_models_url`); the API key is never sent to a
+caller-controlled origin. Discovered IDs convert to agent-pool entries for
+cost-aware routing and optional `model_group` race once that lands. Default CI
+uses offline fixtures (`measurement_status=offline_fixture` when a test transport
+is injected). Live catalog checks require explicit opt-in
+`RUN_LIVE_NIM_TESTS=1` plus a seeded `NVIDIA_NIM_API_KEY`.
 
 ## Role temperature (reasoning effort proxy)
 
