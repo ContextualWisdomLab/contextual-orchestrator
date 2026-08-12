@@ -277,3 +277,11 @@ def test_race_uses_worker_role_temperature() -> None:
     TaskOrchestrator(agents, client=client).route_once([{"role": "user", "content": "x"}])
     assert client.temps
     assert all(t == 0.2 for t in client.temps)  # worker default
+
+
+def test_patch_agent_updates_model_group_in_admin_payload() -> None:
+    orch = TaskOrchestrator([ModelAgent("worker_agent", "mock", tags=("reasoning",))])
+    payload = orch.patch_agent("default", "worker_agent", {"model_group": "gateway_pool_c"})
+    assert payload["model_group"] == "gateway_pool_c"
+    listed = orch.list_agents()
+    assert listed[0]["model_group"] == "gateway_pool_c"
