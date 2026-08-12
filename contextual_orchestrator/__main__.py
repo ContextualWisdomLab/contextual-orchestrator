@@ -4,12 +4,41 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 
 from .credentials import register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
+
+
+def _json_object(raw: str) -> dict[str, float]:
+    """Parse a CLI JSON object of finite non-negative USD-per-million prices.
+
+    Used by ``--price-per-million``. Rejects non-objects, non-numeric values,
+    booleans, NaN, infinities, and negatives so untrusted operator input fails at
+    argparse rather than entering routing or cost evidence.
+    """
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON for --price-per-million: {exc.msg}") from exc
+    if not isinstance(value, dict):
+        raise argparse.ArgumentTypeError("--price-per-million must be a JSON object mapping model names to prices")
+    parsed: dict[str, float] = {}
+    for key, price in value.items():
+        if not isinstance(key, str) or not key.strip():
+            raise argparse.ArgumentTypeError("--price-per-million keys must be non-empty model name strings")
+        if isinstance(price, bool) or not isinstance(price, (int, float)):
+            raise argparse.ArgumentTypeError(f"--price-per-million[{key!r}] must be a finite non-negative number")
+        number = float(price)
+        if not math.isfinite(number):
+            raise argparse.ArgumentTypeError(f"--price-per-million[{key!r}] must be finite")
+        if number < 0:
+            raise argparse.ArgumentTypeError(f"--price-per-million[{key!r}] must be non-negative")
+        parsed[key] = number
+    return parsed
 
 
 def _register_credential_command(argv: list[str]) -> None:
@@ -88,6 +117,16 @@ def main() -> None:
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
     parser.add_argument("--budget-max-cost-usd", type=float, default=None,
                         help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
+    parser.add_argument(
+        "--price-per-million",
+        type=_json_object,
+        default={},
+        help=(
+            "USD price per 1M output tokens by model, e.g. "
+            "'{\"gpt-5.5-mini\": 0.5, \"local-free\": 0}'. Live routing prefers free "
+            "then cheapest among equally-capable agents (default: no price data)."
+        ),
+    )
     parser.add_argument("--cache-ttl", type=float, default=0.0,
                         help="Seconds to cache identical requests (default 0 = disabled).")
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
@@ -103,6 +142,7 @@ def main() -> None:
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
+        price_per_million=args.price_per_million,
     )
 
     if args.eval:
