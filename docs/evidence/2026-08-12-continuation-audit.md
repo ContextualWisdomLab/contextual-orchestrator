@@ -46,6 +46,10 @@ Every open PR remained ineligible for immediate protected merge because a
 qualifying independent non-author approval was `absent`, the PR was Draft or
 stack-blocked, or a current changes-requested review remained effective.
 
+The PR #105 row is a pre-write snapshot. Publishing this appendix advances the
+PR #105 branch beyond the recorded row. The row is not current-head evidence
+after publication and must be refetched.
+
 | PR | Contributor head | Collected evidence | Continuation decision |
 |---:|---|---|---|
 | #63 | `292c87da7bdf3d538710a28f9d94802767ff15f7` | Tests, Security, and Fuzz terminal-success; OpenCode changes requested; author approval only; zero unresolved threads. | `blocked`; downstream dependency update stays Draft and author approval is non-qualifying. |

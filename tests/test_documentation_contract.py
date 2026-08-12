@@ -764,6 +764,13 @@ def test_evidence_index_identifies_and_validates_the_latest_appendix() -> None:
     assert latest.startswith("# Continuation evidence audit — 2026-08-12\n")
     assert "**Audit date:** 2026-08-12 (Asia/Seoul)" in latest
     assert "**Document state:** `active_pr`" in latest
+    normalized_latest = " ".join(latest.split())
+    assert (
+        "The PR #105 row is a pre-write snapshot. Publishing this appendix "
+        "advances the PR #105 branch beyond the recorded row. The row is not "
+        "current-head evidence after publication and must be refetched."
+        in normalized_latest
+    )
     for heading in (
         "## Evidence identity rules",
         "## Protected and dependency authority",
