@@ -10,11 +10,14 @@ from __future__ import annotations
 from dataclasses import replace
 from pathlib import Path
 import sys
+from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import ModelClient, _parse_model_judge_reply  # noqa: E402
 
 
 RISKY_VERIFIER_REPORT = "The plan is sound overall but discusses downtime risks and error handling."
@@ -123,6 +126,46 @@ def test_judge_failure_fails_closed() -> None:
     assert result["verification"]["judge"] == "model"
     assert "failed closed" in result["verification"]["reason"]
     assert result["answer"] == "step-output(2)"
+
+
+@pytest.mark.parametrize(
+    ("reply", "message"),
+    [
+        ('{"decision":"MAYBE","reason":"uncertain"}', "allowed enum"),
+        ('{"decision":"ACCEPT","reason":""}', "reason is missing"),
+        ('{"decision":"ACCEPT","reason":17}', "reason is missing"),
+    ],
+)
+def test_model_judge_parser_rejects_invalid_structured_values(reply: str, message: str) -> None:
+    with pytest.raises(ValueError, match=message):
+        _parse_model_judge_reply(reply)
+
+
+def test_model_judge_parser_rejects_oversized_reply() -> None:
+    with pytest.raises(ValueError, match="maximum size"):
+        _parse_model_judge_reply("x" * 32_001)
+
+
+def test_model_judge_records_failover_agent_and_usage() -> None:
+    orchestrator, _ = _orch("unused")
+    judge = orchestrator.agents[0]
+    with patch.object(orchestrator, "_select_agent", return_value=judge), patch.object(
+        orchestrator,
+        "_invoke",
+        return_value=(
+            '{"decision":"ACCEPT","reason":"The report supports the answer."}',
+            "backup_judge",
+            {"total_tokens": 7},
+        ),
+    ):
+        result = orchestrator._model_judge_verification(
+            "task",
+            {"verifier_output": "report"},
+        )
+
+    assert result["accepted"] is True
+    assert result["judge_agent_id"] == "backup_judge"
+    assert result["judge_usage"] == {"total_tokens": 7}
 
 
 if __name__ == "__main__":

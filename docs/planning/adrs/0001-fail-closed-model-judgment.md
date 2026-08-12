@@ -122,6 +122,7 @@ Run python3 tests/test_model_judge.py, the full contextual test suite, and the f
 | Core orchestration has no gold-answer quality metric. | Keep structural latency metrics honest and inject fast-mlsirm for rubric quality; do not invent a lexical proxy. | Adapter implemented; benchmark gate ongoing |
 | Judge prompt/output can be malformed or truncated. | Use bounded JSON extraction, actionable mlx template guidance, and fail closed. | Implemented |
 | A model can wrap a verdict, add fields, duplicate keys, or send parser-stressing text. | Parse the complete bounded response with an exact duplicate-free schema and exercise the parser with Hypothesis and Atheris; never repair or keyword-match it. | Implemented |
+| The strict judge parser had invalid-enum, empty/non-string-reason, and maximum-size boundaries that were only exercised indirectly. | Add direct regression tests for each fail-closed parser boundary so future schema changes cannot turn malformed model output into a decision. | Implemented in current local head; exact-head CI/review follow-up required |
 | Local model capacity can make four workflow steps too slow. | Benchmark route/conduct and expose concurrency/template controls; optimize only from measured traces. | Ongoing |
 
 ## Risks and Mitigations

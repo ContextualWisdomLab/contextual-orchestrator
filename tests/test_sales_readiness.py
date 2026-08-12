@@ -129,6 +129,13 @@ def test_sales_readiness_accepts_external_bearer_verifier() -> None:
     assert report["readiness_summary"]["fail"] == 0
 
 
+def test_sales_readiness_rejects_unknown_auth_mode() -> None:
+    result = build()._security_posture_criterion({"auth_mode": "unknown"})
+
+    assert result["status"] == "fail"
+    assert "no bearer token" in result["evidence"]
+
+
 def test_sales_readiness_warns_for_single_token_local_deployment() -> None:
     orchestrator = build()
     exercise_runtime(orchestrator)
@@ -150,6 +157,25 @@ def test_sales_readiness_warns_for_single_token_local_deployment() -> None:
     assert report["readiness_summary"]["warn"] == 1
     assert rows["security_posture"]["status"] == "warn"
     assert "split admin and inference tokens" in rows["security_posture"]["remediation"]
+
+
+def test_provider_egress_report_skips_local_and_checks_remote_agents() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1"),
+            ModelAgent(
+                "remote_agent",
+                "remote-model",
+                base_url="https://provider.example/v1",
+                credential_key="remote-key",
+            ),
+        ]
+    )
+
+    result = orchestrator._provider_egress_criterion()
+
+    assert result["status"] == "pass"
+    assert "1 remote providers" in result["evidence"]
 
 
 def test_sales_readiness_endpoint_openapi_and_admin_surface() -> None:

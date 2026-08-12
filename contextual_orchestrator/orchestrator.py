@@ -259,8 +259,11 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
         messages.append({"role": "system", "content": instructions})
 
     raw_input = request.get("input", "")
-    items = raw_input if isinstance(raw_input, list) else [{"type": "message", "role": "user", "content": raw_input}]
-    if not isinstance(items, list):
+    if isinstance(raw_input, list):
+        items = raw_input
+    elif isinstance(raw_input, str):
+        items = [{"type": "message", "role": "user", "content": raw_input}]
+    else:
         raise ValueError("local Responses input must be a string or item list")
     for item in items:
         if isinstance(item, str):
@@ -420,6 +423,8 @@ class ModelClient:
     ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
+        if isinstance(max_retries, bool) or max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
         self.max_retries = max_retries
         if isinstance(local_max_retries, bool) or local_max_retries < 0:
             raise ValueError("local_max_retries must be >= 0")
@@ -488,7 +493,7 @@ class ModelClient:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
-        for attempt in range(retry_limit + 1):
+        for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
                 return self._send(agent, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide

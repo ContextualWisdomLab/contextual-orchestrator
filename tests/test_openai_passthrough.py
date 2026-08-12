@@ -14,6 +14,8 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -84,6 +86,21 @@ def test_proxy_completion_rejects_an_unknown_requested_model() -> None:
         assert "not configured" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("unknown explicit model must not silently fall back")
+
+
+def test_proxy_completion_rejects_disabled_and_malformed_requested_models() -> None:
+    with pytest.raises(RuntimeError, match="disabled"):
+        _build().proxy_completion({
+            "model": "disabled-model",
+            "messages": [{"role": "user", "content": "call a tool"}],
+        })
+
+    for requested_model in (17, ""):
+        with pytest.raises(ValueError, match="non-empty string"):
+            _build().proxy_completion({
+                "model": requested_model,
+                "messages": [{"role": "user", "content": "call a tool"}],
+            })
 
 
 def test_proxy_completion_responses_endpoint_returns_response_object() -> None:
