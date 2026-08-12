@@ -54,6 +54,24 @@ def test_bootstrap_env_seeds_kv_once() -> None:
         set_runtime_config_store(None)
 
 
+def test_empty_env_bootstrap_locks_out_later_env_injection() -> None:
+    """Empty bootstrap must still seed KV so post-start env cannot inject hosts."""
+    set_runtime_config_store(InMemoryConfigStore())
+    previous = os.environ.get(ALLOWED_PROVIDER_HOSTS_ENV)
+    os.environ.pop(ALLOWED_PROVIDER_HOSTS_ENV, None)
+    try:
+        assert allowed_provider_hosts() == set()
+        os.environ[ALLOWED_PROVIDER_HOSTS_ENV] = "evil.example"
+        assert allowed_provider_hosts() == set()
+        assert "evil.example" not in allowed_provider_hosts()
+    finally:
+        if previous is None:
+            os.environ.pop(ALLOWED_PROVIDER_HOSTS_ENV, None)
+        else:
+            os.environ[ALLOWED_PROVIDER_HOSTS_ENV] = previous
+        set_runtime_config_store(None)
+
+
 def test_validate_provider_uses_kv_allowlist() -> None:
     backend = InMemoryCredentialBackend()
     backend.set("MODEL_KEY", "sk-test")
@@ -77,5 +95,6 @@ def test_validate_provider_uses_kv_allowlist() -> None:
 if __name__ == "__main__":
     test_allowed_hosts_read_from_kv_not_live_env_mutation()
     test_bootstrap_env_seeds_kv_once()
+    test_empty_env_bootstrap_locks_out_later_env_injection()
     test_validate_provider_uses_kv_allowlist()
     print("ok")

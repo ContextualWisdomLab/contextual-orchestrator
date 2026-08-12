@@ -201,12 +201,12 @@ def allowed_provider_hosts() -> set[str]:
     store = get_runtime_config_store()
     raw = store.get(PROVIDER_CONFIG_CATEGORY, PROVIDER_ALLOWED_HOSTS_KEY, None)
     if raw is None:
+        # One-shot bootstrap: seed even when the env is empty so a later env
+        # mutation cannot re-seed the store after first read (KV purity).
         env_val = os.environ.get(ALLOWED_PROVIDER_HOSTS_ENV, "")
-        if env_val.strip():
-            store.set(PROVIDER_CONFIG_CATEGORY, PROVIDER_ALLOWED_HOSTS_KEY, env_val.strip())
-            raw = env_val.strip()
-        else:
-            raw = ""
+        seeded = env_val.strip() if isinstance(env_val, str) else ""
+        store.set(PROVIDER_CONFIG_CATEGORY, PROVIDER_ALLOWED_HOSTS_KEY, seeded)
+        raw = seeded
     if isinstance(raw, (list, tuple, set)):
         parts = [str(item) for item in raw]
     else:
