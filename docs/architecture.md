@@ -73,6 +73,25 @@ network or secrets: cost fields stay `unknown` until a versioned pricing
 scenario exists, and plans that exceed `--hard-request-budget` are rejected
 fail-closed (`admission_status=rejected_budget_exceeded`).
 
+## Offline NIM cost-quality (issue #86 post-discovery)
+
+`contextual_orchestrator.nim_cost_quality` runs fair offline policy comparisons
+on a locked task manifest after discovery admission:
+
+- policies: `direct_worker`, `route_once`, `bounded_conduct`, and
+  `hindsight_best_single` (max direct score per task);
+- strict scorers (`exact_number_match` / `substring_match`) with no prompt
+  leakage of expected answers;
+- `actual_api_cost` always `unknown` offline; `hypothetical_paid_cost` is
+  numeric only when a versioned pricing scenario prices every model used in the
+  cell — partial tables stay `unknown` (never coerced to zero);
+- quality-latency and quality-hypothetical-cost Pareto frontiers from policy
+  summaries.
+
+CLI: `python -m contextual_orchestrator nim-cost-quality-offline`. Scripted
+answers keep CI hermetic; live NIM quality/cost still requires explicit opt-in
+and is not claimed by this offline module.
+
 ## Role temperature (reasoning effort proxy)
 
 `OrchestrationPolicy.role_temperature` sets per-role sampling temperatures

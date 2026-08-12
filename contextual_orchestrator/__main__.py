@@ -125,6 +125,80 @@ def _discover_nim_models_command(argv: list[str]) -> None:
         print(json.dumps(report, ensure_ascii=False, indent=2))
 
 
+def _nim_cost_quality_offline_command(argv: list[str]) -> None:
+    """Run the offline cost-quality harness against a locked task manifest (issue #86)."""
+    from .nim_cost_quality import (
+        CostQualityContractError,
+        build_scripted_policy_runners,
+        load_pricing_scenario,
+        load_task_manifest,
+        locked_evaluation_tasks,
+        render_cost_quality_markdown,
+        run_offline_cost_quality,
+    )
+
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator nim-cost-quality-offline",
+        description=(
+            "Offline cost-quality comparison for issue #86 (post-discovery). "
+            "Uses scripted answers by default so CI never needs NVIDIA_NIM_API_KEY. "
+            "Never invents prices: hypothetical cost stays unknown without a scenario."
+        ),
+    )
+    parser.add_argument(
+        "--task-manifest",
+        default="examples/nim_task_manifest_offline.json",
+        help="Path to the versioned task manifest (locked split only).",
+    )
+    parser.add_argument(
+        "--pricing-scenario",
+        default=None,
+        help="Optional USD-per-million-token scenario JSON; omit to keep costs unknown.",
+    )
+    parser.add_argument(
+        "--scripted-answers",
+        default=None,
+        help=(
+            "Optional JSON map {task_id: {policy_name: answer}}. "
+            "When omitted, answers are empty (scores zero) for structural dry-run only."
+        ),
+    )
+    parser.add_argument(
+        "--model-id",
+        default="mock-scripted",
+        help="Model id recorded on cells and used for pricing lookups (default: mock-scripted).",
+    )
+    parser.add_argument(
+        "--markdown",
+        action="store_true",
+        help="Emit a short markdown summary instead of the full JSON report.",
+    )
+    args = parser.parse_args(argv)
+    try:
+        manifest = load_task_manifest(args.task_manifest)
+        tasks = locked_evaluation_tasks(manifest)
+        pricing = load_pricing_scenario(args.pricing_scenario)
+        answers: dict = {}
+        if args.scripted_answers:
+            with open(args.scripted_answers, encoding="utf-8") as handle:
+                answers = json.load(handle)
+            if not isinstance(answers, dict):
+                parser.error("--scripted-answers must be a JSON object")
+        runners = build_scripted_policy_runners(answers, model_id=args.model_id)
+        report = run_offline_cost_quality(
+            tasks=tasks,
+            policy_runners=runners,
+            model_id=args.model_id,
+            pricing_scenario=pricing,
+        )
+    except (CostQualityContractError, OSError, ValueError) as exc:
+        parser.error(str(exc))
+    if args.markdown:
+        print(render_cost_quality_markdown(report))
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
@@ -132,6 +206,9 @@ def main() -> None:
         return
     if len(sys.argv) > 1 and sys.argv[1] == "discover-nim-models":
         _discover_nim_models_command(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "nim-cost-quality-offline":
+        _nim_cost_quality_offline_command(sys.argv[2:])
         return
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")

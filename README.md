@@ -291,6 +291,24 @@ python tests/test_commercial_investment_committee_memo.py
 ```bash
 python -m contextual_orchestrator discover-nim-models
 python -m contextual_orchestrator discover-nim-models --as-agent-pool
+python -m contextual_orchestrator discover-nim-models --benchmark-dry-run
 ```
 
-Requires `NVIDIA_NIM_API_KEY` in the KV (`register-credential`).
+Requires `NVIDIA_NIM_API_KEY` in the KV (`register-credential`) for live catalog
+listing. Offline dry-run / capability inventory paths stay secret-free.
+
+### Offline NIM cost-quality (issue #86)
+
+```bash
+python -m contextual_orchestrator nim-cost-quality-offline \
+  --task-manifest examples/nim_task_manifest_offline.json
+python -m contextual_orchestrator nim-cost-quality-offline \
+  --task-manifest examples/nim_task_manifest_offline.json \
+  --pricing-scenario examples/nim_pricing_scenario_offline.json \
+  --markdown
+python tests/test_nim_cost_quality.py
+```
+
+Compares route/conduct/direct policies on a locked task set with honest
+`unknown` costs unless a pricing scenario covers every model. Never uses
+`COPILOT_GITHUB_TOKEN` for model calls.

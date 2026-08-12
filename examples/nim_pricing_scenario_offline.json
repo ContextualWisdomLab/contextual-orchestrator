@@ -1,0 +1,9 @@
+{
+  "scenario_version": "2026-08-13.1",
+  "scenario_status": "example_unreviewed",
+  "scenario_notes": "Schema-demonstration hypothetical USD-per-million-token rates for offline dry runs only. Not authoritative NVIDIA pricing. Hosted NIM may be free to the caller (actual_api_cost stays separate). Models absent from usd_per_million_tokens keep hypothetical_paid_cost as unknown.",
+  "usd_per_million_tokens": {
+    "mock-scripted": {"input": 0.2, "output": 0.6},
+    "dryrun/chat-basic": {"input": 0.2, "output": 0.6}
+  }
+}

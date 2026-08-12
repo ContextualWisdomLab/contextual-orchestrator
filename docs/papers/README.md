@@ -43,6 +43,14 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## Offline cost-quality comparison (issue #86)
+
+The `nim_cost_quality` offline harness reuses the FrugalGPT / RouteLLM / Hybrid
+LLM citations above for quality-vs-cost Pareto reporting after NIM discovery.
+It does not claim live NIM quality until an opted-in secret-backed run publishes
+exact-head evidence; hypothetical prices remain `unknown` without a versioned
+scenario.
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

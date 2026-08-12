@@ -8,6 +8,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Offline NIM cost-quality comparison harness (`nim_cost_quality` +
+  `nim-cost-quality-offline` CLI) for issue #86 post-discovery: locked task
+  manifest scorers, honest unknown actual/hypothetical cost, policy summaries,
+  and quality-latency / quality-cost Pareto frontiers without live egress.
 - Offline NIM capability inventory + dry-run benchmark plan (issue #86).
 - `discover-nim-models` CLI and `nim_discovery` module (issue #86): allowlisted
   NVIDIA HTTPS `/v1/models` only; offline fixture status; unique agent ids on
