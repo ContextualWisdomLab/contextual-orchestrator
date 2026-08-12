@@ -232,14 +232,21 @@ def test_discover_uses_urllib_when_transport_omitted(monkeypatch) -> None:  # no
     set_backend(backend)
 
     class _Resp:
+        def __init__(self):
+            body = json.dumps({"data": [{"id": "live_fixture_model"}]}).encode("utf-8")
+            self._body = body
+            self.headers = {"Content-Length": str(len(body))}
+
         def __enter__(self):
             return self
 
         def __exit__(self, *args):
             return False
 
-        def read(self):
-            return json.dumps({"data": [{"id": "live_fixture_model"}]}).encode("utf-8")
+        def read(self, n=-1):
+            if n is None or n < 0:
+                return self._body
+            return self._body[:n]
 
     def fake_urlopen(request, timeout=None, context=None):  # noqa: ANN001
         assert request.get_header("Authorization") or request.headers
