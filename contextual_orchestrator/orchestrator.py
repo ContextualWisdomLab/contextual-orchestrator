@@ -909,22 +909,40 @@ class TaskOrchestrator:
         upstream["stream"] = False
         return self.client.proxy_send(agent, endpoint, upstream)
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
-        """Return a route or conducted completion without persisting a workflow run."""
+    def complete(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        preferred_model: str | None = None,
+    ) -> dict[str, Any]:
+        """Return a route or conducted completion without persisting a workflow run.
+
+        ``preferred_model`` is the client-requested OpenAI ``model`` id (from
+        ``/v1/models``). When it matches an enabled agent model, that agent is
+        preferred for the worker route; unknown or gateway-default ids fall back
+        to capability ranking.
+        """
         if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
+            return self._dispatch(messages, mode, preferred_model=preferred_model)
+        key = self._cache_key(messages, mode, preferred_model=preferred_model)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._dispatch(messages, mode)
+        result = self._dispatch(messages, mode, preferred_model=preferred_model)
         self._cache.put(key, result)
         return result
 
-    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
+    def _dispatch(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        *,
+        preferred_model: str | None = None,
+    ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
-            return self.route_once(messages)
+            return self.route_once(messages, preferred_model=preferred_model)
         return self.conduct(messages)
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
@@ -932,14 +950,20 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
 
-    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+    def stream_route(
+        self,
+        messages: list[ChatMessage],
+        workflow_run_id: str | None = None,
+        *,
+        preferred_model: str | None = None,
+    ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
         True streaming for the route path. ponytail: no cross-agent failover here — bytes
         already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
         """
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        agent = self._select_agent(text, "worker", preferred_model=preferred_model)
         parts: list[str] = []
         for delta in self.client.stream_chat(agent, messages):
             parts.append(delta)
@@ -971,17 +995,34 @@ class TaskOrchestrator:
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+    def _cache_key(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        *,
+        preferred_model: str | None = None,
+    ) -> str:
+        payload = json.dumps(
+            {"mode": mode, "messages": messages, "preferred_model": preferred_model or ""},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        *,
+        preferred_model: str | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        result = self.complete(messages, mode=mode, preferred_model=preferred_model)
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -1336,10 +1377,15 @@ class TaskOrchestrator:
         )
         return {"removed": worker_agent_id}
 
-    def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def route_once(
+        self,
+        messages: list[ChatMessage],
+        *,
+        preferred_model: str | None = None,
+    ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        agent = self._select_agent(text, "worker", preferred_model=preferred_model)
         start = time.perf_counter()
         answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
         latency_ms = (time.perf_counter() - start) * 1000
@@ -1512,7 +1558,14 @@ class TaskOrchestrator:
             WorkflowStep(3, "synthesizer", synthesizer, "Produce the final answer, incorporating only verified work.", (0, 1, 2)),
         ]
 
-    def _score_agent(self, agent: ModelAgent, role: str, lowered: str) -> tuple[int, int, str]:
+    def _score_agent(
+        self,
+        agent: ModelAgent,
+        role: str,
+        lowered: str,
+        *,
+        preferred_model: str | None = None,
+    ) -> tuple[int, int, str]:
         if agent.disabled:
             return (-20_000, len(agent.tags), agent.id)
         if role in agent.provider_exclusions:
@@ -1522,15 +1575,39 @@ class TaskOrchestrator:
         for tag, hints in self.DOMAIN_HINTS.items():
             if tag in agent.tags and any(hint in lowered for hint in hints):
                 domain_score += 2
-        return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
+        model_match = 0
+        wanted = (preferred_model or "").strip()
+        if wanted and wanted != "contextual-orchestrator" and agent.model == wanted:
+            # Prefer the agent that implements the client-requested model id
+            # from /v1/models (capability ranking still applies within matches).
+            model_match = 10_000
+        return (role_score + domain_score + agent.priority + model_match, len(agent.tags), agent.id)
 
-    def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
+    def _ranked_agents(
+        self,
+        text: str,
+        role: str,
+        *,
+        preferred_model: str | None = None,
+    ) -> list[ModelAgent]:
         """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
         lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        return sorted(
+            self.agents,
+            key=lambda agent: self._score_agent(
+                agent, role, lowered, preferred_model=preferred_model
+            ),
+            reverse=True,
+        )
 
-    def _select_agent(self, text: str, role: str) -> ModelAgent:
-        selected = self._ranked_agents(text, role)[0]
+    def _select_agent(
+        self,
+        text: str,
+        role: str,
+        *,
+        preferred_model: str | None = None,
+    ) -> ModelAgent:
+        selected = self._ranked_agents(text, role, preferred_model=preferred_model)[0]
         if selected.disabled:  # pragma: no cover
             raise RuntimeError(f"no enabled agent available for role={role}")
         if role in selected.provider_exclusions:  # pragma: no cover

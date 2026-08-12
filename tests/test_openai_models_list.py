@@ -122,10 +122,27 @@ def test_list_openai_models_domain_helper_is_secret_free() -> None:
     assert "credential" not in raw
 
 
+def test_route_prefers_agent_matching_requested_model_id() -> None:
+    """Selecting a /v1/models id steers the worker route to that agent model."""
+    orchestrator = build()
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "hello"}],
+        preferred_model="mock-coder",
+    )
+    assert result["trace"][0]["agent_id"] == "coding_agent"
+    # Gateway default and unknown ids do not force a match.
+    defaulted = orchestrator.route_once(
+        [{"role": "user", "content": "hello"}],
+        preferred_model="contextual-orchestrator",
+    )
+    assert defaulted["trace"][0]["agent_id"] in {"general_agent", "coding_agent", "duplicate_agent"}
+
+
 if __name__ == "__main__":
     test_list_openai_models_requires_inference_bearer()
     test_list_openai_models_returns_gateway_default_and_unique_agent_models()
     test_get_openai_model_by_id_and_missing()
     test_openapi_contract_includes_v1_models()
     test_list_openai_models_domain_helper_is_secret_free()
+    test_route_prefers_agent_matching_requested_model_id()
     print("ok")
