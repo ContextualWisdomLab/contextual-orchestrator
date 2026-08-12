@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import secrets
@@ -64,6 +65,12 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "provider_name",
     "provider_exclusions",
 }
+ALLOWED_SESSION_KEYS = {"token"}
+# HttpOnly cookie established by POST /admin/session so the browser admin never
+# stores the admin bearer in JavaScript; reverse proxies may still inject Authorization.
+# Cookie value is an opaque server-side session id, never the raw admin bearer.
+ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
+DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
 
 
 class RequestError(Exception):
@@ -90,13 +97,19 @@ class SecurityConfig:
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
+    admin_session_ttl_seconds: int = DEFAULT_ADMIN_SESSION_TTL_SECONDS
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
+    # Opaque session_id -> monotonic expiry; never stores the admin bearer.
+    _admin_sessions: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    _session_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if self.admin_session_ttl_seconds < 1:
+            raise ValueError("admin_session_ttl_seconds must be >= 1")
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
 
     def check_bind(self, host: str) -> None:
@@ -105,16 +118,90 @@ class SecurityConfig:
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate bearer token for admin or inference scope."""
+        """Validate bearer token or opaque admin session cookie for scope.
+
+        Browser operators establish an HttpOnly session via ``POST /admin/session``
+        so JavaScript never retains the raw admin secret. The cookie holds an
+        opaque, server-side session id that is distinct from the admin bearer and
+        cannot be replayed as ``Authorization: Bearer``. API clients and reverse
+        proxies continue to send the real bearer on every request.
+        """
         if not (self.auth_token or self.admin_token or self.inference_token):
             raise RequestError(401, "unauthorized", "bearer token is required")
-        raw = headers.get("authorization", "")
-        if not raw.lower().startswith("bearer "):
-            raise RequestError(401, "unauthorized", "bearer token is required")
-        token = raw.split(" ", 1)[1].strip()
         expected = self.auth_token or (self.admin_token if scope == "admin" else self.inference_token)
-        if not expected or not secrets.compare_digest(token, expected):
+        if not expected:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        bearer = self._extract_bearer_token(headers)
+        if bearer:
+            if secrets.compare_digest(bearer, expected):
+                return
+            raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
+            return
+        raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+
+    def _extract_bearer_token(self, headers: Any) -> str:
+        """Return the Authorization bearer value, or empty when absent/malformed."""
+        raw = headers.get("authorization", "") or ""
+        if raw.lower().startswith("bearer "):
+            return raw.split(" ", 1)[1].strip()
+        return ""
+
+    def _extract_admin_session_cookie(self, headers: Any) -> str:
+        """Return the opaque admin session id from the HttpOnly cookie, if any."""
+        cookie_header = headers.get("cookie", "") or ""
+        if not cookie_header:
+            return ""
+        jar = SimpleCookie()
+        try:
+            jar.load(cookie_header)
+        except CookieError:
+            return ""
+        morsel = jar.get(ADMIN_SESSION_COOKIE)
+        return morsel.value if morsel is not None else ""
+
+    def establish_admin_session(self, presented_token: str) -> str:
+        """Mint an opaque admin session id after validating the presented admin bearer.
+
+        The returned id is suitable for an HttpOnly cookie and is never equal to
+        the admin bearer. Raw bearer values are not stored in the session table.
+        """
+        expected = self.auth_token or self.admin_token
+        if not expected or not presented_token or not secrets.compare_digest(presented_token, expected):
+            raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        session_id = secrets.token_urlsafe(32)
+        expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
+        with self._session_lock:
+            self._purge_expired_admin_sessions_locked(now=time.monotonic())
+            self._admin_sessions[session_id] = expires_at
+        return session_id
+
+    def revoke_admin_session(self, session_id: str) -> bool:
+        """Drop an opaque admin session. Returns True when a live session was removed."""
+        if not session_id:
+            return False
+        with self._session_lock:
+            return self._admin_sessions.pop(session_id, None) is not None
+
+    def _admin_session_is_active(self, session_id: str) -> bool:
+        """Return True when ``session_id`` is a non-expired opaque admin session."""
+        if not session_id:
+            return False
+        now = time.monotonic()
+        with self._session_lock:
+            expires_at = self._admin_sessions.get(session_id)
+            if expires_at is None:
+                return False
+            if now >= expires_at:
+                self._admin_sessions.pop(session_id, None)
+                return False
+            return True
+
+    def _purge_expired_admin_sessions_locked(self, now: float) -> None:
+        """Remove expired session ids. Caller must hold ``_session_lock``."""
+        stale = [sid for sid, exp in self._admin_sessions.items() if now >= exp]
+        for sid in stale:
+            self._admin_sessions.pop(sid, None)
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
@@ -151,6 +238,8 @@ class SecurityConfig:
             "rate_limit_requests": self.rate_limit_requests,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "admin_session_ttl_seconds": self.admin_session_ttl_seconds,
+            "admin_session_storage": "process_local",
         }
 
 
@@ -678,8 +767,22 @@ def build_server(
 
         def do_DELETE(self) -> None:  # noqa: N802
             try:
-                self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
+                if path == "/admin/session":
+                    # Logout: drop the opaque session bound to the cookie (if any).
+                    # Idempotent: missing/unknown cookies still return cleared status.
+                    session_id = security._extract_admin_session_cookie(self.headers)
+                    revoked = security.revoke_admin_session(session_id)
+                    clear = (
+                        f"{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+                    )
+                    self._send(
+                        {"session_status": "cleared", "session_revoked": revoked},
+                        200,
+                        extra_headers={"set-cookie": clear},
+                    )
+                    return
+                self._authorize("admin")
                 if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
                     segments = [part for part in path.split("/") if part]
                     if len(segments) != 6 or segments[:3] != ["api", "v1", "agent_pools"] or segments[4] != "worker_agents":
@@ -699,6 +802,30 @@ def build_server(
         def do_POST(self) -> None:  # noqa: N802
             try:
                 path = urllib.parse.urlparse(self.path).path
+                if path == "/admin/session":
+                    # Browser admin auth: validate the presented bearer once and mint
+                    # an opaque HttpOnly session cookie distinct from the admin secret.
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_SESSION_KEYS)
+                    presented = body.get("token")
+                    if not isinstance(presented, str) or not presented.strip():
+                        # Also accept Authorization for API-style session establish.
+                        raw = self.headers.get("authorization", "") or ""
+                        presented = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+                    session_id = security.establish_admin_session(
+                        presented.strip() if isinstance(presented, str) else ""
+                    )
+                    max_age = int(security.admin_session_ttl_seconds)
+                    cookie = (
+                        f"{ADMIN_SESSION_COOKIE}={session_id}; Path=/; HttpOnly; "
+                        f"SameSite=Strict; Max-Age={max_age}"
+                    )
+                    self._send(
+                        {"session_status": "established"},
+                        200,
+                        extra_headers={"set-cookie": cookie},
+                    )
+                    return
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
                 self._authorize(scope)
                 body = self._read_json()
@@ -978,11 +1105,19 @@ def build_server(
         ) -> None:
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
-        def _send(self, payload: dict[str, Any], status: int = 200) -> None:
+        def _send(
+            self,
+            payload: dict[str, Any],
+            status: int = 200,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("content-type", "application/json; charset=utf-8")
             self.send_header("content-length", str(len(raw)))
+            if extra_headers:
+                for header_name, header_value in extra_headers.items():
+                    self.send_header(header_name, header_value)
             self._send_security_headers()
             self.end_headers()
             self.wfile.write(raw)

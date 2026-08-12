@@ -13,7 +13,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, chat_completion_response, redact_text, redact_value  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import ADMIN_SESSION_COOKIE, SecurityConfig, build_server  # noqa: E402
+
+# Test-only bearer values (not production secrets). Narrow noqa for Ruff S106.
+_TEST_AUTH_TOKEN = "secret_token"  # noqa: S105
+_TEST_ADMIN_TOKEN = "admin_secret"  # noqa: S105
+_TEST_INFERENCE_TOKEN = "inference_secret"  # noqa: S105
 
 
 def build() -> TaskOrchestrator:
@@ -67,7 +72,7 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     server = build_server(
         build(),
         port=0,
-        security=SecurityConfig(auth_token="", admin_token="admin_secret", inference_token="inference_secret"),
+        security=SecurityConfig(auth_token="", admin_token=_TEST_ADMIN_TOKEN, inference_token=_TEST_INFERENCE_TOKEN),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -78,12 +83,12 @@ def test_admin_and_inference_tokens_are_separate() -> None:
         admin_for_chat_status, _ = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
             payload,
-            token="admin_secret",
+            token=_TEST_ADMIN_TOKEN,
         )
         inference_status, inference_body = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
             payload,
-            token="inference_secret",
+            token=_TEST_INFERENCE_TOKEN,
         )
     finally:
         server.shutdown()
@@ -93,6 +98,147 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert inference_status == 200
     assert inference_body["orchestration"]["mode"] == "route"
     assert "trace" not in inference_body["orchestration"]
+
+
+def _establish_admin_session(port: int, token: str) -> tuple[str, str]:
+    """POST /admin/session and return (set-cookie header, cookie name=value pair)."""
+    session_req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/admin/session",
+        data=json.dumps({"token": token}).encode("utf-8"),
+        headers={"content-type": "application/json", "connection": "close"},
+        method="POST",
+    )
+    with urllib.request.urlopen(session_req, timeout=5) as response:
+        assert response.status == 200
+        set_cookie = response.headers.get("Set-Cookie") or response.headers.get("set-cookie") or ""
+        body = json.loads(response.read().decode("utf-8"))
+    assert body == {"session_status": "established"}
+    cookie_pair = set_cookie.split(";", 1)[0]
+    return set_cookie, cookie_pair
+
+
+def _get_admin_state(port: int, headers: dict[str, str]) -> tuple[int, dict[str, object]]:
+    """GET /admin/state with the given headers (cookie and/or authorization)."""
+    req = urllib.request.Request(
+        f"http://127.0.0.1:{port}/admin/state",
+        headers={"connection": "close", **headers},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() -> None:
+    """Browser path: POST /admin/session mints opaque HttpOnly cookie; admin calls use it."""
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(admin_token=_TEST_ADMIN_TOKEN, inference_token=_TEST_INFERENCE_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        set_cookie, cookie_value = _establish_admin_session(port, _TEST_ADMIN_TOKEN)
+        assert ADMIN_SESSION_COOKIE in set_cookie
+        assert "HttpOnly" in set_cookie
+        assert "SameSite=Strict" in set_cookie
+        session_id = cookie_value.split("=", 1)[1]
+        assert session_id != _TEST_ADMIN_TOKEN
+        assert _TEST_ADMIN_TOKEN not in set_cookie
+        assert _TEST_ADMIN_TOKEN not in session_id
+
+        status, body = _get_admin_state(port, {"cookie": cookie_value})
+        assert status == 200
+        assert "agents" in body or "policy" in body or isinstance(body, dict)
+
+        # Opaque session id must not work as an Authorization bearer.
+        bearer_status, bearer_body = _get_admin_state(
+            port, {"authorization": f"Bearer {session_id}"}
+        )
+        assert bearer_status == 401
+        assert bearer_body["error"]["code"] == "unauthorized"
+
+        # Inference token cannot establish an admin session.
+        bad_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/session",
+            data=json.dumps({"token": _TEST_INFERENCE_TOKEN}).encode("utf-8"),
+            headers={"content-type": "application/json", "connection": "close"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(bad_req, timeout=5)
+            raise AssertionError("inference token must not establish admin session")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 401
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_admin_session_expires_and_logout_revokes() -> None:
+    """Expired sessions and DELETE /admin/session both stop authorizing admin APIs."""
+    security = SecurityConfig(
+        admin_token=_TEST_ADMIN_TOKEN,
+        inference_token=_TEST_INFERENCE_TOKEN,
+        admin_session_ttl_seconds=1,
+    )
+    server = build_server(build(), port=0, security=security)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        _, cookie_value = _establish_admin_session(port, _TEST_ADMIN_TOKEN)
+        session_id = cookie_value.split("=", 1)[1]
+
+        # Immediate logout path.
+        logout_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/session",
+            headers={"connection": "close", "cookie": cookie_value},
+            method="DELETE",
+        )
+        with urllib.request.urlopen(logout_req, timeout=5) as response:
+            assert response.status == 200
+            logout_body = json.loads(response.read().decode("utf-8"))
+            clear_cookie = response.headers.get("Set-Cookie") or response.headers.get("set-cookie") or ""
+        assert logout_body["session_status"] == "cleared"
+        assert logout_body["session_revoked"] is True
+        assert "Max-Age=0" in clear_cookie
+
+        denied_status, _ = _get_admin_state(port, {"cookie": cookie_value})
+        assert denied_status == 401
+
+        # Fresh short-TTL session then expire.
+        _, cookie2 = _establish_admin_session(port, _TEST_ADMIN_TOKEN)
+        import time as _time
+        _time.sleep(1.2)
+        expired_status, _ = _get_admin_state(port, {"cookie": cookie2})
+        assert expired_status == 401
+
+        # Replaying the raw admin bearer as the cookie value is not a session.
+        raw_cookie = f"{ADMIN_SESSION_COOKIE}={_TEST_ADMIN_TOKEN}"
+        raw_status, _ = _get_admin_state(port, {"cookie": raw_cookie})
+        assert raw_status == 401
+        assert not security._admin_session_is_active(session_id)
+
+        # Each successful login mints a fresh opaque id (session fixation resistance).
+        _, cookie_a = _establish_admin_session(port, _TEST_ADMIN_TOKEN)
+        _, cookie_b = _establish_admin_session(port, _TEST_ADMIN_TOKEN)
+        id_a = cookie_a.split("=", 1)[1]
+        id_b = cookie_b.split("=", 1)[1]
+        assert id_a != id_b
+        assert id_a != _TEST_ADMIN_TOKEN and id_b != _TEST_ADMIN_TOKEN
+        # Attacker-supplied cookie without a server-side record never authorizes.
+        attacker_status, _ = _get_admin_state(
+            port, {"cookie": f"{ADMIN_SESSION_COOKIE}=attacker-chosen-session-id"}
+        )
+        assert attacker_status == 401
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 def test_loopback_without_configured_token_is_rejected() -> None:
@@ -318,6 +464,8 @@ def test_redact_value_preserves_non_string_scalars() -> None:
 if __name__ == "__main__":
     test_http_api_requires_bearer_token_and_hides_trace_by_default()
     test_admin_and_inference_tokens_are_separate()
+    test_admin_session_cookie_authorizes_admin_api_without_js_token_storage()
+    test_admin_session_expires_and_logout_revokes()
     test_loopback_without_configured_token_is_rejected()
     test_http_api_validates_mode_and_request_shape()
     test_http_api_rejects_unknown_request_fields()
