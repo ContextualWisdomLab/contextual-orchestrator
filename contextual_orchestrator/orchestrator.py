@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -1512,17 +1512,40 @@ class TaskOrchestrator:
             WorkflowStep(3, "synthesizer", synthesizer, "Produce the final answer, incorporating only verified work.", (0, 1, 2)),
         ]
 
-    def _score_agent(self, agent: ModelAgent, role: str, lowered: str) -> tuple[int, int, str]:
+    def _score_agent(
+        self, agent: ModelAgent, role: str, lowered: str
+    ) -> tuple[int, int, int, float, int, str]:
         if agent.disabled:
-            return (-20_000, len(agent.tags), agent.id)
+            return (-20_000, 0, 0, 0.0, len(agent.tags), agent.id)
         if role in agent.provider_exclusions:
-            return (-10_000, len(agent.tags), agent.id)
+            return (-10_000, 0, 0, 0.0, len(agent.tags), agent.id)
         role_score = sum(3 for tag in agent.tags if tag in self.ROLE_TAGS.get(role, ()))
         domain_score = 0
         for tag, hints in self.DOMAIN_HINTS.items():
             if tag in agent.tags and any(hint in lowered for hint in hints):
                 domain_score += 2
-        return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
+        # Capability first, then free-first price honesty among equals:
+        # 1) free (explicit USD/M token rate 0) beats any positive price and unpriced;
+        # 2) known positive prices: cheaper wins; 3) unpriced is not free — ranks last.
+        # Never invent a zero rate for missing price_per_million entries.
+        price = self.price_per_million.get(agent.model)
+        if price is None:
+            free_bonus = 0
+            price_known = 0
+            cheapness = 0.0
+        else:
+            rate = float(price)
+            free_bonus = 1 if rate == 0.0 else 0
+            price_known = 1
+            cheapness = -rate
+        return (
+            role_score + domain_score + agent.priority,
+            free_bonus,
+            price_known,
+            cheapness,
+            len(agent.tags),
+            agent.id,
+        )
 
     def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
         """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""

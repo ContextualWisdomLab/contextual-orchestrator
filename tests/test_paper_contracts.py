@@ -60,8 +60,65 @@ def test_conductor_contract_uses_access_lists_to_control_context() -> None:
     assert "Step 1: builder_agent:2" in verifier_prompt
 
 
+def test_fugu_contract_prefers_cheapest_equally_capable_agent() -> None:
+    """Among equal capability, lower known price_per_million wins."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("pricey_agent", "model-pricey", tags=("coding",)),
+            ModelAgent("cheap_agent", "model-cheap", tags=("coding",)),
+        ],
+        price_per_million={"model-pricey": 10.0, "model-cheap": 1.0},
+    )
+    result = orchestrator.route_once([{"role": "user", "content": "fix this bug"}])
+    assert result["trace"][0]["agent_id"] == "cheap_agent"
+
+
+def test_fugu_contract_price_is_only_a_tie_break_not_a_priority_override() -> None:
+    """Capability/priority dominate price; free/cheap cannot override a better match."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("higher_priority_pricey_agent", "model-pricey", tags=("coding",), priority=5),
+            ModelAgent("lower_priority_free_agent", "model-free", tags=("coding",), priority=0),
+        ],
+        price_per_million={"model-pricey": 50.0, "model-free": 0.0},
+    )
+    result = orchestrator.route_once([{"role": "user", "content": "fix this bug"}])
+    assert result["trace"][0]["agent_id"] == "higher_priority_pricey_agent"
+
+
+def test_fugu_contract_prefers_free_over_paid_when_equally_capable() -> None:
+    """Explicit free rate (0) wins free-first tie-break; unpriced is not free."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("paid_agent", "model-paid", tags=("coding",)),
+            ModelAgent("free_agent", "model-free", tags=("coding",)),
+            ModelAgent("unpriced_agent", "model-unpriced", tags=("coding",)),
+        ],
+        price_per_million={"model-paid": 2.0, "model-free": 0.0},
+    )
+    result = orchestrator.route_once([{"role": "user", "content": "fix this bug"}])
+    assert result["trace"][0]["agent_id"] == "free_agent"
+
+
+def test_fugu_contract_prefers_priced_over_unpriced_when_equally_capable() -> None:
+    """Missing price_per_million is not treated as free; known paid still ranks above it."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("unpriced_agent", "model-unpriced", tags=("coding",)),
+            ModelAgent("paid_agent", "model-paid", tags=("coding",)),
+        ],
+        price_per_million={"model-paid": 5.0},
+    )
+    result = orchestrator.route_once([{"role": "user", "content": "fix this bug"}])
+    assert result["trace"][0]["agent_id"] == "paid_agent"
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_fugu_contract_fuses_fast_route_and_deep_workflow()
     test_trinity_contract_has_explicit_thinker_worker_verifier_roles()
     test_conductor_contract_uses_access_lists_to_control_context()
+    test_fugu_contract_prefers_cheapest_equally_capable_agent()
+    test_fugu_contract_price_is_only_a_tie_break_not_a_priority_override()
+    test_fugu_contract_prefers_free_over_paid_when_equally_capable()
+    test_fugu_contract_prefers_priced_over_unpriced_when_equally_capable()
     print("ok")

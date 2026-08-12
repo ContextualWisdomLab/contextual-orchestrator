@@ -40,6 +40,8 @@ This repository implements the interface and control plane, not the trained coor
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
+Live routing (`_score_agent`/`_ranked_agents`) maximizes capability-tag match and operator priority first (the honest, measurable performance proxy). Among agents tied on that ranking, free-first price preference applies: an explicit free rate (`price_per_million[model] == 0`) beats any positive rate; cheaper known paid rates beat more expensive ones; unpriced models (missing table entries) are never treated as free and rank after known prices. This never invents a quality score or a zero price. Set prices via `TaskOrchestrator(price_per_million=...)` or the CLI's `--price-per-million` flag when available.
+
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 
 ## Product Planning Interpretation
