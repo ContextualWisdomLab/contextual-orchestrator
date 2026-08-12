@@ -31,7 +31,7 @@ integration and operational acceptance succeed.
 | Fail-closed commercial release authorization | `active_pr` | PR #112 is an evidence-model prototype, not a trusted authority binder | ADR-0010, ADR-0011, release guide | spoofing, ruleset, review-identity, and protected-integration matrix remains incomplete |
 | Equivalent-endpoint racing | `active_pr` | PR #114 is a partial immediate-race experiment | issue #102, architecture, operability, threat model | equivalence, validation, cancellation, accounting, and ablation matrix remains incomplete |
 | Liveness/readiness, inbound framing, and trace authority | `active_pr` | PR #121 is an open partial security slice | issues #117, #118, and #119 remain requirement authority | duplicate framing, deadlines, independent trace authority, readiness degradation, and protected integration remain incomplete |
-| Evidence-grade NVIDIA NIM benchmark | `planned` | PR #90 is `superseded` closed-unmerged evidence; PR #115 is an open `superseded` scaffold; issue #86 owns replacement | ADR-0006 | replacement benchmark evidence |
+| Evidence-grade NVIDIA NIM benchmark | `planned` | PR #115 is an open `superseded` scaffold; issue #86 owns replacement (predecessor PR #90 evidence recorded below) | ADR-0006 | replacement benchmark evidence |
 | Free-first fallback | `planned` | PR #94 is `superseded` closed-unmerged evidence | ADR-0007 | replacement implementation requires fresh protected-line evidence |
 | Adaptive reasoning effort | `planned` | PR #99 is `superseded` closed-unmerged evidence | ADR-0003 | comparable-budget replacement tests |
 | Synchronous embeddings and KV-only bootstrap | `planned` | PR #66 is `superseded` closed-unmerged evidence | PRD and TRD | replacement contract evidence |
@@ -80,9 +80,10 @@ evidence transfers between these branches.
   accounting, deterministic tie-breaking, and comparable-budget acceptance
   remain incomplete.
 - Issue #86 owns evidence-grade NIM model discovery and cost-quality evaluation.
-  PR #90 is `superseded` closed-unmerged evidence. PR #115 is an open scaffold
-  classified `superseded`, not active implementation authority, because it does
-  not satisfy the accepted security, benchmark, and evidence contract.
+  Predecessor PR #90 is `superseded` closed-unmerged evidence.
+  PR #115 is an open scaffold classified `superseded`, not active
+  implementation authority, because it does not satisfy the accepted
+  security, benchmark, and evidence contract.
 - Issues #117, #118, and #119 remain open requirement authorities. Active PR
   #121 supplies partial implementation evidence only and does not close them.
 - Issue #116 remains open. Active PR #111 proves opaque session separation,
