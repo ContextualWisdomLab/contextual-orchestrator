@@ -270,8 +270,8 @@ def test_race_uses_worker_role_temperature() -> None:
             return f"[{agent.id}]"
 
     agents = [
-        ModelAgent("rep_one", "m", tags=("reasoning", "writing"), priority=5, model_group="g1"),
-        ModelAgent("rep_two", "m", tags=("reasoning", "writing"), priority=4, model_group="g1"),
+        ModelAgent("rep_one", "m", tags=("reasoning", "writing"), priority=5, model_group="gateway_pool_a"),
+        ModelAgent("rep_two", "m", tags=("reasoning", "writing"), priority=4, model_group="gateway_pool_a"),
     ]
     client = TempClient()
     TaskOrchestrator(agents, client=client).route_once([{"role": "user", "content": "x"}])
