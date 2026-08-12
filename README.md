@@ -192,7 +192,7 @@ is read from a **KV config store**, never `os.getenv`.
   backend (local in-process backend standalone), and records one usage-ledger row
   per original vector with the full attribution dimensions (service, team,
   group, company, provider) carried in `metadata`.
-- **Health.** `GET /healthz` is an unauthenticated liveness probe.
+- **Health.** `GET /healthz` is an unauthenticated minimal liveness probe (`status` + `service` only). `GET /readyz` is admin-authenticated readiness with agent/backend/usage inventory for operators.
 - **Standalone + optional pg-llm-batch integration.** The hub runs standalone
   with the in-memory config store and local batch backend; wiring a Postgres DSN
   and an installed/deployed `pg_llm_batch` client activates the KV/secret stores,

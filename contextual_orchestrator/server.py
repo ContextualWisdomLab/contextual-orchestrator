@@ -116,6 +116,23 @@ class SecurityConfig:
         if not expected or not secrets.compare_digest(token, expected):
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
 
+    def may_disclose_trace(self, headers: Any, scope: str) -> bool:
+        """Return True when the verified caller may receive orchestration traces.
+
+        Inference-only credentials never receive planner/workflow evidence.
+        Admin-scope callers may. Single-token deployments may when the host sets
+        ``expose_trace_by_default`` or the request is handled under admin scope.
+        """
+        if scope == "admin":
+            return True
+        if scope != "inference":
+            return False
+        # Split-token inference path: never disclose traces.
+        if self.admin_token and self.inference_token and not self.auth_token:
+            return False
+        # Single shared token: host policy gate only (still needs request bool).
+        return bool(self.expose_trace_by_default)
+
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
         now = time.monotonic()
@@ -170,6 +187,69 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
         raise RequestError(400, "invalid_json", "request body must be a JSON object")
     return value
 
+
+def _coerce_optional_bool(value: Any, field_name: str) -> bool | None:
+    """Parse an optional JSON bool fail-closed; reject truthy strings/numbers."""
+    if value is None:
+        return None
+    if isinstance(value, bool):
+        return value
+    raise RequestError(
+        400,
+        "invalid_boolean",
+        f"{field_name} must be a JSON boolean",
+        {"field": field_name},
+    )
+
+
+def _parse_content_length(headers: Any, max_body_bytes: int) -> int:
+    """Return a validated Content-Length for fixed-length JSON request bodies.
+
+    Rejects missing, negative, non-decimal, overflow, and transfer-coded framing
+    so ``rfile.read`` never receives a negative size or unbounded read.
+    """
+    # BaseHTTPRequestHandler collapses duplicate headers with commas; treat that
+    # as ambiguous framing and reject rather than guessing.
+    raw = headers.get("content-length")
+    if raw is None or raw == "":
+        raise RequestError(411, "length_required", "Content-Length is required for JSON request bodies")
+    if isinstance(raw, str) and "," in raw:
+        raise RequestError(400, "invalid_content_length", "duplicate or ambiguous Content-Length")
+    text = str(raw).strip()
+    if not text.isdigit():
+        # Reject signed forms ("-1", "+10"), hex, and non-decimal tokens.
+        raise RequestError(400, "invalid_content_length", "Content-Length must be an unsigned decimal integer")
+    # Leading zeros are allowed by isdigit; value itself must fit max.
+    body_size = int(text)
+    if body_size > max_body_bytes:
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    transfer = (headers.get("transfer-encoding") or "").strip()
+    if transfer and transfer.lower() != "identity":
+        raise RequestError(
+            400,
+            "unsupported_transfer_encoding",
+            "chunked or non-identity Transfer-Encoding is not accepted for JSON bodies",
+        )
+    return body_size
+
+
+def _resolve_include_trace(
+    body: dict[str, Any],
+    security: SecurityConfig,
+    headers: Any,
+    scope: str,
+) -> bool:
+    """Fail-closed orchestration-trace disclosure decision.
+
+    Requires (1) verified trace authority for the caller scope and (2) an
+    explicit JSON boolean request flag when the host default is off.
+    """
+    if not security.may_disclose_trace(headers, scope):
+        return False
+    requested = _coerce_optional_bool(body.get("include_orchestration_trace"), "include_orchestration_trace")
+    if requested is None:
+        return bool(security.expose_trace_by_default)
+    return requested
 
 def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
@@ -336,9 +416,14 @@ def build_server(
                     self._send(OPENAPI_SPEC)
                     return
                 if path == "/healthz":
-                    # Unauthenticated liveness probe for containers/orchestrators.
+                    # Unauthenticated liveness only: process is up. No inventory.
+                    self._send({"status": "ok", "service": "contextual-orchestrator"})
+                    return
+                if path == "/readyz":
+                    # Authenticated readiness/diagnostics: operator inventory.
+                    self._authorize("admin")
                     self._send({
-                        "status": "ok",
+                        "status": "ready",
                         "service": "contextual-orchestrator",
                         "agent_count": len(orchestrator.agents),
                         "batch_backend": coordinator.batch_backend.name,
@@ -733,7 +818,7 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = _resolve_include_trace(body, security, self.headers, scope)
                     stream = body.get("stream", False)
                     if not isinstance(stream, bool):
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
@@ -856,7 +941,7 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return
-                    self._send(_response_payload(retrieved, include_trace=True))
+                    self._send(_response_payload(retrieved, include_trace=security.may_disclose_trace(self.headers, "inference")))
                     return
                 if path == "/v1/responses":
                     # The Responses API has no chat-completions verifier equivalent,
@@ -884,7 +969,7 @@ def build_server(
                     if not isinstance(prompt, str):
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = _resolve_include_trace(body, security, self.headers, scope)
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace))
                     return
@@ -894,7 +979,7 @@ def build_server(
                     if not isinstance(prompt, str) or not prompt:
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = _resolve_include_trace(body, security, self.headers, scope)
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace), 201)
                     return
@@ -906,7 +991,7 @@ def build_server(
                     if not isinstance(prompts, list) or not prompts:
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = _resolve_include_trace(body, security, self.headers, scope)
                     evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
@@ -960,10 +1045,10 @@ def build_server(
         def _read_json(self) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
-            body_size = int(self.headers.get("content-length", "0"))
-            if body_size > security.max_body_bytes:
-                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+            body_size = _parse_content_length(self.headers, security.max_body_bytes)
             raw = self.rfile.read(body_size)
+            if len(raw) != body_size:
+                raise RequestError(400, "incomplete_body", "request body shorter than Content-Length")
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
