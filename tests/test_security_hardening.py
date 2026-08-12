@@ -287,6 +287,15 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
             os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
 
 
+def test_provider_tls_verification_cannot_be_disabled() -> None:
+    try:
+        ModelClient(verify_tls=False)
+    except ValueError as exc:
+        assert "TLS verification" in str(exc)
+    else:
+        raise AssertionError("provider TLS verification must not be disableable")
+
+
 def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:
     client = ModelClient()
     file_agent = ModelAgent("file_agent", "gpt-example", "file:///etc/passwd", "MODEL_KEY")
@@ -328,6 +337,7 @@ if __name__ == "__main__":
     test_redaction_masks_common_sensitive_values()
     test_external_provider_requires_resolvable_credential_and_public_https()
     test_external_provider_rejects_insecure_or_unlisted_hosts()
+    test_provider_tls_verification_cannot_be_disabled()
     test_provider_transport_rejects_local_url_schemes_before_urllib()
     test_provider_transport_rejects_protocol_relative_batch_paths()
     test_redact_value_preserves_non_string_scalars()

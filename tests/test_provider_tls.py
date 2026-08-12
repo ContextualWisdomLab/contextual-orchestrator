@@ -1,9 +1,8 @@
 """Provider TLS trust configuration for ModelClient.
 
 A live run against a corporate OpenAI-compatible gateway failed because urllib could
-not verify its certificate chain (custom CA not in Python's trust store), and there
-was no way to supply a CA bundle short of disabling verification globally. This adds
-a per-client CA bundle / verify toggle. Default stays verified against the system store.
+not verify its certificate chain (custom CA not in Python's trust store). The client
+accepts a per-client CA bundle while refusing to disable verification globally.
 """
 
 from __future__ import annotations
@@ -24,10 +23,13 @@ def test_default_verifies_against_system_store() -> None:
     assert context.check_hostname is True
 
 
-def test_insecure_skip_verify_disables_checks() -> None:
-    context = ModelClient(verify_tls=False)._ssl_context
-    assert context.verify_mode == ssl.CERT_NONE
-    assert context.check_hostname is False
+def test_insecure_skip_verify_is_rejected() -> None:
+    try:
+        ModelClient(verify_tls=False)
+    except ValueError as exc:
+        assert "TLS verification" in str(exc)
+    else:
+        raise AssertionError("provider TLS verification must not be disableable")
 
 
 def test_ca_bundle_is_loaded() -> None:

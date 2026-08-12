@@ -4,6 +4,7 @@ from __future__ import annotations
 import json
 import sys
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -20,15 +21,17 @@ _INFERENCE = "inference_secret"  # noqa: S105
 _SINGLE = "single_token"  # noqa: S105
 
 
-def post(url: str, payload: dict, token: str) -> tuple[int, dict]:
+def post(url: str, payload: dict, token: str, extra_headers: dict[str, str] | None = None) -> tuple[int, dict]:
+    headers = {
+        "content-type": "application/json",
+        "authorization": f"Bearer {token}",
+        "connection": "close",
+    }
+    headers.update(extra_headers or {})
     req = urllib.request.Request(
         url,
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "content-type": "application/json",
-            "authorization": f"Bearer {token}",
-            "connection": "close",
-        },
+        headers=headers,
         method="POST",
     )
     try:
@@ -78,18 +81,29 @@ def test_inference_token_cannot_obtain_orchestration_trace() -> None:
     finally:
         server2.shutdown()
         t2.join(timeout=5)
-    assert status2 in {200, 400}
-    if status2 == 200:
-        assert "trace" not in body2.get("orchestration", {})
+    assert status2 == 400
+    assert body2["error_code"] == "invalid_boolean"
 
 
 def test_admin_token_can_request_orchestration_trace_on_admin_surfaces() -> None:
     """Admin simulate path may include traces; inference chat remains answer-only."""
     orch = TaskOrchestrator([ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))])
+    security = SecurityConfig(
+        admin_token=_ADMIN,
+        inference_token=_INFERENCE,
+        expose_trace_by_default=True,
+        trace_authority_secret="trace_authority_secret_123",
+    )
+    credential = security.issue_trace_credential(
+        tenant="tenant_a",
+        resource="/admin/simulate",
+        purpose="orchestration_trace",
+        expires_at=int(time.time()) + 60,
+    )
     server = build_server(
         orch,
         port=0,
-        security=SecurityConfig(admin_token=_ADMIN, inference_token=_INFERENCE, expose_trace_by_default=True),
+        security=security,
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -100,9 +114,10 @@ def test_admin_token_can_request_orchestration_trace_on_admin_surfaces() -> None
             f"http://127.0.0.1:{port}/admin/simulate",
             {"prompt": "hello", "mode": "route", "include_orchestration_trace": True},
             _ADMIN,
+            {"x-trace-authority": credential, "x-tenant-id": "tenant_a"},
         )
         assert status == 200
-        assert "trace" in body.get("orchestration", body) or body.get("mode") is not None
+        assert body.get("trace")
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -124,21 +139,35 @@ def test_single_token_mode_trace_requires_explicit_true_bool() -> None:
             {"messages": [{"role": "user", "content": "hello"}], "include_orchestration_trace": True},
             _SINGLE,
         )
-        # Single-token deployments treat the token as both scopes; explicit true
-        # still requires a verified bool and host policy allow when configured.
+        # Single-token deployments still require the separate trace credential.
         assert status == 200
-        # Without expose_trace_by_default and without admin-only split, single
-        # token may disclose only when request bool is true AND policy allows —
-        # default remain denied when expose_trace_by_default is false unless
-        # request is authorized for trace. Single token gets answer only by default.
+        # A bearer token alone is never trace authority.
         assert "trace" not in body.get("orchestration", {})
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
+def test_trace_credential_rejects_revoked_claims() -> None:
+    security = SecurityConfig(
+        auth_token=_SINGLE,
+        trace_authority_secret="trace_authority_secret_123",
+        revoked_trace_credential_ids=("revoked_id",),
+    )
+    credential = security.issue_trace_credential(
+        tenant="tenant_a",
+        resource="/v1/chat/completions",
+        purpose="orchestration_trace",
+        expires_at=int(time.time()) + 60,
+        credential_id="revoked_id",
+    )
+    headers = {"x-trace-authority": credential, "x-tenant-id": "tenant_a"}
+    assert not security.may_disclose_trace(headers, "inference", "/v1/chat/completions")
+
+
 if __name__ == "__main__":
     test_inference_token_cannot_obtain_orchestration_trace()
     test_admin_token_can_request_orchestration_trace_on_admin_surfaces()
     test_single_token_mode_trace_requires_explicit_true_bool()
+    test_trace_credential_rejects_revoked_claims()
     print("ok")

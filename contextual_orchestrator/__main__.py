@@ -82,8 +82,9 @@ def main() -> None:
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
-    parser.add_argument("--insecure-skip-tls-verify", action="store_true",
-                        help="Dev only: do not verify provider TLS certificates (insecure).")
+    parser.add_argument("--trace-authority-secret",
+                        default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_TRACE_AUTHORITY_SECRET", ""),
+                        help="HMAC secret for separately authorized trace credentials.")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
     parser.add_argument("--budget-max-cost-usd", type=float, default=None,
@@ -94,7 +95,7 @@ def main() -> None:
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
-    client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
+    client = ModelClient(ca_bundle=args.provider_ca_bundle)
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),
         client=client,
@@ -129,6 +130,7 @@ def main() -> None:
                 inference_token=args.inference_token,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
+                trace_authority_secret=args.trace_authority_secret,
             ),
             clearfolio_url=args.clearfolio_url,
         )

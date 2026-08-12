@@ -737,6 +737,12 @@ class CostLedger:
             return bool(flush(timeout=timeout))
         return True
 
+    def readiness_check(self) -> Dict[str, Any]:
+        """Return prompt-safe ledger readiness and storage failure evidence."""
+        health = self.telemetry_health()
+        failures = int(health.get("store_failures", 0))
+        return {"ready": failures == 0, "store_failures": failures}
+
     def telemetry_health(self) -> Dict[str, Any]:
         """Return prompt-safe ledger export health counters."""
         health = self._inline_health.as_dict()

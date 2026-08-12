@@ -39,7 +39,7 @@ HTTP serving is hardened for local lab use:
 - `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
-- Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
+- Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` and present a separately minted HMAC trace credential bound to the request tenant and exact resource; `--expose-trace-by-default` alone never grants trace authority.
 - State is in-memory by default. Pass `--state-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_STATE_DB`) to persist workflow runs, evaluation runs, audit, and analytics to a stdlib sqlite file so they survive a restart; without it, behavior is unchanged.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
 - `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
@@ -192,7 +192,7 @@ is read from a **KV config store**, never `os.getenv`.
   backend (local in-process backend standalone), and records one usage-ledger row
   per original vector with the full attribution dimensions (service, team,
   group, company, provider) carried in `metadata`.
-- **Health.** `GET /healthz` is an unauthenticated minimal liveness probe (`status` + `service` only). `GET /readyz` is admin-authenticated readiness with agent/backend/usage inventory for operators.
+- **Health.** `GET /healthz` is an unauthenticated minimal liveness probe (`status` + `service` only). `GET /readyz` is admin-authenticated readiness: it probes both batch backends and the usage ledger within a bounded deadline, returns `503` with `status=degraded` when a required dependency fails, and includes only secret-free inventory. Trace responses require a separate HMAC trace credential bound to tenant, exact resource, purpose `orchestration_trace`, expiry, and revocation; admin or inference bearer access alone is insufficient.
 - **Standalone + optional pg-llm-batch integration.** The hub runs standalone
   with the in-memory config store and local batch backend; wiring a Postgres DSN
   and an installed/deployed `pg_llm_batch` client activates the KV/secret stores,

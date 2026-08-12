@@ -1,7 +1,6 @@
 """Fail-closed inbound HTTP request framing for JSON bodies."""
 from __future__ import annotations
 
-import json
 import socket
 import sys
 import threading
@@ -96,6 +95,35 @@ def test_oversized_content_length_is_rejected() -> None:
     assert b"request_too_large" in raw
 
 
+def test_duplicate_content_length_is_rejected() -> None:
+    server, thread, port = _start()
+    try:
+        code, _raw = _raw_post(
+            port,
+            ["Content-Type: application/json", "Content-Length: 2", "Content-Length: 2"],
+            b"{}",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert code == 400
+
+
+def test_identity_transfer_encoding_is_rejected() -> None:
+    server, thread, port = _start()
+    body = b"{}"
+    try:
+        code, _raw = _raw_post(
+            port,
+            ["Content-Type: application/json", f"Content-Length: {len(body)}", "Transfer-Encoding: identity"],
+            body,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert code == 400
+
+
 def test_missing_content_length_is_rejected_for_json_post() -> None:
     server, thread, port = _start()
     try:
@@ -124,6 +152,33 @@ def test_valid_small_json_body_still_works() -> None:
         thread.join(timeout=5)
     assert code == 200
     assert b"chat.completion" in raw or b"choices" in raw
+
+
+def test_partial_body_hits_read_deadline() -> None:
+    orch = TaskOrchestrator([ModelAgent("general_agent", "mock-generalist", tags=("reasoning",))])
+    server = build_server(
+        orch,
+        port=0,
+        security=SecurityConfig(auth_token=_TOKEN, request_body_timeout_seconds=0.05),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    body = b'{"messages":['
+    request = (
+        f"POST /v1/chat/completions HTTP/1.1\r\nHost: 127.0.0.1:{server.server_address[1]}\r\n"
+        f"Authorization: Bearer {_TOKEN}\r\nConnection: close\r\nContent-Type: application/json\r\n"
+        f"Content-Length: {len(body) + 20}\r\n\r\n"
+    ).encode("ascii") + body
+    try:
+        with socket.create_connection(("127.0.0.1", server.server_address[1]), timeout=3) as sock:
+            sock.sendall(request)
+            sock.settimeout(3)
+            raw = sock.recv(4096)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert b"408" in raw.split(b"\r\n", 1)[0]
+    assert b"request_body_timeout" in raw
 
 
 if __name__ == "__main__":

@@ -2,10 +2,14 @@
 
 from __future__ import annotations
 
+import base64
 from dataclasses import dataclass, field
+import hashlib
+import hmac
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import secrets
+import socket
 import threading
 import time
 import urllib.parse
@@ -87,9 +91,13 @@ class SecurityConfig:
     allow_public_bind: bool = False
     expose_trace_by_default: bool = False
     max_body_bytes: int = 64 * 1024
+    request_body_timeout_seconds: float = 10.0
+    readiness_probe_timeout_seconds: float = 2.0
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
+    trace_authority_secret: str = ""
+    revoked_trace_credential_ids: tuple[str, ...] = ()
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -97,6 +105,10 @@ class SecurityConfig:
     def __post_init__(self) -> None:
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if self.request_body_timeout_seconds <= 0:
+            raise ValueError("request_body_timeout_seconds must be positive")
+        if self.readiness_probe_timeout_seconds <= 0:
+            raise ValueError("readiness_probe_timeout_seconds must be positive")
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
 
     def check_bind(self, host: str) -> None:
@@ -116,22 +128,95 @@ class SecurityConfig:
         if not expected or not secrets.compare_digest(token, expected):
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
 
-    def may_disclose_trace(self, headers: Any, scope: str) -> bool:
+    @staticmethod
+    def _encode_trace_part(value: bytes) -> str:
+        """Encode one trace-credential component without padding."""
+        return base64.urlsafe_b64encode(value).rstrip(b"=").decode("ascii")
+
+    @staticmethod
+    def _decode_trace_part(value: str) -> bytes:
+        """Decode one unpadded trace-credential component."""
+        return base64.urlsafe_b64decode(value + "=" * (-len(value) % 4))
+
+    def issue_trace_credential(
+        self,
+        *,
+        tenant: str,
+        resource: str,
+        purpose: str,
+        expires_at: int,
+        credential_id: str | None = None,
+    ) -> str:
+        """Create a signed, short-lived credential for one trace resource."""
+        if not self.trace_authority_secret:
+            raise ValueError("trace_authority_secret is not configured")
+        if not all(isinstance(value, str) and value for value in (tenant, resource, purpose)):
+            raise ValueError("trace credential tenant, resource, and purpose are required")
+        if int(expires_at) <= int(time.time()):
+            raise ValueError("trace credential must expire in the future")
+        claims = {
+            "credential_id": credential_id or uuid.uuid4().hex,
+            "expires_at": int(expires_at),
+            "purpose": purpose,
+            "resource": resource,
+            "tenant": tenant,
+        }
+        encoded = self._encode_trace_part(
+            json.dumps(claims, sort_keys=True, separators=(",", ":")).encode("utf-8")
+        )
+        signature = hmac.new(
+            self.trace_authority_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
+        ).digest()
+        return f"{encoded}.{self._encode_trace_part(signature)}"
+
+    def _verify_trace_credential(self, headers: Any, resource: str) -> bool:
+        """Verify trace token integrity, scope, tenant binding, expiry, and revocation."""
+        if not self.trace_authority_secret:
+            return False
+        raw = str(headers.get("x-trace-authority", ""))
+        parts = raw.split(".")
+        if len(parts) != 2:
+            return False
+        encoded, supplied_signature = parts
+        expected_signature = hmac.new(
+            self.trace_authority_secret.encode("utf-8"), encoded.encode("ascii"), hashlib.sha256
+        ).digest()
+        try:
+            if not secrets.compare_digest(self._decode_trace_part(supplied_signature), expected_signature):
+                return False
+            claims = json.loads(self._decode_trace_part(encoded).decode("utf-8"))
+        except (ValueError, TypeError, UnicodeDecodeError, json.JSONDecodeError):
+            return False
+        if not isinstance(claims, dict):
+            return False
+        credential_id = claims.get("credential_id")
+        tenant = claims.get("tenant")
+        claim_resource = claims.get("resource")
+        purpose = claims.get("purpose")
+        expires_at = claims.get("expires_at")
+        return (
+            isinstance(credential_id, str)
+            and credential_id not in self.revoked_trace_credential_ids
+            and isinstance(tenant, str)
+            and bool(tenant)
+            and tenant == str(headers.get("x-tenant-id", ""))
+            and isinstance(claim_resource, str)
+            and claim_resource == resource
+            and purpose == "orchestration_trace"
+            and isinstance(expires_at, int)
+            and expires_at > int(time.time())
+        )
+
+    def may_disclose_trace(self, headers: Any, scope: str, resource: str) -> bool:
         """Return True when the verified caller may receive orchestration traces.
 
-        Inference-only credentials never receive planner/workflow evidence.
-        Admin-scope callers may. Single-token deployments may when the host sets
-        ``expose_trace_by_default`` or the request is handled under admin scope.
+        Admin and inference bearer scopes are not trace authority. A separate
+        signed credential is required for every resource, tenant, purpose, and
+        unexpired non-revoked trace disclosure.
         """
-        if scope == "admin":
-            return True
-        if scope != "inference":
+        if scope not in {"admin", "inference"}:
             return False
-        # Split-token inference path: never disclose traces.
-        if self.admin_token and self.inference_token and not self.auth_token:
-            return False
-        # Single shared token: host policy gate only (still needs request bool).
-        return bool(self.expose_trace_by_default)
+        return self._verify_trace_credential(headers, resource)
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
@@ -208,13 +293,13 @@ def _parse_content_length(headers: Any, max_body_bytes: int) -> int:
     Rejects missing, negative, non-decimal, overflow, and transfer-coded framing
     so ``rfile.read`` never receives a negative size or unbounded read.
     """
-    # BaseHTTPRequestHandler collapses duplicate headers with commas; treat that
-    # as ambiguous framing and reject rather than guessing.
-    raw = headers.get("content-length")
-    if raw is None or raw == "":
-        raise RequestError(411, "length_required", "Content-Length is required for JSON request bodies")
-    if isinstance(raw, str) and "," in raw:
-        raise RequestError(400, "invalid_content_length", "duplicate or ambiguous Content-Length")
+    get_all = getattr(headers, "get_all", None)
+    values = list(get_all("content-length") or []) if callable(get_all) else [headers.get("content-length")]
+    if len(values) != 1 or values[0] in (None, ""):
+        status = 411 if not values or values == [None] else 400
+        message = "Content-Length is required for JSON request bodies" if status == 411 else "duplicate or ambiguous Content-Length"
+        raise RequestError(status, "length_required" if status == 411 else "invalid_content_length", message)
+    raw = values[0]
     text = str(raw).strip()
     if not text.isdigit():
         # Reject signed forms ("-1", "+10"), hex, and non-decimal tokens.
@@ -223,12 +308,16 @@ def _parse_content_length(headers: Any, max_body_bytes: int) -> int:
     body_size = int(text)
     if body_size > max_body_bytes:
         raise RequestError(413, "request_too_large", "request body exceeds configured limit")
-    transfer = (headers.get("transfer-encoding") or "").strip()
-    if transfer and transfer.lower() != "identity":
+    transfer_values = (
+        list(get_all("transfer-encoding") or [])
+        if callable(get_all)
+        else ([headers.get("transfer-encoding")] if headers.get("transfer-encoding") else [])
+    )
+    if transfer_values:
         raise RequestError(
             400,
             "unsupported_transfer_encoding",
-            "chunked or non-identity Transfer-Encoding is not accepted for JSON bodies",
+            "Transfer-Encoding is not accepted for fixed-length JSON bodies",
         )
     return body_size
 
@@ -238,18 +327,42 @@ def _resolve_include_trace(
     security: SecurityConfig,
     headers: Any,
     scope: str,
+    resource: str,
 ) -> bool:
     """Fail-closed orchestration-trace disclosure decision.
 
     Requires (1) verified trace authority for the caller scope and (2) an
     explicit JSON boolean request flag when the host default is off.
     """
-    if not security.may_disclose_trace(headers, scope):
-        return False
     requested = _coerce_optional_bool(body.get("include_orchestration_trace"), "include_orchestration_trace")
-    if requested is None:
-        return bool(security.expose_trace_by_default)
-    return requested
+    if not requested:
+        return False
+    return security.may_disclose_trace(headers, scope, resource)
+
+
+def _probe_readiness_component(name: str, component: Any, timeout: float) -> dict[str, Any]:
+    """Run one dependency readiness probe without blocking the HTTP worker."""
+    result: dict[str, Any] = {}
+    finished = threading.Event()
+
+    def probe() -> None:
+        try:
+            check = getattr(component, "readiness_check", None)
+            if not callable(check):
+                result["value"] = {"ready": False, "reason": "readiness_probe_unavailable"}
+            else:
+                value = check()
+                result["value"] = value if isinstance(value, dict) else {"ready": bool(value)}
+        except Exception as exc:  # noqa: BLE001 - readiness must be safe and bounded
+            result["value"] = {"ready": False, "reason": type(exc).__name__}
+        finally:
+            finished.set()
+
+    threading.Thread(target=probe, name=f"readiness-{name}", daemon=True).start()
+    if not finished.wait(timeout):
+        return {"ready": False, "reason": "readiness_probe_timeout"}
+    value = result.get("value", {"ready": False, "reason": "readiness_probe_missing_result"})
+    return {"ready": bool(value.get("ready")), **{key: value[key] for key in value if key != "ready"}}
 
 def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
@@ -422,14 +535,27 @@ def build_server(
                 if path == "/readyz":
                     # Authenticated readiness/diagnostics: operator inventory.
                     self._authorize("admin")
+                    dependencies = {
+                        "batch_backend": _probe_readiness_component(
+                            "batch-backend", coordinator.batch_backend, security.readiness_probe_timeout_seconds
+                        ),
+                        "embedding_batch_backend": _probe_readiness_component(
+                            "embedding-batch-backend", coordinator.embedding_batch_backend, security.readiness_probe_timeout_seconds
+                        ),
+                        "usage_ledger": _probe_readiness_component(
+                            "usage-ledger", coordinator.ledger, security.readiness_probe_timeout_seconds
+                        ),
+                    }
+                    ready = all(item["ready"] for item in dependencies.values())
                     self._send({
-                        "status": "ready",
+                        "status": "ready" if ready else "degraded",
                         "service": "contextual-orchestrator",
                         "agent_count": len(orchestrator.agents),
                         "batch_backend": coordinator.batch_backend.name,
                         "embedding_batch_backend": coordinator.embedding_batch_backend.name,
                         "usage_record_count": len(coordinator.ledger.records()),
-                    })
+                        "dependencies": dependencies,
+                    }, 200 if ready else 503)
                     return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
@@ -482,7 +608,7 @@ def build_server(
                     state["document_viewer"] = (
                         {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
                     )
-                    self._send(_response_payload(state, security.expose_trace_by_default))
+                    self._send(_response_payload(state, security.may_disclose_trace(self.headers, "admin", path)))
                     return
                 if path == "/api/v1/agent_pools":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=100)
@@ -660,12 +786,12 @@ def build_server(
                         "total_count": len(getattr(orchestrator, "_workflow_runs", {})),
                         "page_number": page_number,
                         "page_size": page_size,
-                    }, security.expose_trace_by_default))
+                    }, security.may_disclose_trace(self.headers, "admin", path)))
                     return
                 if path.startswith("/api/v1/workflow_runs/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.expose_trace_by_default))
+                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.may_disclose_trace(self.headers, "admin", path)))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -682,7 +808,7 @@ def build_server(
                                 "status_code": 200,
                             },
                         )
-                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.expose_trace_by_default))
+                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.may_disclose_trace(self.headers, "admin", path)))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -691,7 +817,7 @@ def build_server(
                     evaluation_run_id = path.rsplit("/", 1)[-1]
                     runs = getattr(orchestrator, "_evaluation_runs", {})
                     if evaluation_run_id in runs:
-                        self._send(_response_payload(runs[evaluation_run_id], security.expose_trace_by_default))
+                        self._send(_response_payload(runs[evaluation_run_id], security.may_disclose_trace(self.headers, "admin", path)))
                         return
                     self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
                     return
@@ -818,7 +944,7 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    include_trace = _resolve_include_trace(body, security, self.headers, scope)
+                    include_trace = _resolve_include_trace(body, security, self.headers, scope, path)
                     stream = body.get("stream", False)
                     if not isinstance(stream, bool):
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
@@ -941,7 +1067,7 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
                         return
-                    self._send(_response_payload(retrieved, include_trace=security.may_disclose_trace(self.headers, "inference")))
+                    self._send(_response_payload(retrieved, include_trace=security.may_disclose_trace(self.headers, "inference", path)))
                     return
                 if path == "/v1/responses":
                     # The Responses API has no chat-completions verifier equivalent,
@@ -969,7 +1095,7 @@ def build_server(
                     if not isinstance(prompt, str):
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
-                    include_trace = _resolve_include_trace(body, security, self.headers, scope)
+                    include_trace = _resolve_include_trace(body, security, self.headers, scope, path)
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace))
                     return
@@ -979,7 +1105,7 @@ def build_server(
                     if not isinstance(prompt, str) or not prompt:
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = _resolve_include_trace(body, security, self.headers, scope)
+                    include_trace = _resolve_include_trace(body, security, self.headers, scope, path)
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace), 201)
                     return
@@ -991,7 +1117,7 @@ def build_server(
                     if not isinstance(prompts, list) or not prompts:
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = _resolve_include_trace(body, security, self.headers, scope)
+                    include_trace = _resolve_include_trace(body, security, self.headers, scope, path)
                     evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
@@ -1046,7 +1172,16 @@ def build_server(
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
             body_size = _parse_content_length(self.headers, security.max_body_bytes)
-            raw = self.rfile.read(body_size)
+            previous_timeout = self.connection.gettimeout()
+            self.connection.settimeout(security.request_body_timeout_seconds)
+            try:
+                raw = self.rfile.read(body_size)
+            except socket.timeout as exc:
+                self.close_connection = True
+                raise RequestError(408, "request_body_timeout", "request body read deadline exceeded") from exc
+            finally:
+                if not self.close_connection:
+                    self.connection.settimeout(previous_timeout)
             if len(raw) != body_size:
                 raise RequestError(400, "incomplete_body", "request body shorter than Content-Length")
             return _coerce_json(raw) if raw else {}

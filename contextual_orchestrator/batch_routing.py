@@ -200,6 +200,10 @@ class BatchBackend(Protocol):
 
     name: str
 
+    def readiness_check(self) -> Dict[str, Any]:
+        """Return a bounded, secret-free readiness result for the backend."""
+        ...
+
     def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
         """Submit a batch of requests and return a job handle."""
         ...
@@ -228,6 +232,10 @@ class LocalBatchBackend:
     def __init__(self, runner: Callable[[List[Dict[str, str]], str], Dict[str, Any]]) -> None:
         self._runner = runner
         self._results: Dict[str, List[BatchResultItem]] = {}
+
+    def readiness_check(self) -> Dict[str, Any]:
+        """Report that the in-process batch backend is available."""
+        return {"ready": callable(self._runner), "backend": self.name}
 
     def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
         """Run every request in-process and stash the results under a job id."""
@@ -284,6 +292,10 @@ class PgLlmBatchBackend:
         self._endpoint = endpoint
         self._assembler = payload_assembler
         self._jobs: Dict[str, Dict[str, Any]] = {}
+
+    def readiness_check(self) -> Dict[str, Any]:
+        """Report client configuration without performing external mutation."""
+        return {"ready": self._client is not None, "backend": self.name}
 
     def _assemble_payload(self, requests: List[BatchRequest]) -> str:
         if self._assembler is not None:
@@ -434,6 +446,10 @@ class EmbeddingBatchBackend(Protocol):
 
     name: str
 
+    def readiness_check(self) -> Dict[str, Any]:
+        """Return a bounded, secret-free readiness result for the backend."""
+        ...
+
     def submit(
         self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
     ) -> BatchJob:
@@ -489,6 +505,10 @@ class LocalEmbeddingBatchBackend:
         self._embedder = embedder or (lambda text: heuristic_embedding(text, dimension))
         self._token_counter = token_counter
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = {}
+
+    def readiness_check(self) -> Dict[str, Any]:
+        """Report that the in-process embeddings backend is available."""
+        return {"ready": callable(self._embedder), "backend": self.name}
 
     def _count_tokens(self, text: str, model: str) -> int:
         if self._token_counter is not None:
@@ -548,6 +568,10 @@ class PgLlmBatchEmbeddingBackend:
         self._endpoint = endpoint
         self._assembler = payload_assembler
         self._jobs: Dict[str, Dict[str, Any]] = {}
+
+    def readiness_check(self) -> Dict[str, Any]:
+        """Report client configuration without performing external mutation."""
+        return {"ready": self._client is not None, "backend": self.name}
 
     def _assemble_payload(self, requests: List[EmbeddingBatchRequest]) -> str:
         if self._assembler is not None:
