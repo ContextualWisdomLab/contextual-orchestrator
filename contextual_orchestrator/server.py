@@ -448,18 +448,27 @@ def build_server(
                         "kind": "orchestrator",
                         "status": "active",
                     }]
-                    seen_models: set[str] = {"contextual-orchestrator"}
+                    model_groups: dict[str, list[Any]] = {}
                     for agent in orchestrator.candidates:
-                        if not agent.model or agent.model in seen_models:
+                        if not agent.model or agent.model == "contextual-orchestrator":
                             continue
-                        seen_models.add(agent.model)
+                        model_groups.setdefault(agent.model, []).append(agent)
+                    for model, candidates in model_groups.items():
+                        representative = next(
+                            (candidate for candidate in candidates if not candidate.disabled),
+                            candidates[0],
+                        )
                         models.append({
-                            "id": agent.model,
+                            "id": model,
                             "object": "model",
                             "created": 0,
-                            "owned_by": agent.provider_name or "contextual-orchestrator",
+                            "owned_by": representative.provider_name or "contextual-orchestrator",
                             "kind": "worker",
-                            "status": "disabled" if agent.disabled else "active",
+                            "status": (
+                                "active"
+                                if any(not candidate.disabled for candidate in candidates)
+                                else "disabled"
+                            ),
                         })
                     self._send({"object": "list", "data": models})
                     return

@@ -1287,10 +1287,7 @@ class TaskOrchestrator:
         else:
             text = _coerce_input_text(body.get("input"))
         requested_model = body.get("model")
-        agent = None if requested_model == "contextual-orchestrator" else next(
-            (candidate for candidate in self.candidates if candidate.model == requested_model),
-            None,
-        )
+        agent = self._requested_agent(requested_model)
         if agent is not None and agent.disabled:
             raise RuntimeError(f"requested model {requested_model!r} is disabled")
         if agent is None:
@@ -1305,6 +1302,17 @@ class TaskOrchestrator:
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
         return self.client.proxy_send(agent, endpoint, upstream)
+
+    def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
+        """Resolve an explicit model without silently serving a different model."""
+        if requested_model is None or requested_model == "contextual-orchestrator":
+            return None
+        if type(requested_model) is not str or not requested_model:
+            raise ValueError("requested model must be a configured non-empty string")
+        matches = [candidate for candidate in self.candidates if candidate.model == requested_model]
+        if not matches:
+            raise ValueError(f"requested model {requested_model!r} is not configured")
+        return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""

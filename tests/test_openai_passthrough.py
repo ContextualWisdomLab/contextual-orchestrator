@@ -24,6 +24,7 @@ def _build() -> TaskOrchestrator:
     return TaskOrchestrator(
         agents=[
             ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+            ModelAgent("disabled_builder_duplicate", "mock-builder", disabled=True),
             ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation")),
             ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "review")),
             ModelAgent("disabled_candidate", "disabled-model", disabled=True),
@@ -70,6 +71,19 @@ def test_proxy_completion_honors_an_enabled_requested_worker_model() -> None:
     })
 
     assert result["model"] == "mock-builder"
+
+
+def test_proxy_completion_rejects_an_unknown_requested_model() -> None:
+    try:
+        _build().proxy_completion({
+            "model": "not-configured",
+            "messages": [{"role": "user", "content": "call a tool"}],
+            "tools": [],
+        })
+    except ValueError as exc:
+        assert "not configured" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("unknown explicit model must not silently fall back")
 
 
 def test_proxy_completion_responses_endpoint_returns_response_object() -> None:
@@ -155,6 +169,7 @@ def test_http_models_endpoint_lists_configured_models() -> None:
         "contextual-orchestrator", "mock-planner", "mock-builder", "mock-reviewer", "disabled-model"
     }
     assert body["data"][0]["kind"] == "orchestrator"
+    assert next(item for item in body["data"] if item["id"] == "mock-builder")["status"] == "active"
     assert next(item for item in body["data"] if item["id"] == "disabled-model")["status"] == "disabled"
 
 
