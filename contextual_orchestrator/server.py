@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import math
 import secrets
 import threading
 import time
@@ -116,16 +117,39 @@ class SecurityConfig:
         if not expected or not secrets.compare_digest(token, expected):
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
 
-    def check_rate_limit(self, key: str) -> None:
-        """Apply a simple per-client fixed-window request budget."""
+    def check_rate_limit(self, key: str) -> dict[str, int]:
+        """Apply a per-client fixed-window budget and return header fields.
+
+        Returns ``{limit, remaining, reset}`` where ``reset`` is whole seconds
+        until the window rolls. On budget exhaustion raises 429 with the same
+        fields plus ``retry_after_seconds`` in ``RequestError.detail`` so clients
+        can honour ``Retry-After`` / ``X-RateLimit-*`` (IETF rate-limit fields).
+        """
         now = time.monotonic()
         with self._rate_lock:
             count, reset_at = self._rate_buckets.get(key, (0, now + self.rate_limit_window_seconds))
             if now >= reset_at:
                 count, reset_at = 0, now + self.rate_limit_window_seconds
+            reset_seconds = max(1, int(math.ceil(reset_at - now)))
             if count >= self.rate_limit_requests:
-                raise RequestError(429, "rate_limit_exceeded", "request rate limit exceeded")
-            self._rate_buckets[key] = (count + 1, reset_at)
+                raise RequestError(
+                    429,
+                    "rate_limit_exceeded",
+                    "request rate limit exceeded",
+                    {
+                        "retry_after_seconds": reset_seconds,
+                        "rate_limit_limit": self.rate_limit_requests,
+                        "rate_limit_remaining": 0,
+                        "rate_limit_reset": reset_seconds,
+                    },
+                )
+            used = count + 1
+            self._rate_buckets[key] = (used, reset_at)
+            return {
+                "limit": self.rate_limit_requests,
+                "remaining": max(0, self.rate_limit_requests - used),
+                "reset": reset_seconds,
+            }
 
     def acquire_run_slot(self) -> None:
         """Reserve a run slot, rejecting quickly when the process is saturated."""
@@ -923,7 +947,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def _authorize(self, scope: str) -> None:
-            security.check_rate_limit(self.client_address[0])
+            self._rate_limit_state = security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
 
         def _run(self, callback: Any) -> dict[str, Any]:
@@ -976,7 +1000,16 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
-            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+            detail = dict(detail or {})
+            # Prefer rate-limit fields already attached during authorize.
+            if status == 429 and "rate_limit_limit" in detail:
+                self._rate_limit_state = {
+                    "limit": int(detail["rate_limit_limit"]),
+                    "remaining": int(detail.get("rate_limit_remaining", 0)),
+                    "reset": int(detail.get("rate_limit_reset") or detail.get("retry_after_seconds") or 1),
+                }
+                self._retry_after_seconds = int(detail.get("retry_after_seconds") or detail.get("rate_limit_reset") or 1)
+            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **detail}), status)
 
         def _send(self, payload: dict[str, Any], status: int = 200) -> None:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
@@ -1054,6 +1087,15 @@ def build_server(
             self.send_header("referrer-policy", "no-referrer")
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
+            # Rate-limit budget for authenticated request paths (set in _authorize).
+            state = getattr(self, "_rate_limit_state", None)
+            if isinstance(state, dict) and "limit" in state:
+                self.send_header("x-ratelimit-limit", str(int(state["limit"])))
+                self.send_header("x-ratelimit-remaining", str(int(state.get("remaining", 0))))
+                self.send_header("x-ratelimit-reset", str(int(state.get("reset", 1))))
+            retry_after = getattr(self, "_retry_after_seconds", None)
+            if retry_after is not None:
+                self.send_header("retry-after", str(int(retry_after)))
 
     return ThreadingHTTPServer((host, port), Handler)
 

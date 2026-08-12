@@ -164,19 +164,56 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
     payload = {"messages": [{"role": "user", "content": "hello"}]}
 
     try:
-        first_status, _ = post_json(f"http://127.0.0.1:{port}/v1/chat/completions", payload, token="secret_token")
-        second_status, second_body = post_json(
+        first_req = urllib.request.Request(
             f"http://127.0.0.1:{port}/v1/chat/completions",
-            payload,
-            token="secret_token",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "authorization": "Bearer secret_token",
+                "connection": "close",
+            },
+            method="POST",
         )
+        with urllib.request.urlopen(first_req, timeout=5) as response:
+            first_status = response.status
+            first_limit = response.headers.get("X-RateLimit-Limit") or response.headers.get("x-ratelimit-limit")
+            first_remaining = response.headers.get("X-RateLimit-Remaining") or response.headers.get(
+                "x-ratelimit-remaining"
+            )
+            first_reset = response.headers.get("X-RateLimit-Reset") or response.headers.get("x-ratelimit-reset")
+        second_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "authorization": "Bearer secret_token",
+                "connection": "close",
+            },
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(second_req, timeout=5)
+            raise AssertionError("expected 429")
+        except urllib.error.HTTPError as exc:
+            second_status = exc.code
+            second_body = json.loads(exc.read().decode("utf-8"))
+            retry_after = exc.headers.get("Retry-After") or exc.headers.get("retry-after")
+            second_remaining = exc.headers.get("X-RateLimit-Remaining") or exc.headers.get(
+                "x-ratelimit-remaining"
+            )
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
     assert first_status == 200
+    assert first_limit == "1"
+    assert first_remaining == "0"
+    assert first_reset is not None and int(first_reset) >= 1
     assert second_status == 429
     assert second_body["error"]["code"] == "rate_limit_exceeded"
+    assert retry_after is not None and int(retry_after) >= 1
+    assert second_remaining == "0"
+    assert second_body["error"]["detail"]["rate_limit_limit"] == 1
 
 
 def test_public_bind_requires_explicit_opt_in() -> None:

@@ -38,6 +38,15 @@ This repository implements the interface and control plane, not the trained coor
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
+## Rate-limit response headers
+
+Authenticated request paths emit fixed-window budget headers so OpenAI SDK and org consumers can back off without guessing:
+
+- `X-RateLimit-Limit` / `X-RateLimit-Remaining` / `X-RateLimit-Reset` (seconds until window roll)
+- `Retry-After` on HTTP 429 (`rate_limit_exceeded`)
+
+These follow the common API rate-limit header pattern used by cloud HTTP APIs (see also RFC 6585 additional status codes for 429 semantics).
+
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
