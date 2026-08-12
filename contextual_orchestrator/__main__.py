@@ -129,6 +129,7 @@ def _nim_cost_quality_offline_command(argv: list[str]) -> None:
     """Run the offline cost-quality harness against a locked task manifest (issue #86)."""
     from .nim_cost_quality import (
         CostQualityContractError,
+        build_orchestrator_policy_runners,
         build_scripted_policy_runners,
         load_pricing_scenario,
         load_task_manifest,
@@ -137,13 +138,15 @@ def _nim_cost_quality_offline_command(argv: list[str]) -> None:
         run_offline_cost_quality,
         validate_scripted_answers,
     )
+    from .orchestrator import TaskOrchestrator, load_agents
 
     parser = argparse.ArgumentParser(
         prog="python -m contextual_orchestrator nim-cost-quality-offline",
         description=(
             "Offline cost-quality comparison for issue #86 (post-discovery). "
             "Uses scripted answers by default so CI never needs NVIDIA_NIM_API_KEY. "
-            "Never invents prices: hypothetical cost stays unknown without a scenario."
+            "Pass --use-mock-orchestrator to drive Fugu route_once vs Conductor "
+            "conduct through mock:// agents. Never invents prices."
         ),
     )
     parser.add_argument(
@@ -165,6 +168,20 @@ def _nim_cost_quality_offline_command(argv: list[str]) -> None:
         ),
     )
     parser.add_argument(
+        "--use-mock-orchestrator",
+        action="store_true",
+        help=(
+            "Run policies via TaskOrchestrator route_once/conduct on --agents "
+            "(default examples/agents.mock.json). Mutually exclusive with "
+            "--scripted-answers."
+        ),
+    )
+    parser.add_argument(
+        "--agents",
+        default="examples/agents.mock.json",
+        help="Agent pool JSON for --use-mock-orchestrator (mock:// recommended).",
+    )
+    parser.add_argument(
         "--model-id",
         default="mock-scripted",
         help="Model id recorded on cells and used for pricing lookups (default: mock-scripted).",
@@ -175,22 +192,44 @@ def _nim_cost_quality_offline_command(argv: list[str]) -> None:
         help="Emit a short markdown summary instead of the full JSON report.",
     )
     args = parser.parse_args(argv)
+    if args.use_mock_orchestrator and args.scripted_answers:
+        parser.error("--use-mock-orchestrator cannot be combined with --scripted-answers")
     try:
         manifest = load_task_manifest(args.task_manifest)
         tasks = locked_evaluation_tasks(manifest)
         pricing = load_pricing_scenario(args.pricing_scenario)
-        answers: dict = {}
-        if args.scripted_answers:
-            with open(args.scripted_answers, encoding="utf-8") as handle:
-                raw_answers = json.load(handle)
-            answers = validate_scripted_answers(raw_answers)
-        runners = build_scripted_policy_runners(answers, model_id=args.model_id)
+        if args.use_mock_orchestrator:
+            agents = load_agents(args.agents)
+            if not agents:
+                parser.error("--agents pool is empty")
+            non_mock = [a.id for a in agents if not str(a.base_url).startswith("mock://")]
+            if non_mock:
+                parser.error(
+                    "--use-mock-orchestrator requires mock:// agents only; "
+                    f"non-mock: {non_mock}"
+                )
+            orchestrator = TaskOrchestrator(agents)
+            runners = build_orchestrator_policy_runners(orchestrator)
+            model_id = args.model_id if args.model_id != "mock-scripted" else "mock-orchestrator"
+        else:
+            answers: dict = {}
+            if args.scripted_answers:
+                with open(args.scripted_answers, encoding="utf-8") as handle:
+                    raw_answers = json.load(handle)
+                answers = validate_scripted_answers(raw_answers)
+            runners = build_scripted_policy_runners(answers, model_id=args.model_id)
+            model_id = args.model_id
         report = run_offline_cost_quality(
             tasks=tasks,
             policy_runners=runners,
-            model_id=args.model_id,
+            model_id=model_id,
             pricing_scenario=pricing,
         )
+        if args.use_mock_orchestrator:
+            report["runner_backend"] = "mock_orchestrator"
+            report["agent_pool_path"] = args.agents
+        else:
+            report["runner_backend"] = "scripted_answers"
     except (CostQualityContractError, OSError, ValueError) as exc:
         parser.error(str(exc))
     if args.markdown:

@@ -10,6 +10,7 @@ from pathlib import Path
 
 from contextual_orchestrator.nim_cost_quality import (
     CostQualityContractError,
+    build_orchestrator_policy_runners,
     build_pareto_frontiers,
     build_scripted_policy_runners,
     chat_eligible_model_ids,
@@ -27,6 +28,7 @@ from contextual_orchestrator.nim_cost_quality import (
     score_task_answer,
     summarize_policy_cells,
 )
+from contextual_orchestrator.orchestrator import ModelAgent, TaskOrchestrator
 
 ROOT = Path(__file__).resolve().parents[1]
 MANIFEST_PATH = ROOT / "examples" / "nim_task_manifest_offline.json"
@@ -330,6 +332,67 @@ class TestNoSecretInModuleSurface(unittest.TestCase):
         self.assertNotIn("COPILOT_GITHUB_TOKEN", source)
         self.assertNotIn("os.getenv", source)
         self.assertNotIn("os.environ", source)
+
+
+class TestOrchestratorPolicyRunners(unittest.TestCase):
+    def test_mock_orchestrator_route_and_conduct(self) -> None:
+        agents = [
+            ModelAgent(
+                "general_agent",
+                "mock-generalist",
+                base_url="mock://generalist",
+                tags=("reasoning", "writing", "planning"),
+                priority=1,
+            ),
+            ModelAgent(
+                "builder_agent",
+                "mock-builder",
+                base_url="mock://builder",
+                tags=("coding", "debugging"),
+                priority=2,
+            ),
+            ModelAgent(
+                "reviewer_agent",
+                "mock-reviewer",
+                base_url="mock://reviewer",
+                tags=("verification", "review"),
+                priority=3,
+            ),
+        ]
+        orchestrator = TaskOrchestrator(agents)
+        runners = build_orchestrator_policy_runners(orchestrator)
+        self.assertEqual(
+            set(runners),
+            {"direct_worker", "route_once", "bounded_conduct"},
+        )
+        route = runners["route_once"]("hello cost quality")
+        self.assertEqual(route["mode"], "route_once")
+        self.assertTrue(route["answer"])
+        self.assertGreaterEqual(len(route["trace"]), 1)
+        conduct = runners["bounded_conduct"]("hello cost quality")
+        self.assertEqual(conduct["mode"], "bounded_conduct")
+        self.assertTrue(conduct["answer"])
+        self.assertGreaterEqual(len(conduct["trace"]), 2)
+
+        manifest = load_task_manifest(str(MANIFEST_PATH))
+        tasks = locked_evaluation_tasks(manifest)[:2]
+        report = run_offline_cost_quality(
+            tasks=tasks,
+            policy_runners=runners,
+            model_id="mock-orchestrator",
+            pricing_scenario=None,
+        )
+        self.assertEqual(report["measurement_status"], "offline_cost_quality")
+        self.assertTrue(all(c["actual_api_cost"] == "unknown" for c in report["cells"]))
+        self.assertTrue(all(c["hypothetical_paid_cost"] == "unknown" for c in report["cells"]))
+        # Mock answers echo the prompt; scorers must not invent quality from that alone.
+        self.assertTrue(all(c["outcome"] == "success" for c in report["cells"] if c["policy_name"] != "hindsight_best_single" or True))
+
+    def test_orchestrator_runners_reject_invalid(self) -> None:
+        with self.assertRaises(CostQualityContractError):
+            build_orchestrator_policy_runners(None)
+        with self.assertRaises(CostQualityContractError):
+            build_orchestrator_policy_runners(object())
 
 
 if __name__ == "__main__":

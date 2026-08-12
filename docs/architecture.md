@@ -89,8 +89,10 @@ on a locked task manifest after discovery admission:
   summaries.
 
 CLI: `python -m contextual_orchestrator nim-cost-quality-offline`. Scripted
-answers keep CI hermetic; live NIM quality/cost still requires explicit opt-in
-and is not claimed by this offline module.
+answers keep CI hermetic; `--use-mock-orchestrator` drives Fugu `route_once` and
+Conductor/TRINITY `conduct` through `mock://` agents without provider secrets.
+Live NIM quality/cost still requires explicit opt-in and is not claimed by this
+offline module.
 
 ## Role temperature (reasoning effort proxy)
 

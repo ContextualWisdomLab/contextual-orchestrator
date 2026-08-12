@@ -306,9 +306,12 @@ python -m contextual_orchestrator nim-cost-quality-offline \
   --task-manifest examples/nim_task_manifest_offline.json \
   --pricing-scenario examples/nim_pricing_scenario_offline.json \
   --markdown
+python -m contextual_orchestrator nim-cost-quality-offline \
+  --use-mock-orchestrator --agents examples/agents.mock.json --markdown
 python tests/test_nim_cost_quality.py
 ```
 
 Compares route/conduct/direct policies on a locked task set with honest
-`unknown` costs unless a pricing scenario covers every model. Never uses
-`COPILOT_GITHUB_TOKEN` for model calls.
+`unknown` costs unless a pricing scenario covers every model. Optional
+`--use-mock-orchestrator` exercises Fugu `route_once` and Conductor/TRINITY
+`conduct` on `mock://` agents. Never uses `COPILOT_GITHUB_TOKEN` for model calls.

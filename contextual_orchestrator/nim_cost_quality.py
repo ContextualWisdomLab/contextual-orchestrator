@@ -4,6 +4,10 @@ Builds on :mod:`nim_discovery` dry-run plans: given a locked task manifest and
 mock (or scripted) policy runners, compare Fugu-style single-route, Conductor-
 style bounded conduct, and per-worker direct baselines with honest cost fields.
 
+Optional :func:`build_orchestrator_policy_runners` drives the same comparison
+through a live ``TaskOrchestrator`` (typically ``mock://`` agents) so route vs
+conduct paper paths are exercised offline without NIM credentials.
+
 Never invents prices: hypothetical paid cost stays ``\"unknown\"`` until a
 versioned pricing scenario covers every model used in a cell. Live NIM egress
 requires ``RUN_LIVE_NIM_TESTS=1`` and is out of scope for this offline module.
@@ -283,6 +287,51 @@ def build_scripted_policy_runners(
         return run
 
     return {name: _runner(name) for name in _POLICY_NAMES if name != "hindsight_best_single"}
+
+
+def build_orchestrator_policy_runners(orchestrator: Any) -> dict[str, PolicyRunner]:
+    """Build policy runners backed by a ``TaskOrchestrator`` instance.
+
+    Intended for offline mock pools (``mock://`` agents) and for hermetic CI.
+    Does not read provider secrets: non-mock agents still resolve keys via KV
+    ``get_credential`` inside the orchestrator.
+
+    - ``direct_worker`` / ``route_once``: single-worker ``route_once`` path (Fugu).
+    - ``bounded_conduct``: multi-step ``conduct`` path (Conductor / TRINITY roles).
+    """
+    if orchestrator is None or not hasattr(orchestrator, "route_once") or not hasattr(
+        orchestrator, "conduct"
+    ):
+        raise CostQualityContractError(
+            "orchestrator must provide route_once and conduct callables"
+        )
+
+    def _messages(prompt: str) -> list[dict[str, str]]:
+        return [{"role": "user", "content": prompt}]
+
+    def direct_worker(prompt: str) -> dict[str, Any]:
+        result = orchestrator.route_once(_messages(prompt))
+        result = dict(result)
+        result["mode"] = "direct_worker"
+        return result
+
+    def route_once(prompt: str) -> dict[str, Any]:
+        result = orchestrator.route_once(_messages(prompt))
+        result = dict(result)
+        result["mode"] = "route_once"
+        return result
+
+    def bounded_conduct(prompt: str) -> dict[str, Any]:
+        result = orchestrator.conduct(_messages(prompt))
+        result = dict(result)
+        result["mode"] = "bounded_conduct"
+        return result
+
+    return {
+        "direct_worker": direct_worker,
+        "route_once": route_once,
+        "bounded_conduct": bounded_conduct,
+    }
 
 
 def format_task_prompt(task: Mapping[str, Any]) -> str:

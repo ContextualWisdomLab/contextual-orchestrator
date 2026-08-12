@@ -12,6 +12,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
   offline cost-quality rejects malformed scripted answers and zeros failed-cell usage.
 
 ### Added
+- Offline cost-quality `--use-mock-orchestrator` path: Fugu `route_once` and
+  Conductor/TRINITY `conduct` via `mock://` agents (issue #86 paper-path exercise).
+
+### Added
 - Offline NIM cost-quality comparison harness (`nim_cost_quality` +
   `nim-cost-quality-offline` CLI) for issue #86 post-discovery: locked task
   manifest scorers, honest unknown actual/hypothetical cost, policy summaries,
