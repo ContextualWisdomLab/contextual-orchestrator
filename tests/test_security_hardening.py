@@ -131,6 +131,74 @@ def _get_admin_state(port: int, headers: dict[str, str]) -> tuple[int, dict[str,
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def test_admin_shell_is_public_so_browser_can_establish_session() -> None:
+    """GET /admin serves the static shell without auth so operators can sign in."""
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(admin_token=_TEST_ADMIN_TOKEN, inference_token=_TEST_INFERENCE_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        req = urllib.request.Request(f"http://127.0.0.1:{port}/admin", headers={"connection": "close"})
+        with urllib.request.urlopen(req, timeout=5) as response:
+            assert response.status == 200
+            body = response.read().decode("utf-8")
+        assert "/admin/session" in body
+        assert "credentials: \"same-origin\"" in body or "credentials: 'same-origin'" in body
+        assert "localStorage.setItem(\"admin_token\"" not in body
+        assert "localStorage.setItem('admin_token'" not in body
+        # Data path still requires session or bearer.
+        state_status, _ = _get_admin_state(port, {})
+        assert state_status == 401
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_admin_session_sets_secure_cookie_behind_https_proxy() -> None:
+    """X-Forwarded-Proto: https adds Secure so cookies are not sent over cleartext."""
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(admin_token=_TEST_ADMIN_TOKEN, inference_token=_TEST_INFERENCE_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        session_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/session",
+            data=json.dumps({"token": _TEST_ADMIN_TOKEN}).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "connection": "close",
+                "x-forwarded-proto": "https",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(session_req, timeout=5) as response:
+            set_cookie = response.headers.get("Set-Cookie") or response.headers.get("set-cookie") or ""
+        assert "HttpOnly" in set_cookie
+        assert "SameSite=Strict" in set_cookie
+        assert "Secure" in set_cookie
+        # Without HTTPS signal, Secure is omitted (local loopback HTTP).
+        plain_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/session",
+            data=json.dumps({"token": _TEST_ADMIN_TOKEN}).encode("utf-8"),
+            headers={"content-type": "application/json", "connection": "close"},
+            method="POST",
+        )
+        with urllib.request.urlopen(plain_req, timeout=5) as response:
+            plain_cookie = response.headers.get("Set-Cookie") or response.headers.get("set-cookie") or ""
+        assert "Secure" not in plain_cookie
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() -> None:
     """Browser path: POST /admin/session mints opaque HttpOnly cookie; admin calls use it."""
     server = build_server(
@@ -464,6 +532,8 @@ def test_redact_value_preserves_non_string_scalars() -> None:
 if __name__ == "__main__":
     test_http_api_requires_bearer_token_and_hides_trace_by_default()
     test_admin_and_inference_tokens_are_separate()
+    test_admin_shell_is_public_so_browser_can_establish_session()
+    test_admin_session_sets_secure_cookie_behind_https_proxy()
     test_admin_session_cookie_authorizes_admin_api_without_js_token_storage()
     test_admin_session_expires_and_logout_revokes()
     test_loopback_without_configured_token_is_rejected()

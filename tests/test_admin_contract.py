@@ -14,11 +14,19 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "Orchestration Policy" in ADMIN_HTML
     assert "Audit &amp; Compliance" in ADMIN_HTML
     assert "/admin/simulate" in ADMIN_HTML
+    assert "/admin/session" in ADMIN_HTML
+    assert "credentials: \"same-origin\"" in ADMIN_HTML or "credentials: 'same-origin'" in ADMIN_HTML
+    assert "sessionGate" in ADMIN_HTML
     assert "ADMIN_TRANSLATIONS" not in ADMIN_HTML
     assert "source_basis_text" in ADMIN_HTML
     assert "include_orchestration_trace: true" in ADMIN_HTML
     assert 'data-view="evaluations"' in ADMIN_HTML
     assert 'data-view="datasets"' in ADMIN_HTML
+    # Browser never persists the admin bearer in web storage.
+    assert "localStorage.setItem(\"admin_token\"" not in ADMIN_HTML
+    assert "localStorage.setItem('admin_token'" not in ADMIN_HTML
+    assert "sessionStorage.setItem(\"admin_token\"" not in ADMIN_HTML
+    assert "sessionStorage.setItem('admin_token'" not in ADMIN_HTML
     assert 'data-view="access"' in ADMIN_HTML
     assert "Access List Inspector" in ADMIN_HTML
     assert "Evaluation Replay" in ADMIN_HTML

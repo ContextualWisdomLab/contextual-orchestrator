@@ -73,6 +73,37 @@ ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
 
 
+def request_uses_https(headers: Any) -> bool:
+    """Return True when the effective request origin is HTTPS.
+
+    Honours reverse-proxy ``X-Forwarded-Proto`` (first hop) so Secure cookies
+    are set behind TLS terminators. Direct TLS is not terminated by the stdlib
+    server; production deployments place TLS in front.
+    """
+    forwarded = (headers.get("x-forwarded-proto", "") or "").split(",", 1)[0].strip().lower()
+    return forwarded == "https"
+
+
+def admin_session_cookie_header(
+    session_id: str,
+    *,
+    max_age: int,
+    secure: bool,
+) -> str:
+    """Build Set-Cookie for an opaque admin session (establish or clear)."""
+    # Empty session_id + Max-Age=0 clears the cookie on logout.
+    parts = [
+        f"{ADMIN_SESSION_COOKIE}={session_id}",
+        "Path=/",
+        "HttpOnly",
+        "SameSite=Strict",
+        f"Max-Age={int(max_age)}",
+    ]
+    if secure:
+        parts.append("Secure")
+    return "; ".join(parts)
+
+
 class RequestError(Exception):
     """HTTP-safe request failure."""
 
@@ -435,6 +466,11 @@ def build_server(
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
                     return
+                # Static admin shell is public so operators can establish a session;
+                # every data/API path below remains admin-scoped.
+                if path in ("/", "/admin"):
+                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
+                    return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
                     # it is authorized here before the admin gate below.
@@ -477,9 +513,6 @@ def build_server(
                         self._send(coordinator.poll_batch(job_id))
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
-                    return
-                if path in ("/", "/admin"):
-                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
                     return
                 if path == "/admin/state":
                     state = orchestrator.admin_state()
@@ -773,8 +806,10 @@ def build_server(
                     # Idempotent: missing/unknown cookies still return cleared status.
                     session_id = security._extract_admin_session_cookie(self.headers)
                     revoked = security.revoke_admin_session(session_id)
-                    clear = (
-                        f"{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
+                    clear = admin_session_cookie_header(
+                        "",
+                        max_age=0,
+                        secure=request_uses_https(self.headers),
                     )
                     self._send(
                         {"session_status": "cleared", "session_revoked": revoked},
@@ -816,9 +851,10 @@ def build_server(
                         presented.strip() if isinstance(presented, str) else ""
                     )
                     max_age = int(security.admin_session_ttl_seconds)
-                    cookie = (
-                        f"{ADMIN_SESSION_COOKIE}={session_id}; Path=/; HttpOnly; "
-                        f"SameSite=Strict; Max-Age={max_age}"
+                    cookie = admin_session_cookie_header(
+                        session_id,
+                        max_age=max_age,
+                        secure=request_uses_https(self.headers),
                     )
                     self._send(
                         {"session_status": "established"},

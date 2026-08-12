@@ -48,6 +48,14 @@ ADMIN_TRANSLATIONS = {
         "spend_model": "Model",
         "spend_output_tokens": "Est. output tokens",
         "spend_prompt_tokens": "Est. prompt tokens",
+        "session_login_title": "Operator session",
+        "session_login_hint": "Establish an HttpOnly admin session. The bearer is sent once and never stored in localStorage.",
+        "session_token_label": "Admin bearer",
+        "session_login_button": "Sign in",
+        "session_logout_button": "Sign out",
+        "session_error": "Session could not be established",
+        "session_status_ready": "Session ready",
+        "session_status_needed": "Sign in required",
         "spend_steps": "Steps",
         "spend_cost": "Est. cost",
         "spend_runs": "Runs",
@@ -282,6 +290,14 @@ ADMIN_TRANSLATIONS = {
         "spend_model": "모델",
         "spend_output_tokens": "추정 출력 토큰",
         "spend_prompt_tokens": "추정 입력 토큰",
+        "session_login_title": "운영자 세션",
+        "session_login_hint": "HttpOnly 관리자 세션을 만듭니다. 배어러는 한 번만 전송되며 localStorage에 저장되지 않습니다.",
+        "session_token_label": "관리자 배어러",
+        "session_login_button": "로그인",
+        "session_logout_button": "로그아웃",
+        "session_error": "세션을 만들 수 없습니다",
+        "session_status_ready": "세션 준비됨",
+        "session_status_needed": "로그인 필요",
         "spend_steps": "단계",
         "spend_cost": "추정 비용",
         "spend_runs": "실행",
@@ -792,6 +808,38 @@ ADMIN_HTML = r"""<!doctype html>
       font-weight: 800;
     }
     .status-icon.warn { background: var(--amber); }
+    .session-gate {
+      position: fixed;
+      inset: 0;
+      background: rgba(12, 24, 22, 0.72);
+      display: grid;
+      place-items: center;
+      z-index: 40;
+      padding: 24px;
+    }
+    .session-gate[hidden] { display: none; }
+    .session-card {
+      width: min(420px, 100%);
+      background: var(--surface);
+      border: 1px solid var(--line);
+      border-radius: calc(var(--r) + 4px);
+      padding: 20px;
+      display: grid;
+      gap: 12px;
+      box-shadow: 0 18px 40px rgba(0,0,0,0.25);
+    }
+    .session-card h2 { margin: 0; font-size: 18px; }
+    .session-card p { margin: 0; color: var(--muted); font-size: 13px; }
+    .session-card input[type="password"] {
+      width: 100%;
+      border: 1px solid var(--line);
+      border-radius: var(--r);
+      padding: 10px 12px;
+      font: inherit;
+    }
+    .session-card .error { color: var(--red); font-size: 13px; min-height: 1.2em; }
+    .session-actions { display: flex; gap: 8px; justify-content: flex-end; }
+    .session-status { font-size: 12px; color: var(--muted); }
     @media (max-width: 980px) {
       .app { grid-template-columns: 1fr; }
       .sidebar { display: none; }
@@ -816,6 +864,18 @@ ADMIN_HTML = r"""<!doctype html>
   </style>
 </head>
 <body>
+  <div id="sessionGate" class="session-gate" hidden>
+    <form id="sessionForm" class="session-card" autocomplete="off">
+      <h2 data-i18n="session_login_title">Operator session</h2>
+      <p data-i18n="session_login_hint">Establish an HttpOnly admin session. The bearer is sent once and never stored in localStorage.</p>
+      <label for="sessionToken"><span data-i18n="session_token_label">Admin bearer</span></label>
+      <input id="sessionToken" name="session_token" type="password" required autocomplete="current-password" />
+      <div id="sessionError" class="error" role="alert"></div>
+      <div class="session-actions">
+        <button type="submit" class="btn primary" data-i18n="session_login_button">Sign in</button>
+      </div>
+    </form>
+  </div>
   <div class="app">
     <aside class="sidebar">
       <div class="brand"><span class="mark"></span><span data-i18n="brand_name">Contextual Orchestrator</span></div>
@@ -838,7 +898,8 @@ ADMIN_HTML = r"""<!doctype html>
         <div class="field"><span data-i18n="environment_label">Environment</span><select><option>prod-us-east-1</option><option>staging</option></select></div>
         <div class="field"><span data-i18n="region_label">Region</span><strong>US East</strong></div>
         <div class="field language-switch"><span data-i18n="language_label">Language</span><select id="language"><option value="en">English</option><option value="ko">한국어</option></select></div>
-        <div class="health">● <span data-i18n="healthy_status">Healthy</span></div>
+        <div class="health">● <span id="sessionStatus" class="session-status" data-i18n="session_status_needed">Sign in required</span></div>
+        <button type="button" class="btn" id="sessionLogout" data-i18n="session_logout_button" hidden>Sign out</button>
       </header>
       <div class="mobile-nav">
         <label for="mobileView" data-i18n="view_label">View</label>
@@ -1033,11 +1094,68 @@ Summarize this research thread and verify claims.</textarea>
       agentSettings: document.querySelector("#agentSettings"),
       registerAgent: document.querySelector("#registerAgent"),
       mobileView: document.querySelector("#mobileView"),
-      language: document.querySelector("#language")
+      language: document.querySelector("#language"),
+      sessionGate: document.querySelector("#sessionGate"),
+      sessionForm: document.querySelector("#sessionForm"),
+      sessionToken: document.querySelector("#sessionToken"),
+      sessionError: document.querySelector("#sessionError"),
+      sessionStatus: document.querySelector("#sessionStatus"),
+      sessionLogout: document.querySelector("#sessionLogout")
     };
     let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
     let currentLang = "en";
     let activeTraceTab = "timeline";
+    let sessionReady = false;
+    function setSessionUi(ready) {
+      sessionReady = ready;
+      if (els.sessionGate) els.sessionGate.hidden = ready;
+      if (els.sessionLogout) els.sessionLogout.hidden = !ready;
+      if (els.sessionStatus) {
+        els.sessionStatus.textContent = ready ? t("session_status_ready") : t("session_status_needed");
+        els.sessionStatus.setAttribute("data-i18n", ready ? "session_status_ready" : "session_status_needed");
+      }
+      if (!ready && els.sessionToken) {
+        els.sessionToken.value = "";
+        els.sessionToken.focus();
+      }
+    }
+    async function adminFetch(url, options = {}) {
+      // Always send cookies (opaque session); never put the admin bearer in localStorage.
+      const headers = Object.assign({"connection": "close"}, options.headers || {});
+      const res = await fetch(url, Object.assign({}, options, {
+        credentials: "same-origin",
+        headers
+      }));
+      if (res.status === 401) {
+        setSessionUi(false);
+        throw new Error("unauthorized");
+      }
+      return res;
+    }
+    async function establishSession(token) {
+      const res = await fetch("/admin/session", {
+        method: "POST",
+        credentials: "same-origin",
+        headers: {"content-type": "application/json", "connection": "close"},
+        body: JSON.stringify({token})
+      });
+      if (!res.ok) {
+        const body = await res.json().catch(() => ({}));
+        const message = (body && body.error && body.error.message) || t("session_error");
+        throw new Error(message);
+      }
+      // Drop the presented bearer from the form immediately after minting the cookie.
+      if (els.sessionToken) els.sessionToken.value = "";
+      setSessionUi(true);
+    }
+    async function revokeSession() {
+      await fetch("/admin/session", {
+        method: "DELETE",
+        credentials: "same-origin",
+        headers: {"connection": "close"}
+      }).catch(() => null);
+      setSessionUi(false);
+    }
     const datasets = [
       {name: "golden_prompts", owner: "AI product", prompts: 42, policy: "route + conduct"},
       {name: "security_reviews", owner: "Security", prompts: 28, policy: "conduct required"},
@@ -1474,8 +1592,14 @@ Summarize this research thread and verify claims.</textarea>
       if (state.policy) renderSecondaryViews();
     }
     async function load() {
-      const res = await fetch("/admin/state");
-      state = await res.json();
+      try {
+        const res = await adminFetch("/admin/state");
+        state = await res.json();
+        setSessionUi(true);
+      } catch (err) {
+        setSessionUi(false);
+        return;
+      }
       await refreshAnalytics();
       await refreshReadiness();
       els.hintCount.textContent = state.policy.complex_hints.length;
@@ -1484,63 +1608,63 @@ Summarize this research thread and verify claims.</textarea>
       await simulate();
     }
     async function refreshAnalytics() {
-      const analyticsRes = await fetch("/api/v1/analytics_snapshots/latest");
+      const analyticsRes = await adminFetch("/api/v1/analytics_snapshots/latest");
       state.analytics = await analyticsRes.json();
     }
     async function refreshReadiness() {
-      const readinessRes = await fetch("/api/v1/sales_readiness/latest");
+      const readinessRes = await adminFetch("/api/v1/sales_readiness/latest");
       state.readiness = await readinessRes.json();
-      const commercialRes = await fetch("/api/v1/commercial_readiness/latest");
+      const commercialRes = await adminFetch("/api/v1/commercial_readiness/latest");
       state.commercialReadiness = await commercialRes.json();
-      const buyerManifestRes = await fetch("/api/v1/buyer_evidence_manifests/latest");
+      const buyerManifestRes = await adminFetch("/api/v1/buyer_evidence_manifests/latest");
       state.buyerEvidenceManifest = await buyerManifestRes.json();
-      const handoffBundleRes = await fetch("/api/v1/buyer_handoff_bundles/latest");
+      const handoffBundleRes = await adminFetch("/api/v1/buyer_handoff_bundles/latest");
       state.buyerHandoffBundle = await handoffBundleRes.json();
-      const saleabilityRes = await fetch("/api/v1/saleability_decisions/latest");
+      const saleabilityRes = await adminFetch("/api/v1/saleability_decisions/latest");
       state.saleabilityDecision = await saleabilityRes.json();
-      const commercialExportRes = await fetch("/api/v1/commercial_evidence_exports/latest");
+      const commercialExportRes = await adminFetch("/api/v1/commercial_evidence_exports/latest");
       state.commercialEvidenceExport = await commercialExportRes.json();
-      const commercialAcceptanceRes = await fetch("/api/v1/commercial_acceptance_checks/latest");
+      const commercialAcceptanceRes = await adminFetch("/api/v1/commercial_acceptance_checks/latest");
       state.commercialAcceptanceCheck = await commercialAcceptanceRes.json();
-      const commercialReleaseRes = await fetch("/api/v1/commercial_release_candidates/latest");
+      const commercialReleaseRes = await adminFetch("/api/v1/commercial_release_candidates/latest");
       state.commercialReleaseCandidate = await commercialReleaseRes.json();
-      const commercialGapRes = await fetch("/api/v1/commercial_gap_registers/latest");
+      const commercialGapRes = await adminFetch("/api/v1/commercial_gap_registers/latest");
       state.commercialGapRegister = await commercialGapRes.json();
-      const commercialProcurementRes = await fetch("/api/v1/commercial_procurement_readiness/latest");
+      const commercialProcurementRes = await adminFetch("/api/v1/commercial_procurement_readiness/latest");
       state.commercialProcurementReadiness = await commercialProcurementRes.json();
-      const commercialContractRes = await fetch("/api/v1/commercial_contract_readiness/latest");
+      const commercialContractRes = await adminFetch("/api/v1/commercial_contract_readiness/latest");
       state.commercialContractReadiness = await commercialContractRes.json();
-      const commercialOnboardingRes = await fetch("/api/v1/commercial_onboarding_readiness/latest");
+      const commercialOnboardingRes = await adminFetch("/api/v1/commercial_onboarding_readiness/latest");
       state.commercialOnboardingReadiness = await commercialOnboardingRes.json();
-      const commercialOperationsRes = await fetch("/api/v1/commercial_operations_readiness/latest");
+      const commercialOperationsRes = await adminFetch("/api/v1/commercial_operations_readiness/latest");
       state.commercialOperationsReadiness = await commercialOperationsRes.json();
-      const commercialSecurityRes = await fetch("/api/v1/commercial_security_attestations/latest");
+      const commercialSecurityRes = await adminFetch("/api/v1/commercial_security_attestations/latest");
       state.commercialSecurityAttestation = await commercialSecurityRes.json();
-      const commercialValueRes = await fetch("/api/v1/commercial_value_readiness/latest");
+      const commercialValueRes = await adminFetch("/api/v1/commercial_value_readiness/latest");
       state.commercialValueReadiness = await commercialValueRes.json();
-      const commercialCloseRes = await fetch("/api/v1/commercial_close_readiness/latest");
+      const commercialCloseRes = await adminFetch("/api/v1/commercial_close_readiness/latest");
       state.commercialCloseReadiness = await commercialCloseRes.json();
-      const commercialGtmRes = await fetch("/api/v1/commercial_go_to_market_readiness/latest");
+      const commercialGtmRes = await adminFetch("/api/v1/commercial_go_to_market_readiness/latest");
       state.commercialGoToMarketReadiness = await commercialGtmRes.json();
-      const commercialLaunchRes = await fetch("/api/v1/commercial_launch_readiness/latest");
+      const commercialLaunchRes = await adminFetch("/api/v1/commercial_launch_readiness/latest");
       state.commercialLaunchReadiness = await commercialLaunchRes.json();
-      const commercialCompletionRes = await fetch("/api/v1/commercial_completion_scorecards/latest");
+      const commercialCompletionRes = await adminFetch("/api/v1/commercial_completion_scorecards/latest");
       state.commercialCompletionScorecard = await commercialCompletionRes.json();
-      const commercialBuyerAcceptanceWorkflowRes = await fetch("/api/v1/commercial_buyer_acceptance_workflows/latest");
+      const commercialBuyerAcceptanceWorkflowRes = await adminFetch("/api/v1/commercial_buyer_acceptance_workflows/latest");
       state.commercialBuyerAcceptanceWorkflow = await commercialBuyerAcceptanceWorkflowRes.json();
-      const commercialDemoRes = await fetch("/api/v1/commercial_demo_scenarios/latest");
+      const commercialDemoRes = await adminFetch("/api/v1/commercial_demo_scenarios/latest");
       state.commercialDemoScenarios = await commercialDemoRes.json();
-      const commercialProposalRes = await fetch("/api/v1/commercial_proposal_packets/latest");
+      const commercialProposalRes = await adminFetch("/api/v1/commercial_proposal_packets/latest");
       state.commercialProposalPacket = await commercialProposalRes.json();
-      const commercialPurchaseApprovalRes = await fetch("/api/v1/commercial_purchase_approval_packets/latest");
+      const commercialPurchaseApprovalRes = await adminFetch("/api/v1/commercial_purchase_approval_packets/latest");
       state.commercialPurchaseApprovalPacket = await commercialPurchaseApprovalRes.json();
-      const commercialDueDiligenceRes = await fetch("/api/v1/commercial_due_diligence_rooms/latest");
+      const commercialDueDiligenceRes = await adminFetch("/api/v1/commercial_due_diligence_rooms/latest");
       state.commercialDueDiligenceRoom = await commercialDueDiligenceRes.json();
-      const commercialInvestmentCommitteeRes = await fetch("/api/v1/commercial_investment_committee_memos/latest");
+      const commercialInvestmentCommitteeRes = await adminFetch("/api/v1/commercial_investment_committee_memos/latest");
       state.commercialInvestmentCommitteeMemo = await commercialInvestmentCommitteeRes.json();
     }
     async function simulate() {
-      const res = await fetch("/admin/simulate", {
+      const res = await adminFetch("/admin/simulate", {
         method: "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify({prompt: els.prompt.value, mode: els.mode.value, include_orchestration_trace: true})
@@ -1554,7 +1678,7 @@ Summarize this research thread and verify claims.</textarea>
     }
     async function runEvaluation() {
       const prompts = els.evaluationPrompts.value.split("\n").map(item => item.trim()).filter(Boolean);
-      const res = await fetch("/api/v1/evaluation_runs", {
+      const res = await adminFetch("/api/v1/evaluation_runs", {
         method: "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify({prompts, run_mode: els.evaluationMode.value, include_orchestration_trace: true})
@@ -1574,6 +1698,22 @@ Summarize this research thread and verify claims.</textarea>
     els.registerAgent.addEventListener("click", () => showView("integrations"));
     els.language.addEventListener("change", () => applyI18n(els.language.value));
     els.mobileView.addEventListener("change", () => showView(els.mobileView.value));
+    els.sessionForm?.addEventListener("submit", async (event) => {
+      event.preventDefault();
+      if (els.sessionError) els.sessionError.textContent = "";
+      const token = (els.sessionToken?.value || "").trim();
+      if (!token) return;
+      try {
+        await establishSession(token);
+        await load();
+      } catch (err) {
+        if (els.sessionError) els.sessionError.textContent = err.message || t("session_error");
+        setSessionUi(false);
+      }
+    });
+    els.sessionLogout?.addEventListener("click", async () => {
+      await revokeSession();
+    });
     document.querySelector("#copyJson").addEventListener("click", () => {
       renderTraceTab("json");
       navigator.clipboard?.writeText(els.traceJson.textContent);
@@ -1587,6 +1727,7 @@ Summarize this research thread and verify claims.</textarea>
     const initialLang = new URLSearchParams(location.search).get("lang") || localStorage.getItem("admin_lang") || "en";
     els.language.value = translations[initialLang] ? initialLang : "en";
     applyI18n(els.language.value);
+    // Probe existing cookie session; otherwise show the login gate.
     load();
   </script>
 </body>
