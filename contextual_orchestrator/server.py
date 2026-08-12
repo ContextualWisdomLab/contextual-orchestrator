@@ -51,7 +51,7 @@ ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
-ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions"}
+ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions", "model_group"}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
     "model",

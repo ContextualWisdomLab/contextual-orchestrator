@@ -1281,6 +1281,11 @@ class TaskOrchestrator:
             patched = replace(patched, tags=tuple(patch["tags"]))
         if "provider_exclusions" in patch:
             patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
+        if "model_group" in patch:
+            group = str(patch["model_group"] or "")
+            if group:
+                require_object_name(group, "agent.model_group")
+            patched = replace(patched, model_group=group)
 
         self.agents = [patched if agent.id == worker_agent_id else agent for agent in self.agents]
         if self._pool_store is not None:
