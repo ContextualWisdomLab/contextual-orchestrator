@@ -1,7 +1,7 @@
 from __future__ import annotations
 
 import re
-import tomllib
+import tomli as tomllib
 from dataclasses import dataclass
 from pathlib import Path
 

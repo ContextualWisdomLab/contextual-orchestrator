@@ -24,6 +24,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Changed
 
+- Build and inspect normal wheel and sdist artifacts to enforce emitted PEP 639 license fields, project URLs, and packaged license paths.
+- Declare the MIT SPDX license, packaged license file, authoritative project URLs, and current provider-neutral orchestration-control-plane description in distribution metadata, and pin the PEP 639-capable setuptools build backend.
 - Pin Atheris by Python interpreter so the Python 3.11 fuzz job and the newer central coverage-evidence image both install a published, hash-locked wheel.
 - Run repository Tests, Fuzz, and Security workflows for stacked pull requests targeting any branch, bind every checkout to the literal contributor-head SHA, and keep checkout credentials non-persistent so local evidence cannot silently become absent or synthetic-merge-only evidence.
 
