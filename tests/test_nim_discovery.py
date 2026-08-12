@@ -381,3 +381,74 @@ def test_benchmark_plan_dry_run_rejects_invalid_bounds() -> None:
         build_benchmark_plan_dry_run(["x"], hard_request_budget=0)
     with pytest.raises(NimDiscoveryError):
         build_benchmark_plan_dry_run(["x"], task_manifest_id="")
+
+
+def test_classify_probe_http_status_and_result() -> None:
+    from contextual_orchestrator.nim_discovery import (
+        classify_probe_http_status,
+        classify_probe_result,
+        run_capability_probes_dry_run,
+        build_capability_probe_plan,
+    )
+
+    assert classify_probe_http_status(429) == "rate_limited"
+    assert classify_probe_http_status(404) == "unsupported"
+    row = classify_probe_result(
+        model_id="meta/llama-3-8b-instruct",
+        probe_kind="chat",
+        status_code=200,
+        body={"choices": [{"message": {"content": "hi"}}]},
+    )
+    assert row["outcome"] == "chat"
+    bad = classify_probe_result(
+        model_id="x",
+        probe_kind="chat",
+        status_code=200,
+        body={"unexpected": True},
+    )
+    assert bad["outcome"] == "malformed"
+    timed = classify_probe_result(
+        model_id="x",
+        probe_kind="chat",
+        status_code=0,
+        error_class="TimeoutError",
+    )
+    assert timed["outcome"] == "timeout"
+
+
+def test_capability_probe_plan_and_dry_run_budget() -> None:
+    from contextual_orchestrator.nim_discovery import (
+        NimDiscoveryError,
+        build_capability_probe_plan,
+        run_capability_probes_dry_run,
+    )
+
+    plan = build_capability_probe_plan(
+        ["meta/llama-3-8b-instruct", "nvidia/nv-embedqa-e5-v5"],
+        hard_request_budget=10,
+        probe_kinds=("chat", "embeddings"),
+    )
+    assert plan["measurement_status"] == "offline_probe_plan"
+    assert plan["planned_request_count"] == 4
+    assert plan["admission_status"] == "admitted"
+
+    tight = build_capability_probe_plan(["a", "b", "c"], hard_request_budget=2)
+    assert tight["admission_status"] == "rejected_budget_exceeded"
+
+    fixtures = [
+        {
+            "model_id": "meta/llama-3-8b-instruct",
+            "probe_kind": "chat",
+            "status_code": 200,
+            "body": {"choices": [{"message": {"content": "ok"}}]},
+        },
+        {"model_id": "x", "probe_kind": "chat", "status_code": 429},
+    ]
+    report = run_capability_probes_dry_run(fixtures, hard_request_budget=10)
+    assert report["measurement_status"] == "offline_probe_results"
+    assert report["outcome_counts"]["chat"] == 1
+    assert report["outcome_counts"]["rate_limited"] == 1
+    assert report["chat_eligible_model_ids"] == ["meta/llama-3-8b-instruct"]
+
+    with pytest.raises(NimDiscoveryError):
+        run_capability_probes_dry_run(fixtures, hard_request_budget=1)

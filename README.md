@@ -292,6 +292,8 @@ python tests/test_commercial_investment_committee_memo.py
 python -m contextual_orchestrator discover-nim-models
 python -m contextual_orchestrator discover-nim-models --as-agent-pool
 python -m contextual_orchestrator discover-nim-models --benchmark-dry-run
+python -m contextual_orchestrator discover-nim-models --capability-probe-plan
+python -m contextual_orchestrator discover-nim-models --capability-probe-dry-run examples/nim_capability_probe_fixtures.json
 ```
 
 Requires `NVIDIA_NIM_API_KEY` in the KV (`register-credential`) for live catalog

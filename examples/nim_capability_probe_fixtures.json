@@ -1,0 +1,29 @@
+[
+  {
+    "model_id": "meta/llama-3-8b-instruct",
+    "probe_kind": "chat",
+    "status_code": 200,
+    "body": {"choices": [{"message": {"content": "ok"}}]}
+  },
+  {
+    "model_id": "nvidia/nv-embedqa-e5-v5",
+    "probe_kind": "embeddings",
+    "status_code": 200,
+    "body": {"data": [{"embedding": [0.1, 0.2]}]}
+  },
+  {
+    "model_id": "vendor/missing-model",
+    "probe_kind": "chat",
+    "status_code": 404
+  },
+  {
+    "model_id": "vendor/rate-limited",
+    "probe_kind": "chat",
+    "status_code": 429
+  },
+  {
+    "model_id": "vendor/timeout-model",
+    "probe_kind": "chat",
+    "error_class": "TimeoutError"
+  }
+]

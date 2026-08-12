@@ -374,3 +374,248 @@ def build_benchmark_plan_dry_run(
         "comparison_cells": cells,
         "admission_status": "admitted" if fits_budget else "rejected_budget_exceeded",
     }
+
+
+# Probe outcome labels for issue #86 capability inventory (offline dry-run + live opt-in).
+PROBE_OUTCOME_CHAT = "chat"
+PROBE_OUTCOME_EMBEDDINGS = "embeddings"
+PROBE_OUTCOME_IMAGE = "image"
+PROBE_OUTCOME_AUDIO = "audio"
+PROBE_OUTCOME_VIDEO = "video"
+PROBE_OUTCOME_UNSUPPORTED = "unsupported"
+PROBE_OUTCOME_RATE_LIMITED = "rate_limited"
+PROBE_OUTCOME_UNAVAILABLE = "unavailable"
+PROBE_OUTCOME_TIMEOUT = "timeout"
+PROBE_OUTCOME_MALFORMED = "malformed"
+PROBE_OUTCOME_FAILED = "failed"
+PROBE_OUTCOME_SKIPPED = "skipped"
+
+_PROBE_OUTCOMES = frozenset(
+    {
+        PROBE_OUTCOME_CHAT,
+        PROBE_OUTCOME_EMBEDDINGS,
+        PROBE_OUTCOME_IMAGE,
+        PROBE_OUTCOME_AUDIO,
+        PROBE_OUTCOME_VIDEO,
+        PROBE_OUTCOME_UNSUPPORTED,
+        PROBE_OUTCOME_RATE_LIMITED,
+        PROBE_OUTCOME_UNAVAILABLE,
+        PROBE_OUTCOME_TIMEOUT,
+        PROBE_OUTCOME_MALFORMED,
+        PROBE_OUTCOME_FAILED,
+        PROBE_OUTCOME_SKIPPED,
+    }
+)
+
+
+def classify_probe_http_status(status_code: int) -> str:
+    """Map an HTTP status from a capability probe to a machine-readable outcome."""
+    if not isinstance(status_code, int) or isinstance(status_code, bool):
+        raise NimDiscoveryError("probe status_code must be an int")
+    if status_code == 200:
+        return PROBE_OUTCOME_CHAT  # refined by response body shape in classify_probe_result
+    if status_code == 429:
+        return PROBE_OUTCOME_RATE_LIMITED
+    if status_code in (401, 403):
+        return PROBE_OUTCOME_UNAVAILABLE
+    if status_code == 404:
+        return PROBE_OUTCOME_UNSUPPORTED
+    if status_code == 408 or status_code == 504:
+        return PROBE_OUTCOME_TIMEOUT
+    if 400 <= status_code < 500:
+        return PROBE_OUTCOME_UNSUPPORTED
+    if 500 <= status_code < 600:
+        return PROBE_OUTCOME_FAILED
+    raise NimDiscoveryError(f"unsupported probe status_code: {status_code}")
+
+
+def classify_probe_result(
+    *,
+    model_id: str,
+    probe_kind: str,
+    status_code: int,
+    body: Any | None = None,
+    error_class: str | None = None,
+) -> dict[str, Any]:
+    """Classify one capability probe into a secret-free evidence row.
+
+    Offline dry-run supplies fixture status/body; live probes (opt-in) reuse the
+    same classifier. Never embeds credentials or raw provider secrets.
+    """
+    if not isinstance(model_id, str) or not model_id.strip():
+        raise NimDiscoveryError("model_id must be a non-empty string")
+    if not isinstance(probe_kind, str) or not probe_kind.strip():
+        raise NimDiscoveryError("probe_kind must be a non-empty string")
+    kind = probe_kind.strip().lower()
+    if error_class:
+        err = str(error_class)
+        if "timeout" in err.lower() or err in {"TimeoutError", "socket.timeout"}:
+            outcome = PROBE_OUTCOME_TIMEOUT
+        else:
+            outcome = PROBE_OUTCOME_FAILED
+        return {
+            "model_id": model_id.strip(),
+            "probe_kind": kind,
+            "status_code": status_code if isinstance(status_code, int) else None,
+            "outcome": outcome,
+            "error_class": err,
+            "skip_reason": None,
+        }
+
+    status_outcome = classify_probe_http_status(status_code)
+    if status_outcome != PROBE_OUTCOME_CHAT:
+        return {
+            "model_id": model_id.strip(),
+            "probe_kind": kind,
+            "status_code": status_code,
+            "outcome": status_outcome,
+            "error_class": None,
+            "skip_reason": None,
+        }
+
+    # 200: refine by body shape when present.
+    if body is None:
+        outcome = {
+            "chat": PROBE_OUTCOME_CHAT,
+            "embeddings": PROBE_OUTCOME_EMBEDDINGS,
+            "image": PROBE_OUTCOME_IMAGE,
+            "audio": PROBE_OUTCOME_AUDIO,
+            "video": PROBE_OUTCOME_VIDEO,
+        }.get(kind, PROBE_OUTCOME_CHAT)
+    elif not isinstance(body, dict):
+        outcome = PROBE_OUTCOME_MALFORMED
+    elif kind == "embeddings" and isinstance(body.get("data"), list):
+        outcome = PROBE_OUTCOME_EMBEDDINGS
+    elif kind == "chat" and isinstance(body.get("choices"), list) and body.get("choices"):
+        outcome = PROBE_OUTCOME_CHAT
+    elif kind in {"image", "audio", "video"} and body:
+        outcome = {
+            "image": PROBE_OUTCOME_IMAGE,
+            "audio": PROBE_OUTCOME_AUDIO,
+            "video": PROBE_OUTCOME_VIDEO,
+        }[kind]
+    else:
+        outcome = PROBE_OUTCOME_MALFORMED
+
+    return {
+        "model_id": model_id.strip(),
+        "probe_kind": kind,
+        "status_code": status_code,
+        "outcome": outcome,
+        "error_class": None,
+        "skip_reason": None,
+    }
+
+
+def build_capability_probe_plan(
+    model_ids: list[str],
+    *,
+    hard_request_budget: int = 100,
+    probe_kinds: tuple[str, ...] = ("chat", "embeddings"),
+) -> dict[str, Any]:
+    """Build a fail-closed dry-run probe plan for discovered model ids.
+
+    Does not perform network I/O. Planned probe count = models x probe_kinds.
+    """
+    if hard_request_budget < 1:
+        raise NimDiscoveryError("hard_request_budget must be >= 1")
+    if not probe_kinds:
+        raise NimDiscoveryError("probe_kinds must be non-empty")
+    for kind in probe_kinds:
+        if not isinstance(kind, str) or not kind.strip():
+            raise NimDiscoveryError("probe_kinds entries must be non-empty strings")
+    unique_ids = sorted({m.strip() for m in model_ids if isinstance(m, str) and m.strip()})
+    kinds = tuple(k.strip().lower() for k in probe_kinds)
+    planned = len(unique_ids) * len(kinds)
+    cells = [
+        {
+            "model_id": mid,
+            "probe_kind": kind,
+            "planned_provider_calls": 1,
+            "hint": classify_model_capability_hint(mid),
+        }
+        for mid in unique_ids
+        for kind in kinds
+    ]
+    fits = planned <= hard_request_budget
+    return {
+        "measurement_status": "offline_probe_plan",
+        "hard_request_budget": hard_request_budget,
+        "planned_request_count": planned,
+        "fits_hard_request_budget": fits,
+        "admission_status": "admitted" if fits else "rejected_budget_exceeded",
+        "model_count": len(unique_ids),
+        "probe_kinds": list(kinds),
+        "probe_cells": cells,
+    }
+
+
+def run_capability_probes_dry_run(
+    fixture_rows: list[dict[str, Any]],
+    *,
+    hard_request_budget: int = 100,
+) -> dict[str, Any]:
+    """Execute offline capability probes from fixture rows (no network, no secrets).
+
+    Each fixture row must include ``model_id``, ``probe_kind``, and either
+    ``status_code`` or ``error_class``. Optional ``body`` refines 200 outcomes.
+    """
+    if hard_request_budget < 1:
+        raise NimDiscoveryError("hard_request_budget must be >= 1")
+    if not isinstance(fixture_rows, list):
+        raise NimDiscoveryError("fixture_rows must be a list")
+    if len(fixture_rows) > hard_request_budget:
+        raise NimDiscoveryError(
+            f"fixture probe count {len(fixture_rows)} exceeds hard_request_budget {hard_request_budget}"
+        )
+
+    results: list[dict[str, Any]] = []
+    for index, row in enumerate(fixture_rows):
+        if not isinstance(row, dict):
+            raise NimDiscoveryError(f"fixture row {index} must be an object")
+        model_id = row.get("model_id")
+        probe_kind = row.get("probe_kind")
+        if row.get("error_class"):
+            classified = classify_probe_result(
+                model_id=str(model_id or ""),
+                probe_kind=str(probe_kind or "chat"),
+                status_code=0,
+                error_class=str(row["error_class"]),
+            )
+        else:
+            status = row.get("status_code")
+            if not isinstance(status, int) or isinstance(status, bool):
+                raise NimDiscoveryError(f"fixture row {index} needs int status_code or error_class")
+            classified = classify_probe_result(
+                model_id=str(model_id or ""),
+                probe_kind=str(probe_kind or "chat"),
+                status_code=status,
+                body=row.get("body"),
+            )
+        results.append(classified)
+
+    by_outcome: dict[str, int] = {}
+    for row in results:
+        by_outcome[row["outcome"]] = by_outcome.get(row["outcome"], 0) + 1
+
+    chat_eligible = sorted(
+        {
+            r["model_id"]
+            for r in results
+            if r["outcome"] == PROBE_OUTCOME_CHAT and r["probe_kind"] == "chat"
+        }
+    )
+    return {
+        "measurement_status": "offline_probe_results",
+        "probe_count": len(results),
+        "outcome_counts": dict(sorted(by_outcome.items())),
+        "chat_eligible_model_ids": chat_eligible,
+        "probe_rows": results,
+        "hard_request_budget": hard_request_budget,
+        "fits_hard_request_budget": True,
+        "admission_status": "admitted",
+        "notes": (
+            "Offline fixture classification only — not live NIM probe evidence. "
+            "Live probes require RUN_LIVE_NIM_TESTS=1 and NVIDIA_NIM_API_KEY via KV."
+        ),
+    }

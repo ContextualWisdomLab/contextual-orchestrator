@@ -100,3 +100,10 @@ offline module.
 (default: thinker 0.1, worker 0.2, verifier 0.0, synthesizer 0.15) so ablation
 studies can vary reasoning effort by paper role without collapsing multi-agent
 depth. Used by `_invoke` for route and conduct steps.
+
+## Offline NIM capability probes (issue #86)
+
+`build_capability_probe_plan` and `run_capability_probes_dry_run` classify
+fixture probe rows (HTTP status + optional body shape) into chat / embeddings /
+rate_limited / unsupported / timeout / failed outcomes without network or
+secrets. Live probing remains opt-in via `RUN_LIVE_NIM_TESTS=1`.

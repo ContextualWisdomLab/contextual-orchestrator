@@ -63,8 +63,10 @@ def _discover_nim_models_command(argv: list[str]) -> None:
         NimDiscoveryError,
         build_benchmark_plan_dry_run,
         build_capability_inventory,
+        build_capability_probe_plan,
         discover_nim_models,
         models_to_agent_pool_entries,
+        run_capability_probes_dry_run,
         validate_nim_models_url,
     )
 
@@ -100,15 +102,51 @@ def _discover_nim_models_command(argv: list[str]) -> None:
         "--hard-request-budget",
         type=int,
         default=100,
-        help="Hard call budget for --benchmark-dry-run admission (default: 100).",
+        help="Hard call budget for dry-run admission (default: 100).",
+    )
+    parser.add_argument(
+        "--capability-probe-plan",
+        action="store_true",
+        help="Emit offline capability probe plan (models x probe kinds) without network.",
+    )
+    parser.add_argument(
+        "--capability-probe-dry-run",
+        metavar="FIXTURE_JSON",
+        default=None,
+        help=(
+            "Classify offline probe fixtures from JSON list of "
+            "{model_id, probe_kind, status_code|error_class, body?} rows."
+        ),
     )
     args = parser.parse_args(argv)
     try:
         models_url = validate_nim_models_url(args.models_url)
     except NimDiscoveryError as exc:
         parser.error(str(exc))
+    if args.capability_probe_dry_run:
+        try:
+            with open(args.capability_probe_dry_run, encoding="utf-8") as handle:
+                fixtures = json.load(handle)
+            plan = run_capability_probes_dry_run(
+                fixtures if isinstance(fixtures, list) else fixtures.get("probe_rows") or fixtures.get("fixtures") or [],
+                hard_request_budget=args.hard_request_budget,
+            )
+        except (NimDiscoveryError, OSError, ValueError, TypeError) as exc:
+            parser.error(str(exc))
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+        return
+
     report = discover_nim_models(models_url=models_url)
     model_ids = report.get("model_ids") or []
+    if args.capability_probe_plan:
+        try:
+            plan = build_capability_probe_plan(
+                model_ids, hard_request_budget=args.hard_request_budget
+            )
+        except NimDiscoveryError as exc:
+            parser.error(str(exc))
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+        return
     if args.benchmark_dry_run:
         try:
             plan = build_benchmark_plan_dry_run(
