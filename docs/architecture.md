@@ -53,3 +53,12 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## NVIDIA NIM discovery
+
+`contextual_orchestrator.nim_discovery` lists models from a NIM-compatible
+OpenAI `/models` endpoint using the KV credential `NVIDIA_NIM_API_KEY` (bootstrap
+may seed the KV from process env; request-time resolution stays on `get_credential`).
+Discovered IDs convert to agent-pool entries for cost-aware routing and optional
+`model_group` race once that lands. Live catalog tests use the real key when
+present; CI uses offline fixtures so measurement_status stays honest.
