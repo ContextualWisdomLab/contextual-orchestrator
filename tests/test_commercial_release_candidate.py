@@ -262,3 +262,9 @@ if __name__ == "__main__":  # pragma: no cover
     test_commercial_release_candidate_report_packages_ship_candidate()
     test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract()
     print("ok")
+
+
+def test_package_exports_evaluate_release_authorization() -> None:
+    from contextual_orchestrator import evaluate_release_authorization as exported
+
+    assert exported(None)["authorization_status"] == "release_authorization_blocked"
