@@ -413,6 +413,47 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Batch results with recorded usage"}},
             }
         },
+        "/v1/embeddings": {
+            "post": {
+                "operationId": "create_embeddings",
+                "summary": "OpenAI-compatible sync embeddings (local backend completes in-process; cost-recorded)",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["input"],
+                                "properties": {
+                                    "model": {"type": "string"},
+                                    "input": {
+                                        "oneOf": [
+                                            {"type": "string"},
+                                            {"type": "array", "items": {"type": "string"}},
+                                        ]
+                                    },
+                                    "encoding_format": {"type": "string"},
+                                    "dimensions": {"type": "integer"},
+                                    "user": {"type": "string"},
+                                    "metadata": {"type": "object"},
+                                    "attribution": {"type": "object"},
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {
+                        "description": (
+                            "OpenAI embeddings list: "
+                            "{object, data:[{object, index, embedding}], model, usage}"
+                        )
+                    },
+                    "503": {"description": "Async embeddings backend; use /v1/batch/embeddings"},
+                },
+            }
+        },
         "/v1/batch/embeddings": {
             "post": {
                 "operationId": "create_batch_embeddings_job",

@@ -584,6 +584,58 @@ class CostRoutingCoordinator:
         )
         return self.embeddings_batch_document(job.job_id)
 
+    def complete_embeddings(
+        self,
+        inputs: List[str],
+        *,
+        model: str = "contextual-orchestrator",
+        attribution: Optional[Dict[str, Any]] = None,
+        metadata: Optional[Dict[str, Any]] = None,
+    ) -> Dict[str, Any]:
+        """Return an OpenAI-compatible ``/v1/embeddings`` response.
+
+        Uses the same embeddings backend and cost ledger as the batch path, but
+        frames the result for OpenAI SDK consumers (object/list/data/usage).
+        Requires a synchronously completed batch document; async backends raise
+        so callers use ``POST /v1/batch/embeddings`` instead.
+        """
+        document = self.complete_embeddings_batch(
+            inputs, model=model, attribution=attribution, metadata=metadata
+        )
+        if document.get("status") != "completed":
+            raise RuntimeError(
+                "embeddings backend did not complete synchronously; use POST /v1/batch/embeddings"
+            )
+        raw_embeddings = document.get("embeddings") or []
+        data: List[Dict[str, Any]] = []
+        for item in raw_embeddings:
+            if not isinstance(item, dict):
+                continue
+            index = int(item.get("index", len(data)))
+            vector = item.get("embedding")
+            if not isinstance(vector, list):
+                vector = []
+            data.append({"object": "embedding", "index": index, "embedding": list(vector)})
+        data.sort(key=lambda row: int(row["index"]))
+        prompt_tokens = int(document.get("total_tokens") or 0)
+        if prompt_tokens <= 0:
+            token_counts = document.get("token_counts") or []
+            if isinstance(token_counts, list):
+                prompt_tokens = sum(int(value or 0) for value in token_counts)
+        return {
+            "object": "list",
+            "data": data,
+            "model": model,
+            "usage": {
+                "prompt_tokens": prompt_tokens,
+                "total_tokens": prompt_tokens,
+            },
+            # Non-OpenAI extensions for cost honesty (never fabricate prices).
+            "cost_micro_usd": document.get("cost_micro_usd"),
+            "batch_id": document.get("batch_id"),
+            "backend": document.get("backend"),
+        }
+
     def _require_embedding_job(self, batch_id: str) -> BatchJob:
         job = self._embedding_jobs.get(batch_id)
         if job is None:

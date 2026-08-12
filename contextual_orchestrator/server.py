@@ -46,6 +46,8 @@ ALLOWED_RESPONSES_KEYS = {
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
+# OpenAI /v1/embeddings body keys (sync path; same input shape as batch).
+ALLOWED_EMBEDDINGS_KEYS = {"model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -796,6 +798,37 @@ def build_server(
                     self._send(chat_completion_response(
                         result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
                     ))
+                    return
+                if path == "/v1/embeddings":
+                    # OpenAI-compatible sync embeddings (inference scope).
+                    _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
+                    inputs = _validate_embeddings_inputs(body)
+                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    attribution = _embeddings_attribution(body)
+                    submit_metadata: dict[str, Any] = {"actor_scope": "inference", "endpoint_path": "/v1/embeddings"}
+                    try:
+                        document = self._run(
+                            lambda: coordinator.complete_embeddings(
+                                inputs,
+                                model=model_name,
+                                attribution=attribution,
+                                metadata=submit_metadata,
+                            )
+                        )
+                    except RuntimeError as exc:
+                        raise RequestError(503, "embeddings_async_backend", str(exc)) from exc
+                    orchestrator.record_analytics_event(
+                        "embeddings_created",
+                        {
+                            "endpoint_path": "/v1/embeddings",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "batch_id": document.get("batch_id"),
+                            "batch_backend": document.get("backend"),
+                            "input_count": len(inputs),
+                        },
+                    )
+                    self._send(document, 200)
                     return
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
