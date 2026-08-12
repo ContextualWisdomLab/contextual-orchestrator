@@ -71,6 +71,7 @@ ALLOWED_SESSION_KEYS = {"token"}
 # Cookie value is an opaque server-side session id, never the raw admin bearer.
 ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
+DEFAULT_ADMIN_SESSION_IDLE_SECONDS = 30 * 60
 DEFAULT_MAX_ADMIN_SESSIONS = 32
 
 
@@ -130,12 +131,15 @@ class SecurityConfig:
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
     admin_session_ttl_seconds: int = DEFAULT_ADMIN_SESSION_TTL_SECONDS
+    admin_session_idle_seconds: int = DEFAULT_ADMIN_SESSION_IDLE_SECONDS
     max_admin_sessions: int = DEFAULT_MAX_ADMIN_SESSIONS
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
-    # Opaque session_id -> monotonic expiry; never stores the admin bearer.
+    # Opaque session_id -> absolute monotonic expiry; never stores the admin bearer.
     _admin_sessions: dict[str, float] = field(default_factory=dict, init=False, repr=False)
+    # Opaque session_id -> last successful authorize monotonic time (idle timeout).
+    _admin_session_last_seen: dict[str, float] = field(default_factory=dict, init=False, repr=False)
     _session_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
 
     def __post_init__(self) -> None:
@@ -143,6 +147,8 @@ class SecurityConfig:
             raise ValueError("split token mode requires both admin_token and inference_token")
         if self.admin_session_ttl_seconds < 1:
             raise ValueError("admin_session_ttl_seconds must be >= 1")
+        if self.admin_session_idle_seconds < 1:
+            raise ValueError("admin_session_idle_seconds must be >= 1")
         if self.max_admin_sessions < 1:
             raise ValueError("max_admin_sessions must be >= 1")
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
@@ -205,14 +211,17 @@ class SecurityConfig:
         if not expected or not presented_token or not secrets.compare_digest(presented_token, expected):
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         session_id = secrets.token_urlsafe(32)
-        expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
+        now = time.monotonic()
+        expires_at = now + float(self.admin_session_ttl_seconds)
         with self._session_lock:
-            self._purge_expired_admin_sessions_locked(now=time.monotonic())
+            self._purge_expired_admin_sessions_locked(now=now)
             # Bound live sessions: drop soonest-to-expire ids when at capacity.
             while len(self._admin_sessions) >= self.max_admin_sessions:
                 oldest = min(self._admin_sessions, key=self._admin_sessions.get)
                 self._admin_sessions.pop(oldest, None)
+                self._admin_session_last_seen.pop(oldest, None)
             self._admin_sessions[session_id] = expires_at
+            self._admin_session_last_seen[session_id] = now
         return session_id
 
     def revoke_admin_session(self, session_id: str) -> bool:
@@ -220,10 +229,15 @@ class SecurityConfig:
         if not session_id:
             return False
         with self._session_lock:
+            self._admin_session_last_seen.pop(session_id, None)
             return self._admin_sessions.pop(session_id, None) is not None
 
     def _admin_session_is_active(self, session_id: str) -> bool:
-        """Return True when ``session_id`` is a non-expired opaque admin session."""
+        """Return True when ``session_id`` is a non-expired opaque admin session.
+
+        Enforces absolute TTL and idle timeout. Successful authorization slides
+        the idle window but never extends the absolute expiry.
+        """
         if not session_id:
             return False
         now = time.monotonic()
@@ -233,14 +247,27 @@ class SecurityConfig:
                 return False
             if now >= expires_at:
                 self._admin_sessions.pop(session_id, None)
+                self._admin_session_last_seen.pop(session_id, None)
                 return False
+            last_seen = self._admin_session_last_seen.get(session_id, expires_at)
+            if now - last_seen >= float(self.admin_session_idle_seconds):
+                self._admin_sessions.pop(session_id, None)
+                self._admin_session_last_seen.pop(session_id, None)
+                return False
+            self._admin_session_last_seen[session_id] = now
             return True
 
     def _purge_expired_admin_sessions_locked(self, now: float) -> None:
         """Remove expired session ids. Caller must hold ``_session_lock``."""
-        stale = [sid for sid, exp in self._admin_sessions.items() if now >= exp]
+        stale = [
+            sid
+            for sid, exp in self._admin_sessions.items()
+            if now >= exp
+            or now - self._admin_session_last_seen.get(sid, exp) >= float(self.admin_session_idle_seconds)
+        ]
         for sid in stale:
             self._admin_sessions.pop(sid, None)
+            self._admin_session_last_seen.pop(sid, None)
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
@@ -278,6 +305,7 @@ class SecurityConfig:
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
             "admin_session_ttl_seconds": self.admin_session_ttl_seconds,
+            "admin_session_idle_seconds": self.admin_session_idle_seconds,
             "max_admin_sessions": self.max_admin_sessions,
             "admin_session_storage": "process_local",
         }

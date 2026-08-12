@@ -9,7 +9,7 @@ API bearer path.
 1. **Establish.** `POST /admin/session` accepts the admin bearer once (JSON
    `{"token": "..."}` or `Authorization: Bearer …`) and mints a high-entropy
    opaque session id stored only in a process-local table
-   (`session_id → monotonic expiry`).
+   (`session_id → absolute expiry` + last-seen for idle timeout).
 2. **Cookie.** The id is returned as `Set-Cookie` with
    `HttpOnly; SameSite=Strict; Path=/; Max-Age=<ttl>`. When the effective origin
    is HTTPS (`X-Forwarded-Proto: https`), the cookie also includes `Secure`.
@@ -17,8 +17,10 @@ API bearer path.
    bearer (by scope) or an active opaque cookie. The opaque id is **rejected**
    as `Authorization: Bearer`.
 4. **Logout / expiry.** `DELETE /admin/session` revokes the server-side record
-   and clears the cookie (`Max-Age=0`). Expired ids are purged on use and on
-   mint.
+   and clears the cookie (`Max-Age=0`). Absolute TTL (`admin_session_ttl_seconds`,
+   default 12h) and idle timeout (`admin_session_idle_seconds`, default 30m)
+   both expire sessions; successful admin authorizations slide idle time only.
+   Expired ids are purged on use and on mint.
 5. **Shell.** `GET /` and `GET /admin` serve the static shell **without** auth
    so the operator can open the login gate. All data/API routes remain
    admin-scoped.

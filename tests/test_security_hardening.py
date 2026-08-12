@@ -257,6 +257,21 @@ def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() ->
         thread.join(timeout=5)
 
 
+def test_admin_session_idle_timeout_expires_inactive_cookie() -> None:
+    """Idle timeout revokes a session even when absolute TTL remains."""
+    security = SecurityConfig(
+        admin_token=_TEST_ADMIN_TOKEN,
+        inference_token=_TEST_INFERENCE_TOKEN,
+        admin_session_ttl_seconds=3600,
+        admin_session_idle_seconds=1,
+    )
+    session_id = security.establish_admin_session(_TEST_ADMIN_TOKEN)
+    assert security._admin_session_is_active(session_id)
+    import time as _time
+    _time.sleep(1.2)
+    assert not security._admin_session_is_active(session_id)
+
+
 def test_admin_session_table_evicts_oldest_when_at_capacity() -> None:
     """Bounded live sessions: minting beyond max_admin_sessions drops the oldest."""
     security = SecurityConfig(
@@ -565,6 +580,7 @@ if __name__ == "__main__":
     test_admin_shell_is_public_so_browser_can_establish_session()
     test_admin_session_sets_secure_cookie_behind_https_proxy()
     test_admin_session_cookie_authorizes_admin_api_without_js_token_storage()
+    test_admin_session_idle_timeout_expires_inactive_cookie()
     test_admin_session_table_evicts_oldest_when_at_capacity()
     test_admin_session_expires_and_logout_revokes()
     test_loopback_without_configured_token_is_rejected()
