@@ -327,7 +327,10 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        """Handle one authenticated HTTP request against the supplied orchestrator."""
+
         def do_GET(self) -> None:  # noqa: N802
+            """Return health, admin, evidence, workflow, and batch resources."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -654,6 +657,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            """Apply validated operator changes to one worker-agent resource."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -677,6 +681,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            """Remove one worker agent through the authenticated admin surface."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -697,6 +702,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            """Create agents or execute validated inference and workflow requests."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
@@ -967,6 +973,7 @@ def build_server(
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
+            """Suppress the base server's unstructured request logging."""
             return
 
         def _send_error(
