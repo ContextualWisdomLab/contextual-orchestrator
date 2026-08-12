@@ -137,8 +137,14 @@ def test_security_policy_documents_coordinated_disclosure_lifecycle():
     assert "version or release line" in supported_versions
 
     reporting = section(policy_text, "## Reporting a Vulnerability")
+    normalized_reporting = " ".join(reporting.split())
     assert "Remove credentials, personal data" in reporting
     assert "Do not include exploit details, secrets, personal data" in reporting
+    assert "Before any stable release" in normalized_reporting
+    assert "private vulnerability reporting is enabled" in normalized_reporting
+    assert "security-notification recipients are configured" in normalized_reporting
+    assert "release authorization remains blocked" in normalized_reporting
+    assert "monitored alternative private contact" in normalized_reporting
 
     lifecycle = section(policy_text, "## Coordinated Disclosure Lifecycle")
     lifecycle_stages = (
