@@ -8,6 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- Offline NIM capability inventory + dry-run benchmark plan (issue #86).
 - `discover-nim-models` CLI and `nim_discovery` module (issue #86): allowlisted
   NVIDIA HTTPS `/v1/models` only; offline fixture status; unique agent ids on
   slug collision; live tests require `RUN_LIVE_NIM_TESTS=1`.
