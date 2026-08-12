@@ -169,6 +169,9 @@ class OrchestrationPolicy:
     # report; "model" asks a verifier-selected model to reply ACCEPT/REJECT (fixes the
     # known term-matching false negative on risk-vocabulary verifier outputs).
     verifier_judge: str = "terms"
+    # Role-differentiated sampling temperature (reasoning-effort proxy for Fugu/Conductor/
+    # TRINITY ablation). Thinker/verifier lower for stability; worker slightly higher.
+    role_temperature: dict[str, float] | None = None
 
     def as_dict(self) -> dict[str, Any]:
         """Return the API-safe policy snapshot for workflow records."""
@@ -179,9 +182,33 @@ class OrchestrationPolicy:
             "workflow_planning": self.workflow_planning,
             "verifier_judge": self.verifier_judge,
             "max_workflow_steps": self.max_workflow_steps,
+            "role_temperature": dict(self.role_temperature or self.default_role_temperature()),
             "workflow_steps": ["thinker", "worker", "verifier", "synthesizer"],
             "supported_locales": ["en", "ko"],
         }
+
+    @staticmethod
+    def default_role_temperature() -> dict[str, float]:
+        """Default per-role temperatures for route/conduct ablation studies."""
+        return {
+            "thinker": 0.1,
+            "worker": 0.2,
+            "verifier": 0.0,
+            "synthesizer": 0.15,
+        }
+
+    def temperature_for_role(self, role: str) -> float:
+        """Return the sampling temperature configured for a paper role."""
+        table = self.role_temperature or self.default_role_temperature()
+        try:
+            value = float(table.get(role, 0.2))
+        except (TypeError, ValueError):
+            return 0.2
+        if value < 0.0:
+            return 0.0
+        if value > 2.0:
+            return 2.0
+        return value
 
 
 # HTTP statuses worth retrying: request timeout, conflict, too-early, rate limit,
@@ -230,7 +257,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +334,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -1551,7 +1578,8 @@ class TaskOrchestrator:
         last_error: Exception | None = None
         for agent in candidates:
             try:
-                output = self.client.chat(agent, messages)
+                temperature = self.policy.temperature_for_role(role)
+                output = self.client.chat(agent, messages, temperature=temperature)
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
                 self._record_failure(agent.id)
