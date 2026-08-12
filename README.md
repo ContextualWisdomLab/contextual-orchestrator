@@ -3,9 +3,18 @@
 [![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/ContextualWisdomLab/contextual-orchestrator)
 [![Security](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/workflows/security.yml/badge.svg)](https://github.com/ContextualWisdomLab/contextual-orchestrator/actions/workflows/security.yml)
 
-Stdlib Python lab for a single API that routes, delegates, verifies, and synthesizes work across a configurable pool of OpenAI-compatible model agents.
+Provider-neutral OpenAI-compatible orchestration control plane that routes,
+conducts, verifies, and synthesizes work across governed model agents.
 
-This is not a Sakana AI product or a reproduction of their trained models. It is a small implementation of the public architecture pattern: expose one model-like interface while keeping the agent pool, routing, workflow, and verification logic behind it.
+Contextual Orchestrator is independently implemented from published
+orchestration concepts. It includes no third-party trained model weights or
+proprietary artifacts; operators supply models through provider-neutral
+OpenAI-compatible endpoints.
+
+Product, technical, security, data-model, operational, and decision authority
+is indexed in [docs/README.md](docs/README.md). Capability status is qualified
+there as shipped on protected main, active-PR, accepted architecture, planned,
+research-only, superseded, or externally owned.
 
 ## Quick Start
 
@@ -34,15 +43,15 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
   -d '{"model":"contextual-orchestrator","messages":[{"role":"user","content":"Analyze this code review task and verify the answer."}]}' | jq .
 ```
 
-HTTP serving is hardened for local lab use:
+HTTP serving is hardened for local deployment:
 
 - `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
-- Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
-- State is in-memory by default. Pass `--state-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_STATE_DB`) to persist workflow runs, evaluation runs, audit, and analytics to a stdlib sqlite file so they survive a restart; without it, behavior is unchanged.
+- Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted. Protected main has no dedicated trace scope: any inference-scoped caller can opt in, so isolate that token at the host/gateway boundary.
+- State is in-memory by default. Pass `--state-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_STATE_DB`) to persist ordinary non-stream workflow runs, evaluation runs, audit, and analytics to a stdlib sqlite file so they survive a restart. Route-stream workflow runs remain memory-only, and compatible passthrough creates no workflow run.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
-- `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
+- `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through a provider-native Batch API. Completion windows and discounts are provider-contract facts, not repository guarantees. The mock path answers synchronously.
 
 Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints. Provider secrets are resolved from a KV credential registry via `get_credential`, never from `os.getenv` at request time (see [docs/kv-credentials.md](docs/kv-credentials.md)):
 
@@ -62,13 +71,20 @@ Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints.
 
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
 
-Seed the credential into the KV once at bootstrap:
+For a one-shot bootstrap that survives process exit, configure the Postgres KV
+backend first, then seed the credential:
 
 ```bash
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
 ```
 
-Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
+The default in-memory credential backend is process-local: running that command
+without the Postgres bootstrap variables writes only to the short-lived CLI
+process and cannot seed a separately started server. For memory-backed dev/tests,
+call `register_credential(...)` inside the same long-lived Python process. See
+[docs/kv-credentials.md](docs/kv-credentials.md) for the persistent bootstrap.
+
+Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a socket timeout and send a default `max_tokens` request hint; protected main does not enforce a provider-response byte or cumulative-SSE cap.
 
 > The legacy `api_key_env` field is still accepted for back-compat, but its value is now treated as the **credential name** in the KV, not as an environment variable to read. This supersedes the old `api_key_env` env pattern.
 
@@ -115,9 +131,11 @@ One fused orchestration loop:
 - Deep path: a natural-language workflow is built with planner, worker, verifier, and synthesizer steps.
 - Each step has an access list, so workers see only the prior outputs intentionally exposed to them.
 - Agent definitions are data, so provider preference, exclusions, privacy constraints, and mock testing do not require code changes.
-- Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
+- On ordinary non-stream orchestrated calls, transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If an agent still fails before output is emitted, the request fails over to the next capability-matched agent, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`). Route streaming cannot cross-agent fail over after emission; compatible passthrough and batch paths follow their own provider/backend behavior.
 
-See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
+See [ARCHITECTURE.md](ARCHITECTURE.md) for the current system authority and
+[docs/architecture.md](docs/architecture.md) for the source-backed research
+mapping.
 
 ## Observability & spend
 
@@ -137,19 +155,21 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
     --budget-max-output-tokens 2000000 --budget-max-cost-usd 50
   ```
 
-  Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. Once spend reaches a cap, the next run is refused — `run()` raises `BudgetExceededError` and `/v1/chat/completions` returns HTTP `429 budget_exceeded`. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, `spent_*`, `remaining_*`, `exceeded`). Cost caps require a price table; token caps do not.
+  Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. For requests that execute through `TaskOrchestrator.run()`, once accounted spend reaches a cap, the next precheck is refused — `run()` raises `BudgetExceededError` and the ordinary coordinator-backed `/v1/chat/completions` path returns HTTP `429 budget_exceeded`. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, `spent_*`, `remaining_*`, `exceeded`). The budget precheck is process-local and non-atomic; compatible passthrough and route streaming bypass workflow-spend advancement, so this is not a universal provider quota. Cost caps require a price table; token caps do not.
 - **Admin.** The `/admin` **Observability** view renders the totals and the per-model table (unpriced models show an `unpriced` chip).
 
-These are process-local measured signals for a stdlib lab, not a billing system or production compliance data.
+These are process-local measured signals for a standalone deployment, not a billing system or production compliance data.
 
 ## Cost review + routing hub
 
-The orchestrator is the single control point for **LLM cost review** and
-**sync-vs-batch routing** (a LiteLLM-plus scope: cost optimiser + upstream load
-balancing + batch routing). All config — prices, thresholds, batch endpoints —
-is read from a **KV config store**, never `os.getenv`.
+`CostRoutingCoordinator` owns **sync-vs-batch routing** and its independent
+ledger; `TaskOrchestrator` separately owns **route-vs-conduct**, deterministic
+agent selection, and workflow-derived spend/budget. Routing prices, thresholds,
+and batch endpoints come from ConfigStore. Process/bind/bootstrap settings still
+have explicit environment/CLI inputs.
 
-- **Usage + cost ledger.** Every completion, sync *and* batch, builds a
+- **Usage + cost ledger.** Ordinary coordinator sync completions and retrieved
+  batch results build a
   prompt-safe usage record with generated IDs, token counts, cost, provider,
   model, channel, route mode, and attribution dimensions. Raw prompt and answer
   text are not part of the usage record or telemetry event. The default
@@ -161,6 +181,10 @@ is read from a **KV config store**, never `os.getenv`.
   service, upstream API/provider, model name, team, group, company**. Token
   counts reuse `pg-llm-batch`'s `pg_tiktoken` counter when a Postgres DSN is
   configured, and fall back to a deterministic heuristic otherwise.
+  Raw passthrough and route streaming currently bypass this ledger. Missing
+  ledger prices become zero, while workflow spend reports them as unknown; the
+  two authorities are not yet reconciled. This is not a billing or free-routing
+  claim.
 - **Reporting.** `GET /api/v1/cost_reports/rollup?dimension=team&start=&end=`
   rolls up cost + tokens by any dimension over any time window;
   `GET /api/v1/llm_usage_records` lists raw ledger rows;
@@ -177,6 +201,8 @@ is read from a **KV config store**, never `os.getenv`.
   Submit via `POST /api/v1/batch_routing_jobs`, poll
   `GET /api/v1/batch_routing_jobs/{id}`, retrieve
   `POST /api/v1/batch_routing_jobs/{id}/results` (which records usage + cost).
+  Coordinator handles are process-local and chat result replay is not yet
+  idempotent across restart.
 - **Batch embeddings.** Bulk, latency-tolerant embedding work (e.g. naruon's
   email-import backfill) submits to `POST /v1/batch/embeddings`
   (`{model, input|inputs:[...], endpoint, metadata|attribution}`) and polls

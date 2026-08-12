@@ -1,5 +1,8 @@
 # Analytics Spec
 
+**Document state:** `implemented_on_protected_main` for the listed local runtime
+reports; production telemetry and warehouse-backed evidence remain planned.
+
 ## Measurement Context
 
 This repository does not include production telemetry, event logs, or a
@@ -10,44 +13,44 @@ dashboard claims real usage.
 
 In short: this spec provides proposed definitions and source requirements, not measured product results.
 
-The stdlib prototype now exposes `/api/v1/analytics_snapshots/latest` as a
+The standalone runtime exposes `/api/v1/analytics_snapshots/latest` as a
 local runtime snapshot. It measures only in-memory events and workflow records
 from the current process, so it is source-backed for smoke tests and pilot
 readiness checks, but it is still not production telemetry or a warehouse-backed
 dashboard.
 
-The prototype also exposes `/api/v1/sales_readiness/latest`. That endpoint
+The standalone runtime also exposes `/api/v1/sales_readiness/latest`. That endpoint
 turns the local snapshot, admin state, HTTP security profile, locale bundles,
 and provider configuration into explicit pass/warn/fail criteria for enterprise
 pilot review. It is a readiness gate for a sellable pilot, not a production
 compliance certificate or proof of real customer usage.
 
-The prototype also exposes `/api/v1/commercial_readiness/latest`. That endpoint
+The standalone runtime also exposes `/api/v1/commercial_readiness/latest`. That endpoint
 rolls product, security, operations, audit, documentation, support,
 localization, and value-case evidence into a KRW 2,000,000,000 buyer
 due-diligence gate. It is measured only as local due-diligence evidence and is
 not a valuation guarantee, purchase commitment, or production compliance
 certificate.
 
-The prototype also exposes `/api/v1/commercial_launch_readiness/latest`. That
+The standalone runtime also exposes `/api/v1/commercial_launch_readiness/latest`. That
 endpoint packages the GTM packet, runtime path, acceptance tests, operator
 runbook, admin evidence, analytics truthfulness, Figma artifacts, review policy,
 and packaging decision while keeping buyer environment, production telemetry,
 and commercial signature inputs as explicit warnings.
 
-The prototype also exposes `/api/v1/commercial_completion_scorecards/latest`.
+The standalone runtime also exposes `/api/v1/commercial_completion_scorecards/latest`.
 That endpoint converts the KRW 2,000,000,000 completion scorecard into runtime
 evidence across Product Design, Figma, Superpowers, Ponytail, Data Analytics,
 runtime readiness, verification, review policy, packaging, and external
 follow-ups.
 
-The prototype also exposes
+The standalone runtime also exposes
 `/api/v1/commercial_buyer_acceptance_workflows/latest`. That endpoint converts
 the buyer acceptance runbook into owner-scoped runtime workflow evidence while
 keeping production and buyer-specific follow-ups as warnings, not measured
 results.
 
-The prototype also exposes `/api/v1/commercial_demo_scenarios/latest`. That
+The standalone runtime also exposes `/api/v1/commercial_demo_scenarios/latest`. That
 endpoint packages the buyer demo script as local runtime evidence across
 compatible API smoke, workflow trace, access-list evidence, evaluation replay,
 admin readiness, metric truthfulness, Figma stakeholder review, buyer acceptance,
@@ -55,14 +58,14 @@ review-process policy, and packaging decision. Production telemetry, ROI, legal,
 security questionnaire, and support-plan inputs remain proposed or buyer-specific
 warnings until supplied.
 
-The prototype also exposes `/api/v1/commercial_proposal_packets/latest`. That
+The standalone runtime also exposes `/api/v1/commercial_proposal_packets/latest`. That
 endpoint packages the buyer proposal review artifact as local runtime evidence
 across completion, demo, acceptance, value, security, contract, onboarding,
 operations, analytics truthfulness, Figma stakeholder review, review-process
 policy, and packaging decision. Pricing, legal, ROI, production, support, and
 signature inputs remain proposed or buyer-specific warnings until supplied.
 
-The prototype also exposes
+The standalone runtime also exposes
 `/api/v1/commercial_purchase_approval_packets/latest`. That endpoint packages
 the buyer purchase approval artifact as local runtime evidence across proposal,
 close, procurement, contract, value, security, onboarding, operations, analytics
@@ -71,7 +74,7 @@ decision. Buyer signature authority, budget approval, purchase order, finance
 authority, and go-live authorization remain proposed or buyer-specific warnings
 until supplied.
 
-The prototype also exposes `/api/v1/commercial_due_diligence_rooms/latest`. That
+The standalone runtime also exposes `/api/v1/commercial_due_diligence_rooms/latest`. That
 endpoint packages the buyer due diligence room as local runtime evidence across
 purchase approval, runtime API evidence, admin trace/access evidence, security,
 commercial terms, value analytics, implementation readiness, Figma stakeholder
@@ -79,7 +82,7 @@ review, review-process policy, and packaging decision. Buyer authority
 documents, production telemetry, and third-party attestations remain proposed or
 buyer-specific warnings until supplied.
 
-The prototype also exposes
+The standalone runtime also exposes
 `/api/v1/commercial_investment_committee_memos/latest`. That endpoint packages
 the executive investment committee memo as local runtime evidence across due
 diligence, purchase approval, financial case, risk/security, commercial terms,
@@ -88,7 +91,7 @@ packaging decision. Buyer final authority, production telemetry, and external
 attestations remain proposed or buyer-specific warnings until supplied.
 
 Decision supported: decide whether Contextual Orchestrator is ready to move from
-lab prototype to enterprise pilot while preserving traceability, compliance
+local evaluation to enterprise pilot while preserving traceability, compliance
 evidence, and API compatibility.
 
 Review cadence: weekly during pilot, then monthly for operating review.

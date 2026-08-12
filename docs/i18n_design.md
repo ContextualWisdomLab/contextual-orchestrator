@@ -1,5 +1,8 @@
 # i18n Design
 
+**Document state:** `implemented_on_protected_main` for the inline locale
+bundles and `planned` for the adoption candidate described below.
+
 ## Locales
 
 - `en`: default and fallback locale.
@@ -10,8 +13,8 @@
 UI messages are locale bundles:
 
 - REST: `GET /api/v1/locale_bundles/{locale_code}`
-- Admin runtime: inlined bundle for the dependency-free prototype.
-- Production runtime: i18next resources loaded over HTTP.
+- Admin runtime: inlined bundle in the standalone runtime.
+- Planned web client: i18next resources loaded over HTTP.
 
 ## Key Rules
 
@@ -25,7 +28,8 @@ UI messages are locale bundles:
 
 `contextual_orchestrator.admin.ADMIN_TRANSLATIONS` contains English and Korean bundles. The admin console switches language without a page reload.
 
-## Production Library Target
+## Planned adoption candidate
 
-Use i18next for resource loading, fallback language, interpolation, language detection, and runtime switching. React-admin should receive an `i18nProvider` backed by the same bundles.
-
+i18next and React-admin are planned adoption candidates. Adopt them for a
+separately built web client only with migration, rollback, and parity evidence;
+they do not own the current inline admin call path.

@@ -4,16 +4,21 @@
 
 Python 3.11+.
 
-## Dependencies
+## Current implementation dependencies
 
-Runtime dependencies: none beyond the Python standard library.
+The current Python HTTP and control path uses the standard library. Project
+metadata also declares optional `api` and `db` extras. Those optional extras are
+installable compatibility surfaces, not proof of an implemented framework or
+ORM integration.
 
-Production target dependencies after this lab hardens:
+## Planned adoption candidates
 
-- FastAPI for REST API, OpenAPI, typed request/response validation, and dependency injection.
-- React-admin for the enterprise admin console.
-- i18next for shared web i18n.
-- PostgreSQL, SQLAlchemy, and Alembic for persistence and migrations.
+- FastAPI for a future typed REST adapter when its migration triggers are met.
+- React-admin for a separately built enterprise admin client.
+- i18next for shared web internationalization.
+- SQLAlchemy and Alembic for a future normalized persistence layer. Current
+  code uses SQLite/PEP-249 state paths and an optional direct-psycopg credential
+  backend.
 
 ## Interfaces
 
@@ -33,4 +38,6 @@ DDD, kept minimal:
 
 ## Rationale
 
-The current goal is to encode architecture and workflow contracts, not provider-specific ergonomics. Add FastAPI, OpenAI SDKs, async workers, or persistent storage only after tests show the stdlib version is the bottleneck.
+Adopt FastAPI, provider SDKs, async workers, or an ORM only after a bounded
+product requirement, migration and rollback evidence, and tests prove the new
+authority boundary.

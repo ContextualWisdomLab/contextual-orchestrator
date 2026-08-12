@@ -37,7 +37,7 @@ No interface or factory until a second real implementation exists.
 
 Context lives under `conductor/`. Update it when scope, dependencies, workflow, or domain terms change.
 
-## Ponytail Design Gate
+## Dependency-adoption gate
 
 Before adding or designing a subsystem, research existing libraries first and record the decision in `docs/library_research.md`.
 

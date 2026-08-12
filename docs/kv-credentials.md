@@ -57,6 +57,24 @@ at bootstrap by `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`:
 Tests and the app suite run on the in-memory backend, so **no KV or Postgres is
 required to run `pytest`**.
 
+### Durable-backend failure semantics
+
+Selecting a durable Postgres backend makes it authoritative. Import,
+connection, initialization, and bootstrap-seed failures raise the stable,
+redacted error `Postgres config backend is unavailable`; the orchestrator
+never silently falls back from Postgres to process-local memory. The public
+error and rendered traceback omit the DSN and its credentials.
+
+`CostRoutingCoordinator(postgres_dsn=...)` enters this same factory boundary
+when no config store is injected, so routing policy, prices, and credential
+authority cannot diverge from its Postgres-backed token-counting authority.
+
+Operators must restore the configured backend and restart. If losing durable
+configuration, prices, routing policy, and credential authority is genuinely
+acceptable for a local or test deployment, intentionally select `memory`
+instead. A failed Postgres backend never triggers provider-secret lookup from
+environment variables.
+
 ### Postgres pgcrypto registry (org reference pattern)
 
 The default production backend mirrors xtrmLLMBatchPython's pgcrypto-encrypted
