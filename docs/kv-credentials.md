@@ -112,6 +112,19 @@ echo "$OPENAI_API_KEY" | python -m contextual_orchestrator \
     register-credential --name OPENAI_API_KEY --value-stdin
 ```
 
+### Browser operator session (admin console)
+
+The `/admin` HTML shell is public so operators can open the console. Data and
+mutation endpoints stay admin-scoped. Establish a same-origin session once:
+
+1. Open **Integrations → Operator session** and submit the admin bearer token, or
+2. `POST /admin/session` with `{"token":"..."}` (or `Authorization: Bearer …`).
+
+The response sets the HttpOnly cookie `contextual_orchestrator_session`
+(`SameSite=Strict`). Subsequent browser calls use `credentials: "same-origin"`
+and never keep the raw admin secret in JavaScript. Reverse proxies may instead
+inject `Authorization` on every request; both mechanisms are accepted.
+
 ### Registering a credential from the admin frontend
 
 `POST /admin/api/credentials` (admin scope) lets the `/admin` console — or any
@@ -119,9 +132,15 @@ authenticated operator tool — write a named secret into the KV without a shell
 session, so an operator never has to hand the raw value to a deploy script:
 
 ```bash
-curl -X POST http://127.0.0.1:8000/admin/api/credentials \
-  -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" \
-  -d '{"name": "LITELLM_API_KEY", "value": "sk-..."}'
+# Secret value comes from stdin (or a protected file) so it never lands in argv or shell history.
+# Prefer the same-origin admin session cookie (POST /admin/session once in the browser)
+# or a reverse proxy that injects Authorization for authenticated operators.
+printf '%s' "$LITELLM_API_KEY" | jq -Rn --arg name LITELLM_API_KEY \
+  '{name: $name, value: input}' \
+  | curl -X POST http://127.0.0.1:8000/admin/api/credentials \
+      -H "authorization: Bearer $ADMIN_TOKEN" \
+      -H "content-type: application/json" \
+      --data-binary @-
 # -> {"registered": "LITELLM_API_KEY"}
 ```
 

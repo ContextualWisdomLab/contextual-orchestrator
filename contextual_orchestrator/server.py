@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from http.cookies import CookieError, SimpleCookie
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
 import re
@@ -67,6 +68,10 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "provider_exclusions",
 }
 ALLOWED_CREDENTIAL_KEYS = {"name", "value"}
+ALLOWED_SESSION_KEYS = {"token"}
+# HttpOnly cookie established by POST /admin/session so the browser admin never
+# stores the admin bearer in JavaScript; reverse proxies may still inject Authorization.
+ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
 _CREDENTIAL_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 
 
@@ -122,16 +127,45 @@ class SecurityConfig:
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate bearer token for admin or inference scope."""
+        """Validate bearer token or admin session cookie for admin/inference scope.
+
+        Browser operators establish an HttpOnly session via ``POST /admin/session``
+        so JavaScript never retains the raw admin secret. API clients continue to
+        send ``Authorization: Bearer …``. Reverse proxies may inject either.
+        """
         if not (self.auth_token or self.admin_token or self.inference_token):
             raise RequestError(401, "unauthorized", "bearer token is required")
-        raw = headers.get("authorization", "")
-        if not raw.lower().startswith("bearer "):
-            raise RequestError(401, "unauthorized", "bearer token is required")
-        token = raw.split(" ", 1)[1].strip()
         expected = self.auth_token or (self.admin_token if scope == "admin" else self.inference_token)
-        if not expected or not secrets.compare_digest(token, expected):
+        if not expected:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        token = self._extract_presented_token(headers, scope=scope)
+        if not token or not secrets.compare_digest(token, expected):
+            raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+
+    def _extract_presented_token(self, headers: Any, scope: str) -> str:
+        """Return the presented credential from Authorization or the admin session cookie."""
+        raw = headers.get("authorization", "") or ""
+        if raw.lower().startswith("bearer "):
+            return raw.split(" ", 1)[1].strip()
+        if scope != "admin":
+            return ""
+        cookie_header = headers.get("cookie", "") or ""
+        if not cookie_header:
+            return ""
+        jar = SimpleCookie()
+        try:
+            jar.load(cookie_header)
+        except CookieError:
+            return ""
+        morsel = jar.get(ADMIN_SESSION_COOKIE)
+        return morsel.value if morsel is not None else ""
+
+    def validate_admin_session_token(self, token: str) -> str:
+        """Return the admin-scope secret when ``token`` matches; otherwise raise RequestError."""
+        expected = self.auth_token or self.admin_token
+        if not expected or not token or not secrets.compare_digest(token, expected):
+            raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        return expected
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
@@ -363,6 +397,11 @@ def build_server(
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
                     return
+                # Static admin shell is public so operators can establish a session;
+                # every data/API path below remains admin-scoped.
+                if path in ("/", "/admin"):
+                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
+                    return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
                     # it is authorized here before the admin gate below.
@@ -405,9 +444,6 @@ def build_server(
                         self._send(coordinator.poll_batch(job_id))
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
-                    return
-                if path in ("/", "/admin"):
-                    self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
                     return
                 if path == "/admin/state":
                     state = orchestrator.admin_state()
@@ -716,6 +752,23 @@ def build_server(
         def do_POST(self) -> None:  # noqa: N802
             try:
                 path = urllib.parse.urlparse(self.path).path
+                if path == "/admin/session":
+                    # Browser admin auth: validate the one-time presented token and
+                    # mint an HttpOnly session cookie. The raw secret is not stored
+                    # in JavaScript after this response.
+                    body = self._read_json()
+                    _reject_unknown_keys(body, ALLOWED_SESSION_KEYS)
+                    presented = body.get("token")
+                    if not isinstance(presented, str) or not presented.strip():
+                        # Also accept Authorization for API-style session establish.
+                        raw = self.headers.get("authorization", "") or ""
+                        presented = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+                    session_token = security.validate_admin_session_token(presented.strip() if isinstance(presented, str) else "")
+                    cookie = (
+                        f"{ADMIN_SESSION_COOKIE}={session_token}; Path=/; HttpOnly; SameSite=Strict; Max-Age=43200"
+                    )
+                    self._send({"session_status": "established"}, 200, extra_headers={"set-cookie": cookie})
+                    return
                 scope = (
                     "admin"
                     if path in ("/admin/simulate", "/admin/api/credentials")
@@ -1010,11 +1063,19 @@ def build_server(
         ) -> None:
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
-        def _send(self, payload: dict[str, Any], status: int = 200) -> None:
+        def _send(
+            self,
+            payload: dict[str, Any],
+            status: int = 200,
+            extra_headers: dict[str, str] | None = None,
+        ) -> None:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("content-type", "application/json; charset=utf-8")
             self.send_header("content-length", str(len(raw)))
+            if extra_headers:
+                for header_name, header_value in extra_headers.items():
+                    self.send_header(header_name, header_value)
             self._send_security_headers()
             self.end_headers()
             self.wfile.write(raw)

@@ -51,6 +51,12 @@ ADMIN_TRANSLATIONS = {
         "credentials_save": "Save to KV",
         "credentials_saved": "Saved",
         "credentials_failed": "Failed to save credential.",
+        "session_title": "Operator session",
+        "session_hint": "Establish an HttpOnly admin session so browser calls use a cookie instead of embedding the token in JavaScript. Reverse proxies may inject Authorization instead.",
+        "session_token_placeholder": "Admin bearer token",
+        "session_save": "Start session",
+        "session_ok": "Session established",
+        "session_failed": "Session failed",
         "observability_title": "Observability",
         "spend_title": "Spend",
         "spend_model": "Model",
@@ -293,6 +299,12 @@ ADMIN_TRANSLATIONS = {
         "credentials_save": "KV에 저장",
         "credentials_saved": "저장됨",
         "credentials_failed": "자격 증명 저장에 실패했습니다.",
+        "session_title": "운영자 세션",
+        "session_hint": "HttpOnly 관리자 세션을 열면 브라우저 호출이 JavaScript에 토큰을 저장하지 않고 쿠키를 사용합니다. 리버스 프록시는 Authorization 헤더를 주입할 수 있습니다.",
+        "session_token_placeholder": "관리자 Bearer 토큰",
+        "session_save": "세션 시작",
+        "session_ok": "세션이 설정되었습니다",
+        "session_failed": "세션 설정 실패",
         "observability_title": "관측",
         "spend_title": "비용",
         "spend_model": "모델",
@@ -986,6 +998,15 @@ Summarize this research thread and verify claims.</textarea>
           <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.</p>
         </section>
         <section class="panel wide">
+          <div class="panel-header"><h1 data-i18n="session_title">Operator session</h1><span class="chip">HttpOnly</span></div>
+          <p class="muted" data-i18n="session_hint">Establish an HttpOnly admin session so browser calls use a cookie instead of embedding the token in JavaScript. Reverse proxies may inject Authorization instead.</p>
+          <form id="sessionForm">
+            <input id="sessionToken" type="password" data-i18n-placeholder="session_token_placeholder" placeholder="Admin bearer token" autocomplete="off" />
+            <button type="submit" class="btn primary" data-i18n="session_save">Start session</button>
+          </form>
+          <p class="muted" id="sessionStatus"></p>
+        </section>
+        <section class="panel wide">
           <div class="panel-header"><h1 data-i18n="credentials_title">Credentials</h1><span class="chip" data-i18n="credentials_kv_chip">KV-backed</span></div>
           <p class="muted" data-i18n="credentials_hint">Register a provider credential (for example LITELLM_API_KEY) into the KV registry. The value is never displayed or returned by any endpoint.</p>
           <form id="credentialForm">
@@ -1060,6 +1081,9 @@ Summarize this research thread and verify claims.</textarea>
       registerAgent: document.querySelector("#registerAgent"),
       mobileView: document.querySelector("#mobileView"),
       language: document.querySelector("#language"),
+      sessionForm: document.querySelector("#sessionForm"),
+      sessionToken: document.querySelector("#sessionToken"),
+      sessionStatus: document.querySelector("#sessionStatus"),
       credentialForm: document.querySelector("#credentialForm"),
       credentialName: document.querySelector("#credentialName"),
       credentialValue: document.querySelector("#credentialValue"),
@@ -1080,6 +1104,15 @@ Summarize this research thread and verify claims.</textarea>
 
     function t(key) {
       return (translations[currentLang] || translations.en)[key] || translations.en[key] || key;
+    }
+
+    // Same-origin fetches carry the HttpOnly admin session cookie (set by
+    // POST /admin/session). Reverse proxies may also inject Authorization.
+    // The admin token is never retained in JavaScript after session establish.
+    function apiFetch(url, options = {}) {
+      const next = Object.assign({credentials: "same-origin"}, options || {});
+      next.headers = Object.assign({}, options && options.headers || {});
+      return fetch(url, next);
     }
 
     function tags(tags) {
@@ -1504,7 +1537,13 @@ Summarize this research thread and verify claims.</textarea>
       if (state.policy) renderSecondaryViews();
     }
     async function load() {
-      const res = await fetch("/admin/state");
+      const res = await apiFetch("/admin/state");
+      if (!res.ok) {
+        if (els.sessionStatus) {
+          els.sessionStatus.textContent = t("session_failed") || "Session required — use Integrations → Operator session.";
+        }
+        return;
+      }
       state = await res.json();
       await refreshAnalytics();
       await refreshReadiness();
@@ -1514,67 +1553,68 @@ Summarize this research thread and verify claims.</textarea>
       await simulate();
     }
     async function refreshAnalytics() {
-      const analyticsRes = await fetch("/api/v1/analytics_snapshots/latest");
-      state.analytics = await analyticsRes.json();
+      const analyticsRes = await apiFetch("/api/v1/analytics_snapshots/latest");
+      if (analyticsRes.ok) state.analytics = await analyticsRes.json();
     }
     async function refreshReadiness() {
-      const readinessRes = await fetch("/api/v1/sales_readiness/latest");
-      state.readiness = await readinessRes.json();
-      const commercialRes = await fetch("/api/v1/commercial_readiness/latest");
-      state.commercialReadiness = await commercialRes.json();
-      const buyerManifestRes = await fetch("/api/v1/buyer_evidence_manifests/latest");
-      state.buyerEvidenceManifest = await buyerManifestRes.json();
-      const handoffBundleRes = await fetch("/api/v1/buyer_handoff_bundles/latest");
-      state.buyerHandoffBundle = await handoffBundleRes.json();
-      const saleabilityRes = await fetch("/api/v1/saleability_decisions/latest");
-      state.saleabilityDecision = await saleabilityRes.json();
-      const commercialExportRes = await fetch("/api/v1/commercial_evidence_exports/latest");
-      state.commercialEvidenceExport = await commercialExportRes.json();
-      const commercialAcceptanceRes = await fetch("/api/v1/commercial_acceptance_checks/latest");
-      state.commercialAcceptanceCheck = await commercialAcceptanceRes.json();
-      const commercialReleaseRes = await fetch("/api/v1/commercial_release_candidates/latest");
-      state.commercialReleaseCandidate = await commercialReleaseRes.json();
-      const commercialGapRes = await fetch("/api/v1/commercial_gap_registers/latest");
-      state.commercialGapRegister = await commercialGapRes.json();
-      const commercialProcurementRes = await fetch("/api/v1/commercial_procurement_readiness/latest");
-      state.commercialProcurementReadiness = await commercialProcurementRes.json();
-      const commercialContractRes = await fetch("/api/v1/commercial_contract_readiness/latest");
-      state.commercialContractReadiness = await commercialContractRes.json();
-      const commercialOnboardingRes = await fetch("/api/v1/commercial_onboarding_readiness/latest");
-      state.commercialOnboardingReadiness = await commercialOnboardingRes.json();
-      const commercialOperationsRes = await fetch("/api/v1/commercial_operations_readiness/latest");
-      state.commercialOperationsReadiness = await commercialOperationsRes.json();
-      const commercialSecurityRes = await fetch("/api/v1/commercial_security_attestations/latest");
-      state.commercialSecurityAttestation = await commercialSecurityRes.json();
-      const commercialValueRes = await fetch("/api/v1/commercial_value_readiness/latest");
-      state.commercialValueReadiness = await commercialValueRes.json();
-      const commercialCloseRes = await fetch("/api/v1/commercial_close_readiness/latest");
-      state.commercialCloseReadiness = await commercialCloseRes.json();
-      const commercialGtmRes = await fetch("/api/v1/commercial_go_to_market_readiness/latest");
-      state.commercialGoToMarketReadiness = await commercialGtmRes.json();
-      const commercialLaunchRes = await fetch("/api/v1/commercial_launch_readiness/latest");
-      state.commercialLaunchReadiness = await commercialLaunchRes.json();
-      const commercialCompletionRes = await fetch("/api/v1/commercial_completion_scorecards/latest");
-      state.commercialCompletionScorecard = await commercialCompletionRes.json();
-      const commercialBuyerAcceptanceWorkflowRes = await fetch("/api/v1/commercial_buyer_acceptance_workflows/latest");
-      state.commercialBuyerAcceptanceWorkflow = await commercialBuyerAcceptanceWorkflowRes.json();
-      const commercialDemoRes = await fetch("/api/v1/commercial_demo_scenarios/latest");
-      state.commercialDemoScenarios = await commercialDemoRes.json();
-      const commercialProposalRes = await fetch("/api/v1/commercial_proposal_packets/latest");
-      state.commercialProposalPacket = await commercialProposalRes.json();
-      const commercialPurchaseApprovalRes = await fetch("/api/v1/commercial_purchase_approval_packets/latest");
-      state.commercialPurchaseApprovalPacket = await commercialPurchaseApprovalRes.json();
-      const commercialDueDiligenceRes = await fetch("/api/v1/commercial_due_diligence_rooms/latest");
-      state.commercialDueDiligenceRoom = await commercialDueDiligenceRes.json();
-      const commercialInvestmentCommitteeRes = await fetch("/api/v1/commercial_investment_committee_memos/latest");
-      state.commercialInvestmentCommitteeMemo = await commercialInvestmentCommitteeRes.json();
+      const readinessRes = await apiFetch("/api/v1/sales_readiness/latest");
+      if (readinessRes.ok) state.readiness = await readinessRes.json();
+      const commercialRes = await apiFetch("/api/v1/commercial_readiness/latest");
+      if (commercialRes.ok) state.commercialReadiness = await commercialRes.json();
+      const buyerManifestRes = await apiFetch("/api/v1/buyer_evidence_manifests/latest");
+      if (buyerManifestRes.ok) state.buyerEvidenceManifest = await buyerManifestRes.json();
+      const handoffBundleRes = await apiFetch("/api/v1/buyer_handoff_bundles/latest");
+      if (handoffBundleRes.ok) state.buyerHandoffBundle = await handoffBundleRes.json();
+      const saleabilityRes = await apiFetch("/api/v1/saleability_decisions/latest");
+      if (saleabilityRes.ok) state.saleabilityDecision = await saleabilityRes.json();
+      const commercialExportRes = await apiFetch("/api/v1/commercial_evidence_exports/latest");
+      if (commercialExportRes.ok) state.commercialEvidenceExport = await commercialExportRes.json();
+      const commercialAcceptanceRes = await apiFetch("/api/v1/commercial_acceptance_checks/latest");
+      if (commercialAcceptanceRes.ok) state.commercialAcceptanceCheck = await commercialAcceptanceRes.json();
+      const commercialReleaseRes = await apiFetch("/api/v1/commercial_release_candidates/latest");
+      if (commercialReleaseRes.ok) state.commercialReleaseCandidate = await commercialReleaseRes.json();
+      const commercialGapRes = await apiFetch("/api/v1/commercial_gap_registers/latest");
+      if (commercialGapRes.ok) state.commercialGapRegister = await commercialGapRes.json();
+      const commercialProcurementRes = await apiFetch("/api/v1/commercial_procurement_readiness/latest");
+      if (commercialProcurementRes.ok) state.commercialProcurementReadiness = await commercialProcurementRes.json();
+      const commercialContractRes = await apiFetch("/api/v1/commercial_contract_readiness/latest");
+      if (commercialContractRes.ok) state.commercialContractReadiness = await commercialContractRes.json();
+      const commercialOnboardingRes = await apiFetch("/api/v1/commercial_onboarding_readiness/latest");
+      if (commercialOnboardingRes.ok) state.commercialOnboardingReadiness = await commercialOnboardingRes.json();
+      const commercialOperationsRes = await apiFetch("/api/v1/commercial_operations_readiness/latest");
+      if (commercialOperationsRes.ok) state.commercialOperationsReadiness = await commercialOperationsRes.json();
+      const commercialSecurityRes = await apiFetch("/api/v1/commercial_security_attestations/latest");
+      if (commercialSecurityRes.ok) state.commercialSecurityAttestation = await commercialSecurityRes.json();
+      const commercialValueRes = await apiFetch("/api/v1/commercial_value_readiness/latest");
+      if (commercialValueRes.ok) state.commercialValueReadiness = await commercialValueRes.json();
+      const commercialCloseRes = await apiFetch("/api/v1/commercial_close_readiness/latest");
+      if (commercialCloseRes.ok) state.commercialCloseReadiness = await commercialCloseRes.json();
+      const commercialGtmRes = await apiFetch("/api/v1/commercial_go_to_market_readiness/latest");
+      if (commercialGtmRes.ok) state.commercialGoToMarketReadiness = await commercialGtmRes.json();
+      const commercialLaunchRes = await apiFetch("/api/v1/commercial_launch_readiness/latest");
+      if (commercialLaunchRes.ok) state.commercialLaunchReadiness = await commercialLaunchRes.json();
+      const commercialCompletionRes = await apiFetch("/api/v1/commercial_completion_scorecards/latest");
+      if (commercialCompletionRes.ok) state.commercialCompletionScorecard = await commercialCompletionRes.json();
+      const commercialBuyerAcceptanceWorkflowRes = await apiFetch("/api/v1/commercial_buyer_acceptance_workflows/latest");
+      if (commercialBuyerAcceptanceWorkflowRes.ok) state.commercialBuyerAcceptanceWorkflow = await commercialBuyerAcceptanceWorkflowRes.json();
+      const commercialDemoRes = await apiFetch("/api/v1/commercial_demo_scenarios/latest");
+      if (commercialDemoRes.ok) state.commercialDemoScenarios = await commercialDemoRes.json();
+      const commercialProposalRes = await apiFetch("/api/v1/commercial_proposal_packets/latest");
+      if (commercialProposalRes.ok) state.commercialProposalPacket = await commercialProposalRes.json();
+      const commercialPurchaseApprovalRes = await apiFetch("/api/v1/commercial_purchase_approval_packets/latest");
+      if (commercialPurchaseApprovalRes.ok) state.commercialPurchaseApprovalPacket = await commercialPurchaseApprovalRes.json();
+      const commercialDueDiligenceRes = await apiFetch("/api/v1/commercial_due_diligence_rooms/latest");
+      if (commercialDueDiligenceRes.ok) state.commercialDueDiligenceRoom = await commercialDueDiligenceRes.json();
+      const commercialInvestmentCommitteeRes = await apiFetch("/api/v1/commercial_investment_committee_memos/latest");
+      if (commercialInvestmentCommitteeRes.ok) state.commercialInvestmentCommitteeMemo = await commercialInvestmentCommitteeRes.json();
     }
     async function simulate() {
-      const res = await fetch("/admin/simulate", {
+      const res = await apiFetch("/admin/simulate", {
         method: "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify({prompt: els.prompt.value, mode: els.mode.value, include_orchestration_trace: true})
       });
+      if (!res.ok) return;
       state.last = await res.json();
       state.recent_workflow_runs = [state.last, ...(state.recent_workflow_runs || [])].slice(0, 8);
       await refreshAnalytics();
@@ -1584,22 +1624,40 @@ Summarize this research thread and verify claims.</textarea>
     }
     async function runEvaluation() {
       const prompts = els.evaluationPrompts.value.split("\n").map(item => item.trim()).filter(Boolean);
-      const res = await fetch("/api/v1/evaluation_runs", {
+      const res = await apiFetch("/api/v1/evaluation_runs", {
         method: "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify({prompts, run_mode: els.evaluationMode.value, include_orchestration_trace: true})
       });
+      if (!res.ok) return;
       const result = await res.json();
       els.evaluationRows.insertAdjacentHTML("afterbegin", `<tr><td>${escapeHtml(result.evaluation_run_id)}</td><td>${escapeHtml(result.mode)}</td><td>${escapeHtml(result.prompt_count)}</td><td>${escapeHtml(result.success_count)}</td></tr>`);
       await refreshAnalytics();
       await refreshReadiness();
       renderSecondaryViews();
     }
+    async function startSession(event) {
+      event.preventDefault();
+      const token = els.sessionToken.value;
+      const res = await apiFetch("/admin/session", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({token})
+      });
+      const result = await res.json().catch(() => ({}));
+      if (res.ok) {
+        els.sessionStatus.textContent = t("session_ok") || "Session established";
+        els.sessionToken.value = "";
+        await load();
+      } else {
+        els.sessionStatus.textContent = result.error?.message || t("session_failed") || "Session failed";
+      }
+    }
     async function saveCredential(event) {
       event.preventDefault();
       const name = els.credentialName.value.trim();
       const value = els.credentialValue.value;
-      const res = await fetch("/admin/api/credentials", {
+      const res = await apiFetch("/admin/api/credentials", {
         method: "POST",
         headers: {"content-type": "application/json"},
         body: JSON.stringify({name, value})
@@ -1612,6 +1670,7 @@ Summarize this research thread and verify claims.</textarea>
         els.credentialStatus.textContent = result.error?.message || t("credentials_failed") || "Failed to save credential.";
       }
     }
+    if (els.sessionForm) els.sessionForm.addEventListener("submit", startSession);
     els.credentialForm.addEventListener("submit", saveCredential);
     els.agentSearch.addEventListener("input", renderAgents);
     els.statusFilter.addEventListener("change", renderAgents);

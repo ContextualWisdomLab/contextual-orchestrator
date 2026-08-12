@@ -11,9 +11,15 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
+from contextual_orchestrator.credentials import InMemoryCredentialBackend, get_credential, set_backend  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, chat_completion_response, redact_text, redact_value  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import ADMIN_SESSION_COOKIE, SecurityConfig, build_server  # noqa: E402
+
+# Test-only bearer values (not production secrets). Narrow noqa for Ruff S106.
+_TEST_AUTH_TOKEN = "secret_token"  # noqa: S105
+_TEST_ADMIN_TOKEN = "admin_secret"  # noqa: S105
+_TEST_INFERENCE_TOKEN = "inference_secret"  # noqa: S105
+_TEST_CREDENTIAL_VALUE = "sk-secret-value"  # noqa: S105
 
 
 def build() -> TaskOrchestrator:
@@ -38,7 +44,7 @@ def post_json(url: str, payload: dict[str, object], token: str | None = None) ->
 
 
 def test_http_api_requires_bearer_token_and_hides_trace_by_default() -> None:
-    server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -49,7 +55,7 @@ def test_http_api_requires_bearer_token_and_hides_trace_by_default() -> None:
         authorized_status, authorized_body = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
             payload,
-            token="secret_token",
+            token=_TEST_AUTH_TOKEN,
         )
     finally:
         server.shutdown()
@@ -67,7 +73,7 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     server = build_server(
         build(),
         port=0,
-        security=SecurityConfig(auth_token="", admin_token="admin_secret", inference_token="inference_secret"),
+        security=SecurityConfig(auth_token="", admin_token=_TEST_ADMIN_TOKEN, inference_token=_TEST_INFERENCE_TOKEN),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -78,12 +84,12 @@ def test_admin_and_inference_tokens_are_separate() -> None:
         admin_for_chat_status, _ = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
             payload,
-            token="admin_secret",
+            token=_TEST_ADMIN_TOKEN,
         )
         inference_status, inference_body = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
             payload,
-            token="inference_secret",
+            token=_TEST_INFERENCE_TOKEN,
         )
     finally:
         server.shutdown()
@@ -96,8 +102,9 @@ def test_admin_and_inference_tokens_are_separate() -> None:
 
 
 def test_admin_credential_endpoint_registers_into_kv_without_echoing_value() -> None:
-    set_backend(InMemoryCredentialBackend())
-    server = build_server(build(), port=0, security=SecurityConfig(admin_token="admin_secret", inference_token="inference_secret"))
+    backend = InMemoryCredentialBackend()
+    set_backend(backend)
+    server = build_server(build(), port=0, security=SecurityConfig(admin_token=_TEST_ADMIN_TOKEN, inference_token=_TEST_INFERENCE_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -105,18 +112,20 @@ def test_admin_credential_endpoint_registers_into_kv_without_echoing_value() -> 
     try:
         inference_status, inference_body = post_json(
             f"http://127.0.0.1:{port}/admin/api/credentials",
-            {"name": "LITELLM_API_KEY", "value": "sk-secret-value"},
-            token="inference_secret",
+            {"name": "LITELLM_API_KEY", "value": _TEST_CREDENTIAL_VALUE},
+            token=_TEST_INFERENCE_TOKEN,
         )
         admin_status, admin_body = post_json(
             f"http://127.0.0.1:{port}/admin/api/credentials",
-            {"name": "LITELLM_API_KEY", "value": "sk-secret-value"},
-            token="admin_secret",
+            {"name": "LITELLM_API_KEY", "value": _TEST_CREDENTIAL_VALUE},
+            token=_TEST_ADMIN_TOKEN,
         )
+        assert get_credential("LITELLM_API_KEY") == _TEST_CREDENTIAL_VALUE
+        assert backend.get("LITELLM_API_KEY") == _TEST_CREDENTIAL_VALUE
         bad_name_status, bad_name_body = post_json(
             f"http://127.0.0.1:{port}/admin/api/credentials",
-            {"name": "not-upper-snake", "value": "sk-secret-value"},
-            token="admin_secret",
+            {"name": "not-upper-snake", "value": _TEST_CREDENTIAL_VALUE},
+            token=_TEST_ADMIN_TOKEN,
         )
     finally:
         server.shutdown()
@@ -126,9 +135,57 @@ def test_admin_credential_endpoint_registers_into_kv_without_echoing_value() -> 
     assert inference_status == 401
     assert admin_status == 201
     assert admin_body == {"registered": "LITELLM_API_KEY"}
-    assert "sk-secret-value" not in json.dumps(admin_body)
+    assert _TEST_CREDENTIAL_VALUE not in json.dumps(admin_body)
     assert bad_name_status == 400
     assert bad_name_body["error"]["code"] == "invalid_credential_name"
+
+
+def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() -> None:
+    """Browser path: POST /admin/session mints HttpOnly cookie; subsequent admin calls use it."""
+    backend = InMemoryCredentialBackend()
+    set_backend(backend)
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(admin_token=_TEST_ADMIN_TOKEN, inference_token=_TEST_INFERENCE_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        session_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/session",
+            data=json.dumps({"token": _TEST_ADMIN_TOKEN}).encode("utf-8"),
+            headers={"content-type": "application/json", "connection": "close"},
+            method="POST",
+        )
+        with urllib.request.urlopen(session_req, timeout=5) as response:
+            assert response.status == 200
+            set_cookie = response.headers.get("Set-Cookie") or response.headers.get("set-cookie") or ""
+            body = json.loads(response.read().decode("utf-8"))
+        assert body == {"session_status": "established"}
+        assert ADMIN_SESSION_COOKIE in set_cookie
+        assert "HttpOnly" in set_cookie
+        cookie_value = set_cookie.split(";", 1)[0]
+        cred_req = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/api/credentials",
+            data=json.dumps({"name": "LITELLM_API_KEY", "value": _TEST_CREDENTIAL_VALUE}).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "connection": "close",
+                "cookie": cookie_value,
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(cred_req, timeout=5) as response:
+            assert response.status == 201
+            cred_body = json.loads(response.read().decode("utf-8"))
+        assert cred_body == {"registered": "LITELLM_API_KEY"}
+        assert get_credential("LITELLM_API_KEY") == _TEST_CREDENTIAL_VALUE
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        set_backend(None)
 
 
 def test_loopback_without_configured_token_is_rejected() -> None:
@@ -149,7 +206,7 @@ def test_loopback_without_configured_token_is_rejected() -> None:
 
 
 def test_http_api_validates_mode_and_request_shape() -> None:
-    server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -158,7 +215,7 @@ def test_http_api_validates_mode_and_request_shape() -> None:
         status, body = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
             {"messages": [{"role": "owner", "content": "hello"}], "orchestration": "unsafe"},
-            token="secret_token",
+            token=_TEST_AUTH_TOKEN,
         )
     finally:
         server.shutdown()
@@ -169,7 +226,7 @@ def test_http_api_validates_mode_and_request_shape() -> None:
 
 
 def test_http_api_rejects_unknown_request_fields() -> None:
-    server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
@@ -178,7 +235,7 @@ def test_http_api_rejects_unknown_request_fields() -> None:
         status, body = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
             {"messages": [{"role": "user", "content": "hello"}], "unexpected": True},
-            token="secret_token",
+            token=_TEST_AUTH_TOKEN,
         )
     finally:
         server.shutdown()
@@ -192,7 +249,7 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
     server = build_server(
         build(),
         port=0,
-        security=SecurityConfig(auth_token="secret_token", rate_limit_requests=1),
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN, rate_limit_requests=1),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -200,11 +257,11 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
     payload = {"messages": [{"role": "user", "content": "hello"}]}
 
     try:
-        first_status, _ = post_json(f"http://127.0.0.1:{port}/v1/chat/completions", payload, token="secret_token")
+        first_status, _ = post_json(f"http://127.0.0.1:{port}/v1/chat/completions", payload, token=_TEST_AUTH_TOKEN)
         second_status, second_body = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
             payload,
-            token="secret_token",
+            token=_TEST_AUTH_TOKEN,
         )
     finally:
         server.shutdown()
@@ -217,7 +274,7 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
 
 def test_public_bind_requires_explicit_opt_in() -> None:
     try:
-        SecurityConfig(auth_token="secret_token").check_bind("0.0.0.0")
+        SecurityConfig(auth_token=_TEST_AUTH_TOKEN).check_bind("0.0.0.0")
     except ValueError as exc:
         assert "--allow-public-bind" in str(exc)
     else:
@@ -225,7 +282,7 @@ def test_public_bind_requires_explicit_opt_in() -> None:
 
 
 def test_concurrency_limit_rejects_when_slots_are_full() -> None:
-    security = SecurityConfig(auth_token="secret_token", max_concurrent_runs=1)
+    security = SecurityConfig(auth_token=_TEST_AUTH_TOKEN, max_concurrent_runs=1)
     security.acquire_run_slot()
 
     try:
@@ -355,6 +412,7 @@ if __name__ == "__main__":
     test_http_api_requires_bearer_token_and_hides_trace_by_default()
     test_admin_and_inference_tokens_are_separate()
     test_admin_credential_endpoint_registers_into_kv_without_echoing_value()
+    test_admin_session_cookie_authorizes_admin_api_without_js_token_storage()
     test_loopback_without_configured_token_is_rejected()
     test_http_api_validates_mode_and_request_shape()
     test_http_api_rejects_unknown_request_fields()

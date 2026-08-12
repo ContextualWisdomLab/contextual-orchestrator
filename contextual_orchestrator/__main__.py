@@ -12,6 +12,31 @@ from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
 
+def _json_object(raw: str) -> dict[str, float]:
+    """Parse a CLI JSON object of non-negative numeric values (model → USD/1M tokens).
+
+    Used by ``--price-per-million``. Rejects non-objects, non-numeric values, and
+    negatives so bad operator input fails at argparse rather than at routing time.
+    """
+    try:
+        value = json.loads(raw)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError(f"invalid JSON for --price-per-million: {exc.msg}") from exc
+    if not isinstance(value, dict):
+        raise argparse.ArgumentTypeError("--price-per-million must be a JSON object mapping model names to prices")
+    parsed: dict[str, float] = {}
+    for key, price in value.items():
+        if not isinstance(key, str) or not key.strip():
+            raise argparse.ArgumentTypeError("--price-per-million keys must be non-empty model name strings")
+        if isinstance(price, bool) or not isinstance(price, (int, float)):
+            raise argparse.ArgumentTypeError(f"--price-per-million[{key!r}] must be a non-negative number")
+        number = float(price)
+        if number < 0:
+            raise argparse.ArgumentTypeError(f"--price-per-million[{key!r}] must be non-negative")
+        parsed[key] = number
+    return parsed
+
+
 def _register_credential_command(argv: list[str]) -> None:
     """Bootstrap: read a deploy-time secret and store it in the KV credential registry.
 

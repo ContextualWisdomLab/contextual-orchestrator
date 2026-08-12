@@ -56,11 +56,16 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert ADMIN_TRANSLATIONS["en"]["no_audit_events"] == "No audit events yet."
     assert '|| `<tr><td colspan="3" class="empty" data-i18n="no_audit_events">${t("no_audit_events")}</td></tr>`' in ADMIN_HTML
     assert '"/admin/api/credentials"' in ADMIN_HTML
+    assert '"/admin/session"' in ADMIN_HTML
+    assert "function apiFetch" in ADMIN_HTML
+    assert 'credentials: "same-origin"' in ADMIN_HTML
+    assert 'id="sessionForm"' in ADMIN_HTML
     assert 'id="credentialForm"' in ADMIN_HTML
     assert 'id="credentialValue" type="password"' in ADMIN_HTML
     assert "els.credentialForm.addEventListener(\"submit\", saveCredential)" in ADMIN_HTML
     assert ADMIN_TRANSLATIONS["en"]["credentials_title"] == "Credentials"
     assert ADMIN_TRANSLATIONS["ko"]["credentials_title"] == "자격 증명"
+    assert ADMIN_TRANSLATIONS["en"]["session_title"] == "Operator session"
 
 
 def test_admin_state_exposes_agents_without_secrets() -> None:
