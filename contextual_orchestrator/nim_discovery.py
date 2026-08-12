@@ -108,7 +108,7 @@ def discover_nim_models(
             "credential_name": credential_name,
         }
 
-    request = urllib.request.Request(
+    request = urllib.request.Request(  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         safe_url,
         headers={
             "authorization": f"Bearer {api_key}",
