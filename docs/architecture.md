@@ -62,3 +62,10 @@ may seed the KV from process env; request-time resolution stays on `get_credenti
 Discovered IDs convert to agent-pool entries for cost-aware routing and optional
 `model_group` race once that lands. Live catalog tests use the real key when
 present; CI uses offline fixtures so measurement_status stays honest.
+
+## Role temperature (reasoning effort proxy)
+
+`OrchestrationPolicy.role_temperature` sets per-role sampling temperatures
+(default: thinker 0.1, worker 0.2, verifier 0.0, synthesizer 0.15) so ablation
+studies can vary reasoning effort by paper role without collapsing multi-agent
+depth. Used by `_invoke` for route and conduct steps.
