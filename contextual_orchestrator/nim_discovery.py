@@ -27,6 +27,8 @@ from .credentials import get_credential
 
 DEFAULT_NIM_MODELS_URL = "https://integrate.api.nvidia.com/v1/models"
 NIM_CREDENTIAL_NAME = "NVIDIA_NIM_API_KEY"
+# Bound catalog body consumption so a pathological allowlisted response cannot OOM the CLI.
+NIM_CATALOG_MAX_BYTES = 8 * 1024 * 1024
 # Hosts that may receive the NVIDIA_NIM_API_KEY on authenticated catalog requests.
 ALLOWED_NIM_MODELS_HOSTS = frozenset(
     {
@@ -125,8 +127,25 @@ def discover_nim_models(
         with urllib.request.urlopen(  # nosec B310 - URL validated by validate_nim_models_url (HTTPS allowlist).  # nosemgrep -- dynamic-urllib-use: URL validated by validate_nim_models_url allowlist before auth header is attached.
             request, timeout=timeout_seconds, context=context
         ) as response:
-            raw = response.read()
+            content_length = response.headers.get("Content-Length")
+            if content_length is not None:
+                try:
+                    declared = int(content_length)
+                except ValueError as exc:
+                    raise NimDiscoveryError("catalog Content-Length is not an integer") from exc
+                if declared < 0 or declared > NIM_CATALOG_MAX_BYTES:
+                    raise NimDiscoveryError(
+                        f"catalog Content-Length {declared} exceeds bound {NIM_CATALOG_MAX_BYTES}"
+                    )
+            raw = response.read(NIM_CATALOG_MAX_BYTES + 1)
         status = "live_nim_catalog"
+
+    if not isinstance(raw, (bytes, bytearray)):
+        raise NimDiscoveryError("catalog transport must return bytes")
+    if len(raw) > NIM_CATALOG_MAX_BYTES:
+        raise NimDiscoveryError(
+            f"catalog response exceeds bound of {NIM_CATALOG_MAX_BYTES} bytes"
+        )
 
     payload = json.loads(raw.decode("utf-8"))
     model_ids = _extract_model_ids(payload)
@@ -317,6 +336,11 @@ def build_benchmark_plan_dry_run(
     ]
     inventory = build_capability_inventory(model_ids)
     cells: list[dict[str, Any]] = []
+    # Worst-case provider calls per chat-eligible model:
+    # direct_worker=1, route_once=1, bounded_conduct<=max_steps.
+    # hindsight_best_single reuses direct scores (zero extra egress).
+    per_model_call_budget = 1 + 1 + max_steps
+    planned_calls = len(chat_eligible) * per_model_call_budget
     for policy_name in _BENCHMARK_POLICY_NAMES:
         for model_id in chat_eligible:
             cells.append(
@@ -325,13 +349,17 @@ def build_benchmark_plan_dry_run(
                     "model_id": model_id,
                     "task_manifest_id": task_manifest_id.strip(),
                     "max_steps": max_steps,
+                    "planned_provider_calls": (
+                        max_steps if policy_name == "bounded_conduct" else (
+                            0 if policy_name == "hindsight_best_single" else 1
+                        )
+                    ),
                     "actual_api_cost": "unknown",
                     "hypothetical_paid_cost": "unknown",
                     "pricing_scenario_id": None,
                 }
             )
 
-    planned_calls = len(cells)
     fits_budget = planned_calls <= hard_request_budget
     return {
         "measurement_status": "dry_run_plan",
@@ -339,6 +367,7 @@ def build_benchmark_plan_dry_run(
         "max_steps": max_steps,
         "hard_request_budget": hard_request_budget,
         "planned_request_count": planned_calls,
+        "per_model_call_budget": per_model_call_budget,
         "fits_hard_request_budget": fits_budget,
         "chat_eligible_model_count": len(chat_eligible),
         "capability_inventory": inventory,

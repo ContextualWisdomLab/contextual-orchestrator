@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+- NIM discovery catalog body bound + dry-run call budget uses max_steps;
+  offline cost-quality rejects malformed scripted answers and zeros failed-cell usage.
+
 ### Added
 - Offline NIM cost-quality comparison harness (`nim_cost_quality` +
   `nim-cost-quality-offline` CLI) for issue #86 post-discovery: locked task

@@ -225,8 +225,35 @@ def chat_eligible_model_ids(model_ids: Sequence[str]) -> list[str]:
     ]
 
 
+def validate_scripted_answers(answers_by_task_id: Any) -> dict[str, dict[str, str]]:
+    """Validate ``{task_id: {policy_name: answer_text}}`` maps for offline runners."""
+    if not isinstance(answers_by_task_id, Mapping):
+        raise CostQualityContractError("scripted answers must be a JSON object")
+    normalized: dict[str, dict[str, str]] = {}
+    for task_id, policy_map in answers_by_task_id.items():
+        if not isinstance(task_id, str) or not task_id.strip():
+            raise CostQualityContractError("scripted answer task_id must be a non-empty string")
+        if not isinstance(policy_map, Mapping):
+            raise CostQualityContractError(
+                f"scripted answers for {task_id!r} must be an object of policy_name -> answer"
+            )
+        row: dict[str, str] = {}
+        for policy_name, answer in policy_map.items():
+            if not isinstance(policy_name, str) or not policy_name.strip():
+                raise CostQualityContractError(
+                    f"scripted answer policy_name under {task_id!r} must be a non-empty string"
+                )
+            if not isinstance(answer, str):
+                raise CostQualityContractError(
+                    f"scripted answer for {task_id!r}/{policy_name!r} must be a string"
+                )
+            row[policy_name] = answer
+        normalized[task_id] = row
+    return normalized
+
+
 def build_scripted_policy_runners(
-    answers_by_task_id: Mapping[str, Mapping[str, str]],
+    answers_by_task_id: Mapping[str, Mapping[str, str]] | None = None,
     *,
     model_id: str = "mock-scripted",
 ) -> dict[str, PolicyRunner]:
@@ -236,14 +263,15 @@ def build_scripted_policy_runners(
     cells yield an empty answer (score 0). Used by tests and dry-run demos so CI
     never needs ``NVIDIA_NIM_API_KEY`` or network egress.
     """
+    answers = validate_scripted_answers(answers_by_task_id or {})
 
     def _runner(policy_name: str) -> PolicyRunner:
         def run(prompt: str) -> dict[str, Any]:
             # Prompt carries an embedded task marker when callers use format_task_prompt.
             task_id = _extract_task_id_marker(prompt)
             answer = ""
-            if task_id and task_id in answers_by_task_id:
-                answer = answers_by_task_id[task_id].get(policy_name, "")
+            if task_id and task_id in answers:
+                answer = answers[task_id].get(policy_name, "")
             return {
                 "mode": policy_name,
                 "answer": answer,
@@ -302,9 +330,20 @@ def run_policy_cell(
     latency_ms = round((time.perf_counter() - started) * 1000, 3)
     answer = str(result.get("answer") or "")
     score_block = score_task_answer(task, answer)
-    usage = _usage_from_result(prompt, result, model_id)
-    hyp_cost = hypothetical_cost_usd(pricing_scenario, usage)
-    call_count = max(1, len(result.get("trace") or [])) if outcome == "success" else 0
+    # Failed cells did not complete a provider call — do not invent token/cost usage.
+    if outcome == "success":
+        usage = _usage_from_result(prompt, result, model_id)
+        hyp_cost = hypothetical_cost_usd(pricing_scenario, usage)
+        call_count = max(1, len(result.get("trace") or []))
+        prompt_tokens = usage[model_id]["prompt_tokens"]
+        completion_tokens = usage[model_id]["completion_tokens"]
+        usage_source = "estimated"
+    else:
+        hyp_cost = "unknown"
+        call_count = 0
+        prompt_tokens = 0
+        completion_tokens = 0
+        usage_source = "none"
     content_hash = hashlib.sha256(answer.encode("utf-8")).hexdigest() if answer else None
     return {
         "policy_name": policy_name,
@@ -318,15 +357,15 @@ def run_policy_cell(
         "latency_ms": latency_ms,
         "call_count": call_count,
         "workflow_depth": call_count,
-        "prompt_tokens": usage[model_id]["prompt_tokens"],
-        "completion_tokens": usage[model_id]["completion_tokens"],
-        "total_tokens": usage[model_id]["prompt_tokens"] + usage[model_id]["completion_tokens"],
+        "prompt_tokens": prompt_tokens,
+        "completion_tokens": completion_tokens,
+        "total_tokens": prompt_tokens + completion_tokens,
         "actual_api_cost": "unknown",
         "hypothetical_paid_cost": hyp_cost,
         "pricing_scenario_id": (
             pricing_scenario.get("scenario_version") if pricing_scenario is not None else None
         ),
-        "usage_source": "estimated",
+        "usage_source": usage_source,
         "answer_content_hash": content_hash,
         "verification_accepted": bool((result.get("verification") or {}).get("accepted")),
     }

@@ -232,12 +232,27 @@ class TestOfflineComparison(unittest.TestCase):
             policy_name="route_once",
             runner=boom,
             model_id="mock-scripted",
-            pricing_scenario=None,
+            pricing_scenario=self.pricing,
         )
         self.assertEqual(cell["outcome"], "failed")
         self.assertEqual(cell["error_class"], "RuntimeError")
         self.assertEqual(cell["score"], 0.0)
         self.assertEqual(cell["actual_api_cost"], "unknown")
+        self.assertEqual(cell["hypothetical_paid_cost"], "unknown")
+        self.assertEqual(cell["prompt_tokens"], 0)
+        self.assertEqual(cell["completion_tokens"], 0)
+        self.assertEqual(cell["call_count"], 0)
+        self.assertEqual(cell["usage_source"], "none")
+
+    def test_scripted_answers_reject_non_mapping_values(self) -> None:
+        from contextual_orchestrator.nim_cost_quality import validate_scripted_answers
+
+        with self.assertRaises(CostQualityContractError):
+            validate_scripted_answers({"digit_sum_reasoning": "200"})
+        with self.assertRaises(CostQualityContractError):
+            validate_scripted_answers({"digit_sum_reasoning": {"route_once": 7}})
+        with self.assertRaises(CostQualityContractError):
+            build_scripted_policy_runners({"digit_sum_reasoning": "200"})
 
     def test_pareto_excludes_unknown_cost(self) -> None:
         summaries = [

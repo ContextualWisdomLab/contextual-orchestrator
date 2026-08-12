@@ -14,6 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
 from contextual_orchestrator.nim_discovery import (  # noqa: E402
     DEFAULT_NIM_MODELS_URL,
+    NIM_CATALOG_MAX_BYTES,
     NIM_CREDENTIAL_NAME,
     NimDiscoveryError,
     build_benchmark_plan_dry_run,
@@ -79,6 +80,21 @@ def test_discover_with_fixture_transport_returns_sorted_ids() -> None:
     assert report["measurement_status"] == "offline_fixture"
     assert report["model_ids"] == ["a-model", "m-model", "z-model"]
     assert report["model_count"] == 3
+
+
+def test_discover_rejects_oversized_catalog_body() -> None:
+    backend = InMemoryCredentialBackend()
+    backend.set(NIM_CREDENTIAL_NAME, "nvapi-test-not-real")
+    set_backend(backend)
+
+    def transport(request, timeout):  # noqa: ANN001
+        return b"x" * (NIM_CATALOG_MAX_BYTES + 1)
+
+    try:
+        with pytest.raises(NimDiscoveryError, match="exceeds bound"):
+            discover_nim_models(transport=transport)
+    finally:
+        set_backend(None)
 
 
 def test_models_to_agent_pool_entries_are_loadable_agents() -> None:
@@ -327,14 +343,20 @@ def test_benchmark_plan_dry_run_unknown_cost_and_budget_gate() -> None:
     plan = build_benchmark_plan_dry_run(
         ["meta/llama-3.1-8b-instruct", "nvidia/nv-embedqa-e5-v5"],
         hard_request_budget=100,
+        max_steps=5,
     )
     assert plan["measurement_status"] == "dry_run_plan"
     assert plan["admission_status"] == "admitted"
     assert plan["chat_eligible_model_count"] == 1
+    # direct(1)+route(1)+conduct(max_steps); hindsight reuses direct (0 extra)
+    assert plan["per_model_call_budget"] == 7
+    assert plan["planned_request_count"] == 7
     assert all(cell["hypothetical_paid_cost"] == "unknown" for cell in plan["comparison_cells"])
     assert all(cell["actual_api_cost"] == "unknown" for cell in plan["comparison_cells"])
     # embeddings excluded from chat comparison cells
     assert all("embed" not in cell["model_id"] for cell in plan["comparison_cells"])
+    conduct_cells = [c for c in plan["comparison_cells"] if c["policy_name"] == "bounded_conduct"]
+    assert all(c["planned_provider_calls"] == 5 for c in conduct_cells)
 
     tight = build_benchmark_plan_dry_run(
         ["a-chat-model", "b-chat-instruct"],
@@ -342,6 +364,7 @@ def test_benchmark_plan_dry_run_unknown_cost_and_budget_gate() -> None:
     )
     assert tight["admission_status"] == "rejected_budget_exceeded"
     assert tight["fits_hard_request_budget"] is False
+    assert tight["planned_request_count"] == 14
 
 
 def test_benchmark_plan_dry_run_rejects_invalid_bounds() -> None:

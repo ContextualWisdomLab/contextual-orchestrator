@@ -135,6 +135,7 @@ def _nim_cost_quality_offline_command(argv: list[str]) -> None:
         locked_evaluation_tasks,
         render_cost_quality_markdown,
         run_offline_cost_quality,
+        validate_scripted_answers,
     )
 
     parser = argparse.ArgumentParser(
@@ -181,9 +182,8 @@ def _nim_cost_quality_offline_command(argv: list[str]) -> None:
         answers: dict = {}
         if args.scripted_answers:
             with open(args.scripted_answers, encoding="utf-8") as handle:
-                answers = json.load(handle)
-            if not isinstance(answers, dict):
-                parser.error("--scripted-answers must be a JSON object")
+                raw_answers = json.load(handle)
+            answers = validate_scripted_answers(raw_answers)
         runners = build_scripted_policy_runners(answers, model_id=args.model_id)
         report = run_offline_cost_quality(
             tasks=tasks,
