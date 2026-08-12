@@ -90,6 +90,8 @@ class SecurityConfig:
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
+    # Explicit browser origins allowed to call the API (exact match; empty = CORS off).
+    cors_allow_origins: tuple[str, ...] = ()
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -97,7 +99,28 @@ class SecurityConfig:
     def __post_init__(self) -> None:
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        cleaned: list[str] = []
+        for origin in self.cors_allow_origins:
+            value = str(origin).strip()
+            if value:
+                cleaned.append(value)
+        self.cors_allow_origins = tuple(cleaned)
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
+
+    def cors_origin_allowed(self, origin: str) -> str | None:
+        """Return the origin echo value when it is on the allowlist, else None.
+
+        Only exact string matches are accepted (including a single ``*`` entry when
+        operators deliberately open browser cross-origin access). Empty allowlist
+        disables CORS headers entirely.
+        """
+        if not self.cors_allow_origins or not origin:
+            return None
+        if "*" in self.cors_allow_origins:
+            return "*"
+        if origin in self.cors_allow_origins:
+            return origin
+        return None
 
     def check_bind(self, host: str) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
@@ -151,6 +174,8 @@ class SecurityConfig:
             "rate_limit_requests": self.rate_limit_requests,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "cors_allow_origin_count": len(self.cors_allow_origins),
+            "cors_allow_any_origin": "*" in self.cors_allow_origins,
         }
 
 
@@ -327,6 +352,31 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        def do_OPTIONS(self) -> None:  # noqa: N802
+            """CORS preflight for browser OpenAI-compatible clients."""
+            try:
+                origin = (self.headers.get("origin") or "").strip()
+                allowed = security.cors_origin_allowed(origin)
+                if not allowed:
+                    self._send_error(403, "cors_origin_not_allowed", "origin is not on the CORS allowlist")
+                    return
+                # Preflight is unauthenticated; actual verbs still require bearer tokens.
+                self._cors_allow_origin = allowed
+                self.send_response(204)
+                self._send_security_headers()
+                self.send_header("access-control-allow-methods", "GET, POST, PATCH, DELETE, OPTIONS")
+                self.send_header(
+                    "access-control-allow-headers",
+                    "authorization, content-type, x-request-id",
+                )
+                self.send_header("access-control-max-age", "600")
+                self.send_header("content-length", "0")
+                self.end_headers()
+            except RequestError as exc:
+                self._send_error(exc.status, exc.code, exc.message, exc.detail)
+            except Exception:
+                self._send_error(500, "internal_error", "internal server error")
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
@@ -1054,6 +1104,18 @@ def build_server(
             self.send_header("referrer-policy", "no-referrer")
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
+            # CORS: only when the request Origin is on the operator allowlist.
+            allowed = getattr(self, "_cors_allow_origin", None)
+            if not allowed:
+                origin = (self.headers.get("origin") or "").strip()
+                allowed = security.cors_origin_allowed(origin)
+            if allowed:
+                self.send_header("access-control-allow-origin", allowed)
+                self.send_header("vary", "Origin")
+                # Browser admin may use cookie session on same-site; credentials
+                # are allowed only for exact-origin echoes (never for *).
+                if allowed != "*":
+                    self.send_header("access-control-allow-credentials", "true")
 
     return ThreadingHTTPServer((host, port), Handler)
 

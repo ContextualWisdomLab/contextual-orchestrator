@@ -74,6 +74,15 @@ def main() -> None:
     parser.add_argument("--admin-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN", ""))
     parser.add_argument("--inference-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN", ""))
     parser.add_argument("--allow-public-bind", action="store_true")
+    parser.add_argument(
+        "--cors-allow-origin",
+        action="append",
+        default=[],
+        help=(
+            "Exact browser Origin allowed for CORS (repeatable). Empty disables CORS. "
+            "Use a single '*' only when deliberately opening all origins."
+        ),
+    )
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
     parser.add_argument("--clearfolio-url", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL") or None,
@@ -129,6 +138,7 @@ def main() -> None:
                 inference_token=args.inference_token,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
+                cors_allow_origins=tuple(args.cors_allow_origin or ()),
             ),
             clearfolio_url=args.clearfolio_url,
         )
