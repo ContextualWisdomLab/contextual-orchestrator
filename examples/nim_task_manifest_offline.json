@@ -1,0 +1,34 @@
+{
+  "manifest_version": "2026-08-13.1",
+  "manifest_notes": "Minimal locked offline split for issue #86 cost-quality dry path. Expected answers never appear in prompts. Live NIM evaluation may use a larger locked set under RUN_LIVE_NIM_TESTS=1.",
+  "tasks": [
+    {
+      "task_id": "digit_sum_reasoning",
+      "split": "locked",
+      "prompt": "Multiply 12 by 12, then add 56 to the result. Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "200"}
+    },
+    {
+      "task_id": "linear_equation_solution",
+      "split": "locked",
+      "prompt": "Solve 3x + 5 = 26 for x. Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "7"}
+    },
+    {
+      "task_id": "capital_recall_france",
+      "split": "locked",
+      "prompt": "Name the capital city of France. Answer with the city name only.",
+      "scorer": {"name": "substring_match", "version": "1"},
+      "expected": {"substring": "Paris"}
+    },
+    {
+      "task_id": "sequence_next_fibonacci",
+      "split": "locked",
+      "prompt": "What number comes next in this sequence: 1, 1, 2, 3, 5, 8, 13? Answer with the number only.",
+      "scorer": {"name": "exact_number_match", "version": "1"},
+      "expected": {"number": "21"}
+    }
+  ]
+}
