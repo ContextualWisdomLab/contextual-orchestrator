@@ -142,6 +142,35 @@ def test_validate_nim_models_url_allowlist() -> None:
         validate_nim_models_url("https://integrate.api.nvidia.com/v1/chat/completions")
     with pytest.raises(NimDiscoveryError):
         validate_nim_models_url("https://integrate.api.nvidia.com:8443/v1/models")
+    with pytest.raises(NimDiscoveryError):
+        validate_nim_models_url("")
+    with pytest.raises(NimDiscoveryError):
+        validate_nim_models_url("   ")
+    with pytest.raises(NimDiscoveryError):
+        validate_nim_models_url(None)  # type: ignore[arg-type]
+    with pytest.raises(NimDiscoveryError):
+        validate_nim_models_url("https://user:pass@integrate.api.nvidia.com/v1/models")
+    with pytest.raises(NimDiscoveryError):
+        validate_nim_models_url("https://integrate.api.nvidia.com/v1/models?x=1")
+    with pytest.raises(NimDiscoveryError):
+        validate_nim_models_url("https://integrate.api.nvidia.com/v1/models#frag")
+
+
+def test_unique_agent_id_suffix_chain_covers_collisions() -> None:
+    """Force multi-suffix agent ids when more than two models share a slug."""
+    from contextual_orchestrator.nim_discovery import _unique_agent_id
+
+    used: set[str] = set()
+    first = _unique_agent_id("a/b", used)
+    used.add(first)
+    second = _unique_agent_id("a-b", used)
+    used.add(second)
+    third = _unique_agent_id("a_b", used)
+    used.add(third)
+    assert first == "nim_a_b_agent"
+    assert second == "nim_a_b_agent_2"
+    assert third == "nim_a_b_agent_3"
+    assert len(used) == 3
 
 
 def test_discover_rejects_non_allowlisted_url_before_credential_use() -> None:
