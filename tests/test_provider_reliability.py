@@ -248,3 +248,12 @@ if __name__ == "__main__":
             fn()
             print(f"ok {name}")
     print("ok")
+
+
+def test_role_temperature_defaults_differ_by_paper_role() -> None:
+    from contextual_orchestrator.orchestrator import OrchestrationPolicy
+
+    policy = OrchestrationPolicy()
+    assert policy.temperature_for_role("verifier") < policy.temperature_for_role("worker")
+    snap = policy.as_dict()
+    assert "role_temperature" in snap
