@@ -43,6 +43,7 @@ def test_healthz_is_unauthenticated_liveness() -> None:
     assert body["agent_count"] == 1
     assert body["enabled_agent_count"] == 1
     assert body["candidate_count"] == 2
+    assert body["provider_readiness"] == "unprobed"
     assert body["batch_backend"]
     assert body["embedding_batch_backend"]
     assert body["usage_record_count"] == 0

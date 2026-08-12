@@ -169,6 +169,7 @@ def test_http_models_endpoint_lists_configured_models() -> None:
         "contextual-orchestrator", "mock-planner", "mock-builder", "mock-reviewer", "disabled-model"
     }
     assert body["data"][0]["kind"] == "orchestrator"
+    assert all(item["readiness"] == "unprobed" for item in body["data"])
     assert next(item for item in body["data"] if item["id"] == "mock-builder")["status"] == "active"
     assert next(item for item in body["data"] if item["id"] == "disabled-model")["status"] == "disabled"
 

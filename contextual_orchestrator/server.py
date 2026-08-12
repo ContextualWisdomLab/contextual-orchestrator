@@ -435,6 +435,7 @@ def build_server(
                         "enabled_agent_count": len(orchestrator.agents),
                         "batch_backend": coordinator.batch_backend.name,
                         "embedding_batch_backend": coordinator.embedding_batch_backend.name,
+                        "provider_readiness": "unprobed",
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
                     return
@@ -447,6 +448,7 @@ def build_server(
                         "owned_by": "contextual-orchestrator",
                         "kind": "orchestrator",
                         "status": "active",
+                        "readiness": "unprobed",
                     }]
                     model_groups: dict[str, list[Any]] = {}
                     for agent in orchestrator.candidates:
@@ -469,6 +471,7 @@ def build_server(
                                 if any(not candidate.disabled for candidate in candidates)
                                 else "disabled"
                             ),
+                            "readiness": "unprobed",
                         })
                     self._send({"object": "list", "data": models})
                     return
