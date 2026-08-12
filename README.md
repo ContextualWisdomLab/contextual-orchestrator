@@ -129,12 +129,13 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
 ```
 
 - **Tokens.** `by_model[].output_tokens` uses the provider-reported `usage.completion_tokens` when a real worker returns it, and falls back to a `~4 chars/token` estimate otherwise. Each row carries `usage_source`: `reported` (all steps reported), `mixed`, or `estimated`. `estimated_output_tokens` is always the estimate, kept alongside for comparison. `measurement_status` is `local_runtime_estimate`, not production telemetry.
-- **Cost.** Supply a price table to turn tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models` with `estimated_cost_usd: null`. No prices are assumed or fabricated.
+- **Cost.** Supply a price table to turn tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` or CLI `--price-per-million '{"gpt-5.5": 10.0}'` (USD per 1M output tokens). Live routing prefers an explicit free rate (`0`) over paid among equally capable agents; missing prices are never treated as free. Models without a price appear under `unpriced_models` with `estimated_cost_usd: null`. No prices are assumed or fabricated.
 - **Budget cap.** Set an operator cap to refuse runaway spend (default: no cap):
 
   ```bash
   python -m contextual_orchestrator --serve --agents examples/agents.mock.json \
-    --budget-max-output-tokens 2000000 --budget-max-cost-usd 50
+    --budget-max-output-tokens 2000000 --budget-max-cost-usd 50 \
+    --price-per-million '{"mock-generalist": 0, "gpt-example": 2.0}'
   ```
 
   Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. Once spend reaches a cap, the next run is refused — `run()` raises `BudgetExceededError` and `/v1/chat/completions` returns HTTP `429 budget_exceeded`. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, `spent_*`, `remaining_*`, `exceeded`). Cost caps require a price table; token caps do not.
