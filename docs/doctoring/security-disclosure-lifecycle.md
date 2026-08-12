@@ -28,16 +28,17 @@ NIST SP 800-218 Rev. 1, Secure Software Development Framework Version 1.2, is cu
 
 ## Repository contract
 
-The bounded buyer-visible contract is:
+The bounded buyer-visible contract is aligned with the canonical
+[`docs/RELEASE_GUIDE.md`](../RELEASE_GUIDE.md):
 
-1. The latest supported release is the default support boundary; an advisory may explicitly include additional supported release lines.
+1. No stable release currently exists, and `main` is not a supported release. When a stable release is published, its supported version or release line becomes the default support boundary; an advisory may explicitly include additional supported release lines.
 2. `main`, development branches, archived artifacts, forks, and historical tags are not automatically represented as supported releases.
-3. Private vulnerability reporting is the preferred channel. If unavailable, a public issue may request a secure channel but must not disclose exploit details, secrets, personal data, or unreleased vulnerability details.
+3. Private vulnerability reporting is the preferred channel. Its enablement and security-notification recipients are stable-release admission checks. If unavailable, a public issue may request a secure channel but must not disclose exploit details, secrets, personal data, or unreleased vulnerability details; release authorization remains blocked until a monitored alternative private contact is documented.
 4. The five-business-day acknowledgement target is a communication objective and **not a remediation SLA**.
 5. Security remediation follows normal exact-head security, coverage, provenance, independent-review, branch-protection, packaging, and release-acceptance gates; urgency does not create a bypass.
 6. A GitHub Security Advisory should identify affected and patched versions and may request a CVE when warranted and available.
 7. Reporter credit is opt-in/appropriate to the coordinated-disclosure context and may be declined.
-8. Release evidence fails closed: queued, pending, skipped-required, cancelled, absent, failed, stale-head, predecessor-head, or synthetic-merge-only check evidence is not passing evidence.
+8. Release evidence for the exact integrated revision fails closed: queued, pending, skipped-required, cancelled, failed, absent, stale-head, predecessor-head, author-only, status-only, synthetic-merge-only, rate-limited, or infrastructure-only evidence is not passing evidence.
 9. The safe-harbor language is bounded good-faith guidance, not authorization against third parties or systems/data the researcher does not control.
 
 ## Verification

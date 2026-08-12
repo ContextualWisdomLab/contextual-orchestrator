@@ -105,6 +105,11 @@ def test_security_policy_documents_coordinated_disclosure_lifecycle():
     policy_text = read_text("SECURITY.md")
     doctoring_text = read_text("docs/doctoring/security-disclosure-lifecycle.md")
 
+    def section(document, heading):
+        start = document.index(heading) + len(heading)
+        end = document.find("\n## ", start)
+        return document[start:] if end == -1 else document[start:end]
+
     required_policy_tokens = [
         "## Supported Versions",
         "## Scope",
@@ -126,6 +131,58 @@ def test_security_policy_documents_coordinated_disclosure_lifecycle():
     for token in required_policy_tokens:
         assert token in policy_text
 
+    supported_versions = section(policy_text, "## Supported Versions")
+    assert "No stable release currently exists" in supported_versions
+    assert "`main` is not a supported release" in supported_versions
+    assert "version or release line" in supported_versions
+
+    reporting = section(policy_text, "## Reporting a Vulnerability")
+    assert "Remove credentials, personal data" in reporting
+    assert "Do not include exploit details, secrets, personal data" in reporting
+
+    lifecycle = section(policy_text, "## Coordinated Disclosure Lifecycle")
+    lifecycle_stages = (
+        "Receive and acknowledge",
+        "Validate and scope",
+        "Remediate and verify",
+        "Coordinate release",
+        "Publish evidence",
+        "Learn and prevent recurrence",
+    )
+    lifecycle_positions = [lifecycle.index(stage) for stage in lifecycle_stages]
+    assert lifecycle_positions == sorted(lifecycle_positions)
+
+    safe_harbor = section(policy_text, "## Safe Harbor and Research Boundaries")
+    for prohibited_activity in (
+        "denial-of-service testing",
+        "social engineering",
+        "credential stuffing",
+        "destructive testing",
+        "high-volume automated probing",
+    ):
+        assert prohibited_activity in safe_harbor
+
+    release_evidence = section(policy_text, "## Advisory and Release Evidence")
+    canonical_nonpassing_states = (
+        "queued",
+        "pending",
+        "skipped-required",
+        "cancelled",
+        "failed",
+        "absent",
+        "stale-head",
+        "predecessor-head",
+        "author-only",
+        "status-only",
+        "synthetic-merge-only",
+        "rate-limited",
+        "infrastructure-only",
+    )
+    assert "docs/RELEASE_GUIDE.md" in release_evidence
+    assert "exact integrated revision" in release_evidence
+    for state in canonical_nonpassing_states:
+        assert state in release_evidence
+
     required_doctoring_tokens = [
         "ISO/IEC 29147:2018",
         "ISO/IEC 30111:2019",
@@ -144,6 +201,12 @@ def test_security_policy_documents_coordinated_disclosure_lifecycle():
     ]
     for token in required_doctoring_tokens:
         assert token in doctoring_text
+
+    doctoring_contract = section(doctoring_text, "## Repository contract")
+    assert "docs/RELEASE_GUIDE.md" in doctoring_contract
+    assert "exact integrated revision" in doctoring_contract
+    for state in canonical_nonpassing_states:
+        assert state in doctoring_contract
 
 
 def test_agent_guidance_preserves_central_review_authority_and_nim_development_key():

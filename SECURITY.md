@@ -4,6 +4,10 @@ This policy defines the public vulnerability-reporting and coordinated-disclosur
 
 ## Supported Versions
 
+No stable release currently exists, and `main` is not a supported release.
+When the first stable release is published, this section will name its supported
+version or release line.
+
 Security fixes are prepared for the latest supported release and, when a vulnerability materially affects an older release that is still explicitly supported, for that supported line as well. Development branches, historical tags, archived artifacts, forks, and unreleased commits are not represented as supported production versions merely because they remain accessible.
 
 When no stable release has been published, `main` is the integration reference but is not itself a release-support promise. A GitHub Security Advisory or release advisory is the authoritative place to identify affected and patched versions for a specific vulnerability.
@@ -24,6 +28,11 @@ A useful report includes the affected component and version or commit, prerequis
 
 If private reporting is unavailable, open a public issue that contains only a request for a secure disclosure channel. Do not include exploit details, secrets, personal data, or unreleased vulnerability details in a public issue.
 
+Before any stable release, maintainers must verify that private vulnerability
+reporting is enabled and that security-notification recipients are configured.
+If that private channel cannot be maintained, release authorization remains
+blocked until this policy names a monitored alternative private contact.
+
 ## Coordinated Disclosure Lifecycle
 
 1. **Receive and acknowledge.** Maintainers triage a private report and aim to acknowledge a credible report within 5 business days. This acknowledgement target is a communication objective, not a remediation SLA and not a promise that validation or a fix will complete within five days.
@@ -43,7 +52,7 @@ Do not intentionally persist, download, modify, or disclose data that is not you
 
 ## Advisory and Release Evidence
 
-A vulnerability is not considered remediated merely because a patch exists on a branch. Release evidence must identify the exact integrated and released revision and must not treat queued, pending, skipped-required, cancelled, absent, failed, stale-head, predecessor-head, or synthetic-merge-only checks as passing evidence. Security advisories should identify the affected and patched version ranges and link to release or upgrade guidance when practical.
+A vulnerability is not considered remediated merely because a patch exists on a branch. The [canonical release guide](docs/RELEASE_GUIDE.md) governs the release-evidence states. Release evidence must identify the exact integrated revision and the released revision and must not treat queued, pending, skipped-required, cancelled, failed, absent, stale-head, predecessor-head, author-only, status-only, synthetic-merge-only, rate-limited, or infrastructure-only evidence as passing. Security advisories should identify the affected and patched version ranges and link to release or upgrade guidance when practical.
 
 This policy does not replace repository merge policy: qualifying independent review, unresolved-finding disposition, required checks, branch protection, packaging, provenance, and release-acceptance controls remain authoritative for security releases.
 
