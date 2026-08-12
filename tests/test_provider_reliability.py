@@ -61,6 +61,45 @@ def test_retry_recovers_from_transient_failures_with_backoff() -> None:
     assert all(0.0 <= d <= client.retry_backoff_cap for d in delays)
 
 
+def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -> None:
+    class LocalDownClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=5, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.attempts += 1
+            raise urllib.error.URLError("local server is busy")
+
+    client = LocalDownClient()
+    agent = ModelAgent("local_worker", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    try:
+        client._send_with_retry(agent, {"model": agent.model})
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("a failed local request must not succeed")
+    assert client.attempts == 1
+
+
+def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
+    class LocalFlakyClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=5, local_max_retries=1, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.attempts += 1
+            if self.attempts == 1:
+                raise urllib.error.URLError("local server restarted")
+            return "recovered"
+
+    client = LocalFlakyClient()
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
+    assert client.attempts == 2
+
+
 def test_permanent_error_is_not_retried() -> None:
     class BadRequestClient(ModelClient):
         def __init__(self) -> None:

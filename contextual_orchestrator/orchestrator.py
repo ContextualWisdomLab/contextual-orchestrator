@@ -409,6 +409,7 @@ class ModelClient:
         timeout: int = 90,
         max_output_tokens: int = 2048,
         max_retries: int = 2,
+        local_max_retries: int = 0,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
         temperature: float = 0.2,
@@ -420,6 +421,9 @@ class ModelClient:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
         self.max_retries = max_retries
+        if isinstance(local_max_retries, bool) or local_max_retries < 0:
+            raise ValueError("local_max_retries must be >= 0")
+        self.local_max_retries = int(local_max_retries)
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
         self.temperature = temperature
@@ -483,7 +487,7 @@ class ModelClient:
     ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(self._retry_limit(agent) + 1):
             try:
                 return self._send(agent, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
@@ -493,6 +497,10 @@ class ModelClient:
                 self._sleep(self._backoff_delay(attempt))
         detail = f": {last_error}" if last_error else ""
         raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
+
+    def _retry_limit(self, agent: ModelAgent) -> int:
+        """Return a retry budget without multiplying an expensive local queue by default."""
+        return self.local_max_retries if _is_local_provider_url(agent.base_url) else self.max_retries
 
     def _backoff_delay(self, attempt: int) -> float:
         """Full-jitter exponential backoff, capped, so retries do not thundering-herd a provider."""
@@ -714,7 +722,7 @@ class ModelClient:
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        for attempt in range(self._retry_limit(agent) + 1):
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide

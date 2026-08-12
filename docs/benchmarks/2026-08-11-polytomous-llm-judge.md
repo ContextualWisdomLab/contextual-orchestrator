@@ -217,6 +217,21 @@ criterion categories. Category-derived scoring now validates that redundant
 effective score from the validated categories; malformed top-level fields are
 rejected rather than ignored.
 
+## Local queue saturation observation — 2026-08-12
+
+During a live gateway smoke, the local `mlx-lm` process was configured with
+`prompt-concurrency=1` and received several large Codex prompts. A client-side
+timeout left an abandoned generation in the server queue; the server later
+logged `BrokenPipe` while writing to the disconnected client and was restarted
+by its supervisor. The gateway's process liveness and the MLX provider's
+readiness therefore cannot be treated as the same signal. The transport now
+defaults same-agent retry budget to zero for explicit local providers (remote
+providers retain their configured retry budget), because retrying a large local
+prompt can multiply device work. An explicit local retry budget remains
+available for a supervised provider restart scenario. This is an operational
+reliability finding, not a judge-quality or positive-bias result; future
+benchmarks must report timeout, queue/restart, and prompt-size evidence.
+
 ## Required follow-up
 
 Before production or scientific IRT claims, add repeated paired cases with
