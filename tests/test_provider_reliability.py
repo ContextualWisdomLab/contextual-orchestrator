@@ -100,6 +100,42 @@ def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
     assert client.attempts == 2
 
 
+def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
+    class LocalFlakyClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0, local_max_retries=2, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.attempts += 1
+            if self.attempts < 3:
+                raise urllib.error.URLError("local server is restarting")
+            return "recovered"
+
+    client = LocalFlakyClient()
+    agent = ModelAgent("local_worker", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
+    assert client.attempts == 3
+
+
+def test_local_passthrough_retry_budget_is_not_capped_by_remote_retry_default() -> None:
+    class LocalRawFlakyClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0, local_max_retries=2, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            self.attempts += 1
+            if self.attempts < 3:
+                raise urllib.error.URLError("local server is restarting")
+            return {"ok": True}
+
+    client = LocalRawFlakyClient()
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    assert client._send_raw_with_retry(agent, "chat/completions", {}) == {"ok": True}
+    assert client.attempts == 3
+
+
 def test_permanent_error_is_not_retried() -> None:
     class BadRequestClient(ModelClient):
         def __init__(self) -> None:

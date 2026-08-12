@@ -487,12 +487,13 @@ class ModelClient:
     ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
-        for attempt in range(self._retry_limit(agent) + 1):
+        retry_limit = self._retry_limit(agent)
+        for attempt in range(retry_limit + 1):
             try:
                 return self._send(agent, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
-                if attempt >= self.max_retries or not is_transient_error(exc):
+                if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
         detail = f": {last_error}" if last_error else ""
@@ -722,12 +723,13 @@ class ModelClient:
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
-        for attempt in range(self._retry_limit(agent) + 1):
+        retry_limit = self._retry_limit(agent)
+        for attempt in range(retry_limit + 1):
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
-                if attempt >= self.max_retries or not is_transient_error(exc):
+                if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
