@@ -967,8 +967,9 @@ class TaskOrchestrator:
         """
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
+        temperature = self.policy.temperature_for_role("worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
+        for delta in self.client.stream_chat(agent, messages, temperature=temperature):
             parts.append(delta)
             yield delta
         answer = "".join(parts)
@@ -1076,8 +1077,11 @@ class TaskOrchestrator:
             requests_by_agent.setdefault(agent.id, {})[f"task_{index}"] = [{"role": "user", "content": prompt}]
 
         answers: dict[int, dict[str, Any]] = {}
+        worker_temperature = self.policy.temperature_for_role("worker")
         for agent_id, requests in requests_by_agent.items():
-            for custom_id, result in self.client.batch_chat(agents_by_id[agent_id], requests).items():
+            for custom_id, result in self.client.batch_chat(
+                agents_by_id[agent_id], requests, temperature=worker_temperature
+            ).items():
                 answers[int(custom_id.rsplit("_", 1)[1])] = result
 
         records: list[dict[str, Any]] = []

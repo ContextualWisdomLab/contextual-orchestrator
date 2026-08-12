@@ -29,6 +29,35 @@ def test_custom_role_temperature_is_clamped_and_applied() -> None:
     assert policy.temperature_for_role("thinker") == 0.2  # invalid falls back
 
 
+def test_stream_and_batch_route_use_worker_role_temperature() -> None:
+    """Stream/batch route paths must pass temperature_for_role('worker'), not hard-coded 0.2."""
+    from contextual_orchestrator import ModelAgent, TaskOrchestrator
+    from contextual_orchestrator.orchestrator import OrchestrationPolicy
+
+    agent = ModelAgent("stream_worker_agent", "mock-stream", base_url="mock://local", tags=("reasoning",))
+    orch = TaskOrchestrator([agent])
+    orch.policy = OrchestrationPolicy(role_temperature={"worker": 0.55})
+    assert orch.policy.temperature_for_role("worker") == 0.55
+
+    seen: dict[str, float] = {}
+
+    def fake_stream_chat(a, messages, temperature=0.2):  # noqa: ANN001
+        seen["stream"] = temperature
+        yield "chunk"
+
+    def fake_batch_chat(a, requests, temperature=0.2, poll_interval=5.0, poll_timeout=3600.0):  # noqa: ANN001
+        seen["batch"] = temperature
+        return {cid: {"content": "batch-ok", "usage": None} for cid in requests}
+
+    orch.client.stream_chat = fake_stream_chat  # type: ignore[method-assign]
+    orch.client.batch_chat = fake_batch_chat  # type: ignore[method-assign]
+
+    list(orch.stream_route([{"role": "user", "content": "stream path"}]))
+    orch.batch_route(["batch path"])
+    assert seen["stream"] == 0.55
+    assert seen["batch"] == 0.55
+
+
 def test_conduct_uses_role_temperature_on_worker_path() -> None:
     """Exercise real TaskOrchestrator conduct path with mock agents."""
     agents = [
@@ -48,5 +77,6 @@ def test_conduct_uses_role_temperature_on_worker_path() -> None:
 if __name__ == "__main__":
     test_default_role_temperatures_differ_by_paper_role()
     test_custom_role_temperature_is_clamped_and_applied()
+    test_stream_and_batch_route_use_worker_role_temperature()
     test_conduct_uses_role_temperature_on_worker_path()
     print("ok")
