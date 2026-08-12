@@ -72,9 +72,10 @@ branches.
   integration.
 - Issue #102 is partially implemented by active PR #114; its equivalence,
   cancellation, accounting, and comparable-budget acceptance remain incomplete.
-- Issue #86 owns evidence-grade NIM model discovery and cost-quality evaluation;
-  PR #90 and PR #115 are `superseded` closed-unmerged evidence, so there is no
-  active implementation authority for that issue.
+- Issue #86 owns evidence-grade NIM model discovery and cost-quality evaluation.
+  PR #90 is `superseded` closed-unmerged evidence. Reopened PR #115 is an open scaffold
+  classified `superseded`, not active implementation authority, because it does
+  not satisfy the issue's accepted security, benchmark, and evidence contract.
 - Issues #117, #118, and #119 remain open requirement authorities. PR #121 is
   `superseded` closed-unmerged partial evidence and does not close them.
 
