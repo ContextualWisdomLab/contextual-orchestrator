@@ -56,6 +56,7 @@ The verifier decision is a trust boundary: accepting a result changes the answer
 ## Decision Drivers
 
 * Do not allow a lexical accident to approve or reject model work.
+* Keep routing heuristics explicitly separate from semantic judgment; a capability hint may select a worker, but it cannot decide answer quality or verification.
 * Preserve failover, circuit-breaker, and provider usage accounting for judge calls.
 * Keep evaluation latency honest when response caching is enabled.
 * Make the decision auditable and testable without adding a provider SDK.
@@ -115,6 +116,7 @@ Run python3 tests/test_model_judge.py, the full contextual test suite, and the f
 | Finding | Direction | State |
 | --- | --- | --- |
 | Keyword matching was language- and context-unsafe. | Delete term-based verdicts; use strict model JSON and fail closed. | Implemented |
+| Architecture notes described deterministic keyword scoring without explicitly limiting it to routing, which could be mistaken for a judgment fallback. | Describe the mechanism as capability-hint routing only, link this ADR, and retain the structured model-judge regression tests as the acceptance boundary. | Implemented 2026-08-12 |
 | The judge previously bypassed failover/circuit/usage handling. | Call the judge through _invoke. | Implemented |
 | compare_to_baseline could measure cache hits instead of provider work. | Use _dispatch directly for both measured arms. | Implemented |
 | Core orchestration has no gold-answer quality metric. | Keep structural latency metrics honest and inject fast-mlsirm for rubric quality; do not invent a lexical proxy. | Adapter implemented; benchmark gate ongoing |
