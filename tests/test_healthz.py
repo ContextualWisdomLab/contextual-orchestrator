@@ -16,7 +16,10 @@ from contextual_orchestrator.server import SecurityConfig, build_server  # noqa:
 
 
 def test_healthz_is_unauthenticated_liveness() -> None:
-    orchestrator = TaskOrchestrator([ModelAgent("probe_agent", "mock-agent", tags=("reasoning",))])
+    orchestrator = TaskOrchestrator([
+        ModelAgent("probe_agent", "mock-agent", tags=("reasoning",)),
+        ModelAgent("disabled_probe_agent", "disabled-mock-agent", disabled=True),
+    ])
     server = build_server(
         orchestrator,
         port=0,
@@ -38,6 +41,8 @@ def test_healthz_is_unauthenticated_liveness() -> None:
     assert body["status"] == "ok"
     assert body["service"] == "contextual-orchestrator"
     assert body["agent_count"] == 1
+    assert body["enabled_agent_count"] == 1
+    assert body["candidate_count"] == 2
     assert body["batch_backend"]
     assert body["embedding_batch_backend"]
     assert body["usage_record_count"] == 0

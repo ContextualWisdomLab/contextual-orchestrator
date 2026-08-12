@@ -5,7 +5,11 @@
 
 Stdlib Python lab for a single API that routes, delegates, verifies, and synthesizes work across a configurable pool of OpenAI-compatible model agents.
 
-This is not a Sakana AI product or a reproduction of their trained models. It is a small implementation of the public architecture pattern: expose one model-like interface while keeping the agent pool, routing, workflow, and verification logic behind it.
+This is not a Sakana AI product or a reproduction of their trained models. It is
+a small implementation of the public architecture pattern: expose one
+model-like orchestration candidate while keeping the worker pool, routing,
+workflow, and verification logic behind it. `contextual-orchestrator` is the
+public control-plane model; it is not just an HTTP gateway.
 
 ## Quick Start
 
@@ -78,6 +82,16 @@ For a local `mlx-lm` OpenAI-compatible server, use the explicit `mlx://` scheme.
 }
 ```
 
+The full local candidate registry is [examples/agents.local.json](examples/agents.local.json).
+It contains the public `contextual-orchestrator` candidate, discovered MLX
+worker models, and every discovered llama.cpp/LM Studio candidate. Discovery
+does not decide governance state: seed candidates are enabled by default, while
+`disabled` is reserved for an explicit operator/admin quarantine or a persisted
+removal tombstone. The contextual-orchestrator record is excluded from internal
+roles because this implementation has no bounded recursive self-call protocol;
+that is a routing safety constraint, not a disabled candidate. The registry is
+explicit; runtime discovery does not silently change the pool.
+
 Run an evaluation against that server with `--temperature 0` for repeatable judging. For reasoning-capable mlx models, pass `--chat-template-args '{"enable_thinking":false}'` when a short structured judge response is required. `--local-concurrency N` enables bounded concurrent local batch requests; keep interactive route/conduct requests on the default sequential path.
 
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
@@ -102,6 +116,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** �
 
 One public interface:
 
+- `contextual-orchestrator` is the model-like control-plane candidate exposed to callers. `/v1/models` lists it first, followed by every configured worker candidate, including disabled candidates with their status.
 - `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline — per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.

@@ -26,6 +26,7 @@ def _build() -> TaskOrchestrator:
             ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
             ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation")),
             ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "review")),
+            ModelAgent("disabled_candidate", "disabled-model", disabled=True),
         ]
     )
 
@@ -59,6 +60,16 @@ def test_proxy_completion_forwards_tools() -> None:
         {"messages": [{"role": "user", "content": "call a tool"}], "tools": tools}
     )
     assert result["echo"]["tools"] == tools
+
+
+def test_proxy_completion_honors_an_enabled_requested_worker_model() -> None:
+    result = _build().proxy_completion({
+        "model": "mock-builder",
+        "messages": [{"role": "user", "content": "call a tool"}],
+        "tools": [],
+    })
+
+    assert result["model"] == "mock-builder"
 
 
 def test_proxy_completion_responses_endpoint_returns_response_object() -> None:
@@ -140,7 +151,11 @@ def test_http_models_endpoint_lists_configured_models() -> None:
         server.shutdown()
     assert status == 200
     assert body["object"] == "list"
-    assert {item["id"] for item in body["data"]} == {"mock-planner", "mock-builder", "mock-reviewer"}
+    assert {item["id"] for item in body["data"]} == {
+        "contextual-orchestrator", "mock-planner", "mock-builder", "mock-reviewer", "disabled-model"
+    }
+    assert body["data"][0]["kind"] == "orchestrator"
+    assert next(item for item in body["data"] if item["id"] == "disabled-model")["status"] == "disabled"
 
 
 def test_responses_stream_has_completion_event() -> None:
