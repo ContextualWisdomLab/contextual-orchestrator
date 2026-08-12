@@ -152,6 +152,31 @@ separately measured bounded retry or stronger local-judge selection may be
 considered, but keyword matching, positional repair, and silently dropping a
 failed observation remain prohibited.
 
+## Same-route retry probe with a 3B judge — 2026-08-12
+
+A separate bounded probe used the same local
+`mlx-community/llama-3.2-3b-instruct-4bit` judge, temperature `0`, disabled
+thinking, 256 output tokens, two criteria, and the
+`ContextualOrchestratorJudge -> contextual-orchestrator -> mlx-lm` route. It
+used one good release plan and three task framings. All nine direct K-way
+responses parsed, but the score still moved materially:
+
+| framing | K=2 | K=5 | K=7 |
+|---|---:|---:|---:|
+| neutral | `0.0000` | `1.0000` | `0.8333` |
+| liked | `0.0000` | `1.0000` | `0.9167` |
+| disliked | `0.0000` | `0.7500` | `1.0000` |
+
+The same four cumulative-threshold calls were then retried once after strict
+parsing failure. K=2 failed its boundary-array shape check, and K=3, K=5, and
+K=7 failed monotonicity on both attempts; no retry produced an accepted result.
+The retry was a second contextual-orchestrator completion and was validated by
+the same strict parser; it did not inspect keywords, criterion positions, or
+the invalid output to infer a category. This is evidence that an identical
+retry is not a reliability fix and that direct K-way output remains
+choice-count/framing-sensitive even when it parses. Every failed attempt stays
+in the denominator.
+
 ## Defects found and fixed during the run
 
 The first local calls exposed model-format failures: numeric criterion keys,

@@ -176,6 +176,18 @@ JSON responses, one out-of-range category, and one non-monotone threshold
 vector. This is evidence of local-model format and framing sensitivity, not a
 universal positive-choice-count law.
 
+A same-route retry probe then evaluated a separate good release plan with the
+same 3B model, two criteria, K in `{2,5,7}`, and neutral/liked/disliked
+framing. All nine direct K-way responses parsed, but scores were respectively
+`(0.0000, 1.0000, 0.8333)`, `(0.0000, 1.0000, 0.9167)`, and
+`(0.0000, 0.7500, 1.0000)`. Four cumulative-threshold calls at K in
+`{2,3,5,7}` each failed strict parsing; one identical second
+contextual-orchestrator completion per failure recovered none. K=2 failed the
+boundary-array shape contract, while K=3/5/7 failed monotonicity. This probe
+does not justify a blind retry: any future recovery must be independently
+specified, remain on the contextual-orchestrator path, retain first/final
+parse status and cost, and accept only a final strict schema result.
+
 ### Consequences
 
 * Good, because the suspected positive drift becomes measurable and
@@ -239,6 +251,7 @@ universal positive-choice-count law.
 | A one-person, two-item matrix can pass a shape check while remaining insufficient for IRT estimation. | Require multiple persons, item-information, and factor-coverage checks before fitting or interpreting an IRT model. | Required next |
 | A larger local judge can preserve the aggregate score while moving criterion categories, and a cached 32B judge timed out before producing structured output. | Gate model comparisons on bounded latency, timeout rate, strict-parse success, token usage, category occupancy, and score/acceptance drift; never treat a timeout as a missing or positive result. | Implemented in the 2026-08-12 benchmark; reliability calibration ongoing |
 | A cached local 3B judge failed to emit valid or ordinally coherent structured output in 7/18 good-plan calls, and framing changed some K=7 scores. | Keep every malformed/monotonicity failure in the denominator; compare a separately measured bounded retry or stronger local judge only through contextual-orchestrator, and never add keyword, positional, or silent-drop repair. | Recorded in the 2026-08-12 benchmark; reliability/framing calibration required |
+| An identical second contextual-orchestrator completion recovered none of four cumulative-threshold failures in a follow-up 3B probe, while direct K-way scores shifted across K and framing. | Keep blind retry out of the production contract. If recovery is pursued, compare a bounded independent binary-threshold decomposition or stronger local judge on held-out paired cases, record added latency/tokens and first/final parse status, and preserve strict fail-closed parsing. | Measured 2026-08-12; Goal expanded and calibration required |
 | OA metadata does not guarantee that the original PDF can be downloaded into the local Zotero library: Zotero 9 exposes read-only Local API reads, SAGE returned anti-bot `403` for the Jones--Loe PDF, and the Iannario repository exposed a request-only copy while the publisher returned an empty `202`. | Record the official landing/PDF URL and retrieval evidence, attach only byte-verified original PDFs through the local Connector/API, and retry inaccessible OA sources from an authorized route or a Zotero version with local write/file-upload support. Never regenerate, OCR-rebuild, or substitute a PDF while claiming it is the original. | Required follow-up |
 
 ## Risks and Mitigations
