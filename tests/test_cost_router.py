@@ -5,11 +5,14 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
     CostLedger,
     CostRoutingCoordinator,
+    ConfigBackendUnavailableError,
     InMemoryUsageTelemetrySink,
     InMemoryConfigStore,
     ModelAgent,
@@ -19,6 +22,7 @@ from contextual_orchestrator import (  # noqa: E402
     TaskOrchestrator,
 )
 from contextual_orchestrator.batch_routing import PgLlmBatchBackend  # noqa: E402
+import contextual_orchestrator.cost_router as cost_router_module  # noqa: E402
 
 
 class _FailingLedgerStore:
@@ -39,6 +43,66 @@ def _coordinator(ledger=None) -> CostRoutingCoordinator:
     price_book = PriceBook(config)
     price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
     return CostRoutingCoordinator(orchestrator, config, price_book=price_book, ledger=ledger)
+
+
+def test_coordinator_uses_configured_durable_store(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A supplied DSN selects the durable config factory, not process memory."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("mock_worker", "mock-a", "mock://a", provider_name="mock")]
+    )
+    durable_store = InMemoryConfigStore()
+    observed: dict[str, object] = {}
+
+    def fake_get_config_store(postgres_dsn: str):
+        observed["config_dsn"] = postgres_dsn
+        return durable_store
+
+    def fake_build_token_counter(postgres_dsn: str):
+        observed["counter_dsn"] = postgres_dsn
+        return object()
+
+    monkeypatch.setattr(cost_router_module, "get_config_store", fake_get_config_store)
+    monkeypatch.setattr(
+        cost_router_module,
+        "build_token_counter",
+        fake_build_token_counter,
+    )
+
+    coordinator = CostRoutingCoordinator(
+        orchestrator,
+        postgres_dsn="postgresql://runtime.example/config",
+    )
+
+    assert coordinator.config is durable_store
+    assert observed == {
+        "config_dsn": "postgresql://runtime.example/config",
+        "counter_dsn": "postgresql://runtime.example/config",
+    }
+
+
+def test_coordinator_propagates_durable_config_failure(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A durable config outage must stop coordinator construction."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("mock_worker", "mock-a", "mock://a", provider_name="mock")]
+    )
+
+    def fail_config_store(_postgres_dsn: str):
+        raise ConfigBackendUnavailableError("Postgres config backend is unavailable")
+
+    monkeypatch.setattr(cost_router_module, "get_config_store", fail_config_store)
+
+    with pytest.raises(
+        ConfigBackendUnavailableError,
+        match="Postgres config backend is unavailable",
+    ):
+        CostRoutingCoordinator(
+            orchestrator,
+            postgres_dsn="postgresql://operator:secret@example.invalid/runtime",
+        )
 
 
 def test_sync_completion_records_usage_and_returns_costs() -> None:

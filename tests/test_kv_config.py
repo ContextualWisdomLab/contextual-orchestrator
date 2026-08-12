@@ -9,12 +9,14 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+import traceback
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.kv_config import (  # noqa: E402
+    ConfigBackendUnavailableError,
     InMemoryConfigStore,
     PostgresConfigStoreAdapter,
     get_config_store,
@@ -158,3 +160,122 @@ def test_get_config_store_without_dsn_is_in_memory() -> None:
     store = get_config_store(seed={"price_table": {"gpt_example": 1.0}})
     assert isinstance(store, InMemoryConfigStore)
     assert store.get("price_table", "gpt_example") == 1.0
+
+
+def test_get_config_store_with_dsn_fails_closed_when_dependency_is_missing(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A configured durable backend must not silently become process-local."""
+    monkeypatch.setitem(sys.modules, "pg_llm_batch", None)
+
+    with pytest.raises(
+        ConfigBackendUnavailableError,
+        match="Postgres config backend is unavailable",
+    ):
+        get_config_store("postgresql://operator:secret@example.invalid/runtime")
+
+
+def test_get_config_store_with_dsn_fails_closed_without_disclosing_dsn(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Backend initialization failures stay fatal without echoing credentials."""
+    class FailingConfigStore:
+        """Stand-in whose constructor reproduces a backend outage."""
+
+        def __init__(self, _postgres_dsn: str) -> None:
+            raise OSError("could not reach postgresql://operator:secret@example.invalid/runtime")
+
+    class UnusedSecretStore:
+        """Constructor placeholder that must not be reached after config failure."""
+
+        def __init__(self, _postgres_dsn: str, *, fernet_key=None) -> None:
+            raise AssertionError("secret store construction must not be reached")
+
+    fake_module = type(sys)("pg_llm_batch")
+    fake_module.PostgresConfigStore = FailingConfigStore
+    fake_module.SecretStore = UnusedSecretStore
+    monkeypatch.setitem(sys.modules, "pg_llm_batch", fake_module)
+
+    configured_dsn = "postgresql://operator:secret@example.invalid/runtime"
+    with pytest.raises(ConfigBackendUnavailableError) as caught:
+        get_config_store(configured_dsn)
+
+    assert str(caught.value) == "Postgres config backend is unavailable"
+    assert "operator" not in str(caught.value)
+    assert "secret" not in str(caught.value)
+    rendered_traceback = "".join(
+        traceback.format_exception(caught.type, caught.value, caught.tb)
+    )
+    assert "operator" not in rendered_traceback
+    assert "secret" not in rendered_traceback
+
+
+def test_get_config_store_with_dsn_builds_and_seeds_postgres_adapter(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A healthy configured backend receives bootstrap inputs and the seed."""
+    constructed: dict[str, object] = {}
+
+    class FakePostgresConfigStore(_FakeConfigStore):
+        """Record the DSN while providing the normal config-store surface."""
+
+        def __init__(self, postgres_dsn: str) -> None:
+            super().__init__()
+            constructed["config_dsn"] = postgres_dsn
+
+    class FakePostgresSecretStore(_FakeSecretStore):
+        """Record the secret-store bootstrap inputs."""
+
+        def __init__(self, postgres_dsn: str, *, fernet_key=None) -> None:
+            super().__init__({"provider_key": "stored_secret"})
+            constructed["secret_dsn"] = postgres_dsn
+            constructed["fernet_key"] = fernet_key
+
+    fake_module = type(sys)("pg_llm_batch")
+    fake_module.PostgresConfigStore = FakePostgresConfigStore
+    fake_module.SecretStore = FakePostgresSecretStore
+    monkeypatch.setitem(sys.modules, "pg_llm_batch", fake_module)
+
+    store = get_config_store(
+        "postgresql://runtime.example/config",
+        fernet_key="bootstrap_key",
+        seed={"routing_policy": {"sync_threshold": 4}},
+    )
+
+    assert isinstance(store, PostgresConfigStoreAdapter)
+    assert store.get("routing_policy", "sync_threshold") == 4
+    assert store.require_secret("provider_key") == "stored_secret"
+    assert constructed == {
+        "config_dsn": "postgresql://runtime.example/config",
+        "secret_dsn": "postgresql://runtime.example/config",
+        "fernet_key": "bootstrap_key",
+    }
+
+
+def test_get_config_store_with_dsn_accepts_an_empty_seed(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A healthy durable backend does not require bootstrap config entries."""
+    fake_module = type(sys)("pg_llm_batch")
+    fake_module.PostgresConfigStore = lambda _postgres_dsn: _FakeConfigStore()
+    fake_module.SecretStore = (
+        lambda _postgres_dsn, *, fernet_key=None: _FakeSecretStore({})
+    )
+    monkeypatch.setitem(sys.modules, "pg_llm_batch", fake_module)
+
+    store = get_config_store("postgresql://runtime.example/config")
+
+    assert isinstance(store, PostgresConfigStoreAdapter)
+    assert store.get("routing_policy", "missing", "default") == "default"
+
+
+def test_kv_docs_require_fail_closed_durable_backend() -> None:
+    """Operator guidance must forbid an implicit durable-to-memory downgrade."""
+    repository_root = Path(__file__).resolve().parents[1]
+    guidance = (repository_root / "docs" / "kv-credentials.md").read_text(
+        encoding="utf-8"
+    )
+
+    assert "never silently falls back" in guidance
+    assert "Postgres config backend is unavailable" in guidance
+    assert "intentionally select `memory`" in guidance

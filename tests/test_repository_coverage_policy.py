@@ -1,7 +1,7 @@
 """Repository contracts for fail-closed production coverage and public docstrings."""
 
 from pathlib import Path
-import tomllib
+import tomli as tomllib
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]

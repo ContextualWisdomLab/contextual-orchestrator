@@ -4,13 +4,15 @@ Every tunable the cost/routing layer needs — price tables, routing thresholds,
 batch-backend endpoints, credentials — is read from a KV store, **never** from
 ``os.getenv`` at runtime. Two backends are provided:
 
-* :class:`InMemoryConfigStore` — the always-available, dependency-free default
-  used for standalone runs, tests, and the mock/local path.
+* :class:`InMemoryConfigStore` — the dependency-free default used only when
+  callers do not configure a durable backend, including tests and mock/local
+  paths.
 * A thin adapter over an installed ``pg_llm_batch.PostgresConfigStore`` /
   ``pg_llm_batch.SecretStore`` when a Postgres DSN is supplied via
   :func:`get_config_store`. The DSN itself is the only bootstrap transport;
   it is passed in explicitly by the caller, not resolved from the environment
-  here.
+  here. A configured Postgres backend fails closed instead of silently
+  downgrading configuration and credential authority to process-local memory.
 
 The ``get(category, key, default)`` / ``set(category, key, value)`` shape is
 deliberately identical to ``pg_llm_batch.PostgresConfigStore`` so the two are
@@ -32,6 +34,10 @@ class ConfigStore(Protocol):
     def set(self, category: str, key: str, value: Any) -> None:
         """Persist a configuration value under ``category`` + ``key``."""
         ...
+
+
+class ConfigBackendUnavailableError(RuntimeError):
+    """Raised when a configured durable KV backend cannot be initialized."""
 
 
 class InMemoryConfigStore:
@@ -129,12 +135,12 @@ def get_config_store(
 
     With no DSN, an :class:`InMemoryConfigStore` is returned (the standalone /
     test default). With a DSN, the ``pg_llm_batch`` Postgres-backed stores are
-    used when ``pg_llm_batch`` is importable; otherwise the call degrades to the
-    in-memory store so the orchestrator never hard-depends on Postgres.
+    authoritative. Import, construction, or seed failures raise a sanitized
+    :class:`ConfigBackendUnavailableError`; they never downgrade to memory.
     """
     if not postgres_dsn:
         return InMemoryConfigStore(seed=seed)
-    try:  # pragma: no cover - exercised only with pg_llm_batch + Postgres present
+    try:
         from pg_llm_batch import PostgresConfigStore, SecretStore  # type: ignore
 
         config_store = PostgresConfigStore(postgres_dsn)
@@ -145,5 +151,7 @@ def get_config_store(
                 for key, value in entries.items():
                     adapter.set(category, key, value)
         return adapter
-    except Exception:  # pragma: no cover - fall back when deps/DB unavailable
-        return InMemoryConfigStore(seed=seed)
+    except Exception:
+        raise ConfigBackendUnavailableError(
+            "Postgres config backend is unavailable"
+        ) from None
