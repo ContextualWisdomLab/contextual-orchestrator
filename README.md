@@ -36,7 +36,8 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 
 HTTP serving is hardened for local lab use:
 
-- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
+- `/admin`, `/admin/state`, `/api/v1/*`, `/v1/models`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
+- `GET /v1/models` (inference token) lists OpenAI-compatible model ids from the agent pool plus the gateway default `contextual-orchestrator`. Requesting a listed model on `/v1/chat/completions` prefers the matching agent for the worker route.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
