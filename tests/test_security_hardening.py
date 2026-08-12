@@ -174,6 +174,7 @@ def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() ->
         assert ADMIN_SESSION_COOKIE in set_cookie
         assert "HttpOnly" in set_cookie
         assert "SameSite=Strict" in set_cookie
+        assert "Secure" in set_cookie
         session_id = cookie_value.split("=", 1)[1]
         assert session_id != _TEST_ADMIN_TOKEN
         assert _TEST_ADMIN_TOKEN not in set_cookie
@@ -296,6 +297,62 @@ def test_admin_session_expires_and_logout_revokes() -> None:
         server.shutdown()
         thread.join(timeout=5)
         set_backend(None)
+
+
+def test_admin_session_store_is_capped_and_rate_limited() -> None:
+    """Session table has a hard bound; /admin/session counts toward rate limit."""
+    security = SecurityConfig(
+        admin_token=_TEST_ADMIN_TOKEN,
+        inference_token=_TEST_INFERENCE_TOKEN,
+        max_admin_sessions=2,
+        rate_limit_requests=3,
+        rate_limit_window_seconds=60,
+    )
+    first = security.establish_admin_session(_TEST_ADMIN_TOKEN)
+    second = security.establish_admin_session(_TEST_ADMIN_TOKEN)
+    third = security.establish_admin_session(_TEST_ADMIN_TOKEN)
+    assert security._admin_session_is_active(third)
+    assert security._admin_session_is_active(second)
+    # Oldest session evicted when over cap.
+    assert not security._admin_session_is_active(first)
+    assert len(security._admin_sessions) <= 2
+
+    server = build_server(build(), port=0, security=security)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        for _ in range(3):
+            req = urllib.request.Request(
+                f"http://127.0.0.1:{port}/admin/session",
+                data=json.dumps({"token": _TEST_ADMIN_TOKEN}).encode("utf-8"),
+                headers={"content-type": "application/json", "connection": "close"},
+                method="POST",
+            )
+            with urllib.request.urlopen(req, timeout=5) as response:
+                assert response.status == 200
+        blocked = urllib.request.Request(
+            f"http://127.0.0.1:{port}/admin/session",
+            data=json.dumps({"token": _TEST_ADMIN_TOKEN}).encode("utf-8"),
+            headers={"content-type": "application/json", "connection": "close"},
+            method="POST",
+        )
+        try:
+            urllib.request.urlopen(blocked, timeout=5)
+            raise AssertionError("session establish must share the request rate budget")
+        except urllib.error.HTTPError as exc:
+            assert exc.code == 429
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_constant_time_token_match_accepts_non_ascii_without_raising() -> None:
+    """Non-ASCII secrets must not raise TypeError from compare_digest(str)."""
+    security = SecurityConfig(admin_token="토큰-α", inference_token="infer-β")
+    assert security._constant_time_token_match("토큰-α", "토큰-α")
+    assert not security._constant_time_token_match("토큰-α", "토큰-γ")
+    assert not security._constant_time_token_match("ascii", "토큰-α")
 
 
 def test_loopback_without_configured_token_is_rejected() -> None:
@@ -523,6 +580,9 @@ if __name__ == "__main__":
     test_admin_and_inference_tokens_are_separate()
     test_admin_credential_endpoint_registers_into_kv_without_echoing_value()
     test_admin_session_cookie_authorizes_admin_api_without_js_token_storage()
+    test_admin_session_expires_and_logout_revokes()
+    test_admin_session_store_is_capped_and_rate_limited()
+    test_constant_time_token_match_accepts_non_ascii_without_raising()
     test_loopback_without_configured_token_is_rejected()
     test_http_api_validates_mode_and_request_shape()
     test_http_api_rejects_unknown_request_fields()

@@ -74,6 +74,7 @@ ALLOWED_SESSION_KEYS = {"token"}
 # Cookie value is an opaque server-side session id, never the raw admin bearer.
 ADMIN_SESSION_COOKIE = "contextual_orchestrator_session"
 DEFAULT_ADMIN_SESSION_TTL_SECONDS = 12 * 60 * 60
+DEFAULT_MAX_ADMIN_SESSIONS = 256
 _CREDENTIAL_NAME_RE = re.compile(r"[A-Z][A-Z0-9_]{0,63}")
 
 
@@ -115,6 +116,9 @@ class SecurityConfig:
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
     admin_session_ttl_seconds: int = DEFAULT_ADMIN_SESSION_TTL_SECONDS
+    max_admin_sessions: int = DEFAULT_MAX_ADMIN_SESSIONS
+    # When True, Set-Cookie includes Secure (HTTPS / reverse-proxy deployments).
+    admin_session_secure_cookie: bool = True
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -127,7 +131,22 @@ class SecurityConfig:
             raise ValueError("split token mode requires both admin_token and inference_token")
         if self.admin_session_ttl_seconds < 1:
             raise ValueError("admin_session_ttl_seconds must be >= 1")
+        if self.max_admin_sessions < 1:
+            raise ValueError("max_admin_sessions must be >= 1")
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
+
+    @staticmethod
+    def _constant_time_token_match(presented: str, expected: str) -> bool:
+        """Compare secrets without leaking length via exceptions on non-ASCII input."""
+        if not isinstance(presented, str) or not isinstance(expected, str):
+            return False
+        try:
+            return secrets.compare_digest(
+                presented.encode("utf-8"),
+                expected.encode("utf-8"),
+            )
+        except (TypeError, ValueError):
+            return False
 
     def check_bind(self, host: str) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
@@ -150,7 +169,7 @@ class SecurityConfig:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         bearer = self._extract_bearer_token(headers)
         if bearer:
-            if secrets.compare_digest(bearer, expected):
+            if self._constant_time_token_match(bearer, expected):
                 return
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         if scope == "admin" and self._admin_session_is_active(self._extract_admin_session_cookie(headers)):
@@ -184,14 +203,47 @@ class SecurityConfig:
         the admin bearer. Raw bearer values are not stored in the session table.
         """
         expected = self.auth_token or self.admin_token
-        if not expected or not presented_token or not secrets.compare_digest(presented_token, expected):
+        if not expected or not presented_token or not self._constant_time_token_match(presented_token, expected):
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
         session_id = secrets.token_urlsafe(32)
         expires_at = time.monotonic() + float(self.admin_session_ttl_seconds)
         with self._session_lock:
             self._purge_expired_admin_sessions_locked(now=time.monotonic())
+            if len(self._admin_sessions) >= self.max_admin_sessions:
+                # Drop the soonest-expiring sessions until under the cap (DoS bound).
+                overflow = len(self._admin_sessions) - self.max_admin_sessions + 1
+                victims = sorted(self._admin_sessions.items(), key=lambda item: item[1])[:overflow]
+                for sid, _ in victims:
+                    self._admin_sessions.pop(sid, None)
             self._admin_sessions[session_id] = expires_at
         return session_id
+
+    def admin_session_cookie_header(self, session_id: str, *, max_age: int | None = None) -> str:
+        """Build Set-Cookie for an opaque admin session (HttpOnly, SameSite=Strict, Secure)."""
+        age = int(self.admin_session_ttl_seconds if max_age is None else max_age)
+        parts = [
+            f"{ADMIN_SESSION_COOKIE}={session_id}",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+            f"Max-Age={age}",
+        ]
+        if self.admin_session_secure_cookie:
+            parts.append("Secure")
+        return "; ".join(parts)
+
+    def admin_session_clear_cookie_header(self) -> str:
+        """Build Set-Cookie that clears the opaque admin session."""
+        parts = [
+            f"{ADMIN_SESSION_COOKIE}=",
+            "Path=/",
+            "HttpOnly",
+            "SameSite=Strict",
+            "Max-Age=0",
+        ]
+        if self.admin_session_secure_cookie:
+            parts.append("Secure")
+        return "; ".join(parts)
 
     def revoke_admin_session(self, session_id: str) -> bool:
         """Drop an opaque admin session. Returns True when a live session was removed."""
@@ -259,6 +311,8 @@ class SecurityConfig:
             "rate_limit_requests": self.rate_limit_requests,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "max_admin_sessions": self.max_admin_sessions,
+            "admin_session_secure_cookie": self.admin_session_secure_cookie,
         }
 
 
@@ -792,15 +846,14 @@ def build_server(
                 if path == "/admin/session":
                     # Logout: drop the opaque session bound to the cookie (if any).
                     # Idempotent: missing/unknown cookies still return cleared status.
+                    # Rate-limit even unauthenticated logout to bound store churn.
+                    security.check_rate_limit(self.client_address[0])
                     session_id = security._extract_admin_session_cookie(self.headers)
                     revoked = security.revoke_admin_session(session_id)
-                    clear = (
-                        f"{ADMIN_SESSION_COOKIE}=; Path=/; HttpOnly; SameSite=Strict; Max-Age=0"
-                    )
                     self._send(
                         {"session_status": "cleared", "session_revoked": revoked},
                         200,
-                        extra_headers={"set-cookie": clear},
+                        extra_headers={"set-cookie": security.admin_session_clear_cookie_header()},
                     )
                     return
                 self._authorize("admin")
@@ -826,6 +879,8 @@ def build_server(
                 if path == "/admin/session":
                     # Browser admin auth: validate the presented bearer once and mint
                     # an opaque HttpOnly session cookie distinct from the admin secret.
+                    # Apply rate limit before credential checks (auth-bypass budget).
+                    security.check_rate_limit(self.client_address[0])
                     body = self._read_json()
                     _reject_unknown_keys(body, ALLOWED_SESSION_KEYS)
                     presented = body.get("token")
@@ -836,11 +891,7 @@ def build_server(
                     session_id = security.establish_admin_session(
                         presented.strip() if isinstance(presented, str) else ""
                     )
-                    max_age = int(security.admin_session_ttl_seconds)
-                    cookie = (
-                        f"{ADMIN_SESSION_COOKIE}={session_id}; Path=/; HttpOnly; "
-                        f"SameSite=Strict; Max-Age={max_age}"
-                    )
+                    cookie = security.admin_session_cookie_header(session_id)
                     self._send({"session_status": "established"}, 200, extra_headers={"set-cookie": cookie})
                     return
                 scope = (

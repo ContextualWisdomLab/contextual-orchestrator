@@ -121,14 +121,24 @@ mutation endpoints stay admin-scoped. Establish a same-origin session once:
 2. `POST /admin/session` with `{"token":"..."}` (or `Authorization: Bearer …`).
 
 The response sets the HttpOnly cookie `contextual_orchestrator_session`
-(`SameSite=Strict`, default `Max-Age` 12 hours). The cookie value is an
-**opaque server-side session id**, never the admin bearer itself — so the
-long-lived secret is not replayed on every browser request and cannot be used
-as `Authorization: Bearer` if stolen from cookie storage. `DELETE /admin/session`
-revokes the id and clears the cookie. Subsequent browser calls use
-`credentials: "same-origin"` and never keep the raw admin secret in JavaScript.
-Reverse proxies may instead inject `Authorization` on every request; both
-mechanisms are accepted.
+(`SameSite=Strict`, `Secure` by default, default `Max-Age` 12 hours). The
+cookie value is an **opaque server-side session id**, never the admin bearer
+itself — so the long-lived secret is not replayed on every browser request and
+cannot be used as `Authorization: Bearer` if stolen from cookie storage.
+`DELETE /admin/session` revokes the id and clears the cookie. Subsequent
+browser calls use `credentials: "same-origin"` and never keep the raw admin
+secret in JavaScript. Reverse proxies may instead inject `Authorization` on
+every request; both mechanisms are accepted.
+
+Operational bounds (process-local, not durable across restarts):
+
+- Sessions live in process memory only; restart clears them.
+- `POST`/`DELETE /admin/session` share the per-client request rate budget with
+  the rest of the API (default 60/minute).
+- Live session ids are capped (`max_admin_sessions`, default 256); the
+  soonest-expiring ids are evicted when the table is full.
+- Disable `Secure` only for plain-HTTP loopback demos
+  (`admin_session_secure_cookie=False`); production must keep `Secure`.
 
 ### Registering a credential from the admin frontend
 
@@ -137,14 +147,15 @@ authenticated operator tool — write a named secret into the KV without a shell
 session, so an operator never has to hand the raw value to a deploy script:
 
 ```bash
-# Secret value comes from stdin (or a protected file) so it never lands in argv or shell history.
-# Prefer the same-origin admin session cookie (POST /admin/session once in the browser)
-# or a reverse proxy that injects Authorization for authenticated operators.
+# Secret value comes from stdin (or a protected file) so it never lands in argv
+# or shell history. Prefer the browser session cookie (POST /admin/session once)
+# or a reverse proxy that injects Authorization — avoid putting the admin bearer
+# on the curl command line where process listings can observe it.
 printf '%s' "$LITELLM_API_KEY" | jq -Rn --arg name LITELLM_API_KEY \
   '{name: $name, value: input}' \
   | curl -X POST http://127.0.0.1:8000/admin/api/credentials \
-      -H "authorization: Bearer $ADMIN_TOKEN" \
       -H "content-type: application/json" \
+      -b "contextual_orchestrator_session=${SESSION_ID}" \
       --data-binary @-
 # -> {"registered": "LITELLM_API_KEY"}
 ```
