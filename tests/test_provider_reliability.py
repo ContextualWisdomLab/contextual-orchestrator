@@ -257,3 +257,23 @@ def test_role_temperature_defaults_differ_by_paper_role() -> None:
     assert policy.temperature_for_role("verifier") < policy.temperature_for_role("worker")
     snap = policy.as_dict()
     assert "role_temperature" in snap
+
+
+def test_race_uses_worker_role_temperature() -> None:
+    class TempClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(retry_backoff=0.0)
+            self.temps: list[float] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.temps.append(temperature)
+            return f"[{agent.id}]"
+
+    agents = [
+        ModelAgent("rep_one", "m", tags=("reasoning", "writing"), priority=5, model_group="g1"),
+        ModelAgent("rep_two", "m", tags=("reasoning", "writing"), priority=4, model_group="g1"),
+    ]
+    client = TempClient()
+    TaskOrchestrator(agents, client=client).route_once([{"role": "user", "content": "x"}])
+    assert client.temps
+    assert all(t == 0.2 for t in client.temps)  # worker default
