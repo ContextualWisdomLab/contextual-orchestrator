@@ -44,13 +44,13 @@ ALLOWED_CHAT_KEYS = {
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
-ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
+ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model", "metadata"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
-ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
-ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
-ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
+ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace", "metadata"}
+ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace", "metadata"}
+ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace", "metadata"}
 ALLOWED_AGENT_PATCH_KEYS = {"status", "priority", "tags", "provider_exclusions"}
 ALLOWED_AGENT_CREATE_KEYS = {
     "id",
@@ -77,6 +77,44 @@ class RequestError(Exception):
         self.detail = detail or {}
 
 
+@dataclass(frozen=True)
+class VerifiedIdentity:
+    """Identity claims returned by a reviewed Keyverse/OIDC verifier."""
+
+    subject: str
+    org: str
+    workspace: str
+    scopes: frozenset[str]
+    roles: frozenset[str] = field(default_factory=frozenset)
+
+    def __post_init__(self) -> None:
+        for field_name in ("subject", "org", "workspace"):
+            value = getattr(self, field_name)
+            if not isinstance(value, str) or not value or value != value.strip():
+                raise ValueError(f"{field_name} must be a non-blank trimmed string")
+        for field_name in ("scopes", "roles"):
+            values = getattr(self, field_name)
+            if not isinstance(values, (set, frozenset, list, tuple)):
+                raise ValueError(f"{field_name} must be a collection of strings")
+            normalized = frozenset(
+                value for value in values
+                if isinstance(value, str) and value and value == value.strip()
+            )
+            if len(normalized) != len(values):
+                raise ValueError(f"{field_name} contains an invalid value")
+            object.__setattr__(self, field_name, normalized)
+        if not self.scopes:
+            raise ValueError("scopes must not be empty")
+
+    def resource_context(self) -> dict[str, str]:
+        """Return only non-secret claims used for tenant ABAC."""
+        return {
+            "subject": self.subject,
+            "org": self.org,
+            "workspace": self.workspace,
+        }
+
+
 @dataclass
 class SecurityConfig:
     """Runtime safety controls for the stdlib HTTP server."""
@@ -93,7 +131,7 @@ class SecurityConfig:
     # Deployment may inject a real OIDC/JWT verifier (for example a Keyverse
     # relying-party adapter). The core deliberately does not decode JWTs with
     # an unsafe hand-rolled parser or own Keycloak admin credentials.
-    bearer_verifier: Callable[[str, str], bool] | None = None
+    bearer_verifier: Callable[[str, str], VerifiedIdentity] | None = None
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -101,6 +139,8 @@ class SecurityConfig:
     def __post_init__(self) -> None:
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if self.bearer_verifier is not None and (self.auth_token or self.admin_token or self.inference_token):
+            raise ValueError("external bearer verifier cannot be combined with static tokens")
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
 
     def check_bind(self, host: str) -> None:
@@ -108,8 +148,8 @@ class SecurityConfig:
         if host in {"0.0.0.0", "::", ""} and not self.allow_public_bind:  # nosec B104 - comparison rejects public bind unless explicitly opted in.
             raise ValueError("public bind requires --allow-public-bind")
 
-    def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate bearer token for admin or inference scope."""
+    def authorize(self, headers: Any, scope: str, client_address: str) -> VerifiedIdentity:
+        """Validate bearer token and return its verified RBAC identity."""
         if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
         raw = headers.get("authorization", "")
@@ -118,14 +158,53 @@ class SecurityConfig:
         token = raw.split(" ", 1)[1].strip()
         if self.bearer_verifier is not None:
             try:
-                valid = bool(self.bearer_verifier(token, scope))
+                identity = self.bearer_verifier(token, scope)
+                valid = isinstance(identity, VerifiedIdentity) and scope in identity.scopes
             except Exception:  # noqa: BLE001 - an auth adapter failure is an auth denial
+                identity = None
                 valid = False
         else:
             expected = self.auth_token or (self.admin_token if scope == "admin" else self.inference_token)
             valid = bool(expected) and secrets.compare_digest(token, expected)
+            identity = (
+                VerifiedIdentity(
+                    subject="local",
+                    org="local",
+                    workspace="local",
+                    scopes=frozenset({scope}),
+                    roles=frozenset({"local"}),
+                )
+                if valid
+                else None
+            )
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+        return identity
+
+    def authorize_resource(
+        self,
+        identity: VerifiedIdentity,
+        resource: Any = None,
+        *,
+        require_tenant: bool = False,
+    ) -> dict[str, str]:
+        """Enforce exact Keyverse ``org``/``workspace`` resource attributes."""
+        if not isinstance(identity, VerifiedIdentity):
+            raise RequestError(401, "unauthorized", "verified identity is required")
+        if resource is None:
+            if require_tenant:
+                raise RequestError(403, "tenant_forbidden", "resource tenant context is missing")
+            return identity.resource_context()
+        if not isinstance(resource, dict):
+            raise RequestError(400, "invalid_request", "metadata must be an object")
+        for field_name in ("org", "workspace"):
+            requested = resource.get(field_name, getattr(identity, field_name))
+            expected = getattr(identity, field_name)
+            if not isinstance(requested, str) or not requested or requested != requested.strip():
+                raise RequestError(403, "tenant_forbidden", f"metadata.{field_name} is invalid")
+            if requested != expected:
+                raise RequestError(403, "tenant_forbidden", f"metadata.{field_name} is outside the caller tenant")
+        return identity.resource_context()
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
@@ -365,6 +444,11 @@ def build_server(
                     self._authorize("inference")
                     batch_id = path[len("/v1/batch/embeddings/"):]
                     try:
+                        security.authorize_resource(
+                            self._identity,
+                            coordinator.embeddings_batch_access_context(batch_id),
+                            require_tenant=True,
+                        )
                         self._send(coordinator.embeddings_batch_document(batch_id))
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
@@ -398,6 +482,11 @@ def build_server(
                 if path.startswith("/api/v1/batch_routing_jobs/"):
                     job_id = path.rsplit("/", 1)[-1]
                     try:
+                        security.authorize_resource(
+                            self._identity,
+                            coordinator.batch_access_context(job_id),
+                            require_tenant=True,
+                        )
                         self._send(coordinator.poll_batch(job_id))
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
@@ -583,9 +672,16 @@ def build_server(
                     return
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
+                    authorization_context = self._identity.resource_context()
                     self._send(_response_payload({
-                        "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size),
-                        "total_count": len(getattr(orchestrator, "_workflow_runs", {})),
+                        "items": orchestrator.list_recent_runs(
+                            page_number=page_number,
+                            page_size=page_size,
+                            authorization_context=authorization_context,
+                        ),
+                        "total_count": orchestrator.count_recent_runs(
+                            authorization_context=authorization_context,
+                        ),
                         "page_number": page_number,
                         "page_size": page_size,
                     }, security.expose_trace_by_default))
@@ -593,7 +689,13 @@ def build_server(
                 if path.startswith("/api/v1/workflow_runs/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.expose_trace_by_default))
+                        self._send(_response_payload(
+                            orchestrator.get_workflow_run(
+                                workflow_run_id,
+                                authorization_context=self._identity.resource_context(),
+                            ),
+                            security.expose_trace_by_default,
+                        ))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -610,7 +712,13 @@ def build_server(
                                 "status_code": 200,
                             },
                         )
-                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.expose_trace_by_default))
+                        self._send(_response_payload(
+                            orchestrator.get_access_report(
+                                workflow_run_id,
+                                authorization_context=self._identity.resource_context(),
+                            ),
+                            security.expose_trace_by_default,
+                        ))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -619,6 +727,11 @@ def build_server(
                     evaluation_run_id = path.rsplit("/", 1)[-1]
                     runs = getattr(orchestrator, "_evaluation_runs", {})
                     if evaluation_run_id in runs:
+                        security.authorize_resource(
+                            self._identity,
+                            runs[evaluation_run_id].get("authorization_context"),
+                            require_tenant=True,
+                        )
                         self._send(_response_payload(runs[evaluation_run_id], security.expose_trace_by_default))
                         return
                     self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
@@ -715,6 +828,7 @@ def build_server(
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
                 self._authorize(scope)
                 body = self._read_json()
+                authorization_context = self._authorize_resource(body.get("metadata"))
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
@@ -755,7 +869,9 @@ def build_server(
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
                     if stream and orchestrator.would_route(messages, mode):
-                        self._stream_route_completion(orchestrator, security, messages, model_name)
+                        self._stream_route_completion(
+                            orchestrator, security, messages, model_name, authorization_context
+                        )
                         orchestrator.record_analytics_event(
                             "chat_completion_requested",
                             {
@@ -775,6 +891,7 @@ def build_server(
                         hints=routing,
                         model_name=model_name,
                         workflow_run_id=f"run_{uuid.uuid4().hex}",
+                        authorization_context=authorization_context,
                     ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
@@ -815,7 +932,10 @@ def build_server(
                     inputs = _validate_embeddings_inputs(body)
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     attribution = _embeddings_attribution(body)
-                    submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
+                    submit_metadata: dict[str, Any] = {
+                        "actor_scope": "inference",
+                        "authorization_context": authorization_context,
+                    }
                     endpoint_alias = body.get("endpoint")
                     if endpoint_alias:
                         submit_metadata["endpoint_alias"] = str(endpoint_alias)
@@ -842,7 +962,7 @@ def build_server(
                 if path == "/api/v1/batch_routing_jobs":
                     _reject_unknown_keys(body, ALLOWED_BATCH_KEYS)
                     batch_requests = _validate_batch_requests(body, security.expose_trace_by_default)
-                    metadata = {"actor_scope": "inference"}
+                    metadata = {"actor_scope": "inference", "authorization_context": authorization_context}
                     job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
                     orchestrator.record_analytics_event(
                         "batch_routing_job_created",
@@ -865,6 +985,11 @@ def build_server(
                 if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
                     try:
+                        security.authorize_resource(
+                            self._identity,
+                            coordinator.batch_access_context(job_id),
+                            require_tenant=True,
+                        )
                         retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
                     except KeyError:
                         self._send_error(404, "batch_job_not_found", f"batch job {job_id} not found")
@@ -898,7 +1023,11 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
+                    result = self._run(lambda: orchestrator.run(
+                        [{"role": "user", "content": prompt}],
+                        mode=mode,
+                        authorization_context=authorization_context,
+                    ))
                     self._send(_response_payload(result, include_trace))
                     return
                 if path == "/api/v1/workflow_runs":
@@ -908,7 +1037,11 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
+                    result = self._run(lambda: orchestrator.run(
+                        [{"role": "user", "content": prompt}],
+                        mode=mode,
+                        authorization_context=authorization_context,
+                    ))
                     self._send(_response_payload(result, include_trace), 201)
                     return
                 if path == "/api/v1/evaluation_runs":
@@ -920,7 +1053,11 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
+                    evaluation_run = self._run(lambda: orchestrator.run_evaluation(
+                        [str(item) for item in prompts],
+                        mode=mode,
+                        authorization_context=authorization_context,
+                    ))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -935,9 +1072,13 @@ def build_server(
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
-        def _authorize(self, scope: str) -> None:
+        def _authorize(self, scope: str) -> VerifiedIdentity:
             security.check_rate_limit(self.client_address[0])
-            security.authorize(self.headers, scope, self.client_address[0])
+            self._identity = security.authorize(self.headers, scope, self.client_address[0])
+            return self._identity
+
+        def _authorize_resource(self, resource: Any = None) -> dict[str, str]:
+            return security.authorize_resource(self._identity, resource)
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()
@@ -1032,7 +1173,14 @@ def build_server(
             self.wfile.write(frame.encode("utf-8"))
             self.wfile.flush()
 
-        def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
+        def _stream_route_completion(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+            authorization_context: dict[str, str],
+        ) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = f"chatcmpl-{int(time.time() * 1000)}"
@@ -1053,7 +1201,11 @@ def build_server(
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                    for delta in orchestrator.stream_route(
+                        messages,
+                        workflow_run_id=run_id,
+                        authorization_context=authorization_context,
+                    ):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame

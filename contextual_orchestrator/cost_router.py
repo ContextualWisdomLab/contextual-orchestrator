@@ -116,6 +116,7 @@ class CostRoutingCoordinator:
         hints: Optional[Dict[str, Any]] = None,
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
+        authorization_context: Optional[Dict[str, str]] = None,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -135,7 +136,13 @@ class CostRoutingCoordinator:
                 attribution=dict(attribution or {}),
                 mode=mode,
             )
-            job = self.submit_batch([request], metadata={"routing_reason": decision.reason})
+            job = self.submit_batch(
+                [request],
+                metadata={
+                    "routing_reason": decision.reason,
+                    "authorization_context": dict(authorization_context or {}),
+                },
+            )
             return {
                 "channel": "batch",
                 "routing_reason": decision.reason,
@@ -145,7 +152,12 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        result = self.orchestrator.run(messages, mode=mode, workflow_run_id=workflow_run_id)
+        result = self.orchestrator.run(
+            messages,
+            mode=mode,
+            workflow_run_id=workflow_run_id,
+            authorization_context=authorization_context,
+        )
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),
@@ -207,6 +219,7 @@ class CostRoutingCoordinator:
     ) -> BatchJob:
         """Submit a batch of requests to the configured batch backend."""
         job = self.batch_backend.submit(requests, metadata=metadata)
+        job.authorization_context = dict((metadata or {}).get("authorization_context") or {})
         self._batch_jobs[job.job_id] = job
         return job
 
@@ -264,6 +277,10 @@ class CostRoutingCoordinator:
             raise KeyError(f"batch job {job_id!r} not found")
         return job
 
+    def batch_access_context(self, job_id: str) -> Dict[str, str]:
+        """Return the non-secret tenant context bound to a routing batch."""
+        return dict(self._require_job(job_id).authorization_context)
+
     # ------------------------------------------------------------------
     # Embeddings batch lifecycle
     # ------------------------------------------------------------------
@@ -287,6 +304,7 @@ class CostRoutingCoordinator:
             inputs, model=model, attribution=shared_attribution
         )
         job = self.embedding_batch_backend.submit(requests, metadata=metadata)
+        job.authorization_context = dict((metadata or {}).get("authorization_context") or {})
         self._embedding_jobs[job.job_id] = job
         self._embedding_requests[job.job_id] = requests
         self._embedding_input_counts[job.job_id] = len(inputs)
@@ -589,6 +607,10 @@ class CostRoutingCoordinator:
         if job is None:
             raise KeyError(f"embeddings batch job {batch_id!r} not found")
         return job
+
+    def embeddings_batch_access_context(self, batch_id: str) -> Dict[str, str]:
+        """Return the non-secret tenant context bound to an embeddings batch."""
+        return dict(self._require_embedding_job(batch_id).authorization_context)
 
     # ------------------------------------------------------------------
     # Reporting

@@ -180,6 +180,7 @@ class BatchJob:
     status: str = "submitted"
     submitted_at: int = field(default_factory=lambda: int(time.time()))
     request_count: int = 0
+    authorization_context: Dict[str, str] = field(default_factory=dict)
 
 
 @dataclass

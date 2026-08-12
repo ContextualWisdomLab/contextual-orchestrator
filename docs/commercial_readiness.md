@@ -10,7 +10,7 @@ compliance certificate.
 | Area | Acceptance bar | Evidence source |
 | --- | --- | --- |
 | Product capability evidence | The program exposes one OpenAI-compatible API plus an operator control plane with agent pool, policy, trace, access-list, evaluation replay, and locale evidence. | `/v1/chat/completions`, `/admin`, `/admin/state`, `/api/v1/sales_readiness/latest` |
-| Security and access control | Admin and inference scopes are split, public bind is opt-in, traces are hidden by default, rate limits and concurrency limits are active, and remote provider egress uses HTTPS with explicit key env vars. | `SecurityConfig.readiness_profile()`, `sales_readiness_report()` |
+| Security and access control | Admin and inference scopes are split, public bind is opt-in, traces are hidden by default, rate limits and concurrency limits are active, Keyverse identity/tenant checks are fail-closed, and remote provider egress uses HTTPS with KV-backed credentials. | `SecurityConfig.readiness_profile()`, `sales_readiness_report()`, `docs/kv-credentials.md` |
 | Operational resilience | The runtime reports policy-safe routing, request rate limits, run concurrency limits, and remediation for missing production SLOs. | `/api/v1/analytics_snapshots/latest`, `/api/v1/commercial_readiness/latest` |
 | Audit and compliance evidence | Workflow traces include role, agent, access list, output, verification, provider exclusion, and replay evidence. | workflow run records, access reports, analytics guardrails |
 | Buyer due-diligence packet | Product, API, security, analytics, and commercial readiness documents are present and linked to runtime evidence. | `README.md`, `SECURITY.md`, `docs/product_planning.md`, `docs/rest_api_design.md`, `docs/analytics_spec.md`, this document |

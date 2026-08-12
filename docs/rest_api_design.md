@@ -8,6 +8,9 @@
 - Error shape: `{"error_code": "...", "error_message": "...", "error_detail": {...}}` in production.
 - Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
 - OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
+- When a Keyverse verifier is configured, optional request `metadata.org` and
+  `metadata.workspace` must exactly match the verified identity; created
+  workflow, evaluation, and batch resources retain that tenant context.
 
 ## Current Endpoints
 

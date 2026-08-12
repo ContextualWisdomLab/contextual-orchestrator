@@ -11,9 +11,16 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.batch_routing import BatchRequest  # noqa: E402
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
+from contextual_orchestrator.cost_router import CostRoutingCoordinator  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, chat_completion_response, redact_text, redact_value  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    RequestError,
+    SecurityConfig,
+    VerifiedIdentity,
+    build_server,
+)
 
 
 def build() -> TaskOrchestrator:
@@ -23,20 +30,132 @@ def build() -> TaskOrchestrator:
 def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
     seen: list[tuple[str, str]] = []
 
-    def verify(token: str, scope: str) -> bool:
+    def verify(token: str, scope: str) -> VerifiedIdentity:
         seen.append((token, scope))
-        return token == "keyverse-token" and scope == "inference"
+        return VerifiedIdentity(
+            subject="user-1",
+            org="org-a",
+            workspace="workspace-a",
+            roles=frozenset({"member"}),
+            scopes=frozenset({"inference"}),
+        )
 
     security = SecurityConfig(bearer_verifier=verify)
-    security.authorize({"authorization": "Bearer keyverse-token"}, "inference", "127.0.0.1")
+    identity = security.authorize({"authorization": "Bearer keyverse-token"}, "inference", "127.0.0.1")
+    assert identity.subject == "user-1"
+    assert identity.org == "org-a"
     try:
         security.authorize({"authorization": "Bearer keyverse-token"}, "admin", "127.0.0.1")
-    except Exception as exc:
+    except RequestError as exc:
         assert "invalid" in str(exc)
     else:  # pragma: no cover
         raise AssertionError("external verifier accepted the wrong scope")
     assert seen == [("keyverse-token", "inference"), ("keyverse-token", "admin")]
     assert security.readiness_profile()["auth_mode"] == "external_bearer_verifier"
+
+
+def test_external_bearer_verifier_rejects_boolean_only_decisions() -> None:
+    security = SecurityConfig(bearer_verifier=lambda _token, _scope: True)  # type: ignore[arg-type]
+
+    try:
+        security.authorize({"authorization": "Bearer keyverse-token"}, "inference", "127.0.0.1")
+    except RequestError as exc:
+        assert exc.code == "unauthorized"
+    else:  # pragma: no cover
+        raise AssertionError("boolean-only verifier must not create an identity")
+
+
+def test_keyverse_identity_enforces_org_and_workspace_abac() -> None:
+    identity = VerifiedIdentity(
+        subject="user-1",
+        org="org-a",
+        workspace="workspace-a",
+        scopes=frozenset({"inference"}),
+    )
+    security = SecurityConfig(auth_token="local-token")
+
+    context = security.authorize_resource(identity, {"org": "org-a", "workspace": "workspace-a"})
+    assert context == {
+        "subject": "user-1",
+        "org": "org-a",
+        "workspace": "workspace-a",
+    }
+    try:
+        security.authorize_resource(identity, {"org": "org-b", "workspace": "workspace-a"})
+    except RequestError as exc:
+        assert exc.status == 403
+        assert exc.code == "tenant_forbidden"
+    else:  # pragma: no cover
+        raise AssertionError("cross-tenant resource must be rejected")
+
+
+def test_http_external_identity_rejects_cross_tenant_metadata() -> None:
+    def verify(_token: str, scope: str) -> VerifiedIdentity:
+        return VerifiedIdentity(
+            subject="user-1",
+            org="org-a",
+            workspace="workspace-a",
+            scopes=frozenset({scope}),
+        )
+
+    server = build_server(build(), port=0, security=SecurityConfig(bearer_verifier=verify))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    payload = {
+        "messages": [{"role": "user", "content": "hello"}],
+        "metadata": {"org": "org-a", "workspace": "workspace-a"},
+    }
+
+    try:
+        allowed_status, _ = post_json(
+            f"http://127.0.0.1:{port}/v1/chat/completions", payload, token="keyverse-token"
+        )
+        denied_status, denied_body = post_json(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {**payload, "metadata": {"org": "org-b", "workspace": "workspace-a"}},
+            token="keyverse-token",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert allowed_status == 200
+    assert denied_status == 403
+    assert denied_body["error"]["code"] == "tenant_forbidden"
+
+
+def test_workflow_records_are_tenant_scoped() -> None:
+    orchestrator = build()
+    owner = {"subject": "user-1", "org": "org-a", "workspace": "workspace-a"}
+    other = {"subject": "user-2", "org": "org-b", "workspace": "workspace-b"}
+    record = orchestrator.run(
+        [{"role": "user", "content": "hello"}],
+        mode="route",
+        authorization_context=owner,
+    )
+
+    assert record["authorization_context"] == owner
+    assert orchestrator.get_workflow_run(record["workflow_run_id"], authorization_context=owner) == record
+    assert orchestrator.list_recent_runs(authorization_context=other) == []
+    assert orchestrator.count_recent_runs(authorization_context=other) == 0
+    try:
+        orchestrator.get_workflow_run(record["workflow_run_id"], authorization_context=other)
+    except KeyError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("cross-tenant workflow lookup must be hidden")
+
+
+def test_batch_resources_keep_tenant_context() -> None:
+    owner = {"subject": "user-1", "org": "org-a", "workspace": "workspace-a"}
+    coordinator = CostRoutingCoordinator(build())
+    job = coordinator.submit_batch(
+        [BatchRequest(messages=[{"role": "user", "content": "hello"}])],
+        metadata={"authorization_context": owner},
+    )
+
+    assert coordinator.batch_access_context(job.job_id) == owner
 
 
 def post_json(url: str, payload: dict[str, object], token: str | None = None) -> tuple[int, dict[str, object]]:

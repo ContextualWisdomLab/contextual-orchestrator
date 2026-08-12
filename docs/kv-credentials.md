@@ -156,11 +156,16 @@ legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment variables at request time.
 Explicit token flags remain local-development escape hatches.
 
 For production ecosystem access, construct `SecurityConfig` with a reviewed
-`bearer_verifier` that validates Keyverse-issued OIDC tokens. The adapter must
-own issuer/audience/signature/expiry/scope validation and key rotation; do not
-decode JWTs with a string split or place Keycloak admin credentials in this
-repository. Keyverse RP registration, desired-state reconciliation, and
-confidential-client secret placement remain deployment-controller operations.
+`bearer_verifier(token, scope)` that validates Keyverse-issued OIDC tokens and
+returns `VerifiedIdentity(subject, org, workspace, scopes, roles)`. The adapter
+must own issuer/audience/signature/expiry/scope validation and key rotation;
+boolean-only results, verifier errors, and missing requested scopes are denied.
+The gateway compares exact request `metadata.org` and `metadata.workspace`
+against the verified claims and binds those claims to workflow, evaluation, and
+batch resources without storing bearer bytes. Do not decode JWTs with a string
+split or place Keycloak admin credentials in this repository. Keyverse RP
+registration, desired-state reconciliation, and confidential-client secret
+placement remain deployment-controller operations.
 
 ## Gateway direction
 
