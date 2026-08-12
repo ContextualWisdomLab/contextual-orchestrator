@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -1694,6 +1694,51 @@ class TaskOrchestrator:
         start = (page_number - 1) * page_size
         end = start + page_size
         return [self._agent_to_admin_payload(agent) for agent in self.agents[start:end]]
+
+    def list_openai_models(self) -> dict[str, Any]:
+        """Return an OpenAI-compatible ``/v1/models`` list from the agent pool.
+
+        Consumers (OpenAI SDKs, gyeot, scopeweave) discover selectable model ids
+        without admin-scope agent pool access. Each enabled agent model appears
+        once; the gateway default id ``contextual-orchestrator`` is always first
+        so clients that send that model name keep working.
+        """
+        created = 1_700_000_000  # stable epoch so list responses are deterministic
+        data: list[dict[str, Any]] = [
+            {
+                "id": "contextual-orchestrator",
+                "object": "model",
+                "created": created,
+                "owned_by": "contextual-orchestrator",
+            }
+        ]
+        seen: set[str] = {"contextual-orchestrator"}
+        for agent in self.agents:
+            if agent.disabled:
+                continue
+            model_id = str(agent.model).strip()
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            data.append(
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "created": created,
+                    "owned_by": agent.provider_name or self._infer_provider_name(agent.base_url) or "agent_pool",
+                }
+            )
+        return {"object": "list", "data": data}
+
+    def get_openai_model(self, model_id: str) -> dict[str, Any]:
+        """Return one OpenAI-compatible model object or raise ``KeyError``."""
+        wanted = str(model_id).strip()
+        if not wanted:
+            raise KeyError("model id is required")
+        for item in self.list_openai_models()["data"]:
+            if item["id"] == wanted:
+                return item
+        raise KeyError(f"model {wanted!r} not found")
 
     def list_recent_runs(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
         """Return a paginated list of recent workflow run records."""

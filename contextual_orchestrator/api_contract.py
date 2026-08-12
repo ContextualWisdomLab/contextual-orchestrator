@@ -17,6 +17,33 @@ OPENAPI_SPEC = {
         }
     },
     "paths": {
+        "/v1/models": {
+            "get": {
+                "operationId": "list_openai_models",
+                "summary": "List OpenAI-compatible model ids from the agent pool",
+                "security": [{"inference_bearer_auth": []}],
+                "responses": {"200": {"description": "OpenAI models list"}},
+            }
+        },
+        "/v1/models/{model_id}": {
+            "get": {
+                "operationId": "get_openai_model",
+                "summary": "Retrieve one OpenAI-compatible model id",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [
+                    {
+                        "name": "model_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {
+                    "200": {"description": "Model object"},
+                    "404": {"description": "Model not found"},
+                },
+            }
+        },
         "/api/v1/agent_pools": {
             "get": {
                 "operationId": "list_agent_pools",

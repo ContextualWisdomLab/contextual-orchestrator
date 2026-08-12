@@ -346,6 +346,21 @@ def build_server(
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
                     return
+                if path == "/v1/models" or path.startswith("/v1/models/"):
+                    # OpenAI-compatible model discovery (inference scope).
+                    self._authorize("inference")
+                    if path == "/v1/models":
+                        self._send(orchestrator.list_openai_models())
+                        return
+                    model_id = urllib.parse.unquote(path[len("/v1/models/") :])
+                    if not model_id or "/" in model_id:
+                        self._send_error(404, "model_not_found", "model not found")
+                        return
+                    try:
+                        self._send(orchestrator.get_openai_model(model_id))
+                    except KeyError:
+                        self._send_error(404, "model_not_found", f"model {model_id!r} not found")
+                    return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
                     # it is authorized here before the admin gate below.
