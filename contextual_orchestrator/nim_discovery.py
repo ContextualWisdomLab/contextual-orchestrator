@@ -220,3 +220,128 @@ def _slug_model_id(model_id: str) -> str:
     if "_" not in slug:
         slug = f"{slug}_model"
     return slug[:48]
+
+
+# Capability labels used in offline inventory / dry-run benchmark plans (issue #86).
+CAPABILITY_CHAT = "chat"
+CAPABILITY_EMBEDDINGS = "embeddings"
+CAPABILITY_IMAGE = "image"
+CAPABILITY_AUDIO = "audio"
+CAPABILITY_VIDEO = "video"
+CAPABILITY_UNSUPPORTED = "unsupported"
+CAPABILITY_UNKNOWN = "unknown"
+
+_BENCHMARK_POLICY_NAMES = (
+    "direct_worker",
+    "route_once",
+    "bounded_conduct",
+    "hindsight_best_single",
+)
+
+
+def classify_model_capability_hint(model_id: str) -> str:
+    """Return a coarse capability label from the model id string alone (offline).
+
+    This is a catalog hint for dry-run inventory, not a live probe. Live
+    capability probing (issue #86) must opt in with ``RUN_LIVE_NIM_TESTS=1`` and
+    never invent success for unsupported modalities.
+    """
+    if not isinstance(model_id, str) or not model_id.strip():
+        return CAPABILITY_UNSUPPORTED
+    token = model_id.lower()
+    if any(part in token for part in ("embed", "embedding", "e5-", "bge-")):
+        return CAPABILITY_EMBEDDINGS
+    if any(part in token for part in ("image", "vision", "sdxl", "flux", "dall-e", "stable-diffusion")):
+        return CAPABILITY_IMAGE
+    if any(part in token for part in ("audio", "whisper", "tts", "speech", "asr")):
+        return CAPABILITY_AUDIO
+    if any(part in token for part in ("video", "luma", "runway", "sora")):
+        return CAPABILITY_VIDEO
+    if any(part in token for part in ("gpt", "llama", "gemma", "mistral", "claude", "qwen", "nemotron", "instruct", "chat")):
+        return CAPABILITY_CHAT
+    return CAPABILITY_UNKNOWN
+
+
+def build_capability_inventory(model_ids: list[str]) -> dict[str, Any]:
+    """Build a secret-free capability inventory from discovered model ids.
+
+    Offline-only: classifies each id via :func:`classify_model_capability_hint`.
+    ``measurement_status`` is always ``offline_capability_hints`` so operators
+    never confuse this with a live probe.
+    """
+    rows: list[dict[str, str]] = []
+    for model_id in sorted({mid.strip() for mid in model_ids if isinstance(mid, str) and mid.strip()}):
+        rows.append(
+            {
+                "model_id": model_id,
+                "capability_hint": classify_model_capability_hint(model_id),
+            }
+        )
+    by_capability: dict[str, int] = {}
+    for row in rows:
+        label = row["capability_hint"]
+        by_capability[label] = by_capability.get(label, 0) + 1
+    return {
+        "measurement_status": "offline_capability_hints",
+        "model_count": len(rows),
+        "capability_rows": rows,
+        "capability_counts": dict(sorted(by_capability.items())),
+    }
+
+
+def build_benchmark_plan_dry_run(
+    model_ids: list[str],
+    *,
+    task_manifest_id: str = "locked_eval_v1",
+    max_steps: int = 5,
+    hard_request_budget: int = 100,
+) -> dict[str, Any]:
+    """Return a fail-closed dry-run benchmark plan for issue #86 fair comparisons.
+
+    Never attaches secrets. Hypothetical cost fields stay ``unknown`` until a
+    versioned pricing scenario exists (honest cost reporting — never invent zero).
+    Policies cover direct worker, route_once, bounded conduct, and hindsight
+    best-single baselines per the product research contract.
+    """
+    if max_steps < 1 or max_steps > 5:
+        raise NimDiscoveryError("max_steps must be between 1 and 5 for Conductor/TRINITY-bounded dry runs")
+    if hard_request_budget < 1:
+        raise NimDiscoveryError("hard_request_budget must be >= 1")
+    if not isinstance(task_manifest_id, str) or not task_manifest_id.strip():
+        raise NimDiscoveryError("task_manifest_id must be a non-empty string")
+
+    chat_eligible = [
+        mid
+        for mid in sorted({m.strip() for m in model_ids if isinstance(m, str) and m.strip()})
+        if classify_model_capability_hint(mid) in {CAPABILITY_CHAT, CAPABILITY_UNKNOWN}
+    ]
+    inventory = build_capability_inventory(model_ids)
+    cells: list[dict[str, Any]] = []
+    for policy_name in _BENCHMARK_POLICY_NAMES:
+        for model_id in chat_eligible:
+            cells.append(
+                {
+                    "policy_name": policy_name,
+                    "model_id": model_id,
+                    "task_manifest_id": task_manifest_id.strip(),
+                    "max_steps": max_steps,
+                    "actual_api_cost": "unknown",
+                    "hypothetical_paid_cost": "unknown",
+                    "pricing_scenario_id": None,
+                }
+            )
+
+    planned_calls = len(cells)
+    fits_budget = planned_calls <= hard_request_budget
+    return {
+        "measurement_status": "dry_run_plan",
+        "task_manifest_id": task_manifest_id.strip(),
+        "max_steps": max_steps,
+        "hard_request_budget": hard_request_budget,
+        "planned_request_count": planned_calls,
+        "fits_hard_request_budget": fits_budget,
+        "chat_eligible_model_count": len(chat_eligible),
+        "capability_inventory": inventory,
+        "comparison_cells": cells,
+        "admission_status": "admitted" if fits_budget else "rejected_budget_exceeded",
+    }

@@ -16,6 +16,9 @@ from contextual_orchestrator.nim_discovery import (  # noqa: E402
     DEFAULT_NIM_MODELS_URL,
     NIM_CREDENTIAL_NAME,
     NimDiscoveryError,
+    build_benchmark_plan_dry_run,
+    build_capability_inventory,
+    classify_model_capability_hint,
     discover_nim_models,
     models_to_agent_pool_entries,
     validate_nim_models_url,
@@ -298,3 +301,53 @@ if __name__ == "__main__":  # pragma: no cover
     test_validate_nim_models_url_allowlist()
     test_live_nim_catalog_when_env_seeded_into_kv()
     print("ok")
+
+
+def test_classify_model_capability_hint_modalities() -> None:
+    assert classify_model_capability_hint("meta/llama-3.1-8b-instruct") == "chat"
+    assert classify_model_capability_hint("nvidia/nv-embedqa-e5-v5") == "embeddings"
+    assert classify_model_capability_hint("stabilityai/stable-diffusion-xl") == "image"
+    assert classify_model_capability_hint("openai/whisper-large-v3") == "audio"
+    assert classify_model_capability_hint("vendor/video-gen-1") == "video"
+    assert classify_model_capability_hint("") == "unsupported"
+    assert classify_model_capability_hint("obscure-weights-v9") == "unknown"
+
+
+def test_build_capability_inventory_is_offline_honest() -> None:
+    inv = build_capability_inventory(
+        ["meta/llama-3.1-8b-instruct", "nvidia/nv-embedqa-e5-v5", "meta/llama-3.1-8b-instruct"]
+    )
+    assert inv["measurement_status"] == "offline_capability_hints"
+    assert inv["model_count"] == 2
+    assert inv["capability_counts"]["chat"] == 1
+    assert inv["capability_counts"]["embeddings"] == 1
+
+
+def test_benchmark_plan_dry_run_unknown_cost_and_budget_gate() -> None:
+    plan = build_benchmark_plan_dry_run(
+        ["meta/llama-3.1-8b-instruct", "nvidia/nv-embedqa-e5-v5"],
+        hard_request_budget=100,
+    )
+    assert plan["measurement_status"] == "dry_run_plan"
+    assert plan["admission_status"] == "admitted"
+    assert plan["chat_eligible_model_count"] == 1
+    assert all(cell["hypothetical_paid_cost"] == "unknown" for cell in plan["comparison_cells"])
+    assert all(cell["actual_api_cost"] == "unknown" for cell in plan["comparison_cells"])
+    # embeddings excluded from chat comparison cells
+    assert all("embed" not in cell["model_id"] for cell in plan["comparison_cells"])
+
+    tight = build_benchmark_plan_dry_run(
+        ["a-chat-model", "b-chat-instruct"],
+        hard_request_budget=1,
+    )
+    assert tight["admission_status"] == "rejected_budget_exceeded"
+    assert tight["fits_hard_request_budget"] is False
+
+
+def test_benchmark_plan_dry_run_rejects_invalid_bounds() -> None:
+    with pytest.raises(NimDiscoveryError):
+        build_benchmark_plan_dry_run(["x"], max_steps=6)
+    with pytest.raises(NimDiscoveryError):
+        build_benchmark_plan_dry_run(["x"], hard_request_budget=0)
+    with pytest.raises(NimDiscoveryError):
+        build_benchmark_plan_dry_run(["x"], task_manifest_id="")

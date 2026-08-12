@@ -61,6 +61,8 @@ def _discover_nim_models_command(argv: list[str]) -> None:
     from .nim_discovery import (
         DEFAULT_NIM_MODELS_URL,
         NimDiscoveryError,
+        build_benchmark_plan_dry_run,
+        build_capability_inventory,
         discover_nim_models,
         models_to_agent_pool_entries,
         validate_nim_models_url,
@@ -84,14 +86,41 @@ def _discover_nim_models_command(argv: list[str]) -> None:
         action="store_true",
         help="Emit agent-pool JSON entries instead of the discovery report.",
     )
+    parser.add_argument(
+        "--capability-inventory",
+        action="store_true",
+        help="Emit offline capability-hint inventory for discovered model ids (issue #86 dry path).",
+    )
+    parser.add_argument(
+        "--benchmark-dry-run",
+        action="store_true",
+        help="Emit a fail-closed dry-run benchmark plan with unknown costs (issue #86).",
+    )
+    parser.add_argument(
+        "--hard-request-budget",
+        type=int,
+        default=100,
+        help="Hard call budget for --benchmark-dry-run admission (default: 100).",
+    )
     args = parser.parse_args(argv)
     try:
         models_url = validate_nim_models_url(args.models_url)
     except NimDiscoveryError as exc:
         parser.error(str(exc))
     report = discover_nim_models(models_url=models_url)
-    if args.as_agent_pool:
-        print(json.dumps(models_to_agent_pool_entries(report.get("model_ids") or []), ensure_ascii=False, indent=2))
+    model_ids = report.get("model_ids") or []
+    if args.benchmark_dry_run:
+        try:
+            plan = build_benchmark_plan_dry_run(
+                model_ids, hard_request_budget=args.hard_request_budget
+            )
+        except NimDiscoveryError as exc:
+            parser.error(str(exc))
+        print(json.dumps(plan, ensure_ascii=False, indent=2))
+    elif args.capability_inventory:
+        print(json.dumps(build_capability_inventory(model_ids), ensure_ascii=False, indent=2))
+    elif args.as_agent_pool:
+        print(json.dumps(models_to_agent_pool_entries(model_ids), ensure_ascii=False, indent=2))
     else:
         print(json.dumps(report, ensure_ascii=False, indent=2))
 

@@ -67,6 +67,12 @@ uses offline fixtures (`measurement_status=offline_fixture` when a test transpor
 is injected). Live catalog checks require explicit opt-in
 `RUN_LIVE_NIM_TESTS=1` plus a seeded `NVIDIA_NIM_API_KEY`.
 
+Offline capability inventory (`build_capability_inventory`) and dry-run
+benchmark plans (`build_benchmark_plan_dry_run`) advance issue #86 without
+network or secrets: cost fields stay `unknown` until a versioned pricing
+scenario exists, and plans that exceed `--hard-request-budget` are rejected
+fail-closed (`admission_status=rejected_budget_exceeded`).
+
 ## Role temperature (reasoning effort proxy)
 
 `OrchestrationPolicy.role_temperature` sets per-role sampling temperatures
