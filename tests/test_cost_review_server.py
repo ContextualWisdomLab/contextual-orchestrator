@@ -56,9 +56,7 @@ def test_healthz_is_unauthenticated_and_ok() -> None:
     finally:
         server.shutdown()
     assert status == 200
-    assert body["status"] == "ok"
-    assert body["service"] == "contextual-orchestrator"
-    assert "batch_backend" in body
+    assert body == {"status": "ok", "service": "contextual-orchestrator"}
 
 
 def test_chat_completion_reports_real_usage_and_records_cost() -> None:
