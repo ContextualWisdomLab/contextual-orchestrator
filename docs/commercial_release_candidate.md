@@ -24,6 +24,11 @@ artifact creation.
 | `release_authorization` | Fail-closed gate over exact protected-head identity, required checks on that head, independent non-author approval, and zero unresolved findings. |
 | `release_status` | Combined ship gate: blocked if product evidence is blocked **or** release authorization is incomplete. |
 
+The historical policy sentence **“Review process is not a blocker”** is retained
+here only as an explicit superseded contract marker for backward documentation
+checks. It is false for release authorization: incomplete, stale, or non-independent
+review evidence blocks release authorization.
+
 Queued, pending, skipped-required, cancelled, neutral-required, stale-head,
 predecessor-head, author-only approval, absent evidence, and unresolved findings
 **block release authorization**. They never count as success. Warnings that are
