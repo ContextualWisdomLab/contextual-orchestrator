@@ -25,11 +25,16 @@ integration and operational acceptance succeed.
 | FR-012 execution-path evidence parity | `accepted_architecture` | route, conduct, passthrough, streaming, and batch paths | Architecture, UML, threat model | execution-mode matrix |
 | PRD-006 / FR-013 cost authority | `accepted_architecture` | price and usage authorities | ADR-0006, ERD | reconciliation and non-free unknown-price tests |
 | PRD-007 / FR-014 durable batch identity | `accepted_architecture` | job and idempotency stores | ADR-0005, operability | restart and replay tests |
-| PRD-009 / SEC-002 provider transport trust | `active_pr` | PR #96 | ADR-0002, ADR-0015, threat model | PR-bound evidence until protected merge |
-| Free-first fallback | `active_pr` | PR #94 | ADR-0007 | PR-bound evidence until protected merge |
-| Adaptive reasoning effort | `active_pr` | PR #99 stacked on PR #94 | ADR-0003 | PR-bound evidence until protected merge |
-| NIM all-modality benchmark | `active_pr` | PR #90 stacked on PR #96 | ADR-0006 | PR-bound evidence until protected merge |
+| PRD-009 / SEC-002 provider transport and configured-KV trust | `active_pr` | PR #96 | ADR-0002, ADR-0015, threat model | PR-bound evidence until protected merge |
 | Local loopback MLX provider and audited model judgment | `active_pr` | PR #109 independently targets protected main | PR #109 planning ADR, PRD, TRD | PR-bound evidence until protected merge |
+| Price-aware tie-breaking and administrator credential workflow | `active_pr` | PR #111 independently targets protected main | PR #111 contracts and issue #116 | security, routing, session, and exact-head evidence |
+| Fail-closed commercial release authorization | `active_pr` | PR #112 | ADR-0010, ADR-0011, release guide | authority-state matrix and protected integration evidence |
+| Equivalent-endpoint racing | `active_pr` | PR #114 | issue #102, architecture, operability, threat model | equivalence, validation, cancellation, accounting, and ablation matrix |
+| Liveness/readiness, inbound framing, and trace authority | `active_pr` | PR #121 | issues #117, #118, and #119 | health, framing, trace-scope, and exact-head evidence |
+| Free-first fallback | `planned` | PR #94 is `superseded` closed-unmerged evidence | ADR-0007 | replacement implementation requires fresh protected-line evidence |
+| Adaptive reasoning effort | `planned` | PR #99 is `superseded` closed-unmerged evidence | ADR-0003 | comparable-budget replacement tests |
+| NIM all-modality benchmark | `planned` | PR #90 is `superseded` closed-unmerged evidence; issue #86 owns replacement | ADR-0006 | replacement benchmark evidence |
+| Synchronous embeddings and KV-only bootstrap | `planned` | PR #66 is `superseded` closed-unmerged evidence | PRD and TRD | replacement contract evidence |
 | PRD-010 independent review and release | `accepted_architecture` | repository rules, workflows, and human governance | ADR-0010, ADR-0011, ADR-0016, release guide | exact-head and protected-main evidence |
 | Purpose-bound PII handling | `accepted_architecture` | host and runtime audience boundaries | ADR-0009, threat model | privacy, telemetry, and trace tests |
 
@@ -49,22 +54,27 @@ flowchart TB
 
 ## Active stack relationships
 
-PR #96 supersedes closed-unmerged PR #76. PR #82 remains Draft until PR #96
-has an accepted stable head or protected merge, after which only PR #82's
-unique bootstrap intent may be reconstructed and revalidated. PR #105 carries
-this canonical documentation graph and PR #104 carries the disclosure
-lifecycle on top of it. PR #109 is an independent `active_pr` MLX slice and
-does not inherit PR #96 authority. No predecessor, author-only, status-only, or
+PR #96 supersedes closed-unmerged PR #76. PR #82 is `superseded`
+closed-unmerged bootstrap evidence; only its unique intent may be rebuilt after
+PR #96 reaches an accepted protected result. PR #105 carries this canonical
+documentation graph. PR #104 was merged into this documentation stack and is
+not protected-main authority until PR #105 reaches protected main. PR #109,
+PR #111, PR #112, PR #114, and PR #121 are independent `active_pr` slices and
+do not inherit PR #96 authority. No predecessor, author-only, status-only, or
 synthetic-merge evidence transfers between these branches.
 
 ## Open product backlog relationships
 
 - Issue #95 closes only after PR #96 reaches protected main.
-- Issue #103 owns fail-closed commercial release authorization semantics.
-- Issue #102 owns equivalent-endpoint racing after the accepted security and
-  coverage boundary is integrated.
-- Issue #86 owns evidence-grade NIM model discovery and cost-quality
-  evaluation; PR #90 remains active evidence, not shipped behavior.
+- Issue #103 is implemented by active PR #112 and closes only after protected
+  integration.
+- Issue #102 is partially implemented by active PR #114; its equivalence,
+  cancellation, accounting, and comparable-budget acceptance remain incomplete.
+- Issue #86 owns evidence-grade NIM model discovery and cost-quality evaluation;
+  PR #90 and PR #115 are `superseded` closed-unmerged evidence, so there is no
+  active implementation authority for that issue.
+- Issues #117, #118, and #119 are implemented by active PR #121 and close only
+  after exact protected integration.
 
 ## Documentation maintenance rule
 

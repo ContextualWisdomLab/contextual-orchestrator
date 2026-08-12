@@ -31,6 +31,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Reconcile the live implementation inventory by classifying closed-unmerged PR #66, PR #82, PR #90, PR #94, and PR #99 as `superseded`, recording current active slices without promoting them to protected authority, and separating protected-main configuration fallback from PR #96's configured-Postgres fail-closed behavior and deliberate heuristic token-count evidence.
 - Add an indexed continuation evidence appendix that preserves the original
   documentation audit, classifies exact-head, integration, review, and absent
   evidence, and records protected-main release gaps without promoting active

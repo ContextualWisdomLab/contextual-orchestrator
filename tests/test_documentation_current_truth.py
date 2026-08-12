@@ -10,8 +10,9 @@ CANONICAL_STATUS_PATHS = (
     "ARCHITECTURE.md",
     "docs/PRD.md",
     "docs/TRACEABILITY.md",
+    "docs/TRD.md",
 )
-CLOSED_UNMERGED_STACKS = (82, 90, 94, 99)
+CLOSED_UNMERGED_STACKS = (66, 82, 90, 94, 99)
 
 
 def _read(relative_path: str) -> str:
@@ -45,15 +46,17 @@ def test_configured_postgres_kv_is_fail_closed_not_a_memory_fallback() -> None:
     """Keep canonical config authority aligned with the active #96 composition root."""
 
     architecture = _read("ARCHITECTURE.md")
+    technical_requirements = _read("docs/TRD.md")
     normalized = " ".join(architecture.split())
+    combined = " ".join(f"{architecture} {technical_requirements}".split())
 
     assert (
         "An explicitly configured Postgres KV backend is authoritative and fails "
         "closed with ConfigBackendUnavailableError"
         in normalized
     )
-    assert "config and token-count adapters may silently fall back" not in normalized
+    assert "config and token-count adapters may silently fall back" not in combined
     assert (
         "token counting may deliberately degrade to the documented heuristic"
-        in normalized
+        in combined.lower()
     )

@@ -53,7 +53,7 @@ not the target evidence architecture.
 | `admin.py` | Dependency-free operator console. |
 | `api_contract.py` | Machine-readable OpenAPI subset and operation identities. |
 | `credentials.py` | Credential protocol, in-memory backend, pgcrypto Postgres backend, and registry functions. |
-| `kv_config.py` | In-memory configuration and optional `pg-llm-batch` configuration adapters. |
+| `kv_config.py` | Intentional no-DSN in-memory configuration plus an authoritative fail-closed `pg-llm-batch` Postgres adapter on the active #96 stack. |
 | `cost_ledger.py` | Price book, prompt-safe usage records, telemetry, non-blocking export, SQL store, and rollups. |
 | `batch_routing.py` | Routing hints/policy, local and external chat/embedding batch contracts. |
 | `cost_router.py` | Coordinates token counting, sync/batch channel choice, ledger, and backend submission/retrieval. |
@@ -182,21 +182,40 @@ explicit interfaces and retain their own data and authorization boundaries.
   result replay can duplicate usage; embedding idempotency is also process-local.
 - Static OpenAPI, runtime dispatch, scopes, and endpoint prose are separate
   authorities and have drifted.
-- Optional config and token-count adapters may silently fall back to memory or
-  heuristic counting. Degraded authority needs explicit operator evidence.
+- Protected `main` may still downgrade a configured Postgres configuration path
+  to process-local memory. The `active_pr` #96 stack used by this documentation
+  branch changes that behavior: An explicitly configured Postgres KV backend is
+  authoritative and fails closed with ConfigBackendUnavailableError. This is
+  not protected-main behavior until #96 merges.
+- Token counting may deliberately degrade to the documented heuristic when the
+  optional Postgres counter cannot be constructed; that result remains
+  estimated evidence and must be operator-visible.
 - Commercial/readiness responses are derived documents, not persisted domain
   entities or external attestations.
 
 ## Status-qualified evolution
 
-- PR #96: `active_pr` provider transport and response trust boundary.
-- PR #90: `active_pr` NIM discovery/benchmark evidence.
-- PR #94: `active_pr` free-first fallback.
-- PR #99: `active_pr` adaptive reasoning controls stacked on #94.
-- PR #109: `active_pr` local loopback MLX provider and audited model judgment,
-  independently targeting protected main.
-- PR #82: `active_pr` dependency bootstrap stacked on #96 and not independently
-  mergeable first.
+- PR #96: `active_pr` provider transport, response trust, and configured-KV
+  fail-closed boundary.
+- PR #109: `active_pr` local loopback MLX provider and audited model judgment.
+- PR #111: `active_pr` price-aware tie-breaking and administrator credential
+  workflow; valid security and evidence blockers remain.
+- PR #112: `active_pr` fail-closed commercial release authorization; it is not
+  protected authority until integration.
+- PR #114: `active_pr` equivalent-endpoint racing; issue acceptance remains
+  incomplete.
+- PR #121: `active_pr` liveness/readiness, inbound framing, and trace-authority
+  hardening.
+- PR #66: `superseded` closed-unmerged synchronous-embeddings and KV-bootstrap
+  evidence; the requirement remains planned.
+- PR #82: `superseded` closed-unmerged dependency-bootstrap evidence; rebuild
+  only its unique intent after #96 protects main.
+- PR #90: `superseded` closed-unmerged NIM benchmark evidence; issue #86
+  remains planned.
+- PR #94: `superseded` closed-unmerged free-first fallback evidence; the
+  requirement remains planned.
+- PR #99: `superseded` closed-unmerged adaptive-reasoning evidence; the
+  requirement remains planned.
 
 No active pull request is architecture authority until its exact head passes
 repository policy and reaches protected main. See `docs/TRACEABILITY.md` for the

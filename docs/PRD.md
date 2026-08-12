@@ -92,12 +92,16 @@ shipped. The capability table below supplies implementation status.
 | KV credential registry with in-memory and pgcrypto Postgres backends | `implemented_on_protected_main` | Provider secrets do not fall back to ambient request-time environment values. |
 | Cost ledger, seven attribution dimensions, routing hints, local and `pg-llm-batch` adapters | `implemented_on_protected_main` | Two unsynchronized cost authorities exist; the SQL price table is dormant and the ledger currently treats missing price as zero. This is not cost-based provider selection and is a P0 honesty gap. |
 | Optional SQLite workflow/evaluation/audit/analytics persistence | `implemented_on_protected_main` | Useful standalone durability; retention pruning and multi-tenant isolation are not complete. |
-| DNS-pinned provider transport and strict bounded response parsing | `active_pr` | PR #96; do not treat it as protected-main behavior until merged. |
-| Evidence-grade NVIDIA NIM discovery and modality benchmark | `active_pr` | PR #90; benchmark evidence is not product acceptance until its stack and gates pass. |
-| Free-first fallback policy | `active_pr` | PR #94. |
-| Adaptive provider reasoning-effort control | `active_pr` | PR #99, stacked on #94. |
+| DNS-pinned provider transport, strict bounded response parsing, and configured-Postgres fail-closed authority | `active_pr` | PR #96; do not treat it as protected-main behavior until merged. |
 | Local loopback MLX provider and audited model judgment | `active_pr` | PR #109; neither local-provider nor judgment behavior is protected-main product behavior until merged. |
-| Synchronous embeddings and KV-only bootstrap expansion | `active_pr` | PR #66 on a separate historical stack. |
+| Price-aware tie-breaking and administrator credential workflow | `active_pr` | PR #111; valid session-security, non-finite-price, inherited-SAST, and quality-evidence blockers remain. |
+| Fail-closed commercial release authorization | `active_pr` | PR #112; no release authority exists until the exact protected integration and independent approval succeed. |
+| Equivalent-endpoint racing | `active_pr` | PR #114; the full equivalence, validation, cancellation, accounting, and comparable-budget contract remains incomplete. |
+| Liveness/readiness split, inbound framing, and trace-authority hardening | `active_pr` | PR #121; exact-head evidence and independent approval remain required. |
+| Evidence-grade NVIDIA NIM discovery and modality benchmark | `planned` | PR #90 is `superseded` closed-unmerged evidence; issue #86 remains the requirement authority. |
+| Free-first fallback policy | `planned` | PR #94 is `superseded` closed-unmerged evidence. |
+| Adaptive provider reasoning-effort control | `planned` | PR #99 is `superseded` closed-unmerged evidence. |
+| Synchronous embeddings and KV-only bootstrap expansion | `planned` | PR #66 is `superseded` closed-unmerged evidence. |
 | Learned routing/coordinator | `planned` | Requires a versioned evaluation set and comparable-budget proof over deterministic policy. |
 | Rust/GPU mathematical or psychometric compute layer | `out_of_scope` | Required only if orchestration begins owning such arithmetic; domain services should own their scientific kernels. |
 

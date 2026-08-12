@@ -186,6 +186,11 @@ adapter/service.
 - Cross-process bootstrap requires the Postgres backend. The default in-memory
   backend dies with the registering CLI process and is usable only when
   registration and provider calls share one process.
+- With no Postgres DSN, `InMemoryConfigStore` is the intentional standalone
+  default.
+- On active PR #96, an explicitly configured Postgres backend is authoritative
+  and raises `ConfigBackendUnavailableError` on import, construction, or seed
+  failure; this is not protected-main behavior until merge.
 - Live autonomous-development/model tests use `NVIDIA_NIM_API_KEY` only in the
   bounded job that calls the model.
 - `COPILOT_GITHUB_TOKEN` is never a development-model credential.
@@ -252,13 +257,18 @@ reviewing identity.
 - `route_p95_seconds` is exposed but is not used for dispatch. Agent selection
   is deterministic tag/domain/priority scoring, not learned, price-aware, or
   load-balanced.
-- `get_config_store()` and token-counter construction can silently fall back to
-  memory/heuristic behavior; degraded authority must be operator-visible.
+- Protected `main` can still downgrade a configured Postgres configuration path
+  to memory; the active PR #96 stack instead fails closed with
+  `ConfigBackendUnavailableError` and does not make that behavior shipped.
+- Token counting may deliberately degrade to the documented heuristic and must
+  qualify the resulting counts as estimated evidence.
 - Retention pruning, encryption, tenancy, backup, and schema migrations for the
   generic SQLite `records` store are not production complete.
 - Protected main validates global provider addresses but does not yet contain
   the entire DNS-pinned/strict-response boundary from PR #96.
 - Production readiness and buyer-evidence endpoints are local evidence views,
   not substitutes for deployed SLOs or external attestations.
-- Learned routing, adaptive reasoning, free-first fallback, and NIM benchmark
-  work remain active-PR or planned capabilities.
+- Learned routing remains planned. Adaptive reasoning, free-first fallback, and
+  NIM benchmark requirements are planned; PR #99, PR #94, and PR #90 are
+  `superseded` closed-unmerged evidence. Active PR #111, PR #112, PR #114, and
+  PR #121 remain unprotected implementation evidence.
