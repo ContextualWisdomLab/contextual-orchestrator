@@ -8,6 +8,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Security
 
+- Fail closed with a stable redacted error when an explicitly configured Postgres KV backend cannot be imported, initialized, or seeded, preventing a silent downgrade of configuration, routing, price, and credential authority to process-local memory.
 - Restrict the private plain-HTTP provider seam to `localhost` or literal loopback IP addresses, reject URL userinfo before connection, dial directly without ambient proxy lookup, reject all redirect responses, and close failed resources deterministically.
 - Pin each HTTPS provider connection to the exact public addresses approved during validation, preserve the original hostname for TLS verification, bypass environment proxy resolution, and reject redirects to close DNS-rebinding and credential-forwarding SSRF paths.
 - Fail closed at the final pre-socket HTTPS boundary when a provider Bearer credential is missing or empty at dispatch time, so credential revocation after DNS validation cannot degrade into unauthenticated provider network egress.

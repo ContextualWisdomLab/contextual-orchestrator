@@ -40,7 +40,11 @@ from .cost_ledger import (
 )
 from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
-from .kv_config import InMemoryConfigStore, get_config_store
+from .kv_config import (
+    ConfigBackendUnavailableError,
+    InMemoryConfigStore,
+    get_config_store,
+)
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
@@ -70,6 +74,7 @@ __all__ = [
     "dimension_catalog",
     # config / tokens
     "InMemoryConfigStore",
+    "ConfigBackendUnavailableError",
     "get_config_store",
     "HeuristicTokenCounter",
     "build_token_counter",
