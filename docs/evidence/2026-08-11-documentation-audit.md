@@ -68,6 +68,7 @@ refetch both refs rather than treating this dated table as merge authority.
 
 | PR | Audited contributor head (pre-write) | Base branch → live tip | Draft / mergeable | Observed gate summary | Unresolved threads |
 |---:|---|---|---|---|---:|
+| #110 | `8607eba46a5dd7773fde211ceedcf70b3855de0d` | `codex/local-llm-benchmark` → `c138d1737b69fec9805253398a41046617a3a7a7` | yes / no | Direct local suite reports 324 tests; default-branch hosted workflows and 100% production coverage are absent on this exact stacked head; CodeRabbit skipped the non-default base; no formal review or qualifying approval | 0 |
 | #109 | `ada372df205271c74ad095e898644588c7156075` | `main` → `6841b71935e0b7cb98fb52bcb4709cc5100c8d87` | no / yes | Exact-head Tests, Security, Fuzz, and Security Scan success; merge-tree Semgrep still fails on one `HTTPSConnection` advisory; one COMMENTED security review and no qualifying approval | 0 |
 | #108 | `8760993cb8262922a771948845c8dfd2afefb773` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; 571 tests and 100% statement/branch/docstring evidence; built package identity, license, and SBOM evidence present; no formal review or qualifying approval | 0 |
 | #107 | `28088b9fc86d975b43637b7758d25e20d61c5786` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Exact-head Tests, Security, and Fuzz success; no formal review or qualifying approval | 0 |
@@ -83,10 +84,9 @@ refetch both refs rather than treating this dated table as merge authority.
 | #71 | `2f4ec9fed753927d1ebc83638db68683736e6fad` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
 | #69 | `e0b3bcf31b42e284e8d0519751cfa0e775cfa32b` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
 | #83 | `fa3a30bda3b3209025d55c5526a037f3086f0f07` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
-| #84 | `269daa41fd0c664f8b78c084781471176753371b` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
 | #63 | `dd4e62b46fbc651a6696cb04438751122e161d8c` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
 
-Sixteen of the 17 PRs were Draft; #109 was non-Draft. No PR in the snapshot
+All 17 open PRs were Draft after fail-closed readiness reconciliation. No PR in the snapshot
 was eligible for immediate protected merge. A successful workflow name or CodeRabbit status was not
 promoted into independent approval or exact-head success. Live ruleset detail
 was not returned by the connector used for this audit, so the repository's
@@ -104,6 +104,7 @@ flowchart TB
     central907 -. protected integration required .-> pr96
     main["protected main"] --> pr96["PR #96 provider and Atheris boundary"]
     main --> pr109["PR #109 local MLX and audited judgment"]
+    pr109 --> pr110["PR #110 Keyverse tenant authorization"]
     pr96 --> pr107["PR #107 CodeQL action update"]
     pr96 --> pr108["PR #108 package identity and license authority"]
     pr96 --> pr105["PR #105 canonical documentation"]
