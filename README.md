@@ -204,6 +204,8 @@ Grounding papers (LLM cost, routing, load balancing) live in
 
 ## Design Artifacts
 
+- [Ecosystem connectors](docs/ecosystem.md) (free-router, clearfolio, pg-llm-batch, consumers)
+
 - [Library research](docs/library_research.md)
 - [Product planning](docs/product_planning.md)
 - [Screen design](docs/screen_design.md)
