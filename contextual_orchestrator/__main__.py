@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 
@@ -13,10 +14,11 @@ from .server import SecurityConfig, serve
 
 
 def _json_object(raw: str) -> dict[str, float]:
-    """Parse a CLI JSON object of non-negative numeric values (model → USD/1M tokens).
+    """Parse a CLI JSON object of finite non-negative USD-per-million prices.
 
-    Used by ``--price-per-million``. Rejects non-objects, non-numeric values, and
-    negatives so bad operator input fails at argparse rather than at routing time.
+    Used by ``--price-per-million``. Rejects non-objects, non-numeric values,
+    booleans, NaN, infinities, and negatives so untrusted operator input fails at
+    argparse rather than entering routing or cost evidence.
     """
     try:
         value = json.loads(raw)
@@ -29,8 +31,10 @@ def _json_object(raw: str) -> dict[str, float]:
         if not isinstance(key, str) or not key.strip():
             raise argparse.ArgumentTypeError("--price-per-million keys must be non-empty model name strings")
         if isinstance(price, bool) or not isinstance(price, (int, float)):
-            raise argparse.ArgumentTypeError(f"--price-per-million[{key!r}] must be a non-negative number")
+            raise argparse.ArgumentTypeError(f"--price-per-million[{key!r}] must be a finite non-negative number")
         number = float(price)
+        if not math.isfinite(number):
+            raise argparse.ArgumentTypeError(f"--price-per-million[{key!r}] must be finite")
         if number < 0:
             raise argparse.ArgumentTypeError(f"--price-per-million[{key!r}] must be non-negative")
         parsed[key] = number
