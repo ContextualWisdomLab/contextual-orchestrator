@@ -82,3 +82,5 @@ policy.
 Discovery credentials for live catalog checks use `NVIDIA_NIM_API_KEY` (KV). Do
 not reuse review-pipeline tokens.
 
+
+Template agent pool after free-router discovery: `examples/agents.free_router.example.json` (replace model ids; use `NVIDIA_NIM_API_KEY` via KV).

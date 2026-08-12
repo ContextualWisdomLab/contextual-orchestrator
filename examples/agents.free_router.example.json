@@ -1,0 +1,20 @@
+[
+  {
+    "id": "free_router_primary_agent",
+    "model": "REPLACE_WITH_DISCOVERED_MODEL_ID",
+    "base_url": "https://integrate.api.nvidia.com/v1",
+    "credential_key": "NVIDIA_NIM_API_KEY",
+    "model_group": "free_router_nim_pool",
+    "tags": ["reasoning", "writing"],
+    "priority": 5
+  },
+  {
+    "id": "free_router_replica_agent",
+    "model": "REPLACE_WITH_DISCOVERED_MODEL_ID",
+    "base_url": "https://integrate.api.nvidia.com/v1",
+    "credential_key": "NVIDIA_NIM_API_KEY",
+    "model_group": "free_router_nim_pool",
+    "tags": ["reasoning", "writing"],
+    "priority": 4
+  }
+]
