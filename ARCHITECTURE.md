@@ -74,6 +74,9 @@ usage telemetry. Protected main has only admin and inference bearer scopes: no
 dedicated trace scope exists, and an inference-scoped caller may request
 `include_orchestration_trace: true`. Purpose- and tenant-specific trace authority
 is an accepted boundary that still needs host RBAC or a dedicated runtime scope.
+Active PR #121 partially removes inference-only disclosure on selected paths,
+but it does not yet implement an independent purpose/tenant/resource trace
+authority across every trace-bearing surface.
 
 ## Route and conduct
 
@@ -190,20 +193,37 @@ explicit interfaces and retain their own data and authorization boundaries.
 - Token counting may deliberately degrade to the documented heuristic when the
   optional Postgres counter cannot be constructed; that result remains
   estimated evidence and must be operator-visible.
+- Protected main combines liveness/readiness detail, accepts incomplete inbound
+  framing states, and couples trace disclosure to broad bearer scopes. Active
+  PR #121 is a partial hardening slice, but duplicate Content-Length,
+  transfer-coding rejection, body deadlines/desynchronization, independent
+  trace authority, and real dependency-readiness degradation remain incomplete.
 - Commercial/readiness responses are derived documents, not persisted domain
   entities or external attestations.
 
 ## Status-qualified evolution
 
-- PR #96: `active_pr` provider transport, response trust, and configured-KV
-  fail-closed boundary.
-- PR #109: `active_pr` local loopback MLX provider and audited model judgment.
-- PR #111: `active_pr` price-aware tie-breaking and administrator credential
-  workflow; valid security and evidence blockers remain.
-- PR #112: `active_pr` fail-closed commercial release authorization; it is not
-  protected authority until integration.
-- PR #114: `active_pr` equivalent-endpoint racing; issue acceptance remains
+- PR #96: `active_pr` provider transport, response trust, configured-KV
+  fail-closed boundary, and portable Atheris prerequisite; source-complete but
+  not protected or independently approved.
+- PR #109: `active_pr` local loopback MLX provider and audited model judgment;
+  coverage, ancestry, structured review, and independent approval remain
+  unprotected evidence.
+- PR #111: `active_pr` partial price-aware tie-breaking, administrator
+  credential, and opaque-session slice; Secure-cookie, CSRF/origin,
+  bounded-session, restart/durability, disclosure-sink, security-base, and
+  approval blockers remain.
+- PR #112: `active_pr` fail-closed evidence-model prototype; caller-supplied
+  dictionaries are not a trusted protected-head release-authority binder.
+- PR #114: `active_pr` partial immediate-race experiment; explicit equivalence,
+  completed-response validation, cancellation/drain, budget, accounting,
+  deterministic tie-breaking, delayed hedge, and ablation acceptance remain
   incomplete.
+- PR #115: open `superseded` NIM catalog scaffold; useful bounded discovery
+  evidence does not satisfy issue #86's security, modality, benchmark, cost,
+  uncertainty, provenance, and transactional-artifact contract.
+- PR #121: `active_pr` open partial liveness/readiness, request-framing, and
+  trace-authority slice. Issues #117, #118, and #119 remain open and incomplete.
 - PR #66: `superseded` closed-unmerged synchronous-embeddings and KV-bootstrap
   evidence; the requirement remains planned.
 - PR #82: `superseded` closed-unmerged dependency-bootstrap evidence; rebuild
@@ -214,10 +234,10 @@ explicit interfaces and retain their own data and authorization boundaries.
   requirement remains planned.
 - PR #99: `superseded` closed-unmerged adaptive-reasoning evidence; the
   requirement remains planned.
-- PR #121: `superseded` closed-unmerged partial liveness/readiness, request-
-  framing, and trace-authority evidence. Issues #117, #118, and #119 remain
-  planned and require a complete test-first rebuild on the accepted #96 line.
+- PR #113 and PR #120: `superseded` closed-unmerged duplicate documentation
+  replays; accepted unique disclosure and canonical-graph intent is retained in
+  PR #105 rather than a second authority.
 
 No active pull request is architecture authority until its exact head passes
 repository policy and reaches protected main. See `docs/TRACEABILITY.md` for the
-dated repository snapshot and `docs/adr/README.md` for decision status.
+status-qualified relationship graph and `docs/adr/README.md` for decision status.

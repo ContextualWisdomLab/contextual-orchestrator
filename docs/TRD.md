@@ -43,6 +43,9 @@ explicit gaps below. Agent definitions remain configuration data.
 | FR-013 | Use one price/cost authority in which unknown price remains unknown and cost-based selection is claimed only when invoked. | `accepted_architecture` | ledger/spend reconciliation and unknown-price tests required |
 | FR-014 | Preserve restart-safe, idempotent batch job identity and usage recording. | `accepted_architecture` | restart/retrieval/replay tests required |
 | FR-015 | Support a bounded local loopback MLX provider and fail-closed audited model judgment without granting the local transport broader credential or egress authority. | `active_pr` | PR #109 tests and planning ADR; no protected-main authority until merge |
+| FR-016 | Separate unauthenticated process liveness from bounded, authenticated dependency readiness and deterministic degraded states. | `active_pr` | PR #121 is a partial implementation; real dependency probes, deadlines, 503/degraded semantics, and protected integration remain incomplete |
+| FR-017 | Reject ambiguous, duplicate, transfer-coded, oversized, truncated, or slow inbound request framing before unbounded body consumption and close unsafe connections. | `active_pr` | PR #121 is a partial implementation; duplicate-length, transfer-coding, deadline, connection-close, socket, and fuzz acceptance remain incomplete |
+| FR-018 | Authorize orchestration-trace disclosure independently from ordinary inference/admin access across every trace-bearing surface. | `active_pr` | PR #121 is a partial implementation; purpose, tenant, resource, lifetime, revocation, compatibility, and complete-surface acceptance remain incomplete |
 
 ### Quality and safety requirements
 
@@ -67,6 +70,8 @@ explicit gaps below. Agent definitions remain configuration data.
 | SEC-005 | PII handling is purpose- and audience-bound. Blanket masking is not a substitute for authorization, encryption, retention, deletion, or audit. |
 | SEC-006 | Untrusted JSON, SSE, agent configuration, and redaction inputs have validation and fuzz seams. |
 | SEC-007 | Checks, statuses, reviews, and merge authority are distinct evidence types; none may impersonate another. |
+| SEC-008 | Browser-admin sessions are cryptographically and semantically distinct from long-lived bearer credentials, bounded, revocable, origin/CSRF-controlled, Secure on HTTPS, and explicit about restart/durability semantics. PR #111 is a partial `active_pr` implementation. |
+| SEC-009 | Trace disclosure requires an independent purpose-bound authority rather than inference or broad admin scope alone. PR #121 is a partial `active_pr` implementation. |
 
 ## Interfaces
 
@@ -89,9 +94,12 @@ explicit gaps below. Agent definitions remain configuration data.
 - `/api/v1/access_reports/{workflow_run_id}`
 - cost, usage, analytics, readiness, and buyer-evidence resources defined in
   `contextual_orchestrator/api_contract.py`
-- `GET /healthz` for liveness only; it is not readiness or dependency proof
+- `GET /healthz` on protected main combines liveness with internal detail and
+  is not an accepted readiness contract; active PR #121 partially narrows it
+- `GET /readyz` exists only on active PR #121 and is not accepted until it
+  proves bounded dependency health and deterministic degraded states
 
-Current scopes are asymmetric: `/healthz` and `/openapi.json` are
+Current protected-main scopes are asymmetric: `/healthz` and `/openapi.json` are
 unauthenticated; chat, Responses, embedding batch, chat-batch submission and
 result upload, workflow creation, and evaluation creation use inference
 authority; most operator routes use admin authority. In protected main, chat
@@ -102,7 +110,10 @@ decision before changing it.
 There is no dedicated trace scope on protected main. A caller with inference
 authority can set `include_orchestration_trace: true` on chat requests; separate
 tenant/purpose trace authority therefore belongs at the host/gateway boundary
-until runtime RBAC is added.
+until runtime RBAC is added. Active PR #121 partially removes inference-only
+trace disclosure on selected paths, but broad admin authority still acts as
+trace authority and several trace-bearing surfaces and malformed-input cases do
+not share a complete independent policy.
 
 The dispatcher in `server.py` is the current delivery truth. `OPENAPI_SPEC` in
 `api_contract.py` describes only a resource-oriented subset and omits
@@ -270,6 +281,11 @@ reviewing identity.
   not substitutes for deployed SLOs or external attestations.
 - Learned routing remains planned. Adaptive reasoning, free-first fallback, and
   NIM benchmark requirements are planned; PR #99, PR #94, and PR #90 are
-  `superseded` closed-unmerged evidence. Active PR #111, PR #112, and PR #114
-  remain unprotected implementation evidence. PR #121 is `superseded`
-  closed-unmerged partial evidence for issues #117, #118, and #119.
+  `superseded` closed-unmerged evidence. PR #115 is an open `superseded`
+  scaffold rather than accepted benchmark authority.
+- Active PR #111 is a partial price/admin/session slice; active PR #112 is a
+  release-evidence prototype rather than a trusted authority binder; active PR
+  #114 is a partial immediate-race experiment; and active PR #121 is a partial
+  liveness/readiness, inbound-framing, and trace-authority slice. Their green
+  branch checks do not complete their issue contracts or make them protected
+  product behavior.

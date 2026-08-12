@@ -27,13 +27,13 @@ integration and operational acceptance succeed.
 | PRD-007 / FR-014 durable batch identity | `accepted_architecture` | job and idempotency stores | ADR-0005, operability | restart and replay tests |
 | PRD-009 / SEC-002 provider transport and configured-KV trust | `active_pr` | PR #96 | ADR-0002, ADR-0015, threat model | PR-bound evidence until protected merge |
 | Local loopback MLX provider and audited model judgment | `active_pr` | PR #109 independently targets protected main | PR #109 planning ADR, PRD, TRD | PR-bound evidence until protected merge |
-| Price-aware tie-breaking and administrator credential workflow | `active_pr` | PR #111 independently targets protected main | PR #111 contracts and issue #116 | security, routing, session, and exact-head evidence |
-| Fail-closed commercial release authorization | `active_pr` | PR #112 | ADR-0010, ADR-0011, release guide | authority-state matrix and protected integration evidence |
-| Equivalent-endpoint racing | `active_pr` | PR #114 | issue #102, architecture, operability, threat model | equivalence, validation, cancellation, accounting, and ablation matrix |
-| Liveness/readiness, inbound framing, and trace authority | `planned` | PR #121 is `superseded` closed-unmerged partial evidence | issues #117, #118, and #119 | complete replacement acceptance matrix required |
+| Price-aware tie-breaking and administrator credential workflow | `active_pr` | PR #111 is a partial feature slice on protected-main ancestry | PR #111 contracts and issue #116 | remaining session, security, coverage, review, and protected-integration evidence |
+| Fail-closed commercial release authorization | `active_pr` | PR #112 is an evidence-model prototype, not a trusted authority binder | ADR-0010, ADR-0011, release guide | spoofing, ruleset, review-identity, and protected-integration matrix remains incomplete |
+| Equivalent-endpoint racing | `active_pr` | PR #114 is a partial immediate-race experiment | issue #102, architecture, operability, threat model | equivalence, validation, cancellation, accounting, and ablation matrix remains incomplete |
+| Liveness/readiness, inbound framing, and trace authority | `active_pr` | PR #121 is an open partial security slice | issues #117, #118, and #119 remain requirement authority | duplicate framing, deadlines, independent trace authority, readiness degradation, and protected integration remain incomplete |
+| Evidence-grade NVIDIA NIM benchmark | `planned` | PR #90 is `superseded` closed-unmerged evidence; PR #115 is an open `superseded` scaffold; issue #86 owns replacement | ADR-0006 | replacement benchmark evidence |
 | Free-first fallback | `planned` | PR #94 is `superseded` closed-unmerged evidence | ADR-0007 | replacement implementation requires fresh protected-line evidence |
 | Adaptive reasoning effort | `planned` | PR #99 is `superseded` closed-unmerged evidence | ADR-0003 | comparable-budget replacement tests |
-| NIM all-modality benchmark | `planned` | PR #90 is `superseded` closed-unmerged evidence; issue #86 owns replacement | ADR-0006 | replacement benchmark evidence |
 | Synchronous embeddings and KV-only bootstrap | `planned` | PR #66 is `superseded` closed-unmerged evidence | PRD and TRD | replacement contract evidence |
 | PRD-010 independent review and release | `accepted_architecture` | repository rules, workflows, and human governance | ADR-0010, ADR-0011, ADR-0016, release guide | exact-head and protected-main evidence |
 | Purpose-bound PII handling | `accepted_architecture` | host and runtime audience boundaries | ADR-0009, threat model | privacy, telemetry, and trace tests |
@@ -58,26 +58,37 @@ PR #96 supersedes closed-unmerged PR #76. PR #82 is `superseded`
 closed-unmerged bootstrap evidence; only its unique intent may be rebuilt after
 PR #96 reaches an accepted protected result. PR #105 carries this canonical
 documentation graph. PR #104 was merged into this documentation stack and is
-not protected-main authority until PR #105 reaches protected main. PR #109,
-PR #111, PR #112, and PR #114 are independent `active_pr` slices and do not
-inherit PR #96 authority. PR #121 is `superseded` closed-unmerged partial
-evidence and supplies no active implementation authority. No predecessor,
-author-only, status-only, or synthetic-merge evidence transfers between these
-branches.
+not protected-main authority until PR #105 reaches protected main.
+
+PR #109 remains an independent `active_pr` local-provider/judgment slice. PR
+#111, PR #112, PR #114, and PR #121 are independent `active_pr` partial or
+prototype slices; none inherits PR #96 authority or closes its owning issue.
+PR #115 is an open scaffold classified `superseded`, not active implementation
+authority. PR #113 and PR #120 are `superseded` closed-unmerged duplicate
+documentation replays; their accepted unique intent is retained in this PR #105
+graph. No predecessor, author-only, status-only, queued, or synthetic-merge
+evidence transfers between these branches.
 
 ## Open product backlog relationships
 
-- Issue #95 closes only after PR #96 reaches protected main.
-- Issue #103 is implemented by active PR #112 and closes only after protected
-  integration.
-- Issue #102 is partially implemented by active PR #114; its equivalence,
-  cancellation, accounting, and comparable-budget acceptance remain incomplete.
+- Issue #95 closes only after PR #96 reaches protected main and operational
+  acceptance succeeds.
+- Issue #103 has a partial prototype in active PR #112. The trusted GitHub and
+  protected-main authority binder remains incomplete, so the issue stays open.
+- Issue #102 has a partial immediate-race experiment in active PR #114. Explicit
+  endpoint equivalence, completed-response validation, cancellation/drain,
+  accounting, deterministic tie-breaking, and comparable-budget acceptance
+  remain incomplete.
 - Issue #86 owns evidence-grade NIM model discovery and cost-quality evaluation.
-  PR #90 is `superseded` closed-unmerged evidence. Reopened PR #115 is an open scaffold
+  PR #90 is `superseded` closed-unmerged evidence. PR #115 is an open scaffold
   classified `superseded`, not active implementation authority, because it does
-  not satisfy the issue's accepted security, benchmark, and evidence contract.
-- Issues #117, #118, and #119 remain open requirement authorities. PR #121 is
-  `superseded` closed-unmerged partial evidence and does not close them.
+  not satisfy the accepted security, benchmark, and evidence contract.
+- Issues #117, #118, and #119 remain open requirement authorities. Active PR
+  #121 supplies partial implementation evidence only and does not close them.
+- Issue #116 remains open. Active PR #111 proves opaque session separation,
+  expiry, and logout, but Secure-cookie, CSRF/origin, bounded-session,
+  restart/durability, disclosure-sink, security-base, and approval acceptance
+  remain incomplete.
 
 ## Documentation maintenance rule
 

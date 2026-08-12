@@ -92,13 +92,13 @@ shipped. The capability table below supplies implementation status.
 | KV credential registry with in-memory and pgcrypto Postgres backends | `implemented_on_protected_main` | Provider secrets do not fall back to ambient request-time environment values. |
 | Cost ledger, seven attribution dimensions, routing hints, local and `pg-llm-batch` adapters | `implemented_on_protected_main` | Two unsynchronized cost authorities exist; the SQL price table is dormant and the ledger currently treats missing price as zero. This is not cost-based provider selection and is a P0 honesty gap. |
 | Optional SQLite workflow/evaluation/audit/analytics persistence | `implemented_on_protected_main` | Useful standalone durability; retention pruning and multi-tenant isolation are not complete. |
-| DNS-pinned provider transport, strict bounded response parsing, and configured-Postgres fail-closed authority | `active_pr` | PR #96; do not treat it as protected-main behavior until merged. |
-| Local loopback MLX provider and audited model judgment | `active_pr` | PR #109; neither local-provider nor judgment behavior is protected-main product behavior until merged. |
-| Price-aware tie-breaking and administrator credential workflow | `active_pr` | PR #111; valid session-security, non-finite-price, inherited-SAST, and quality-evidence blockers remain. |
-| Fail-closed commercial release authorization | `active_pr` | PR #112; no release authority exists until the exact protected integration and independent approval succeed. |
-| Equivalent-endpoint racing | `active_pr` | PR #114; the full equivalence, validation, cancellation, accounting, and comparable-budget contract remains incomplete. |
-| Liveness/readiness split, inbound framing, and trace-authority hardening | `planned` | PR #121 is `superseded` closed-unmerged partial evidence; issues #117, #118, and #119 remain authoritative. |
-| Evidence-grade NVIDIA NIM discovery and modality benchmark | `planned` | PR #90 is `superseded` closed-unmerged evidence; issue #86 remains the requirement authority. |
+| DNS-pinned provider transport, strict bounded response parsing, and configured-Postgres fail-closed authority | `active_pr` | PR #96; source-complete security prerequisite with exact-head repository checks, but not protected-main behavior or independently approved authority until merge. |
+| Local loopback MLX provider and audited model judgment | `active_pr` | PR #109; neither local-provider nor judgment behavior is protected-main product behavior until ancestry, coverage, structured review, approval, and integration gates pass. |
+| Price-aware tie-breaking, administrator credential workflow, and opaque browser session | `active_pr` | PR #111 is a partial feature slice. Secure-cookie, CSRF/origin, bounded-session, restart/durability, disclosure-sink, security-base, coverage, review, and protected-integration blockers remain. |
+| Fail-closed commercial release authorization | `active_pr` | PR #112 is an evidence-model prototype. Caller-supplied dictionaries are not a trusted GitHub/protected-head authority binder, so no release authority exists. |
+| Equivalent-endpoint racing | `active_pr` | PR #114 is a partial immediate-race experiment. Explicit equivalence, completed-response validation, cancellation/drain, budgets, accounting, deterministic tie-breaking, delayed hedge, and comparable-budget acceptance remain incomplete. |
+| Liveness/readiness split, inbound framing, and trace-authority hardening | `active_pr` | PR #121 is an open partial security slice. Duplicate framing, transfer-coding rejection, body deadlines/desynchronization, independent trace authority, dependency readiness/degraded states, security-base reconciliation, and approval remain incomplete; issues #117, #118, and #119 remain authoritative. |
+| Evidence-grade NVIDIA NIM discovery and modality benchmark | `planned` | PR #90 is `superseded` closed-unmerged evidence and PR #115 is an open `superseded` scaffold; issue #86 remains the requirement authority with no accepted complete implementation PR. |
 | Free-first fallback policy | `planned` | PR #94 is `superseded` closed-unmerged evidence. |
 | Adaptive provider reasoning-effort control | `planned` | PR #99 is `superseded` closed-unmerged evidence. |
 | Synchronous embeddings and KV-only bootstrap expansion | `planned` | PR #66 is `superseded` closed-unmerged evidence. |
@@ -179,9 +179,9 @@ newer primary work are research inputs, not compatibility claims.
 ## Release and acquisition acceptance
 
 A release candidate requires one unchanged protected head with passing
-functional, security, fuzz, 100% owned production statement/branch/public
-docstring, packaging, SBOM/provenance, compatibility, and reproducibility
-evidence; zero valid unresolved findings; and qualifying independent non-author
-approval. Repository evidence may demonstrate controls, but external audit,
-production SLO, penetration-test, DPA, buyer-signature, and certification
-evidence remain explicitly external.
+functional, security, fuzz, 100% owned production statement/branch/function/line
+and public-docstring, packaging, SBOM/provenance, compatibility, and
+reproducibility evidence; zero valid unresolved findings; and qualifying
+independent non-author approval. Repository evidence may demonstrate controls,
+but external audit, production SLO, penetration-test, DPA, buyer-signature, and
+certification evidence remain explicitly external.
