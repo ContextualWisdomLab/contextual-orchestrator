@@ -43,6 +43,14 @@ ADMIN_TRANSLATIONS = {
         "doc_viewer_open_doc": "Open document",
         "doc_viewer_docid": "docId",
         "doc_viewer_hint": "Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.",
+        "credentials_title": "Credentials",
+        "credentials_kv_chip": "KV-backed",
+        "credentials_hint": "Register a provider credential (for example LITELLM_API_KEY) into the KV registry. The value is never displayed or returned by any endpoint.",
+        "credentials_name_placeholder": "Credential name (e.g. LITELLM_API_KEY)",
+        "credentials_value_placeholder": "Secret value",
+        "credentials_save": "Save to KV",
+        "credentials_saved": "Saved",
+        "credentials_failed": "Failed to save credential.",
         "observability_title": "Observability",
         "spend_title": "Spend",
         "spend_model": "Model",
@@ -277,6 +285,14 @@ ADMIN_TRANSLATIONS = {
         "doc_viewer_open_doc": "문서 열기",
         "doc_viewer_docid": "docId",
         "doc_viewer_hint": "--clearfolio-url (또는 CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) 설정 시 활성화됩니다.",
+        "credentials_title": "자격 증명",
+        "credentials_kv_chip": "KV 기반",
+        "credentials_hint": "공급자 자격 증명(예: LITELLM_API_KEY)을 KV 레지스트리에 등록합니다. 값은 어떤 엔드포인트에서도 표시되거나 반환되지 않습니다.",
+        "credentials_name_placeholder": "자격 증명 이름 (예: LITELLM_API_KEY)",
+        "credentials_value_placeholder": "비밀 값",
+        "credentials_save": "KV에 저장",
+        "credentials_saved": "저장됨",
+        "credentials_failed": "자격 증명 저장에 실패했습니다.",
         "observability_title": "관측",
         "spend_title": "비용",
         "spend_model": "모델",
@@ -969,6 +985,16 @@ Summarize this research thread and verify claims.</textarea>
           </div>
           <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.</p>
         </section>
+        <section class="panel wide">
+          <div class="panel-header"><h1 data-i18n="credentials_title">Credentials</h1><span class="chip" data-i18n="credentials_kv_chip">KV-backed</span></div>
+          <p class="muted" data-i18n="credentials_hint">Register a provider credential (for example LITELLM_API_KEY) into the KV registry. The value is never displayed or returned by any endpoint.</p>
+          <form id="credentialForm">
+            <input id="credentialName" type="text" data-i18n-placeholder="credentials_name_placeholder" placeholder="Credential name (e.g. LITELLM_API_KEY)" />
+            <input id="credentialValue" type="password" data-i18n-placeholder="credentials_value_placeholder" placeholder="Secret value" autocomplete="off" />
+            <button type="submit" class="btn primary" data-i18n="credentials_save">Save to KV</button>
+          </form>
+          <p class="muted" id="credentialStatus"></p>
+        </section>
       </section>
       <section class="detail-grid view" data-view="observability" hidden>
         <section class="panel wide">
@@ -1033,7 +1059,11 @@ Summarize this research thread and verify claims.</textarea>
       agentSettings: document.querySelector("#agentSettings"),
       registerAgent: document.querySelector("#registerAgent"),
       mobileView: document.querySelector("#mobileView"),
-      language: document.querySelector("#language")
+      language: document.querySelector("#language"),
+      credentialForm: document.querySelector("#credentialForm"),
+      credentialName: document.querySelector("#credentialName"),
+      credentialValue: document.querySelector("#credentialValue"),
+      credentialStatus: document.querySelector("#credentialStatus")
     };
     let state = {agents: [], last: null, analytics: null, readiness: null, buyerHandoffBundle: null, saleabilityDecision: null, commercialEvidenceExport: null, commercialAcceptanceCheck: null, commercialReleaseCandidate: null, commercialGapRegister: null, commercialProcurementReadiness: null, commercialContractReadiness: null, commercialOnboardingReadiness: null, commercialOperationsReadiness: null, commercialSecurityAttestation: null, commercialValueReadiness: null, commercialCloseReadiness: null, commercialGoToMarketReadiness: null, commercialLaunchReadiness: null, commercialCompletionScorecard: null, commercialBuyerAcceptanceWorkflow: null, commercialDemoScenarios: null, commercialProposalPacket: null, commercialPurchaseApprovalPacket: null, commercialDueDiligenceRoom: null, commercialInvestmentCommitteeMemo: null};
     let currentLang = "en";
@@ -1565,6 +1595,24 @@ Summarize this research thread and verify claims.</textarea>
       await refreshReadiness();
       renderSecondaryViews();
     }
+    async function saveCredential(event) {
+      event.preventDefault();
+      const name = els.credentialName.value.trim();
+      const value = els.credentialValue.value;
+      const res = await fetch("/admin/api/credentials", {
+        method: "POST",
+        headers: {"content-type": "application/json"},
+        body: JSON.stringify({name, value})
+      });
+      const result = await res.json();
+      if (res.ok) {
+        els.credentialStatus.textContent = `${t("credentials_saved") || "Saved"}: ${result.registered}`;
+        els.credentialValue.value = "";
+      } else {
+        els.credentialStatus.textContent = result.error?.message || t("credentials_failed") || "Failed to save credential.";
+      }
+    }
+    els.credentialForm.addEventListener("submit", saveCredential);
     els.agentSearch.addEventListener("input", renderAgents);
     els.statusFilter.addEventListener("change", renderAgents);
     els.run.addEventListener("click", simulate);

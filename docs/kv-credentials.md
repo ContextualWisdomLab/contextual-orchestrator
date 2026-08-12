@@ -112,6 +112,42 @@ echo "$OPENAI_API_KEY" | python -m contextual_orchestrator \
     register-credential --name OPENAI_API_KEY --value-stdin
 ```
 
+### Registering a credential from the admin frontend
+
+`POST /admin/api/credentials` (admin scope) lets the `/admin` console — or any
+authenticated operator tool — write a named secret into the KV without a shell
+session, so an operator never has to hand the raw value to a deploy script:
+
+```bash
+curl -X POST http://127.0.0.1:8000/admin/api/credentials \
+  -H "authorization: Bearer $ADMIN_TOKEN" -H "content-type: application/json" \
+  -d '{"name": "LITELLM_API_KEY", "value": "sk-..."}'
+# -> {"registered": "LITELLM_API_KEY"}
+```
+
+`name` must be `UPPER_SNAKE_CASE` (1-64 characters); `value` must be a
+non-empty string. The response never echoes `value`, and no `GET` endpoint
+returns it — this is a write-only seam into the same registry `get_credential`
+reads. This is the whole scope of the frontend/Keyverse boundary described
+below: the gateway writes secrets into the KV it already owns, it does not
+implement OIDC identity itself (see "Server authentication and Keyverse").
+
+To wire that credential to a live agent, give the agent's `credential_key`
+the same name, e.g. an OpenAI-compatible gateway (LiteLLM proxy or similar)
+reached through the org's LLM gateway:
+
+```json
+{ "id": "gateway_agent", "model": "your-gateway-model-name",
+  "base_url": "https://your-litellm-compatible-gateway/v1",
+  "credential_key": "LITELLM_API_KEY", "tags": ["reasoning", "coding"] }
+```
+
+`base_url` is deployment data (agent pools are data, not code — see
+`examples/agents.openai.json`); this repo does not hardcode or guess it.
+Pair this with `--price-per-million` (see `docs/architecture.md`) so live
+routing actually prefers the cheapest equally-capable agent once real prices
+are known.
+
 ### CI/deploy injection without runtime `os.getenv`
 
 Inject `secrets.OPENAI_API_KEY` into the **bootstrap job only**, and pipe it to
