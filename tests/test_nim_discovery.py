@@ -98,6 +98,47 @@ def test_models_to_agent_pool_entries_are_loadable_agents() -> None:
     assert all("_" in entry["id"] for entry in entries)
 
 
+def test_extract_model_ids_handles_list_and_non_list_shapes() -> None:
+    assert _extract_model_ids(["alpha_model", "beta_model"]) == ["alpha_model", "beta_model"]
+    assert _extract_model_ids({"models": [{"model": "x_y"}]}) == ["x_y"]
+    assert _extract_model_ids({"data": "not-a-list"}) == []
+    assert _extract_model_ids(42) == []
+
+
+def test_slug_model_id_edge_cases() -> None:
+    assert _slug_model_id("!!!") == "unnamed_model"
+    assert _slug_model_id("simple") == "simple_model"
+    assert "__" not in _slug_model_id("a--b__c")
+
+
+def test_discover_uses_urllib_when_transport_omitted(monkeypatch) -> None:  # noqa: ANN001
+    backend = InMemoryCredentialBackend()
+    backend.set(NIM_CREDENTIAL_NAME, "nvapi-test")
+    set_backend(backend)
+
+    class _Resp:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *args):
+            return False
+
+        def read(self):
+            return json.dumps({"data": [{"id": "live_fixture_model"}]}).encode("utf-8")
+
+    def fake_urlopen(request, timeout=None, context=None):  # noqa: ANN001
+        assert request.get_header("Authorization") or request.headers
+        return _Resp()
+
+    monkeypatch.setattr("contextual_orchestrator.nim_discovery.urllib.request.urlopen", fake_urlopen)
+    try:
+        report = discover_nim_models()
+    finally:
+        set_backend(None)
+    assert report["measurement_status"] == "live_nim_catalog"
+    assert report["model_ids"] == ["live_fixture_model"]
+
+
 def test_live_nim_catalog_when_env_seeded_into_kv() -> None:
     """Optional live check: seed NVIDIA_NIM_API_KEY into KV if present in process env.
 
