@@ -285,3 +285,11 @@ def test_patch_agent_updates_model_group_in_admin_payload() -> None:
     assert payload["model_group"] == "gateway_pool_c"
     listed = orch.list_agents()
     assert listed[0]["model_group"] == "gateway_pool_c"
+
+
+def test_model_group_example_pool_loads() -> None:
+    from contextual_orchestrator.orchestrator import load_agents
+
+    agents = load_agents("examples/agents.model_group.json")
+    assert len(agents) == 2
+    assert {a.model_group for a in agents} == {"mock_gateway_pool"}
