@@ -209,8 +209,7 @@ def test_admin_session_sets_secure_cookie_behind_https_proxy() -> None:
         thread.join(timeout=5)
 
 
-def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage()
-    test_admin_session_table_evicts_oldest_when_at_capacity() -> None:
+def test_admin_session_cookie_authorizes_admin_api_without_js_token_storage() -> None:
     """Browser path: POST /admin/session mints opaque HttpOnly cookie; admin calls use it."""
     server = build_server(
         build(),
