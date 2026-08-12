@@ -127,3 +127,14 @@ if __name__ == "__main__":  # pragma: no cover
     test_models_to_agent_pool_entries_are_loadable_agents()
     test_live_nim_catalog_when_env_seeded_into_kv()
     print("ok")
+
+
+def test_role_temperature_defaults_differ_by_paper_role() -> None:
+    from contextual_orchestrator.orchestrator import OrchestrationPolicy
+
+    policy = OrchestrationPolicy()
+    assert policy.temperature_for_role("verifier") < policy.temperature_for_role("worker")
+    assert policy.temperature_for_role("thinker") <= policy.temperature_for_role("worker")
+    snap = policy.as_dict()
+    assert "role_temperature" in snap
+    assert set(snap["role_temperature"]) >= {"thinker", "worker", "verifier", "synthesizer"}
