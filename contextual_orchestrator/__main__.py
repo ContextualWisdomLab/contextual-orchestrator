@@ -55,10 +55,43 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+
+def _discover_nim_models_command(argv: list[str]) -> None:
+    """List NIM model IDs via KV credential and print agent-pool JSON candidates."""
+    from .nim_discovery import discover_nim_models, models_to_agent_pool_entries
+
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator discover-nim-models",
+        description="Discover NVIDIA NIM model IDs using the KV credential NVIDIA_NIM_API_KEY.",
+    )
+    parser.add_argument(
+        "--models-url",
+        default=None,
+        help="Override models listing URL (default: integrate.api.nvidia.com/v1/models).",
+    )
+    parser.add_argument(
+        "--as-agent-pool",
+        action="store_true",
+        help="Emit agent-pool JSON entries instead of the discovery report.",
+    )
+    args = parser.parse_args(argv)
+    kwargs = {}
+    if args.models_url:
+        kwargs["models_url"] = args.models_url
+    report = discover_nim_models(**kwargs)
+    if args.as_agent_pool:
+        print(json.dumps(models_to_agent_pool_entries(report.get("model_ids") or []), ensure_ascii=False, indent=2))
+    else:
+        print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
         _register_credential_command(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "discover-nim-models":
+        _discover_nim_models_command(sys.argv[2:])
         return
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")

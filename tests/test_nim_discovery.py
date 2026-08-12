@@ -179,3 +179,14 @@ def test_role_temperature_defaults_differ_by_paper_role() -> None:
     snap = policy.as_dict()
     assert "role_temperature" in snap
     assert set(snap["role_temperature"]) >= {"thinker", "worker", "verifier", "synthesizer"}
+
+
+def test_discover_nim_models_cli_prints_credential_missing(capsys) -> None:
+    from contextual_orchestrator.__main__ import _discover_nim_models_command
+    set_backend(InMemoryCredentialBackend())
+    try:
+        _discover_nim_models_command([])
+    finally:
+        set_backend(None)
+    out = json.loads(capsys.readouterr().out)
+    assert out["measurement_status"] == "credential_missing"
