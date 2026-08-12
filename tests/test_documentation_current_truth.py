@@ -12,7 +12,7 @@ CANONICAL_STATUS_PATHS = (
     "docs/TRACEABILITY.md",
     "docs/TRD.md",
 )
-CLOSED_UNMERGED_STACKS = (66, 82, 90, 94, 99)
+CLOSED_UNMERGED_STACKS = (66, 82, 90, 94, 99, 121)
 
 
 def _read(relative_path: str) -> str:
