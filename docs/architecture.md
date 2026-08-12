@@ -67,3 +67,4 @@ depth — it only removes replica tail latency inside one equivalence class.
 See also Yu et al. (2022) Orca / serving systems literature summarized in `docs/papers/llm-serving-load-balancing.md`.
 
 Doctoring: `docs/doctoring/model-group-endpoint-race.md`.
+See docs/papers/role-reasoning-effort-ablation.md for role_temperature grounding.
