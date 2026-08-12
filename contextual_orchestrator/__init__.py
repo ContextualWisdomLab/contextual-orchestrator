@@ -1,4 +1,8 @@
-"""Public package exports for the contextual orchestration runtime."""
+"""Public package exports for the contextual orchestration runtime.
+
+Importing this module is intentionally side-effect free: provider transports and
+optional adapters are configured explicitly by their owning runtime components.
+"""
 
 from .batch_routing import (
     BatchJob,

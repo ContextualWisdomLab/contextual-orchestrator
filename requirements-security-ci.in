@@ -1,2 +1,4 @@
+# Security tool dependencies. pip itself is bootstrapped first from the
+# repository-wide hash lock in requirements-pip-bootstrap.txt.
 pip-audit==2.10.1
 cyclonedx-bom==7.3.0
