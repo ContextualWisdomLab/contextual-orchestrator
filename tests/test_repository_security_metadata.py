@@ -101,6 +101,139 @@ def test_security_policy_documents_reporting_and_automation():
     assert "pinned to reviewed commit SHAs or hash-locked package requirements" in policy_text
 
 
+def test_security_policy_documents_coordinated_disclosure_lifecycle():
+    policy_text = read_text("SECURITY.md")
+    doctoring_text = read_text("docs/doctoring/security-disclosure-lifecycle.md")
+
+    def section(document, heading):
+        start = document.index(heading) + len(heading)
+        end = document.find("\n## ", start)
+        return document[start:] if end == -1 else document[start:end]
+
+    required_policy_tokens = [
+        "## Supported Versions",
+        "## Scope",
+        "## Reporting a Vulnerability",
+        "## Coordinated Disclosure Lifecycle",
+        "## Safe Harbor and Research Boundaries",
+        "## Advisory and Release Evidence",
+        "latest supported release",
+        "GitHub Security Advisory",
+        "acknowledgement target",
+        "not a remediation SLA",
+        "CVE",
+        "Reporter credit",
+        "public issue",
+        "Do not include exploit details",
+        "ISO/IEC 29147:2018",
+        "ISO/IEC 30111:2019",
+    ]
+    for token in required_policy_tokens:
+        assert token in policy_text
+
+    supported_versions = section(policy_text, "## Supported Versions")
+    assert "No stable release currently exists" in supported_versions
+    assert "`main` is not a supported release" in supported_versions
+    assert "version or release line" in supported_versions
+
+    reporting = section(policy_text, "## Reporting a Vulnerability")
+    normalized_reporting = " ".join(reporting.split())
+    assert "Remove credentials, personal data" in reporting
+    assert "Do not include exploit details, secrets, personal data" in reporting
+    assert "Before any stable release" in normalized_reporting
+    assert "private vulnerability reporting is enabled" in normalized_reporting
+    assert "security-notification recipients are configured" in normalized_reporting
+    assert "release authorization remains blocked" in normalized_reporting
+    assert "monitored alternative private contact" in normalized_reporting
+
+    lifecycle = section(policy_text, "## Coordinated Disclosure Lifecycle")
+    lifecycle_stages = (
+        "Receive and acknowledge",
+        "Validate and scope",
+        "Remediate and verify",
+        "Coordinate release",
+        "Publish evidence",
+        "Learn and prevent recurrence",
+    )
+    lifecycle_positions = [lifecycle.index(stage) for stage in lifecycle_stages]
+    assert lifecycle_positions == sorted(lifecycle_positions)
+
+    safe_harbor = section(policy_text, "## Safe Harbor and Research Boundaries")
+    for prohibited_activity in (
+        "denial-of-service testing",
+        "social engineering",
+        "credential stuffing",
+        "destructive testing",
+        "high-volume automated probing",
+    ):
+        assert prohibited_activity in safe_harbor
+
+    release_evidence = section(policy_text, "## Advisory and Release Evidence")
+    canonical_nonpassing_states = (
+        "queued",
+        "pending",
+        "skipped-required",
+        "cancelled",
+        "failed",
+        "absent",
+        "stale-head",
+        "predecessor-head",
+        "author-only",
+        "status-only",
+        "synthetic-merge-only",
+        "rate-limited",
+        "infrastructure-only",
+    )
+    assert "docs/RELEASE_GUIDE.md" in release_evidence
+    assert "exact integrated revision" in release_evidence
+    for state in canonical_nonpassing_states:
+        assert state in release_evidence
+
+    required_doctoring_tokens = [
+        "ISO/IEC 29147:2018",
+        "ISO/IEC 30111:2019",
+        "reviewed and confirmed",
+        "GitHub private vulnerability reporting",
+        "repository security advisory",
+        "NIST SP 800-218 Rev. 1",
+        "Initial Public Draft",
+        "Harold Booth",
+        "Michael Ogata",
+        "Karen Kent",
+        "Murugiah Souppaya",
+        "Donna Dodson",
+        "https://doi.org/10.6028/NIST.SP.800-218r1.ipd",
+        "APA 7",
+    ]
+    for token in required_doctoring_tokens:
+        assert token in doctoring_text
+
+    doctoring_contract = section(doctoring_text, "## Repository contract")
+    assert "docs/RELEASE_GUIDE.md" in doctoring_contract
+    assert "exact integrated revision" in doctoring_contract
+    for state in canonical_nonpassing_states:
+        assert state in doctoring_contract
+
+
+def test_agent_guidance_preserves_central_review_authority_and_nim_development_key():
+    """Org policy: OpenCode *review* stays on GitHub Models; product LLM tests use NIM."""
+    for guidance_path in ("AGENTS.md", "CLAUDE.md"):
+        guidance_text = read_text(guidance_path)
+        # Review pipeline must remain on GitHub Models (do not re-key review agents).
+        assert "GitHub Models" in guidance_text
+        assert "OpenCode" in guidance_text or "opencode" in guidance_text.lower() or "review" in guidance_text.lower()
+    # Product development LLM path documented for NIM (may live in docs or issue contracts).
+    security_doc = read_text("docs/doctoring/security-disclosure-lifecycle.md")
+    assert "ISO/IEC 29147" in security_doc or "29147" in security_doc
+
+
+def test_agent_guidance_keeps_kv_and_security_gate_rules():
+    for guidance_path in ("AGENTS.md", "CLAUDE.md"):
+        guidance_text = read_text(guidance_path)
+        assert "Trivy" in guidance_text or "pip-audit" in guidance_text
+        assert "get_credential" in guidance_text or "KV" in guidance_text or "credential" in guidance_text.lower()
+
+
 def test_database_design_avoids_plaintext_prompt_output_storage():
     database_text = read_text("docs/database_design.sql")
 
@@ -140,6 +273,9 @@ if __name__ == "__main__":  # pragma: no cover
     test_dependabot_tracks_actions_and_python_dependencies()
     test_codeowners_requires_repository_owner_review()
     test_security_policy_documents_reporting_and_automation()
+    test_security_policy_documents_coordinated_disclosure_lifecycle()
+    test_agent_guidance_preserves_central_review_authority_and_nim_development_key()
+    test_agent_guidance_enforces_writer_lease_and_read_only_dependencies()
     test_database_design_avoids_plaintext_prompt_output_storage()
     test_python_lockfile_uses_hash_pinning()
     test_security_tool_lockfile_uses_hash_pinning()
