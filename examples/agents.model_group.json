@@ -1,18 +1,28 @@
-[
-  {
-    "id": "replica_worker_a",
-    "model": "mock-model",
-    "base_url": "mock://local",
-    "tags": ["reasoning", "writing", "coding"],
-    "priority": 5,
-    "model_group": "mock_gateway_pool"
-  },
-  {
-    "id": "replica_worker_b",
-    "model": "mock-model",
-    "base_url": "mock://local",
-    "tags": ["reasoning", "writing", "coding"],
-    "priority": 4,
-    "model_group": "mock_gateway_pool"
-  }
-]
+{
+  "agents": [
+    {
+      "id": "replica_worker_a",
+      "model": "mock-model",
+      "base_url": "mock://local",
+      "tags": [
+        "reasoning",
+        "writing",
+        "coding"
+      ],
+      "priority": 5,
+      "model_group": "mock_gateway_pool"
+    },
+    {
+      "id": "replica_worker_b",
+      "model": "mock-model",
+      "base_url": "mock://local",
+      "tags": [
+        "reasoning",
+        "writing",
+        "coding"
+      ],
+      "priority": 4,
+      "model_group": "mock_gateway_pool"
+    }
+  ]
+}
