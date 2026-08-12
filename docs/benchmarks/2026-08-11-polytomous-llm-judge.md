@@ -179,6 +179,28 @@ in the denominator.
 
 ## Defects found and fixed during the run
 
+## Live gateway paired-method probe — 2026-08-12
+
+A live call through the running bearer-authenticated gateway at
+`127.0.0.1:18000` used the configured
+`mlx-community/llama-3.2-3b-instruct-4bit` worker and the exact
+`fast-mlsirm.ContextualOrchestratorJudge -> contextual-orchestrator -> mlx-lm`
+route. The same answer and two criteria were judged with `K=5`; the adapter
+mapped the gateway's nested `orchestration.trace` into the injected completion
+record, so each call retained one trace step and usage.
+
+| method | score | accepted | categories | tokens |
+|---|---:|:---:|---|---:|
+| direct | `1.0000` | yes | both criteria `4/4` | `568` |
+| cumulative threshold | `0.0000` | no | both criteria `0/0` | `570` |
+
+Both outputs passed the same strict parser and the two-item polytomous IRT
+shape contract. The opposite result for the same content is a paired
+method-sensitivity finding, not evidence that either method is unbiased or
+that more categories cause positive bias. It reinforces the release rule that
+method, K, trace, usage, and parse status must be retained; no keyword or
+positional repair was used.
+
 The first local calls exposed model-format failures: numeric criterion keys,
 the phrase `return criterion_categories` copied as a JSON key, and decimal
 values in an integer category field. The adapter now supplies an exact literal
