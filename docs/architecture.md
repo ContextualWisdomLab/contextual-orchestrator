@@ -40,6 +40,8 @@ This repository implements the interface and control plane, not the trained coor
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
+Browser operators authenticate via an opaque HttpOnly admin session (`POST /admin/session`) so the long-lived admin bearer is never stored in JavaScript-readable storage. See [admin_session.md](admin_session.md).
+
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 
 ## Product Planning Interpretation

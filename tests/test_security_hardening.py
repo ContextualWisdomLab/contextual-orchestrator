@@ -131,6 +131,16 @@ def _get_admin_state(port: int, headers: dict[str, str]) -> tuple[int, dict[str,
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def test_admin_session_doc_contract_covers_cookie_and_process_local_storage() -> None:
+    """Docs for #116 describe Secure/HttpOnly cookies and process-local session storage."""
+    doc = Path("docs/admin_session.md").read_text(encoding="utf-8")
+    assert "HttpOnly" in doc
+    assert "SameSite=Strict" in doc
+    assert "process-local" in doc
+    assert "X-Forwarded-Proto" in doc
+    assert "RFC 6265" in doc or "Barth" in doc
+
+
 def test_admin_shell_is_public_so_browser_can_establish_session() -> None:
     """GET /admin serves the static shell without auth so operators can sign in."""
     server = build_server(
@@ -532,6 +542,7 @@ def test_redact_value_preserves_non_string_scalars() -> None:
 if __name__ == "__main__":
     test_http_api_requires_bearer_token_and_hides_trace_by_default()
     test_admin_and_inference_tokens_are_separate()
+    test_admin_session_doc_contract_covers_cookie_and_process_local_storage()
     test_admin_shell_is_public_so_browser_can_establish_session()
     test_admin_session_sets_secure_cookie_behind_https_proxy()
     test_admin_session_cookie_authorizes_admin_api_without_js_token_storage()
