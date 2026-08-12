@@ -976,14 +976,26 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
-            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+            request_id = uuid.uuid4().hex
+            self._send(
+                _error_payload(code, message, {"request_id": request_id, **(detail or {})}),
+                status,
+                request_id=request_id,
+            )
 
-        def _send(self, payload: dict[str, Any], status: int = 200) -> None:
+        def _send(
+            self,
+            payload: dict[str, Any],
+            status: int = 200,
+            *,
+            request_id: str | None = None,
+        ) -> None:
+            rid = request_id or uuid.uuid4().hex
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
             self.send_response(status)
             self.send_header("content-type", "application/json; charset=utf-8")
             self.send_header("content-length", str(len(raw)))
-            self._send_security_headers()
+            self._send_security_headers(request_id=rid)
             self.end_headers()
             self.wfile.write(raw)
 
@@ -992,7 +1004,7 @@ def build_server(
             self.send_response(status)
             self.send_header("content-type", content_type)
             self.send_header("content-length", str(len(raw)))
-            self._send_security_headers()
+            self._send_security_headers(request_id=uuid.uuid4().hex)
             self.end_headers()
             self.wfile.write(raw)
 
@@ -1002,7 +1014,7 @@ def build_server(
             self.send_header("content-type", "text/event-stream; charset=utf-8")
             self.send_header("cache-control", "no-cache")
             self.send_header("content-length", str(len(raw)))
-            self._send_security_headers()
+            self._send_security_headers(request_id=uuid.uuid4().hex)
             self.end_headers()
             self.wfile.write(raw)
 
@@ -1012,7 +1024,7 @@ def build_server(
             self.send_header("content-type", "text/event-stream; charset=utf-8")
             self.send_header("cache-control", "no-cache")
             self.send_header("connection", "close")
-            self._send_security_headers()
+            self._send_security_headers(request_id=uuid.uuid4().hex)
             self.end_headers()
 
         def _write_sse(self, frame: str) -> None:
@@ -1049,11 +1061,13 @@ def build_server(
             finally:
                 security.release_run_slot()
 
-        def _send_security_headers(self) -> None:
+        def _send_security_headers(self, *, request_id: str | None = None) -> None:
             self.send_header("x-content-type-options", "nosniff")
             self.send_header("referrer-policy", "no-referrer")
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
+            # Correlation id for buyer ops / multi-service traces (never a secret).
+            self.send_header("x-request-id", request_id or uuid.uuid4().hex)
 
     return ThreadingHTTPServer((host, port), Handler)
 
