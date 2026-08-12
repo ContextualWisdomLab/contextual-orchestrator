@@ -430,7 +430,8 @@ def build_server(
                     self._send({
                         "status": "ok",
                         "service": "contextual-orchestrator",
-                        "agent_count": len(orchestrator.agents),
+                        "agent_count": len(orchestrator.candidates),
+                        "enabled_agent_count": len(orchestrator.agents),
                         "batch_backend": coordinator.batch_backend.name,
                         "embedding_batch_backend": coordinator.embedding_batch_backend.name,
                         "usage_record_count": len(coordinator.ledger.records()),
@@ -438,9 +439,16 @@ def build_server(
                     return
                 if path == "/v1/models":
                     self._authorize("inference")
-                    models: list[dict[str, Any]] = []
-                    seen_models: set[str] = set()
-                    for agent in orchestrator.agents:
+                    models: list[dict[str, Any]] = [{
+                        "id": "contextual-orchestrator",
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": "contextual-orchestrator",
+                        "kind": "orchestrator",
+                        "status": "active",
+                    }]
+                    seen_models: set[str] = {"contextual-orchestrator"}
+                    for agent in orchestrator.candidates:
                         if not agent.model or agent.model in seen_models:
                             continue
                         seen_models.add(agent.model)
@@ -449,6 +457,8 @@ def build_server(
                             "object": "model",
                             "created": 0,
                             "owned_by": agent.provider_name or "contextual-orchestrator",
+                            "kind": "worker",
+                            "status": "disabled" if agent.disabled else "active",
                         })
                     self._send({"object": "list", "data": models})
                     return
@@ -510,7 +520,7 @@ def build_server(
                     items = orchestrator.list_agents(page_number=page_number, page_size=page_size)
                     self._send({
                         "items": items,
-                        "total_count": len(orchestrator.agents),
+                        "total_count": len(orchestrator.candidates),
                         "page_number": page_number,
                         "page_size": page_size,
                     })

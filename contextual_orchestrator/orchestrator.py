@@ -251,8 +251,8 @@ def _responses_text(value: Any) -> str:
 
 
 def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
-    # ADR 0002: keep Codex Responses compatibility at the gateway boundary;
-    # mlx-lm remains a local Chat Completions provider.
+    # ADR 0002: keep Codex Responses compatibility at the public control-plane
+    # boundary; mlx-lm remains a local Chat Completions worker provider.
     messages: list[dict[str, Any]] = []
     instructions = _responses_text(request.get("instructions"))
     if instructions:
@@ -1210,7 +1210,8 @@ class TaskOrchestrator:
         if self._pool_store is not None:
             stored = {agent.id: agent for agent in self._pool_store.load_all()}
             agents = [stored.pop(agent.id, agent) for agent in agents] + list(stored.values())
-        self.agents = [agent for agent in agents if not agent.disabled]
+        self.candidates = list(agents)
+        self.agents = [agent for agent in self.candidates if not agent.disabled]
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
         self.client = client or ModelClient()
@@ -1277,7 +1278,15 @@ class TaskOrchestrator:
             text = self._latest_user_text(messages)
         else:
             text = _coerce_input_text(body.get("input"))
-        agent = self._select_agent(text, "worker")
+        requested_model = body.get("model")
+        agent = None if requested_model == "contextual-orchestrator" else next(
+            (candidate for candidate in self.candidates if candidate.model == requested_model),
+            None,
+        )
+        if agent is not None and agent.disabled:
+            raise RuntimeError(f"requested model {requested_model!r} is disabled")
+        if agent is None:
+            agent = self._select_agent(text, "worker")
         upstream = {
             key: value
             for key, value in body.items()
@@ -1636,7 +1645,12 @@ class TaskOrchestrator:
         if "provider_exclusions" in patch:
             patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
 
-        self.agents = [patched if agent.id == worker_agent_id else agent for agent in self.agents]
+        updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
+        updated_agents = [agent for agent in updated_candidates if not agent.disabled]
+        if not updated_agents:
+            raise ValueError("cannot disable the last enabled agent")
+        self.candidates = updated_candidates
+        self.agents = updated_agents
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self._append_audit_event(
@@ -1674,7 +1688,7 @@ class TaskOrchestrator:
         if "id" not in value or "model" not in value:
             raise ValueError("agent requires id and model")
         agent = ModelAgent.from_dict(value)
-        if any(existing.id == agent.id for existing in self.agents):
+        if any(existing.id == agent.id for existing in self.candidates):
             raise ValueError(f"agent {agent.id} already exists")
         if not agent.base_url.startswith("mock://"):
             parsed = urlparse(agent.base_url)
@@ -1682,7 +1696,8 @@ class TaskOrchestrator:
                 raise ValueError("non-mock remote agents must use an https base_url; local agents use mlx://loopback")
             if not _is_local_provider_url(agent.base_url) and not agent.credential_name:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
-        self.agents = [*self.agents, agent]
+        self.candidates = [*self.candidates, agent]
+        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         if self._pool_store is not None:
             self._pool_store.save(agent)
         self._append_audit_event(
@@ -1700,10 +1715,11 @@ class TaskOrchestrator:
         if agent_pool_id != "default":  # pragma: no cover
             raise KeyError(agent_pool_id)
         target = self._agent(worker_agent_id)
-        remaining_enabled = [agent for agent in self.agents if agent.id != worker_agent_id and not agent.disabled]
+        remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
             raise ValueError("cannot remove the last enabled agent")
-        self.agents = [agent for agent in self.agents if agent.id != worker_agent_id]
+        self.candidates = [agent for agent in self.candidates if agent.id != worker_agent_id]
+        self.agents = [agent for agent in self.candidates if not agent.disabled]
         if self._pool_store is not None:
             # Disabled tombstone (not a row delete): it overlays the seed file on restart
             # and startup drops disabled agents, so removal survives even for seed agents.
@@ -1971,7 +1987,7 @@ class TaskOrchestrator:
         self._circuit.pop(agent_id, None)
 
     def _agent(self, agent_id: str) -> ModelAgent:
-        for agent in self.agents:
+        for agent in self.candidates:
             if agent.id == agent_id:
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
@@ -2079,7 +2095,7 @@ class TaskOrchestrator:
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        return [self._agent_to_admin_payload(agent) for agent in self.agents[start:end]]
+        return [self._agent_to_admin_payload(agent) for agent in self.candidates[start:end]]
 
     def list_recent_runs(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
         """Return a paginated list of recent workflow run records."""
@@ -8293,7 +8309,7 @@ class TaskOrchestrator:
 
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
-        agent_page_size = max(1, len(self.agents))
+        agent_page_size = max(1, len(self.candidates))
         return {
             "agents": self.list_agents(page_size=agent_page_size),
             "policy": {

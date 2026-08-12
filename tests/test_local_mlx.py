@@ -9,8 +9,28 @@ from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator, load_agents  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+
+
+def test_local_candidate_registry_keeps_all_discovered_entries() -> None:
+    agents = load_agents(str(Path(__file__).resolve().parents[1] / "examples/agents.local.json"))
+    orchestrator = TaskOrchestrator(agents)
+
+    assert {agent.model for agent in orchestrator.candidates} >= {
+        "contextual-orchestrator",
+        "mlx-community/gemma-4-31b-it-4bit",
+        "mlx-community/llama-3.2-3b-instruct-4bit",
+        "outlier-ai/deepseek-r1-distill-qwen-32b-mlx-4bit",
+        "embeddinggemma",
+    }
+    assert all(not agent.disabled for agent in orchestrator.candidates)
+    assert len(orchestrator.candidates) == len(orchestrator.agents)
+    assert any(
+        agent.model == "contextual-orchestrator"
+        and set(agent.provider_exclusions) == {"thinker", "worker", "verifier", "synthesizer"}
+        for agent in orchestrator.candidates
+    )
 
 
 class _Response:

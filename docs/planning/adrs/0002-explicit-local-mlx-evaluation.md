@@ -9,6 +9,9 @@ deciders:
 consulted:
   - "mlx-lm runtime"
   - "fast-mlsirm evaluation adapter"
+  - "Sakana Fugu Technical Report"
+  - "TRINITY: An Evolved LLM Coordinator"
+  - "Learning to Orchestrate Agents in Natural Language with the Conductor"
 informed:
   - "contributors"
 affected_components:
@@ -16,6 +19,7 @@ affected_components:
   - "contextual_orchestrator/server.py"
   - "contextual_orchestrator/__main__.py"
   - "examples/agents.mlx.json"
+  - "examples/agents.local.json"
   - "tests/test_local_mlx.py"
   - "tests/test_openai_passthrough.py"
 effort: M
@@ -50,7 +54,7 @@ success_criteria:
     measurement_window: "every passthrough regression run and local Codex smoke"
     source: "contextual_orchestrator/orchestrator.py, contextual_orchestrator/server.py, tests/test_openai_passthrough.py"
   - metric: "local model discovery"
-    target: "authenticated /v1/models returns the configured local model identifiers through contextual-orchestrator"
+    target: "authenticated /v1/models returns contextual-orchestrator plus every configured worker candidate with governance status"
     measurement_window: "every Codex provider startup and passthrough test run"
     source: "contextual_orchestrator/server.py and tests/test_openai_passthrough.py"
   - metric: "credential separation"
@@ -63,13 +67,31 @@ success_criteria:
 
 ## Context
 
-mlx-lm exposes an OpenAI-compatible server, but local reasoning models may return a reasoning-only message when thinking consumes the output budget. The gateway previously treated local HTTP as a remote provider shape, and the evaluation package had no provider-neutral boundary that guaranteed contextual-orchestrator was used for LLM-as-a-Judge.
+The Fugu technical report describes an orchestrator model that behaves as one
+model to callers while selecting, delegating to, verifying with, and
+synthesizing work from a swappable worker pool. It also permits the
+orchestrator to be selected as a worker for recursive topologies. TRINITY
+defines role contracts for thinker, worker, and verifier; Conductor defines
+natural-language subtasks, worker identifiers, and access lists.
+
+This repository is a stdlib control-plane implementation of that public shape,
+not a trained Fugu/Trinity/Conductor coordinator. Its `contextual-orchestrator`
+model is therefore the public orchestration candidate, while `ModelAgent`
+records are worker candidates. Disabled records remain in the registry for
+operator visibility and can represent an incompatible capability, an inactive
+runtime, or the optional recursive self-worker until bounded recursion exists.
+
+mlx-lm exposes an OpenAI-compatible server, but local reasoning models may
+return a reasoning-only message when thinking consumes the output budget. The
+previous transport wording also treated local HTTP as a remote provider shape,
+and the evaluation package had no provider-neutral boundary that guaranteed
+contextual-orchestrator was used for LLM-as-a-Judge.
 
 Codex custom providers use the Responses wire contract, while the installed
 mlx-lm server exposes an OpenAI-compatible Chat Completions endpoint. A direct
 Codex-to-mlx-lm configuration therefore cannot preserve the Codex request and
 streaming contract. The compatibility boundary belongs in
-contextual-orchestrator, which is already the authenticated routing and
+contextual-orchestrator, which is the authenticated public control-plane and
 provider-egress boundary.
 
 > ModelClient accepts an explicit mlx:// or local:// loopback URL and maps it to HTTP only after validation.
@@ -91,6 +113,7 @@ provider-egress boundary.
 * Treat all OpenAI-compatible endpoints identically.
 * Add a direct mlx-specific provider dependency to both repositories.
 * Make mlx-lm implement the Codex Responses API or fork its server transport.
+* Treat contextual-orchestrator as only a thin gateway and omit it from the model candidate surface.
 * Keep the core stdlib-only and add explicit loopback transport controls plus an injected evaluation adapter.
 
 ## Decision Outcome
@@ -106,13 +129,18 @@ Chosen option: "Explicit loopback local transport plus provider-neutral adapter"
 
 The core accepts only mlx:// or local:// with loopback hosts and a valid port for keyless local traffic. Local batch requests use a bounded thread pool; interactive paths remain sequential by default. fast-mlsirm receives an injected contextual-orchestrator adapter, strict criteria, bounded JSON parsing, and usage/trace metadata.
 
-For Codex, the gateway accepts the Responses request, converts supported
+For Codex, the public control plane accepts the Responses request, converts supported
 message and function-tool items to the local Chat Completions shape, forwards
 the configured mlx-lm chat-template arguments, converts the result back to a
 Responses object, and emits a valid Responses SSE sequence for streaming. The
-gateway also exposes the configured model identifiers at /v1/models. The
-OpenAI/ChatGPT login remains a separate built-in Codex provider selected by a
-Codex profile; its credential is never sent to the loopback mlx-lm endpoint.
+control plane exposes `contextual-orchestrator` followed by every configured
+worker candidate at /v1/models, including explicit governance status. Discovery
+does not set `disabled`: that field is reserved for operator/admin quarantine or
+persisted removal tombstones. Recursive self-selection is constrained by
+provider exclusions in the current untrained implementation, rather than by
+disabled state.
+The OpenAI/ChatGPT login remains a separate built-in Codex provider selected by
+a Codex profile; its credential is never sent to the loopback mlx-lm endpoint.
 
 ### Consequences
 
@@ -129,14 +157,16 @@ Codex profile; its credential is never sent to the loopback mlx-lm endpoint.
 
 * Do not modify or fork mlx-lm to add a Responses endpoint.
 * Do not forward ChatGPT/OpenAI auth material to any `mlx://` or loopback provider.
-* Do not make contextual-orchestrator auto-discover or silently switch between mlx-lm, llama.cpp, vLLM, and LM Studio; each additional runtime requires an explicit agent configuration and compatible contract.
+* Do not silently switch runtimes based only on process presence. Discovery may produce an explicit candidate registry; availability and model capability are runtime/provider facts, while `disabled` remains an explicit operator/admin governance action.
+* Do not enable recursive contextual-orchestrator self-selection until recursion depth, authentication, and failure termination are explicit.
 * Do not bind the local Codex bridge to a public interface or make inference unauthenticated.
 
 ## Implementation Plan
 
 * `contextual_orchestrator/orchestrator.py`: keep the Responses-to-Chat and Chat-to-Responses conversion at `ModelClient.proxy_send`; validate local `mlx://` endpoints before sending and preserve `chat_template_kwargs`.
 * `contextual_orchestrator/server.py`: authenticate `/v1/models` and `/v1/responses`, proxy Responses requests, and frame streamed responses with `response.completed` and `data: [DONE]`.
-* `examples/agents.mlx.json`: keep the selected local model and explicit `mlx://127.0.0.1:8080/v1` transport visible in data, not code.
+* `examples/agents.mlx.json`: keep the minimal selected MLX worker example visible in data, not code.
+* `examples/agents.local.json`: keep the explicit candidate registry: public contextual-orchestrator and every discovered MLX, llama.cpp, and LM Studio candidate. Do not pre-disable entries as a discovery side effect.
 * `tests/test_local_mlx.py`: verify the local Responses request is adapted to the Chat transport and template arguments.
 * `tests/test_openai_passthrough.py`: verify the Responses SSE completion contract and model discovery endpoint.
 * Local machine configuration: keep the ChatGPT login in Codex's normal auth cache, select the built-in `openai` provider through a profile when needed, and keep the local gateway bearer token in the OS credential store.
@@ -144,7 +174,7 @@ Codex profile; its credential is never sent to the loopback mlx-lm endpoint.
 ## Verification
 
 * `PYTHONPATH=. .venv/bin/python -m pytest -q tests/test_local_mlx.py tests/test_openai_passthrough.py` passes in the repository test environment.
-* `GET /healthz` and authenticated `GET /v1/models` succeed on the loopback gateway.
+* `GET /healthz` and authenticated `GET /v1/models` succeed on the loopback control plane; model discovery includes the public orchestrator and the complete configured candidate registry.
 * Authenticated streamed `POST /v1/responses` contains `response.completed` and `data: [DONE]` and reaches the configured mlx-lm model.
 * A Codex local-provider smoke returns the requested exact sentinel response through contextual-orchestrator.
 * Required exact-head CI, independent approval, zero unresolved threads, and final merge refetch are governed by ADR-0004; local verification cannot substitute for those gates.
@@ -190,9 +220,10 @@ Run the local transport and passthrough tests, the real mlx route/conduct/judge 
 | LLM-as-a-Judge could bypass the gateway. | Make fast-mlsirm depend on an injected contextual-orchestrator object, not a provider. | Implemented |
 | Quality claims could be inferred from latency/step count. | Report structural metrics as structural and use rubric judgments for quality. | Implemented; benchmark ongoing |
 | Codex sends Responses requests while mlx-lm accepts Chat Completions. | Convert the supported request/response subset at the authenticated gateway and test the SSE completion sequence. | Implemented |
-| Codex model discovery reached the gateway's missing `/v1/models` route. | Expose the configured local model IDs through an authenticated OpenAI-compatible list response. | Implemented |
+| Codex model discovery reached the gateway's missing `/v1/models` route. | Expose contextual-orchestrator plus the complete configured worker candidate registry through an authenticated OpenAI-compatible list response. | Implemented |
 | Codex's large developer/tool payload exceeded the gateway's default 64 KiB body limit. | Keep the secure default; use an explicit 8 MiB limit only for the loopback, bearer-authenticated local Codex LaunchAgent. | Implemented |
 | A local provider could accidentally receive ChatGPT/OpenAI credentials. | Keep built-in OpenAI auth and the local gateway bearer credential in separate Codex/provider boundaries; never attach OpenAI auth to `mlx://`. | Implemented |
+| The public orchestrator was incorrectly described as a proxy and omitted from the candidate surface. | Treat contextual-orchestrator as the public model-like control plane; retain all discovered worker candidates in an explicit registry, reserve `disabled` for operator/admin governance, and constrain recursive self-selection until a bounded future protocol exists. | Implemented |
 
 ## Risks and Mitigations
 
@@ -201,8 +232,10 @@ Run the local transport and passthrough tests, the real mlx route/conduct/judge 
 | A malicious config labels a remote endpoint as local. | low | high | Scheme, loopback host, port, credential/query validation and tests. | maintainer |
 | Concurrent mlx requests exceed device memory. | medium | high | Default concurrency 1 and bounded user control; measure before raising it. | local-runtime owner |
 | A small judge model produces invalid JSON. | medium | medium | Disable thinking, cap prompt/output, strict parse, fail closed. | evaluation owner |
-| Responses-to-Chat conversion loses a future Codex item or tool type. | medium | high | Reject unknown request fields, forward only supported function tools, add a focused regression for every newly supported item type, and fail closed on malformed provider output. | gateway owner |
+| Responses-to-Chat conversion loses a future Codex item or tool type. | medium | high | Reject unknown request fields, forward only supported function tools, add a focused regression for every newly supported item type, and fail closed on malformed provider output. | control-plane owner |
 | The local model emits a syntactically valid but operationally unusable tool call. | medium | medium | Keep the model/tool capability explicit in `agents.mlx.json`, use a capable local model for tool-heavy work, and retain exact Codex smoke plus tool-call tests. | local-runtime owner |
+| A discovered candidate is installed but not a usable chat worker. | medium | high | Keep it in the registry without silently changing governance state; provider capability checks and failover determine whether a request can use it, while an operator may explicitly quarantine it. | local-runtime owner |
+| Recursive self-selection can loop or re-enter the same authenticated server indefinitely. | medium | high | Keep the contextual-orchestrator self-worker candidate out of internal roles with provider exclusions until recursion depth, internal auth, and termination behavior have focused tests. | control-plane owner |
 
 ## Rollback / Exit Strategy
 
@@ -214,6 +247,7 @@ Remove the explicit local adapter and use the mock path if the local server is u
 * contextual_orchestrator/server.py
 * contextual_orchestrator/__main__.py
 * examples/agents.mlx.json
+* examples/agents.local.json
 * tests/test_local_mlx.py
 * tests/test_openai_passthrough.py
 * fast-mlsirm/python/fast_mlsirm/llm_judge.py
@@ -226,6 +260,13 @@ The public projects are [contextual-orchestrator](https://github.com/ContextualW
 On 2026-08-12 the Codex compatibility path was implemented in
 `ModelClient.proxy_send` and the HTTP server. The local checks covered the
 transport adapter, Responses SSE framing, and `/v1/models`; a live Codex smoke
-returned the requested sentinel through the loopback gateway. The machine's
+returned the requested sentinel through the loopback control plane. The machine's
 ChatGPT login remains available through Codex's built-in `openai` provider
 profile, while the local server uses a separate OS-keychain bearer token.
+
+The Fugu report was then re-read on 2026-08-12. Its distinction between the
+single model-like orchestrator and the swappable worker pool, plus its optional
+recursive orchestrator-as-worker topology, is the reason this ADR keeps a full
+candidate registry while constraining recursive self-selection in the current
+untrained stdlib implementation. `disabled` remains an operator decision, not a
+discovery decision.

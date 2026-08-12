@@ -9,7 +9,15 @@
 
 ## What The Architecture Is
 
-The public shape is a single model API. The internal shape is a model pool plus a learned coordinator that decides when to answer directly, when to delegate, how much context each worker receives, when to verify, and how to synthesize the final answer.
+The public shape is a single model API. The internal shape is a model pool plus
+an orchestrator that decides when to answer directly, when to delegate, how
+much context each worker receives, when to verify, and how to synthesize the
+final answer. The public `contextual-orchestrator` model is the orchestration
+candidate; the configured local and remote models are worker candidates in its
+pool. The candidate registry retains every discovered model. `disabled` is an
+explicit operator/admin quarantine or removal state, not an automatic discovery
+result. Capability and recursion constraints are expressed separately from that
+state.
 
 The useful split is quality-latency, not separate products:
 
@@ -29,7 +37,12 @@ The Fugu report combines these ideas into production constraints:
 
 ## Implementation Mapping
 
-This repository implements the interface and control plane, not the trained coordinator.
+This repository implements the interface and control plane, not the trained
+coordinator or its optional recursive self-worker. The public model is therefore
+an explicit control-plane candidate, while the worker pool is selected from
+configured `ModelAgent` records. The current implementation keeps that public
+record out of internal roles with provider exclusions until the runtime has a
+bounded, authenticated recursion protocol; it is not administratively disabled.
 
 - `contextual_orchestrator.orchestrator.Agent`: one configured worker model.
 - `Orchestrator.route_once`: the low-latency routing path.
