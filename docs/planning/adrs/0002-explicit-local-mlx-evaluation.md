@@ -77,9 +77,9 @@ natural-language subtasks, worker identifiers, and access lists.
 This repository is a stdlib control-plane implementation of that public shape,
 not a trained Fugu/Trinity/Conductor coordinator. Its `contextual-orchestrator`
 model is therefore the public orchestration candidate, while `ModelAgent`
-records are worker candidates. Disabled records remain in the registry for
-operator visibility and can represent an incompatible capability, an inactive
-runtime, or the optional recursive self-worker until bounded recursion exists.
+records are worker candidates. Every discovered record remains in the registry;
+`disabled` is reserved for an explicit operator/admin quarantine or a persisted
+removal tombstone, not for an automatic capability or availability judgment.
 
 mlx-lm exposes an OpenAI-compatible server, but local reasoning models may
 return a reasoning-only message when thinking consumes the output budget. The
@@ -224,6 +224,7 @@ Run the local transport and passthrough tests, the real mlx route/conduct/judge 
 | Codex's large developer/tool payload exceeded the gateway's default 64 KiB body limit. | Keep the secure default; use an explicit 8 MiB limit only for the loopback, bearer-authenticated local Codex LaunchAgent. | Implemented |
 | A local provider could accidentally receive ChatGPT/OpenAI credentials. | Keep built-in OpenAI auth and the local gateway bearer credential in separate Codex/provider boundaries; never attach OpenAI auth to `mlx://`. | Implemented |
 | The public orchestrator was incorrectly described as a proxy and omitted from the candidate surface. | Treat contextual-orchestrator as the public model-like control plane; retain all discovered worker candidates in an explicit registry, reserve `disabled` for operator/admin governance, and constrain recursive self-selection until a bounded future protocol exists. | Implemented |
+| Expanding the registry could silently change the meaning of the existing unauthenticated `/healthz` `agent_count` field from active workers to all candidates. | Preserve `agent_count` as the enabled worker count for compatibility, add explicit `candidate_count` for the full registry, and expose `enabled_agent_count` as a redundant named metric with a regression containing one disabled candidate. | Implemented |
 
 ## Risks and Mitigations
 
