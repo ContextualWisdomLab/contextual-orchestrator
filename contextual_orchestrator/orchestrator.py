@@ -1493,10 +1493,14 @@ class TaskOrchestrator:
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
-        raw = self.client.chat(planner, [
-            {"role": "system", "content": system},
-            {"role": "user", "content": task},
-        ])
+        raw = self.client.chat(
+            planner,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": task},
+            ],
+            temperature=self.policy.temperature_for_role("thinker"),
+        )
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -1645,14 +1649,18 @@ class TaskOrchestrator:
             return fallback
         judge = self._select_agent(task, "verifier")
         try:
-            reply = self.client.chat(judge, [
-                {"role": "system", "content": (
-                    "You are the verification judge. Read the verifier report about the task. "
-                    "Reply with exactly one word: ACCEPT if the verified work is sound, "
-                    "REJECT if it has disqualifying problems."
-                )},
-                {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
-            ])
+            reply = self.client.chat(
+                judge,
+                [
+                    {"role": "system", "content": (
+                        "You are the verification judge. Read the verifier report about the task. "
+                        "Reply with exactly one word: ACCEPT if the verified work is sound, "
+                        "REJECT if it has disqualifying problems."
+                    )},
+                    {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
+                ],
+                temperature=self.policy.temperature_for_role("verifier"),
+            )
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return fallback
         upper = (reply or "").strip().upper()

@@ -74,9 +74,44 @@ def test_conduct_uses_role_temperature_on_worker_path() -> None:
     assert orch.policy.temperature_for_role("worker") == 0.7
 
 
+def test_plan_and_judge_use_role_temperature() -> None:
+    """Planner (thinker) and model-judge (verifier) paths honor role temperatures."""
+    agents = [
+        ModelAgent("thinker_agent", "mock-thinker", tags=("reasoning",)),
+        ModelAgent("worker_agent", "mock-worker", tags=("coding", "writing")),
+        ModelAgent("verifier_agent", "mock-verifier", tags=("review",)),
+        ModelAgent("synthesizer_agent", "mock-synth", tags=("writing",)),
+    ]
+    orch = TaskOrchestrator(agents)
+    orch.policy = OrchestrationPolicy(
+        role_temperature={"thinker": 0.11, "verifier": 0.0, "worker": 0.33}
+    )
+    seen: list[tuple[str, float]] = []
+    original = orch.client.chat
+
+    def tracking_chat(agent, messages, temperature=0.2):  # noqa: ANN001
+        seen.append((agent.id, float(temperature)))
+        return original(agent, messages, temperature=temperature)
+
+    orch.client.chat = tracking_chat  # type: ignore[method-assign]
+    try:
+        orch._plan_generated("plan a multi-step analysis")
+    except Exception:  # noqa: BLE001 - plan parse may fail; temperature still recorded
+        pass
+    assert any(temp == 0.11 for _agent_id, temp in seen), seen
+
+    seen.clear()
+    orch._model_judge_verification(
+        "task",
+        {"verifier_output": "looks good ACCEPT", "accepted": True},
+    )
+    assert any(temp == 0.0 for _agent_id, temp in seen), seen
+
+
 if __name__ == "__main__":
     test_default_role_temperatures_differ_by_paper_role()
     test_custom_role_temperature_is_clamped_and_applied()
     test_stream_and_batch_route_use_worker_role_temperature()
     test_conduct_uses_role_temperature_on_worker_path()
+    test_plan_and_judge_use_role_temperature()
     print("ok")
