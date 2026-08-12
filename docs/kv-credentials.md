@@ -65,6 +65,10 @@ redacted error `Postgres config backend is unavailable`; the orchestrator
 never silently falls back from Postgres to process-local memory. The public
 error and rendered traceback omit the DSN and its credentials.
 
+`CostRoutingCoordinator(postgres_dsn=...)` enters this same factory boundary
+when no config store is injected, so routing policy, prices, and credential
+authority cannot diverge from its Postgres-backed token-counting authority.
+
 Operators must restore the configured backend and restart. If losing durable
 configuration, prices, routing policy, and credential authority is genuinely
 acceptable for a local or test deployment, intentionally select `memory`

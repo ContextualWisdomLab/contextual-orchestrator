@@ -35,7 +35,7 @@ from .batch_routing import (
     RoutingPolicy,
 )
 from .cost_ledger import CostLedger, PriceBook
-from .kv_config import InMemoryConfigStore
+from .kv_config import get_config_store
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 _EMBEDDING_CONFIG_CATEGORY = "routing"
@@ -45,7 +45,12 @@ _EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
 
 class CostRoutingCoordinator:
-    """Wire routing + cost accounting around a ``TaskOrchestrator``."""
+    """Wire routing + cost accounting around a ``TaskOrchestrator``.
+
+    An injected config store takes precedence. Otherwise ``postgres_dsn``
+    selects the fail-closed durable config factory; omitting both selects the
+    explicit standalone in-memory default.
+    """
 
     def __init__(
         self,
@@ -61,7 +66,11 @@ class CostRoutingCoordinator:
         postgres_dsn: Optional[str] = None,
     ) -> None:
         self.orchestrator = orchestrator
-        self.config = config_store or InMemoryConfigStore()
+        self.config = (
+            config_store
+            if config_store is not None
+            else get_config_store(postgres_dsn)
+        )
         self.price_book = price_book or PriceBook(self.config)
         self.ledger = ledger or CostLedger(self.price_book)
         self.token_counter = token_counter or (
