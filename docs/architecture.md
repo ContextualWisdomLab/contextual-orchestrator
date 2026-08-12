@@ -42,7 +42,7 @@ The deliberate simplification is the policy. The paper systems learn routing and
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 
-Live routing (`_score_agent`/`_ranked_agents`) reuses the same "maximize quality, minimize cost" tradeoff `optimize_orchestration`/`_recommend_config` already apply offline: capability-tag match and operator priority decide the primary ranking (the honest, measurable "performance" proxy), and among agents tied on that ranking, the one with the lower operator-supplied `price_per_million` wins as a tie-break. This never invents a quality score — an unpriced agent (no `price_per_million` entry) never loses the tie-break, so behavior is unchanged for pools that supply no price data. Set prices via `TaskOrchestrator(price_per_million=...)` or the CLI's `--price-per-million` flag.
+Live routing (`_score_agent`/`_ranked_agents`) reuses the same "maximize quality, minimize cost" tradeoff `optimize_orchestration`/`_recommend_config` already apply offline: capability-tag match and operator priority decide the primary ranking (the honest, measurable "performance" proxy). Among agents tied on that ranking, free-first price preference applies: an explicit free rate (`price_per_million[model] == 0`) beats any positive rate; cheaper known paid rates beat more expensive ones; unpriced models (missing table entries) are never treated as free and rank after known prices. This never invents a quality score or a zero price. Set prices via `TaskOrchestrator(price_per_million=...)` or the CLI's `--price-per-million` flag.
 
 ## Product Planning Interpretation
 
@@ -55,3 +55,7 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## Free-first price preference (routing)
+
+When agents are equally capable for a role, selection prefers an explicit free rate (`price_per_million[model] == 0`) over positive rates, then cheaper known paid rates; unpriced models are never treated as free.
