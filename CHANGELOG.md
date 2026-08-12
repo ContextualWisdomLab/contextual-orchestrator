@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 - Role-differentiated sampling temperatures for paper-role ablation.
-- Optional `model_group` on agents: peers in the same group race for first valid
+- Optional `model_group` on agents (create/patch/admin payload): peers in the same group race for first valid
   completion to remove replica tail latency (issue #102).
 - Coordinated disclosure doctoring (`docs/doctoring/security-disclosure-lifecycle.md`)
   and root `ARCHITECTURE.md` pointer (PR path).
