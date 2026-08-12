@@ -86,8 +86,9 @@ refetch both refs rather than treating this dated table as merge authority.
 | #83 | `fa3a30bda3b3209025d55c5526a037f3086f0f07` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
 | #63 | `dd4e62b46fbc651a6696cb04438751122e161d8c` | `fix/atheris-interpreter-lock` → `3703d0da9823b8258a0be94f1801aa5d61bfad9f` | yes / yes | Tests, Security, Fuzz, and Security Scan success; stale-base Semgrep failure | 0 |
 
-All 17 open PRs were Draft after fail-closed readiness reconciliation. No PR in the snapshot
-was eligible for immediate protected merge. A successful workflow name or CodeRabbit status was not
+16 of 17 open PRs were Draft in the snapshot. PR #109 was Ready but remained
+ineligible for immediate protected merge, as was every Draft PR. A successful
+workflow name or CodeRabbit status was not
 promoted into independent approval or exact-head success. Live ruleset detail
 was not returned by the connector used for this audit, so the repository's
 required-context decision remains GitHub's protected merge authority rather

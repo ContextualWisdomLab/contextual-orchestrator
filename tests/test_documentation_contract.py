@@ -714,6 +714,27 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
         for number in re.findall(r"^\| #(\d+) \|", snapshot, flags=re.MULTILINE)
     }
     assert observed == AUDITED_OPEN_PR_NUMBERS
+    inventory_rows = [
+        line.split("|")
+        for line in snapshot.splitlines()
+        if re.match(r"^\| #\d+ \|", line)
+    ]
+    draft_count = sum(
+        columns[4].strip().split("/", 1)[0].strip() == "yes"
+        for columns in inventory_rows
+    )
+    all_draft_claim = re.search(r"All (\d+) open PRs were Draft", snapshot)
+    partial_draft_claim = re.search(
+        r"(\d+) of (\d+) open PRs were Draft", snapshot
+    )
+    if all_draft_claim is not None:
+        claimed_draft_count = claimed_total_count = int(all_draft_claim.group(1))
+    else:
+        assert partial_draft_claim is not None
+        claimed_draft_count = int(partial_draft_claim.group(1))
+        claimed_total_count = int(partial_draft_claim.group(2))
+    assert claimed_total_count == len(inventory_rows)
+    assert claimed_draft_count == draft_count
     assert "#80" not in snapshot
     assert "#88" not in snapshot
     for audited_head in (
