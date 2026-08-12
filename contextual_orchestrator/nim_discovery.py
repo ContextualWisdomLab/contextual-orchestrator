@@ -21,11 +21,52 @@ import ssl
 import urllib.error
 import urllib.request
 from typing import Any
+from urllib.parse import urlparse
 
 from .credentials import get_credential
 
 DEFAULT_NIM_MODELS_URL = "https://integrate.api.nvidia.com/v1/models"
 NIM_CREDENTIAL_NAME = "NVIDIA_NIM_API_KEY"
+# Hosts that may receive the NVIDIA_NIM_API_KEY on authenticated catalog requests.
+ALLOWED_NIM_MODELS_HOSTS = frozenset(
+    {
+        "integrate.api.nvidia.com",
+        "api.nvcf.nvidia.com",
+    }
+)
+
+
+class NimDiscoveryError(ValueError):
+    """Raised when NIM discovery cannot safely proceed (bad URL, etc.)."""
+
+
+def validate_nim_models_url(models_url: str) -> str:
+    """Return a normalized models catalog URL or raise ``NimDiscoveryError``.
+
+    Authenticated requests only go to allowlisted NVIDIA HTTPS hosts with
+    path ``/v1/models`` (optional trailing slash). No user-controlled host
+    may receive ``NVIDIA_NIM_API_KEY``.
+    """
+    if not isinstance(models_url, str) or not models_url.strip():
+        raise NimDiscoveryError("models_url must be a non-empty string")
+    parsed = urlparse(models_url.strip())
+    if parsed.scheme != "https":
+        raise NimDiscoveryError("models_url must use https")
+    if parsed.username or parsed.password:
+        raise NimDiscoveryError("models_url must not embed credentials")
+    if parsed.port not in (None, 443):
+        raise NimDiscoveryError("models_url must use the default HTTPS port")
+    hostname = (parsed.hostname or "").lower()
+    if hostname not in ALLOWED_NIM_MODELS_HOSTS:
+        raise NimDiscoveryError(
+            f"models_url host {hostname!r} is not an allowlisted NVIDIA catalog host"
+        )
+    path = parsed.path.rstrip("/") or ""
+    if path != "/v1/models":
+        raise NimDiscoveryError("models_url path must be /v1/models")
+    if parsed.query or parsed.fragment:
+        raise NimDiscoveryError("models_url must not include query or fragment")
+    return f"https://{hostname}/v1/models"
 
 
 def discover_nim_models(
@@ -40,14 +81,15 @@ def discover_nim_models(
     Parameters
     ----------
     models_url:
-        Absolute HTTPS URL of the models listing endpoint.
+        Absolute HTTPS URL of the models listing endpoint. Must pass
+        :func:`validate_nim_models_url` before any credential is attached.
     credential_name:
         KV credential name. Defaults to ``NVIDIA_NIM_API_KEY``.
     timeout_seconds:
         Socket timeout for the listing request.
     transport:
-        Optional callable ``(request, timeout) -> bytes`` for tests. When omitted,
-        uses stdlib ``urllib`` with default TLS verification.
+        Optional callable ``(request, timeout) -> bytes`` for tests. When set,
+        ``measurement_status`` is ``offline_fixture`` (not live catalog).
 
     Returns
     -------
@@ -56,17 +98,18 @@ def discover_nim_models(
         ``credential_missing``), ``model_ids`` (sorted unique strings), and
         ``source_url``. Never includes the raw API key.
     """
+    safe_url = validate_nim_models_url(models_url)
     api_key = get_credential(credential_name)
     if not api_key:
         return {
             "measurement_status": "credential_missing",
             "model_ids": [],
-            "source_url": models_url,
+            "source_url": safe_url,
             "credential_name": credential_name,
         }
 
     request = urllib.request.Request(
-        models_url,
+        safe_url,
         headers={
             "authorization": f"Bearer {api_key}",
             "accept": "application/json",
@@ -76,19 +119,21 @@ def discover_nim_models(
 
     if transport is not None:
         raw = transport(request, timeout_seconds)
+        status = "offline_fixture"
     else:
         context = ssl.create_default_context()
-        with urllib.request.urlopen(  # nosec B310 - URL is operator-configured HTTPS catalog endpoint.
+        with urllib.request.urlopen(  # nosec B310 - URL validated by validate_nim_models_url (HTTPS allowlist).  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             request, timeout=timeout_seconds, context=context
         ) as response:
             raw = response.read()
+        status = "live_nim_catalog"
 
     payload = json.loads(raw.decode("utf-8"))
     model_ids = _extract_model_ids(payload)
     return {
-        "measurement_status": "live_nim_catalog",
+        "measurement_status": status,
         "model_ids": model_ids,
-        "source_url": models_url,
+        "source_url": safe_url,
         "model_count": len(model_ids),
     }
 
@@ -102,15 +147,19 @@ def models_to_agent_pool_entries(
 ) -> list[dict[str, Any]]:
     """Map discovered model IDs to agent-pool JSON dicts (multi-word snake_case ids).
 
-    Each model becomes one agent. After ``model_group`` race lands on main
-    (issue #102 / PR #114), operators may add ``model_group`` keys for replica race.
+    Each model becomes one agent with a unique deterministic ``id``. Colliding
+    slugs (normalization or 48-char truncation) get a stable numeric suffix.
+    After ``model_group`` race lands on main (issue #102 / PR #114), operators
+    may add ``model_group`` keys for replica race.
     """
     entries: list[dict[str, Any]] = []
+    used_ids: set[str] = set()
     for index, model_id in enumerate(model_ids):
-        slug = _slug_model_id(model_id)
+        agent_id = _unique_agent_id(model_id, used_ids)
+        used_ids.add(agent_id)
         entries.append(
             {
-                "id": f"nim_{slug}_agent",
+                "id": agent_id,
                 "model": model_id,
                 "base_url": base_url,
                 "credential_key": credential_key,
@@ -119,6 +168,20 @@ def models_to_agent_pool_entries(
             }
         )
     return entries
+
+
+def _unique_agent_id(model_id: str, used_ids: set[str]) -> str:
+    """Build ``nim_<slug>_agent`` and append ``_N`` when the id already exists."""
+    slug = _slug_model_id(model_id)
+    base = f"nim_{slug}_agent"
+    if base not in used_ids:
+        return base
+    suffix = 2
+    while True:
+        candidate = f"{base}_{suffix}"
+        if candidate not in used_ids:
+            return candidate
+        suffix += 1
 
 
 def _extract_model_ids(payload: Any) -> list[str]:
