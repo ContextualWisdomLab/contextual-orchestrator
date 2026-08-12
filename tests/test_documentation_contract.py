@@ -46,6 +46,8 @@ REQUIRED_FILES = [
     "docs/UML.md",
     "docs/ERD.md",
     "docs/TRACEABILITY.md",
+    "docs/evidence/README.md",
+    "docs/evidence/2026-08-11-documentation-audit.md",
     "docs/THREAT_MODEL.md",
     "docs/TEST_STRATEGY.md",
     "docs/OPERABILITY.md",
@@ -77,6 +79,7 @@ CANONICAL_FILES = [
     "docs/TRD.md",
     "docs/UML.md",
     "docs/ERD.md",
+    "docs/TRACEABILITY.md",
     "docs/THREAT_MODEL.md",
     "docs/TEST_STRATEGY.md",
     "docs/OPERABILITY.md",
@@ -91,7 +94,8 @@ LINK_CHECK_FILES = CANONICAL_FILES + [
     "CLAUDE.md",
     "README.md",
     "SECURITY.md",
-    "docs/TRACEABILITY.md",
+    "docs/evidence/README.md",
+    "docs/evidence/2026-08-11-documentation-audit.md",
     "docs/architecture.md",
     "docs/fuzzing.md",
     "docs/papers/README.md",
@@ -128,6 +132,9 @@ def canonical_text() -> str:
     """Return durable canonical documents without the dated evidence appendix."""
 
     return "\n".join(read_text(path) for path in CANONICAL_FILES)
+
+
+DATED_EVIDENCE_APPENDIX = "docs/evidence/2026-08-11-documentation-audit.md"
 
 
 def class_method_names(relative_path: str, class_name: str) -> set[str]:
@@ -268,6 +275,7 @@ def test_required_canonical_files_are_present_and_indexed() -> None:
         "[ERD](ERD.md)",
         "[ADR index](adr/README.md)",
         "[Traceability](TRACEABILITY.md)",
+        "[Dated evidence appendices](evidence/README.md)",
         "[Threat model](THREAT_MODEL.md)",
         "[Test strategy](TEST_STRATEGY.md)",
         "[Operability](OPERABILITY.md)",
@@ -686,15 +694,15 @@ def test_references_licensing_and_volatile_evidence_are_separated() -> None:
 
     sha_pattern = re.compile(r"(?<![0-9a-f])[0-9a-f]{40}(?![0-9a-f])")
     assert sha_pattern.search(canonical_text()) is None
-    assert sha_pattern.search(read_text("docs/TRACEABILITY.md")) is not None
+    assert sha_pattern.search(read_text(DATED_EVIDENCE_APPENDIX)) is not None
 
 
 def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
     """Keep the sole volatile evidence ledger aligned with its dated audit."""
 
-    traceability = read_text("docs/TRACEABILITY.md")
-    assert "**Audit date:** 2026-08-11 (Asia/Seoul)" in traceability
-    snapshot = traceability.split("## Dated open-PR snapshot", 1)[1].split(
+    evidence = read_text(DATED_EVIDENCE_APPENDIX)
+    assert "**Audit date:** 2026-08-11 (Asia/Seoul)" in evidence
+    snapshot = evidence.split("## Dated open-PR snapshot", 1)[1].split(
         "## Dependency order from live refs", 1
     )[0]
     normalized_snapshot = " ".join(snapshot.split())
@@ -723,13 +731,13 @@ def test_dated_open_pr_snapshot_matches_the_audited_inventory() -> None:
 def test_dated_central_prerequisite_snapshot_is_fail_closed() -> None:
     """Keep incomplete central dependencies distinct from accepted authority."""
 
-    traceability = read_text("docs/TRACEABILITY.md")
-    assert '.github PR #929 JSON repair: test-only RED' in traceability
-    assert '.github issue #907 wrapper repair: no completing PR' in traceability
-    assert "#906 had ten green" in traceability
-    assert "no formal review or qualifying approval" in traceability
-    assert "no production repair or associated workflow run" in traceability
-    assert "None of those states is protected integration" in traceability
+    evidence = read_text(DATED_EVIDENCE_APPENDIX)
+    assert '.github PR #929 JSON repair: test-only RED' in evidence
+    assert '.github issue #907 wrapper repair: no completing PR' in evidence
+    assert "#906 had ten green" in evidence
+    assert "no formal review or qualifying approval" in evidence
+    assert "no production repair or associated workflow run" in evidence
+    assert "None of those states is protected integration" in evidence
 
 
 def test_canonical_documentation_change_is_recorded_in_changelog() -> None:

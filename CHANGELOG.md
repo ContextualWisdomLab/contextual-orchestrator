@@ -28,6 +28,9 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Separate durable requirement traceability from volatile SHA, workflow,
+  review, and branch snapshots by moving the dated audit into an indexed
+  evidence appendix and enforcing that boundary in documentation fitness tests.
 - Align the canonical cost, access-grant, internationalization, research-license, coverage, failure-flow, credential-authority, and status contracts with exact-head automated review findings and machine-check them.
 - Status-qualify the analytics, REST API, and internationalization guides, replacing legacy prototype labels and distinguishing current standalone paths from optional planned framework adoption.
 - Align Claude and conductor guidance with the current provider-neutral product and status-qualified dependency-adoption boundary, removing legacy lab and internal gate names.
