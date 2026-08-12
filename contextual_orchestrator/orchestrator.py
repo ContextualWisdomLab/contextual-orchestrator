@@ -1777,6 +1777,7 @@ class TaskOrchestrator:
             "tags": list(agent.tags),
             "status": "disabled" if agent.disabled else "active",
             "provider_exclusions": list(agent.provider_exclusions),
+            "model_group": agent.model_group,
         }
 
     def list_agents(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
