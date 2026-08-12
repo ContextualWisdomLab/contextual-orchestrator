@@ -285,3 +285,12 @@ python tests/test_commercial_purchase_approval_packet.py
 python tests/test_commercial_due_diligence_room.py
 python tests/test_commercial_investment_committee_memo.py
 ```
+
+### NIM model discovery
+
+```bash
+python -m contextual_orchestrator discover-nim-models
+python -m contextual_orchestrator discover-nim-models --as-agent-pool
+```
+
+Requires `NVIDIA_NIM_API_KEY` in the KV (`register-credential`).
