@@ -67,6 +67,56 @@ def test_reasoning_only_response_explains_local_template_fix() -> None:
             raise AssertionError("reasoning-only provider response must fail clearly")
 
 
+def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_retries=0, chat_template_args={"enable_thinking": False})
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client,
+        "_send_raw_with_retry",
+        return_value={
+            "id": "chatcmpl-local",
+            "model": "local-model",
+            "created": 123,
+            "choices": [{
+                "message": {"role": "assistant", "content": "OK"},
+                "finish_reason": "stop",
+            }],
+            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
+        },
+    ) as send:
+        response = client.proxy_send(
+            agent,
+            "responses",
+            {
+                "model": "local-model",
+                "instructions": "Be concise.",
+                "input": [{
+                    "type": "message",
+                    "role": "user",
+                    "content": [{"type": "input_text", "text": "ping"}],
+                }],
+                "stream": True,
+                "tools": [{
+                    "type": "function",
+                    "name": "lookup",
+                    "parameters": {"type": "object"},
+                }],
+            },
+        )
+    assert response["object"] == "response"
+    assert response["output_text"] == "OK"
+    forwarded = send.call_args.args[2]
+    assert forwarded["messages"] == [
+        {"role": "system", "content": "Be concise."},
+        {"role": "user", "content": "ping"},
+    ]
+    assert forwarded["tools"] == [{
+        "type": "function",
+        "function": {"name": "lookup", "parameters": {"type": "object"}},
+    }]
+    assert forwarded["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 def test_remote_http_is_still_rejected() -> None:
     agent = ModelAgent("remote_agent", "remote-model", base_url="http://127.0.0.1:8080/v1")
     try:

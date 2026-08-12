@@ -236,6 +236,161 @@ def _is_local_provider_url(base_url: str) -> bool:
     return parsed.scheme in LOCAL_PROVIDER_SCHEMES and parsed.hostname in LOCAL_PROVIDER_HOSTS
 
 
+def _responses_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "".join(parts)
+
+
+def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
+    # ADR 0002: keep Codex Responses compatibility at the gateway boundary;
+    # mlx-lm remains a local Chat Completions provider.
+    messages: list[dict[str, Any]] = []
+    instructions = _responses_text(request.get("instructions"))
+    if instructions:
+        messages.append({"role": "system", "content": instructions})
+
+    raw_input = request.get("input", "")
+    items = raw_input if isinstance(raw_input, list) else [{"type": "message", "role": "user", "content": raw_input}]
+    if not isinstance(items, list):
+        raise ValueError("local Responses input must be a string or item list")
+    for item in items:
+        if isinstance(item, str):
+            messages.append({"role": "user", "content": item})
+            continue
+        if not isinstance(item, dict):
+            raise ValueError("local Responses input items must be objects")
+        item_type = item.get("type", "message")
+        if item_type == "message":
+            role = item.get("role", "user")
+            if role == "developer":
+                role = "system"
+            if role not in {"system", "user", "assistant"}:
+                raise ValueError(f"unsupported local Responses message role: {role}")
+            content = _responses_text(item.get("content"))
+            if content:
+                messages.append({"role": role, "content": content})
+        elif item_type == "function_call_output":
+            messages.append({
+                "role": "tool",
+                "tool_call_id": str(item.get("call_id", "")),
+                "content": _responses_text(item.get("output", item.get("content", ""))),
+            })
+        elif item_type == "function_call":
+            messages.append({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": str(item.get("call_id", "")),
+                    "type": "function",
+                    "function": {
+                        "name": str(item.get("name", "")),
+                        "arguments": str(item.get("arguments", "{}")),
+                    },
+                }],
+            })
+        elif item_type in {"reasoning", "item_reference"}:
+            continue
+        else:
+            raise ValueError(f"unsupported local Responses input item: {item_type}")
+
+    payload: dict[str, Any] = {
+        "model": request.get("model", "local-model"),
+        "messages": messages,
+        "stream": False,
+    }
+    for key in (
+        "temperature", "top_p", "max_tokens", "stop", "seed", "presence_penalty",
+        "frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "user",
+        "parallel_tool_calls", "tool_choice",
+    ):
+        if key in request:
+            payload[key] = request[key]
+    if "max_output_tokens" in request and "max_tokens" not in payload:
+        payload["max_tokens"] = request["max_output_tokens"]
+
+    tools: list[dict[str, Any]] = []
+    for tool in request.get("tools", []):
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            continue
+        function = {
+            key: tool[key]
+            for key in ("name", "description", "parameters", "strict")
+            if key in tool
+        }
+        tools.append({"type": "function", "function": function})
+    if tools:
+        payload["tools"] = tools
+
+    tool_choice = payload.get("tool_choice")
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        payload["tool_choice"] = {
+            "type": "function",
+            "function": {"name": tool_choice.get("name", "")},
+        }
+    return payload
+
+
+def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") if isinstance(choice, dict) else {}
+    message = message if isinstance(message, dict) else {}
+    content = message.get("content")
+    if not isinstance(content, str):
+        content = message.get("reasoning") if isinstance(message.get("reasoning"), str) else ""
+
+    output: list[dict[str, Any]] = []
+    if content or not message.get("tool_calls"):
+        output.append({
+            "id": f"msg_{uuid.uuid4().hex}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": content, "annotations": []}],
+        })
+    for tool_call in message.get("tool_calls", []):
+        if not isinstance(tool_call, dict):
+            continue
+        function = tool_call.get("function") or {}
+        output.append({
+            "id": f"fc_{tool_call.get('id', uuid.uuid4().hex)}",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": str(tool_call.get("id", uuid.uuid4().hex)),
+            "name": str(function.get("name", "")),
+            "arguments": str(function.get("arguments", "{}")),
+        })
+
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    input_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    output_tokens = int(usage.get("completion_tokens", 0) or 0)
+    response: dict[str, Any] = {
+        "id": f"resp_{data.get('id', uuid.uuid4().hex)}",
+        "object": "response",
+        "created_at": int(data.get("created", time.time())),
+        "model": data.get("model", request.get("model", "local-model")),
+        "output": output,
+        "output_text": content,
+        "status": "completed" if choice.get("finish_reason") != "length" else "incomplete",
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
+        },
+    }
+    if isinstance(request.get("metadata"), dict):
+        response["metadata"] = request["metadata"]
+    return response
+
+
 def is_transient_error(exc: BaseException) -> bool:
     """Return True when a provider call failure is worth retrying with backoff."""
     if isinstance(exc, urllib.error.HTTPError):
@@ -539,6 +694,15 @@ class ModelClient:
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
+        if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
+            chat_payload = _responses_to_chat_payload(payload)
+            chat_payload.setdefault("max_tokens", self.max_output_tokens)
+            if self.chat_template_args:
+                chat_payload["chat_template_kwargs"] = self.chat_template_args
+            chat_response = self._send_raw_with_retry(
+                agent, "chat/completions", chat_payload, destination
+            )
+            return _chat_to_responses_payload(chat_response, payload)
         return self._send_raw_with_retry(agent, endpoint, payload, destination)  # pragma: no cover
 
     def _send_raw_with_retry(

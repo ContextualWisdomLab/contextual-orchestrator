@@ -17,7 +17,7 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
 
 
 def _build() -> TaskOrchestrator:
@@ -123,6 +123,44 @@ def test_http_responses_endpoint_passes_through() -> None:
         server.shutdown()
     assert status == 200
     assert body["object"] == "response"
+
+
+def test_http_models_endpoint_lists_configured_models() -> None:
+    server, port, token = _serve()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/models",
+        headers={"authorization": f"Bearer {token}", "connection": "close"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status = response.status
+            body = json.loads(response.read().decode("utf-8"))
+    finally:
+        server.shutdown()
+    assert status == 200
+    assert body["object"] == "list"
+    assert {item["id"] for item in body["data"]} == {"mock-planner", "mock-builder", "mock-reviewer"}
+
+
+def test_responses_stream_has_completion_event() -> None:
+    body = {
+        "id": "resp_test",
+        "object": "response",
+        "status": "completed",
+        "output": [{
+            "id": "msg_test",
+            "type": "message",
+            "role": "assistant",
+            "status": "completed",
+            "content": [{"type": "output_text", "text": "OK", "annotations": []}],
+        }],
+    }
+    stream = responses_sse_body(body)
+    assert "event: response.output_text.delta" in stream
+    assert '"delta": "OK"' in stream
+    assert "event: response.completed" in stream
+    assert stream.endswith("data: [DONE]\n\n")
 
 
 def test_http_plain_prompt_still_uses_orchestration_path() -> None:

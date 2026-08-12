@@ -43,6 +43,8 @@ ALLOWED_CHAT_KEYS = {
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "include", "prompt_cache_key", "client_metadata", "previous_response_id",
+    "conversation", "truncation", "max_output_tokens", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -316,6 +318,81 @@ def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str,
     return _strip_trace(safe_payload)
 
 
+def responses_sse_body(response: dict[str, Any]) -> str:
+    """Frame a completed Responses object as a valid SSE response."""
+    sequence = 0
+    frames: list[str] = []
+
+    def emit(event_type: str, **values: Any) -> None:
+        nonlocal sequence
+        payload = {"type": event_type, "sequence_number": sequence, **values}
+        sequence += 1
+        frames.append(
+            f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        )
+
+    in_progress = {**response, "status": "in_progress", "output": []}
+    emit("response.created", response=in_progress)
+    for output_index, item in enumerate(response.get("output", [])):
+        if not isinstance(item, dict):
+            continue
+        item_in_progress = {**item, "status": "in_progress"}
+        emit("response.output_item.added", output_index=output_index, item=item_in_progress)
+        if item.get("type") == "message":
+            for content_index, part in enumerate(item.get("content", [])):
+                if not isinstance(part, dict):
+                    continue
+                part_in_progress = {**part, "text": ""}
+                emit(
+                    "response.content_part.added",
+                    item_id=item.get("id"),
+                    output_index=output_index,
+                    content_index=content_index,
+                    part=part_in_progress,
+                )
+                if part.get("type") == "output_text":
+                    emit(
+                        "response.output_text.delta",
+                        item_id=item.get("id"),
+                        output_index=output_index,
+                        content_index=content_index,
+                        delta=part.get("text", ""),
+                    )
+                    emit(
+                        "response.output_text.done",
+                        item_id=item.get("id"),
+                        output_index=output_index,
+                        content_index=content_index,
+                        text=part.get("text", ""),
+                    )
+                emit(
+                    "response.content_part.done",
+                    item_id=item.get("id"),
+                    output_index=output_index,
+                    content_index=content_index,
+                    part=part,
+                )
+        elif item.get("type") == "function_call":
+            arguments = str(item.get("arguments", "{}"))
+            emit(
+                "response.function_call_arguments.delta",
+                item_id=item.get("id"),
+                output_index=output_index,
+                delta=arguments,
+            )
+            emit(
+                "response.function_call_arguments.done",
+                item_id=item.get("id"),
+                output_index=output_index,
+                name=item.get("name", ""),
+                arguments=arguments,
+            )
+        emit("response.output_item.done", output_index=output_index, item=item)
+    emit("response.completed", response=response)
+    frames.append("data: [DONE]\n\n")
+    return "".join(frames)
+
+
 def build_server(
     orchestrator: TaskOrchestrator,
     host: str = "127.0.0.1",
@@ -358,6 +435,22 @@ def build_server(
                         "embedding_batch_backend": coordinator.embedding_batch_backend.name,
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
+                    return
+                if path == "/v1/models":
+                    self._authorize("inference")
+                    models: list[dict[str, Any]] = []
+                    seen_models: set[str] = set()
+                    for agent in orchestrator.agents:
+                        if not agent.model or agent.model in seen_models:
+                            continue
+                        seen_models.add(agent.model)
+                        models.append({
+                            "id": agent.model,
+                            "object": "model",
+                            "created": 0,
+                            "owned_by": agent.provider_name or "contextual-orchestrator",
+                        })
+                    self._send({"object": "list", "data": models})
                     return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
@@ -888,7 +981,10 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    self._send(proxied)
+                    if body.get("stream") is True:
+                        self._send_sse(responses_sse_body(proxied))
+                    else:
+                        self._send(proxied)
                     return
 
                 if path == "/admin/simulate":
