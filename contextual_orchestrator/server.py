@@ -177,6 +177,24 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_responses_penalties(body: dict[str, Any]) -> dict[str, float]:
+    """OpenAI Responses presence/frequency penalties — numbers in [-2, 2] when present."""
+    validated: dict[str, float] = {}
+    for key, code in (
+        ("presence_penalty", "invalid_presence_penalty"),
+        ("frequency_penalty", "invalid_frequency_penalty"),
+    ):
+        if key not in body:
+            continue
+        value = body.get(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RequestError(400, code, f"{key} must be a number")
+        if value < -2 or value > 2:
+            raise RequestError(400, code, f"{key} must be between -2 and 2 inclusive")
+        validated[key] = float(value)
+    return validated
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +880,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_penalties(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
