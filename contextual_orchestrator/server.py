@@ -32,7 +32,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "seed", "presence_penalty", "frequency_penalty", "logit_bias", "logprobs",
     "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
     "response_format", "tools", "tool_choice", "functions", "function_call",
-    "modalities", "prediction", "store", "service_tier",
+    "modalities", "prediction", "store", "service_tier", "audio",
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
@@ -175,6 +175,39 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+
+def _validate_audio_modalities_coupling(body: dict[str, Any]) -> None:
+    """OpenAI chat audio output requires ``modalities`` to include ``audio``.
+
+    - If ``audio`` is set, ``modalities`` must be a list containing ``"audio"``.
+    - If ``modalities`` contains ``"audio"``, ``audio`` must be a non-empty object.
+    Shape checks for voice/format live in the audio-object PR; this PR only
+    enforces the pairing so clients fail closed at the gateway.
+    """
+    has_audio = "audio" in body
+    modalities = body.get("modalities")
+    modalities_has_audio = (
+        isinstance(modalities, list) and any(item == "audio" for item in modalities)
+    )
+    if has_audio and not modalities_has_audio:
+        raise RequestError(
+            400,
+            "invalid_audio",
+            "audio requires modalities to include audio",
+        )
+    if modalities_has_audio and not has_audio:
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            "modalities containing audio requires an audio object",
+        )
+    if has_audio:
+        audio = body.get("audio")
+        if not isinstance(audio, dict) or not audio:
+            raise RequestError(400, "invalid_audio", "audio must be a non-empty object")
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +746,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_audio_modalities_coupling(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +896,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_audio_modalities_coupling(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
