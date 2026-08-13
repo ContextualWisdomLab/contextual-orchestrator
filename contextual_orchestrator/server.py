@@ -177,6 +177,30 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_responses_store(body: dict[str, Any]) -> bool | None:
+    """OpenAI Responses ``store`` — strict boolean when present."""
+    if "store" not in body:
+        return None
+    store = body.get("store")
+    if not isinstance(store, bool):
+        raise RequestError(400, "invalid_store", "store must be a boolean")
+    return store
+
+
+def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None:
+    """OpenAI Responses ``parallel_tool_calls`` — strict boolean when present."""
+    if "parallel_tool_calls" not in body:
+        return None
+    value = body.get("parallel_tool_calls")
+    if not isinstance(value, bool):
+        raise RequestError(
+            400,
+            "invalid_parallel_tool_calls",
+            "parallel_tool_calls must be a boolean",
+        )
+    return value
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +886,8 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_store(body)
+                    _validate_responses_parallel_tool_calls(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
