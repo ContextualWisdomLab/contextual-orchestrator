@@ -254,16 +254,20 @@ class ModelClient:
         temperature: float = 0.2,
         *,
         max_tokens: int | None = None,
+        stop: list[str] | None = None,
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
         ``max_tokens`` overrides the client default ``max_output_tokens`` for this
-        call when set (OpenAI-compatible request sampling).
+        call when set (OpenAI-compatible request sampling). ``stop`` truncates the
+        mock path and is forwarded to real providers.
         """
         self._local.usage = None
         token_limit = self.max_output_tokens if max_tokens is None else max_tokens
         if agent.base_url.startswith("mock://"):
-            return self._apply_max_tokens(self._mock(agent, messages), token_limit)
+            return self._apply_sampling_limits(
+                self._mock(agent, messages), token_limit, stop
+            )
 
         self._validate_provider(agent)  # pragma: no cover
         api_key = get_credential(agent.credential_name)  # pragma: no cover
@@ -279,11 +283,22 @@ class ModelClient:
             "stream": False,
             "max_tokens": token_limit,
         }
+        if stop:
+            payload["stop"] = stop
         return self._send_with_retry(agent, payload)
 
     @staticmethod
-    def _apply_max_tokens(text: str, max_tokens: int) -> str:
-        """Approximate max_tokens for mock agents (~4 chars/token) so offline tests exercise the cap."""
+    def _apply_sampling_limits(
+        text: str, max_tokens: int, stop: list[str] | None = None
+    ) -> str:
+        """Apply max_tokens (~4 chars/token) and stop sequences for mock agents."""
+        if stop:
+            cut = len(text)
+            for seq in stop:
+                idx = text.find(seq)
+                if idx != -1 and idx < cut:
+                    cut = idx
+            text = text[:cut]
         if max_tokens <= 0:
             return ""
         char_cap = max_tokens * 4
@@ -343,6 +358,7 @@ class ModelClient:
         temperature: float = 0.2,
         *,
         max_tokens: int | None = None,
+        stop: list[str] | None = None,
     ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
@@ -352,7 +368,7 @@ class ModelClient:
         """
         token_limit = self.max_output_tokens if max_tokens is None else max_tokens
         if agent.base_url.startswith("mock://"):
-            answer = self._apply_max_tokens(self._mock(agent, messages), token_limit)
+            answer = self._apply_sampling_limits(self._mock(agent, messages), token_limit, stop)
             for start in range(0, len(answer), 24):
                 yield answer[start : start + 24]
             return
@@ -365,6 +381,8 @@ class ModelClient:
             "stream": True,
             "max_tokens": token_limit,
         }
+        if stop:
+            payload["stop"] = stop
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
@@ -993,16 +1011,14 @@ class TaskOrchestrator:
         """
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
-        temperature = 0.2
-        max_tokens: int | None = None
-        if sampling:
-            if "temperature" in sampling:
-                temperature = float(sampling["temperature"])
-            if "max_tokens" in sampling:
-                max_tokens = int(sampling["max_tokens"])
+        temperature, max_tokens, stop = self._sampling_kwargs(sampling)
         parts: list[str] = []
         for delta in self.client.stream_chat(
-            agent, messages, temperature=temperature, max_tokens=max_tokens
+            agent,
+            messages,
+            temperature=temperature,
+            max_tokens=max_tokens,
+            stop=stop,
         ):
             parts.append(delta)
             yield delta
@@ -1424,13 +1440,7 @@ class TaskOrchestrator:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
-        temperature = 0.2
-        max_tokens: int | None = None
-        if sampling:
-            if "temperature" in sampling:
-                temperature = float(sampling["temperature"])
-            if "max_tokens" in sampling:
-                max_tokens = int(sampling["max_tokens"])
+        temperature, max_tokens, stop = self._sampling_kwargs(sampling)
         start = time.perf_counter()
         answer, served_id, usage = self._invoke(
             agent,
@@ -1439,6 +1449,7 @@ class TaskOrchestrator:
             role="worker",
             temperature=temperature,
             max_tokens=max_tokens,
+            stop=stop,
         )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
@@ -1635,6 +1646,23 @@ class TaskOrchestrator:
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
 
+    @staticmethod
+    def _sampling_kwargs(
+        sampling: dict[str, Any] | None,
+    ) -> tuple[float, int | None, list[str] | None]:
+        """Unpack validated sampling map into temperature, max_tokens, stop."""
+        temperature = 0.2
+        max_tokens: int | None = None
+        stop: list[str] | None = None
+        if sampling:
+            if "temperature" in sampling:
+                temperature = float(sampling["temperature"])
+            if "max_tokens" in sampling:
+                max_tokens = int(sampling["max_tokens"])
+            if "stop" in sampling:
+                stop = list(sampling["stop"])
+        return temperature, max_tokens, stop
+
     def _invoke(
         self,
         primary: ModelAgent,
@@ -1644,6 +1672,7 @@ class TaskOrchestrator:
         role: str,
         temperature: float = 0.2,
         max_tokens: int | None = None,
+        stop: list[str] | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -1657,7 +1686,11 @@ class TaskOrchestrator:
         for agent in candidates:
             try:
                 output = self._client_chat(
-                    agent, messages, temperature=temperature, max_tokens=max_tokens
+                    agent,
+                    messages,
+                    temperature=temperature,
+                    max_tokens=max_tokens,
+                    stop=stop,
                 )
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
@@ -1675,11 +1708,12 @@ class TaskOrchestrator:
         *,
         temperature: float,
         max_tokens: int | None,
+        stop: list[str] | None = None,
     ) -> str:
         """Call ``client.chat`` with sampling kwargs only when the client accepts them.
 
         Test doubles often implement a narrow ``chat(agent, messages, temperature=…)``
-        signature; production ``ModelClient`` also accepts ``max_tokens``.
+        signature; production ``ModelClient`` also accepts ``max_tokens`` and ``stop``.
         """
         kwargs: dict[str, Any] = {}
         try:
@@ -1691,6 +1725,8 @@ class TaskOrchestrator:
             kwargs["temperature"] = temperature
         if max_tokens is not None and ("max_tokens" in params or accepts_var_kw):
             kwargs["max_tokens"] = max_tokens
+        if stop and ("stop" in params or accepts_var_kw):
+            kwargs["stop"] = stop
         return self.client.chat(agent, messages, **kwargs)
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:

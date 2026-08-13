@@ -107,6 +107,58 @@ def test_http_rejects_n_greater_than_one() -> None:
         thread.join(timeout=5)
 
 
+def test_stop_sequence_truncates_mock_output() -> None:
+    client = ModelClient()
+    agent = ModelAgent("general_agent", "mock-generalist")
+    messages = [{"role": "user", "content": "please write a long detailed answer about systems"}]
+    full = client.chat(agent, messages)
+    # Use a substring that appears mid-answer so stop is exercised for real.
+    mid = full[len(full) // 3 : len(full) // 3 + 8]
+    assert mid, full
+    stopped = client.chat(agent, messages, stop=[mid])
+    assert mid not in stopped
+    assert full.startswith(stopped)
+    assert len(stopped) < len(full)
+
+
+def test_http_stop_string_shortens_answer() -> None:
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+
+    def post(payload: dict) -> str:
+        request = urllib.request.Request(
+            url,
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+                "connection": "close",
+            },
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            body = json.loads(response.read().decode("utf-8"))
+            return body["choices"][0]["message"]["content"]
+
+    try:
+        base = {
+            "messages": [{"role": "user", "content": "please write a long detailed answer about systems"}],
+            "orchestration": "route",
+        }
+        full = post(base)
+        marker = full[len(full) // 4 : len(full) // 4 + 6]
+        stopped = post({**base, "stop": marker})
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert marker not in stopped
+    assert full.startswith(stopped)
+
+
 def test_http_max_tokens_shortens_route_answer() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -150,6 +202,8 @@ if __name__ == "__main__":
     test_validate_sampling_rejects_bad_n_and_temperature()
     test_mock_client_truncates_to_max_tokens()
     test_route_once_honors_max_tokens()
+    test_stop_sequence_truncates_mock_output()
+    test_http_stop_string_shortens_answer()
     test_http_rejects_n_greater_than_one()
     test_http_max_tokens_shortens_route_answer()
     print("ok")

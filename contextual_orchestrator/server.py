@@ -256,6 +256,24 @@ def _validate_sampling(body: dict[str, Any]) -> dict[str, Any] | None:
             )
         sampling["max_tokens"] = max_tokens
 
+    if "stop" in body:
+        stop = body["stop"]
+        if isinstance(stop, str):
+            if not stop:
+                raise RequestError(400, "invalid_stop", "stop string must be non-empty")
+            sampling["stop"] = [stop]
+        elif isinstance(stop, list):
+            if not stop or len(stop) > 4:
+                raise RequestError(400, "invalid_stop", "stop must be 1–4 non-empty strings")
+            cleaned: list[str] = []
+            for item in stop:
+                if not isinstance(item, str) or not item:
+                    raise RequestError(400, "invalid_stop", "stop must be 1–4 non-empty strings")
+                cleaned.append(item)
+            sampling["stop"] = cleaned
+        else:
+            raise RequestError(400, "invalid_stop", "stop must be a string or array of strings")
+
     return sampling or None
 
 
