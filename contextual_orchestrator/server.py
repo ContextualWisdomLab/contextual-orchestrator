@@ -177,6 +177,23 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_user_field(body: dict[str, Any]) -> str | None:
+    """OpenAI ``user`` end-user id — non-empty string ≤ 64 chars when present.
+
+    OpenAI documents ``user`` as a string identifier for abuse monitoring; oversize
+    or non-string values break SDK clients and attribution joins.
+    """
+    if "user" not in body:
+        return None
+    user = body.get("user")
+    if not isinstance(user, str) or not user.strip():
+        raise RequestError(400, "invalid_user", "user must be a non-empty string")
+    if len(user) > 64:
+        raise RequestError(400, "invalid_user", "user must be at most 64 characters")
+    return user
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +730,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_user_field(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
