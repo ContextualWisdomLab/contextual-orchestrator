@@ -48,6 +48,7 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+_MAX_CHAT_MESSAGES = 512
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -186,6 +187,13 @@ def _validate_mode(mode: Any) -> str:
 def _validate_messages(messages: Any) -> list[dict[str, str]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
+    if len(messages) > _MAX_CHAT_MESSAGES:
+        raise RequestError(
+            400,
+            "invalid_message",
+            f"messages must contain at most {_MAX_CHAT_MESSAGES} entries",
+            {"count": len(messages), "max_count": _MAX_CHAT_MESSAGES},
+        )
     validated: list[dict[str, str]] = []
     for message in messages:
         if not isinstance(message, dict):
