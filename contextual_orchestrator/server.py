@@ -25,6 +25,7 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .token_counting import HeuristicTokenCounter
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -1089,8 +1090,6 @@ def build_server(
                     self._write_sse(frame({}, finish="stop"))
                     if include_usage:
                         # OpenAI: final usage chunk has empty choices before [DONE].
-                        from contextual_orchestrator.token_counting import HeuristicTokenCounter
-
                         counter = HeuristicTokenCounter()
                         prompt_tokens = counter.count_messages(messages, model_name)
                         completion_tokens = counter.count_text("".join(parts), model_name)
