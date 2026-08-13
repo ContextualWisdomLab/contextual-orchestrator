@@ -808,14 +808,10 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    try:
-                        model_name = orchestrator.resolve_request_model(body.get("model"))
-                    except KeyError as exc:
-                        raise RequestError(
-                            404,
-                            "model_not_found",
-                            f"model {str(exc.args[0])!r} not found",
-                        ) from exc
+                    # Embeddings model ids are cost/token labels for the embeddings
+                    # backend — not chat agent pool members — so they are not
+                    # fail-closed against agent.model names.
+                    model_name = str(body.get("model", "contextual-orchestrator") or "contextual-orchestrator")
                     attribution = _embeddings_attribution(body)
                     submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
                     endpoint_alias = body.get("endpoint")

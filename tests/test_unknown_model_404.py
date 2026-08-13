@@ -94,7 +94,8 @@ def test_chat_completions_returns_404_for_unknown_model() -> None:
     assert default_status == 200
 
 
-def test_embeddings_batch_returns_404_for_unknown_model() -> None:
+def test_embeddings_batch_allows_embedding_model_labels_outside_agent_pool() -> None:
+    """Embeddings model strings are cost labels, not chat-pool members."""
     server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -102,18 +103,18 @@ def test_embeddings_batch_returns_404_for_unknown_model() -> None:
     try:
         status, body = post_json(
             f"http://127.0.0.1:{port}/v1/batch/embeddings",
-            {"model": "nope-model", "input": ["alpha"]},
+            {"model": "text-embedding-test", "input": ["alpha"]},
         )
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
-    assert status == 404
-    assert body["error"]["code"] == "model_not_found"
+    assert status == 200, body
+    assert body.get("status") in {"completed", "in_progress", "validating", "finalizing"} or "embeddings" in body
 
 
 if __name__ == "__main__":
     test_resolve_request_model_accepts_gateway_default_and_pool_models()
     test_chat_completions_returns_404_for_unknown_model()
-    test_embeddings_batch_returns_404_for_unknown_model()
+    test_embeddings_batch_allows_embedding_model_labels_outside_agent_pool()
     print("ok")
