@@ -177,6 +177,16 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_parallel_tool_calls(body: dict[str, Any]) -> bool | None:
+    """OpenAI ``parallel_tool_calls`` — must be a boolean when present."""
+    if "parallel_tool_calls" not in body:
+        return None
+    value = body.get("parallel_tool_calls")
+    if not isinstance(value, bool):
+        raise RequestError(400, "invalid_parallel_tool_calls", "parallel_tool_calls must be a boolean")
+    return value
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +723,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_parallel_tool_calls(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
