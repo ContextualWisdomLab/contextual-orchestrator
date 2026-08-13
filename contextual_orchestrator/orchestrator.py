@@ -284,7 +284,7 @@ class ModelClient:
     def _backoff_delay(self, attempt: int) -> float:
         """Full-jitter exponential backoff, capped, so retries do not thundering-herd a provider."""
         ceiling = min(self.retry_backoff_cap, self.retry_backoff * (2 ** attempt))
-        return random.uniform(0.0, ceiling)
+        return random.uniform(0.0, ceiling)  # nosec B311 - non-cryptographic retry-jitter timing, not security-sensitive.
 
     def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
@@ -8393,7 +8393,7 @@ def evolve_orchestration(
     exceeds ``cost_budget_usd`` rank below all affordable ones. Quality comes from the
     caller's ``quality_fn(task, answer) -> [0,1]`` — never fabricated.
     """
-    rng = random.Random(seed)
+    rng = random.Random(seed)  # nosec B311 - deterministic, explicitly-seeded search reproducibility; secrets cannot be seeded and would break the contract this function promises.
     params = sorted(search_space)
 
     def random_config() -> dict[str, Any]:
