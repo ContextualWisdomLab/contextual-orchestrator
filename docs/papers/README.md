@@ -46,3 +46,8 @@ but not vendored here so this repository remains one deployable control plane.
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.
+
+## Sampling passthrough and attribution honesty
+
+See `docs/doctoring/openai-sampling-attribution.md` for the Completions/chat
+sampling and cost-ledger attribution contract (APA 7th citations).
