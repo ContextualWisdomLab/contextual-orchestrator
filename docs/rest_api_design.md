@@ -14,6 +14,7 @@
 | Method | Path | Purpose |
 |---|---|---|
 | `GET` | `/openapi.json` | API contract |
+| `GET` | `/healthz`, `/health` | Unauthenticated liveness probe (`/health` alias for common cloud/LB defaults) |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |

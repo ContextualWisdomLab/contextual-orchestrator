@@ -335,8 +335,9 @@ def build_server(
                 if path == "/openapi.json":
                     self._send(OPENAPI_SPEC)
                     return
-                if path == "/healthz":
+                if path in {"/healthz", "/health"}:
                     # Unauthenticated liveness probe for containers/orchestrators.
+                    # `/health` is an alias used by common cloud/LB probe defaults.
                     self._send({
                         "status": "ok",
                         "service": "contextual-orchestrator",
@@ -1031,6 +1032,7 @@ def build_server(
                     "object": "chat.completion.chunk",
                     "created": created,
                     "model": model_name,
+                    "system_fingerprint": "fp_contextual_orchestrator",
                     "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
                 }
                 return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"

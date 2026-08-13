@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -8505,6 +8505,9 @@ def chat_completion_response(
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
+        # Stable gateway fingerprint so OpenAI clients that read the field do not
+        # treat responses as malformed; not a model-weight hash.
+        "system_fingerprint": "fp_contextual_orchestrator",
         "choices": [
             {
                 "index": 0,
@@ -8534,7 +8537,13 @@ def chat_completion_chunks(
     answer = result.get("answer", "")
     completion_id = f"chatcmpl-{int(time.time() * 1000)}"
     created = int(time.time())
-    base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
+    base = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model,
+        "system_fingerprint": "fp_contextual_orchestrator",
+    }
 
     chunks: list[dict[str, Any]] = [
         {**base, "choices": [{"index": 0, "delta": {"role": "assistant"}, "finish_reason": None}]}
