@@ -537,6 +537,31 @@ latency/token difference from the pre-sync snapshot is retained rather than
 normalized away; future performance comparison must use repeated runs under
 the same server and prompt configuration.
 
+### Paired option-count and framing controls — 2026-08-14
+
+The new fast-mlsirm calibration controls at exact head
+`a57ef506812cb54abe40d44494dd5a8a1028eb2e` were exercised through the same
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm` route with Gemma 4 e4b, temperature `0`, disabled
+thinking, `max_output_tokens=192`, zero retries, `local_concurrency=1`, K=`3`,
+two complete anchored criteria, and caller-declared `held_out` status. Each
+case ran baseline, option-only/no-question, shuffled-option, and
+distractor-replacement variants. Every successful result produced the
+required two-column polytomous row; no keyword matching, repair, retry, or
+positional category inference was used.
+
+| option count | variants | status | gold exact agreement | score range | paired score deltas | elapsed | provider tokens |
+| ---: | ---: | --- | ---: | ---: | --- | ---: | ---: |
+| 3 | 4 | `4 passed` | `4/4` | `1.0..1.0` | all `0.0` | `20.442 s` | `7,868` |
+| 5 | 4 | `4 passed` | `4/4` | `1.0..1.0` | all `0.0` | `20.277 s` | `8,110` |
+
+This small held-out smoke did not show a positive option-count shift, but it
+does not estimate or disprove a general LLM option-count effect. The report
+retained contamination status, per-variant categories, IRT rows, trace-step
+counts, and usage while excluding raw model output. Replication must expand
+persons/items, correct-option positions, option counts, models, framing, and
+human/gold anchors before any bias or IRT-readiness claim.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
