@@ -215,6 +215,10 @@ class ModelClient:
     ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
+        self.default_temperature = 0.2
+        self.default_top_p: float | None = None
+        self.default_presence_penalty: float | None = None
+        self.default_frequency_penalty: float | None = None
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
@@ -230,7 +234,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -246,9 +250,29 @@ class ModelClient:
         self._local.usage = None
         return usage
 
-    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
-        """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
+    def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        top_p: float | None = None,
+    ) -> str:
+        """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
+
+        When ``temperature``/``top_p`` are omitted, ``default_temperature`` and
+        ``default_top_p`` are used so request-scoped Completions sampling can be
+        applied without threading kwargs through every orchestrator hop.
+        """
         self._local.usage = None
+        # Expose the effective sampling knobs for request-path tests / diagnostics.
+        effective_temperature = self.default_temperature if temperature is None else temperature
+        effective_top_p = self.default_top_p if top_p is None else top_p
+        effective_presence = self.default_presence_penalty
+        effective_frequency = self.default_frequency_penalty
+        self._local.last_temperature = effective_temperature
+        self._local.last_top_p = effective_top_p
+        self._local.last_presence_penalty = effective_presence
+        self._local.last_frequency_penalty = effective_frequency
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
@@ -262,10 +286,16 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": effective_temperature,
             "stream": False,
             "max_tokens": self.max_output_tokens,
         }
+        if effective_top_p is not None:  # pragma: no cover
+            payload["top_p"] = effective_top_p
+        if effective_presence is not None:  # pragma: no cover
+            payload["presence_penalty"] = effective_presence
+        if effective_frequency is not None:  # pragma: no cover
+            payload["frequency_penalty"] = effective_frequency
         return self._send_with_retry(agent, payload)
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
@@ -307,7 +337,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -897,7 +927,23 @@ class TaskOrchestrator:
             text = self._latest_user_text(messages)
         else:
             text = _coerce_input_text(body.get("input"))
-        agent = self._select_agent(text, "worker")
+        requested_model = body.get("model")
+        # When the client names a model, resolve a pool agent that actually serves
+        # that model id. Silent rewrite to an unrelated agent.model is a commercial
+        # honesty failure for OpenAI SDKs (passthrough tools/Responses paths).
+        if isinstance(requested_model, str) and requested_model.strip():
+            matched = [
+                agent
+                for agent in self.agents
+                if not getattr(agent, "disabled", False) and agent.model == requested_model
+            ]
+            if not matched:
+                raise ValueError(
+                    f"model {requested_model!r} is not available in the agent pool"
+                )
+            agent = matched[0]
+        else:
+            agent = self._select_agent(text, "worker")
         upstream = {
             key: value
             for key, value in body.items()
@@ -8514,6 +8560,29 @@ def chat_completion_response(
         ],
         "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
+    }
+
+
+def text_completion_response(
+    result: dict[str, Any],
+    model: str = "contextual-orchestrator",
+    usage: dict[str, int] | None = None,
+) -> dict[str, Any]:  # pragma: no cover
+    """Wrap orchestration output as OpenAI legacy ``text_completion`` (``/v1/completions``)."""
+    return {
+        "id": f"cmpl-{int(time.time() * 1000)}",
+        "object": "text_completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "text": result["answer"],
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
 
