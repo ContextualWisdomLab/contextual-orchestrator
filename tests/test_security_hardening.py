@@ -225,6 +225,16 @@ def test_concurrency_limit_rejects_when_slots_are_full() -> None:
         security.release_run_slot()
 
 
+def test_concurrency_limit_rejects_unbounded_or_non_integer_configuration() -> None:
+    for value in (0, 65, False, 1.5):
+        try:
+            SecurityConfig(auth_token="secret_token", max_concurrent_runs=value)  # type: ignore[arg-type]
+        except ValueError as exc:
+            assert "max_concurrent_runs" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("invalid max_concurrent_runs configuration was accepted")
+
+
 def test_chat_completion_response_requires_explicit_trace() -> None:
     result = {
         "mode": "route",

@@ -19,6 +19,7 @@ from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
+    MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
@@ -103,6 +104,10 @@ class SecurityConfig:
     def __post_init__(self) -> None:
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
+            raise ValueError(
+                f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
+            )
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
 
     def check_bind(self, host: str) -> None:
