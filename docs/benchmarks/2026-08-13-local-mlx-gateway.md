@@ -290,6 +290,25 @@ The fast adapter now defaults to `category_method="binary_threshold"` when
 remains available only as an explicit calibration method; no keyword,
 positional, silent-drop, or malformed-output repair was added.
 
+### Actual adapter default smoke — 2026-08-14
+
+The default-selection result was then verified on the real integrated path,
+not only with an injected fake transport. Exact fast-mlsirm source was
+`9d18f53`, contextual-orchestrator was `a0a354a`, the local 3B Llama worker was
+used through `_FastMLSIJudgeAdapter`, and `category_count=5` was supplied with
+no `category_method`. The gateway client used `local_concurrency=4`.
+
+| case | result | calls | tokens | seconds |
+|---|---|---:|---:|---:|
+| unsafe recommendation | score `0.0`, categories `(0,0)`, rejected | 8 | `2,379` | `3.73` |
+| safe evidence | failed closed: non-monotone thresholds | 8 | not a valid result | `3.23` |
+
+The unsafe result proves the production adapter selected binary thresholds and
+retained the contextual trace. The safe result is a semantic/calibration
+failure, not a transport success; it remains in the denominator and is not
+coerced into a category. This is integrated contract evidence only, not a
+claim of high recall, unbiasedness, or sufficient IRT sample size.
+
 The integrated path was then checked separately after an audit found that the
 contextual `_FastMLSIJudgeAdapter` did not expose the gateway client capability
 used by the fast judge. With contextual commit `d82e592` and exact fast judge
