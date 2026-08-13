@@ -177,6 +177,24 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+ALLOWED_SERVICE_TIERS = {"auto", "default", "flex", "priority"}
+
+
+def _validate_service_tier(body: dict[str, Any]) -> str | None:
+    """OpenAI ``service_tier`` — auto|default|flex|priority when present."""
+    if "service_tier" not in body:
+        return None
+    value = body.get("service_tier")
+    if value not in ALLOWED_SERVICE_TIERS:
+        raise RequestError(
+            400,
+            "invalid_service_tier",
+            "service_tier must be auto, default, flex, or priority",
+        )
+    return value
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +731,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_service_tier(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +881,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_service_tier(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
