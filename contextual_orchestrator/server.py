@@ -183,6 +183,90 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
+
+def _message_has_image_content(messages: Any) -> bool:
+    """True when any message content part is an OpenAI image_url part."""
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "image_url":
+                return True
+    return False
+
+
+def _normalize_message_content(content: Any) -> str:
+    """Normalize OpenAI message content to a plain string for orchestration.
+
+    Accepts a string or an array of content parts. ``text`` parts are joined.
+    ``image_url`` parts are accepted for schema parity but force single-agent
+    passthrough (see chat completions handler); the orchestrated multi-agent
+    path cannot fuse vision inputs across workers, so callers with images are
+    routed to passthrough before orchestration runs.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list) or not content:
+        raise RequestError(400, "invalid_message", "message role or content is invalid")
+    text_parts: list[str] = []
+    has_image = False
+    for part in content:
+        if isinstance(part, str):
+            if part:
+                text_parts.append(part)
+            continue
+        if not isinstance(part, dict):
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        part_type = part.get("type", "text")
+        if part_type == "text":
+            text = part.get("text")
+            if not isinstance(text, str):
+                raise RequestError(400, "invalid_message", "message role or content is invalid")
+            if text:
+                text_parts.append(text)
+            continue
+        if part_type == "image_url":
+            image_url = part.get("image_url")
+            if not isinstance(image_url, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "image_url content part must include an image_url object",
+                )
+            url = image_url.get("url")
+            if not isinstance(url, str) or not url.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "image_url.url must be a non-empty string",
+                )
+            detail = image_url.get("detail")
+            if detail is not None and detail not in {"auto", "low", "high"}:
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "image_url.detail must be auto, low, or high when present",
+                )
+            has_image = True
+            continue
+        raise RequestError(
+            400,
+            "invalid_message_content",
+            f"content part type {part_type!r} is not supported",
+            {"part_type": part_type},
+        )
+    if not text_parts and not has_image:
+        raise RequestError(400, "invalid_message", "message role or content is invalid")
+    if not text_parts and has_image:
+        return "[image]"
+    return "\n".join(text_parts)
+
+
 def _validate_messages(messages: Any) -> list[dict[str, str]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
@@ -191,9 +275,9 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
-        content = message.get("content")
-        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
+        content = _normalize_message_content(message.get("content"))
         validated.append({"role": role, "content": content})
     return validated
 
@@ -713,9 +797,16 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
-                    if PASSTHROUGH_TRIGGER_KEYS & set(body):
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
+                    # Validate message shapes first (including image_url content parts)
+                    # so invalid multi-modal payloads fail with 400 before proxy.
+                    if isinstance(body.get("messages"), list):
+                        for message in body["messages"]:
+                            if isinstance(message, dict) and "content" in message:
+                                _normalize_message_content(message.get("content"))
+                    if PASSTHROUGH_TRIGGER_KEYS & set(body) or _message_has_image_content(body.get("messages")):
+                        # response_format / tools / vision image_url parts cannot be
+                        # merged across multi-agent verifiers; proxy to one agent.
+
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")

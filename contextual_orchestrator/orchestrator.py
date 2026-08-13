@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -1600,7 +1600,30 @@ class TaskOrchestrator:
         return hits >= self.policy.conduct_hint_threshold or len(text) > 700
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
-        return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
+        """Return the latest user message as plain text for agent selection.
+
+        OpenAI multi-modal messages may use a content-part array; extract text
+        chunks and ignore image_url parts so selection still works.
+        """
+        for message in reversed(messages):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content", "")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                parts: list[str] = []
+                for chunk in content:
+                    if isinstance(chunk, str) and chunk:
+                        parts.append(chunk)
+                    elif isinstance(chunk, dict):
+                        text = chunk.get("text")
+                        if isinstance(text, str) and text:
+                            parts.append(text)
+                if parts:
+                    return "\n".join(parts)
+                return "[image]"
+        return ""
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Ask a model to judge the verifier report (fixes term-matching false negatives).
