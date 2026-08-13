@@ -160,7 +160,7 @@ def test_sales_readiness_endpoint_openapi_and_admin_surface() -> None:
         )
         chat_status, _ = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
-            {"model": "mock-generalist", "messages": [{"role": "user", "content": "Analyze, verify, and summarize readiness."}]},
+            {"model": "mock-planner", "messages": [{"role": "user", "content": "Analyze, verify, and summarize readiness."}]},
             "inference_secret",
         )
         readiness_status, readiness = get_json(
