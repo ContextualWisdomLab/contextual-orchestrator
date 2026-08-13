@@ -177,6 +177,26 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+_MAX_OPENAI_FUNCTIONS = 128
+
+
+def _validate_functions_max_count(body: dict[str, Any]) -> None:
+    """Legacy OpenAI ``functions`` array hard-cap (128), matching tools limit."""
+    if "functions" not in body:
+        return
+    functions = body.get("functions")
+    if not isinstance(functions, list):
+        raise RequestError(400, "invalid_functions", "functions must be an array when present")
+    if len(functions) > _MAX_OPENAI_FUNCTIONS:
+        raise RequestError(
+            400,
+            "invalid_functions",
+            f"functions must contain at most {_MAX_OPENAI_FUNCTIONS} entries",
+            {"count": len(functions), "max_count": _MAX_OPENAI_FUNCTIONS},
+        )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +733,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_functions_max_count(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
