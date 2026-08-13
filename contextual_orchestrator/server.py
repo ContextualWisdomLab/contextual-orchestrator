@@ -33,6 +33,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
     "response_format", "tools", "tool_choice", "functions", "function_call",
     "modalities", "prediction", "store", "service_tier",
+    "verbosity",
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
@@ -175,6 +176,20 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _validate_verbosity(body: dict[str, Any]) -> str | None:
+    """OpenAI ``verbosity`` — low, medium, or high when present."""
+    if "verbosity" not in body:
+        return None
+    value = body.get("verbosity")
+    if value not in {"low", "medium", "high"}:
+        raise RequestError(
+            400,
+            "invalid_verbosity",
+            "verbosity must be low, medium, or high",
+        )
+    return value
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +728,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_verbosity(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +878,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_verbosity(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
