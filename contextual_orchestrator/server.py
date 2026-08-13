@@ -177,6 +177,89 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_response_format(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI ``response_format`` — object with type text|json_object|json_schema."""
+    if "response_format" not in body:
+        return None
+    response_format = body.get("response_format")
+    if not isinstance(response_format, dict):
+        raise RequestError(400, "invalid_response_format", "response_format must be an object")
+    format_type = response_format.get("type")
+    if format_type not in {"text", "json_object", "json_schema"}:
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.type must be text, json_object, or json_schema",
+        )
+    if format_type == "json_schema":
+        schema_wrapper = response_format.get("json_schema")
+        if not isinstance(schema_wrapper, dict):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema must be an object when type is json_schema",
+            )
+        name = schema_wrapper.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must be a non-empty string",
+            )
+        schema = schema_wrapper.get("schema")
+        if not isinstance(schema, dict):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.schema must be an object",
+            )
+    return response_format
+
+
+def _validate_tool_choice(body: dict[str, Any]) -> Any:
+    """OpenAI ``tool_choice`` — none|auto|required or a function-named object."""
+    if "tool_choice" not in body:
+        return None
+    tool_choice = body.get("tool_choice")
+    if isinstance(tool_choice, str):
+        if tool_choice not in {"none", "auto", "required"}:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice string must be none, auto, or required",
+            )
+        return tool_choice
+    if isinstance(tool_choice, dict):
+        choice_type = tool_choice.get("type")
+        if choice_type != "function":
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice object type must be function",
+            )
+        function = tool_choice.get("function")
+        if not isinstance(function, dict):
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function must be an object",
+            )
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function.name must be a non-empty string",
+            )
+        return tool_choice
+    raise RequestError(
+        400,
+        "invalid_tool_choice",
+        "tool_choice must be a string or object",
+    )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +796,8 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_response_format(body)
+                    _validate_tool_choice(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
