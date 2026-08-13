@@ -177,6 +177,29 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+ALLOWED_RESPONSE_MODALITIES = {"text", "audio"}
+
+
+def _validate_responses_modalities(body: dict[str, Any]) -> list[str] | None:
+    """OpenAI ``modalities`` list — non-empty array of text/audio when present."""
+    if "modalities" not in body:
+        return None
+    modalities = body.get("modalities")
+    if not isinstance(modalities, list) or not modalities:
+        raise RequestError(400, "invalid_modalities", "modalities must be a non-empty array")
+    validated: list[str] = []
+    for item in modalities:
+        if not isinstance(item, str) or item not in ALLOWED_RESPONSE_MODALITIES:
+            raise RequestError(
+                400,
+                "invalid_modalities",
+                "modalities entries must be text or audio",
+            )
+        validated.append(item)
+    return validated
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +885,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_modalities(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
