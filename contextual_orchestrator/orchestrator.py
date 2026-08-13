@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -1694,6 +1694,22 @@ class TaskOrchestrator:
         start = (page_number - 1) * page_size
         end = start + page_size
         return [self._agent_to_admin_payload(agent) for agent in self.agents[start:end]]
+
+    def resolve_request_model(self, model_id: str | None) -> str:
+        """Resolve a client-requested model id or raise ``KeyError`` if unknown.
+
+        The gateway default ``contextual-orchestrator`` is always accepted so
+        OpenAI clients that omit or use the product name keep working. Any other
+        id must match an enabled agent ``model`` field exactly (OpenAI-compatible
+        fail-closed discovery for unknown models).
+        """
+        wanted = str(model_id or "contextual-orchestrator").strip() or "contextual-orchestrator"
+        if wanted == "contextual-orchestrator":
+            return wanted
+        for agent in self.agents:
+            if not agent.disabled and agent.model == wanted:
+                return wanted
+        raise KeyError(wanted)
 
     def list_recent_runs(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
         """Return a paginated list of recent workflow run records."""

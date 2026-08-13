@@ -38,6 +38,13 @@ This repository implements the interface and control plane, not the trained coor
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
+## Fail-closed model resolution
+
+`POST /v1/chat/completions`, `/v1/responses`, and embeddings batch paths accept the
+gateway default model id `contextual-orchestrator` or any enabled agent `model`
+field. Unknown model ids return HTTP 404 `model_not_found` instead of silently
+routing to an unrelated worker (OpenAI-compatible fail-closed discovery).
+
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.

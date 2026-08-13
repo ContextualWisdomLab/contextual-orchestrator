@@ -713,6 +713,15 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    try:
+                        model_name = orchestrator.resolve_request_model(body.get("model"))
+                    except KeyError as exc:
+                        raise RequestError(
+                            404,
+                            "model_not_found",
+                            f"model {str(exc.args[0])!r} not found",
+                        ) from exc
+                    body["model"] = model_name
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -739,7 +748,6 @@ def build_server(
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
-                    model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
                     if stream and orchestrator.would_route(messages, mode):
                         self._stream_route_completion(orchestrator, security, messages, model_name)
@@ -800,7 +808,14 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    try:
+                        model_name = orchestrator.resolve_request_model(body.get("model"))
+                    except KeyError as exc:
+                        raise RequestError(
+                            404,
+                            "model_not_found",
+                            f"model {str(exc.args[0])!r} not found",
+                        ) from exc
                     attribution = _embeddings_attribution(body)
                     submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
                     endpoint_alias = body.get("endpoint")
@@ -862,6 +877,14 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    try:
+                        body["model"] = orchestrator.resolve_request_model(body.get("model"))
+                    except KeyError as exc:
+                        raise RequestError(
+                            404,
+                            "model_not_found",
+                            f"model {str(exc.args[0])!r} not found",
+                        ) from exc
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
