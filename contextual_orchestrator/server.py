@@ -183,6 +183,54 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
+def _normalize_message_content(content: Any) -> str:
+    """Normalize OpenAI message content to a plain string for orchestration.
+
+    Accepts a string or an array of text content parts (``{"type":"text","text":...}``).
+    Empty or whitespace-only text parts fail closed with ``invalid_message_content``.
+    Non-text part types fail closed on the orchestrated route.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list) or not content:
+        raise RequestError(400, "invalid_message", "message role or content is invalid")
+    text_parts: list[str] = []
+    for index, part in enumerate(content):
+        if isinstance(part, str):
+            if not part.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    f"content part[{index}] text must be a non-empty string",
+                    {"part_index": index},
+                )
+            text_parts.append(part)
+            continue
+        if not isinstance(part, dict):
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        part_type = part.get("type", "text")
+        if part_type == "text":
+            text = part.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    f"content part[{index}] text must be a non-empty string",
+                    {"part_index": index, "part_type": "text"},
+                )
+            text_parts.append(text)
+            continue
+        raise RequestError(
+            400,
+            "invalid_message_content",
+            f"content part type {part_type!r} is not supported on the orchestrated route",
+            {"part_type": part_type, "part_index": index},
+        )
+    if not text_parts:
+        raise RequestError(400, "invalid_message", "message role or content is invalid")
+    return "\n".join(text_parts)
+
+
 def _validate_messages(messages: Any) -> list[dict[str, str]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
@@ -191,9 +239,9 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
-        content = message.get("content")
-        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
+        content = _normalize_message_content(message.get("content"))
         validated.append({"role": role, "content": content})
     return validated
 
