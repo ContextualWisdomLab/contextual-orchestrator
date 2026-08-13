@@ -259,6 +259,10 @@ def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
         mode="route",
     )
     assert adapter.client is orchestrator.client
+    assert (
+        adapter.contextual_orchestrator_contract
+        == "contextual-orchestrator-contract-v1"
+    )
     with patch.object(
         orchestrator,
         "_invoke",

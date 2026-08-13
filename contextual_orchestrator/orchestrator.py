@@ -83,6 +83,7 @@ SECRET_PATTERNS = (
 
 DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
 MAX_MODEL_JUDGE_REPLY_CHARACTERS = 32_000
+CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1 = "contextual-orchestrator-contract-v1"
 
 
 @dataclass(frozen=True)
@@ -114,6 +115,11 @@ class _FastMLSIJudgeAdapter:
     judge: str
     served_agent_id: str | None = None
     mode: str = "auto"
+
+    @property
+    def contextual_orchestrator_contract(self) -> str:
+        """Declare the versioned gateway boundary required by fast-mlsirm."""
+        return CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1
 
     @property
     def client(self) -> ModelClient:
