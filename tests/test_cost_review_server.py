@@ -66,7 +66,8 @@ def test_chat_completion_reports_real_usage_and_records_cost() -> None:
     base = f"http://127.0.0.1:{port}"
     try:
         status, body = _request("POST", f"{base}/v1/chat/completions", token,
-                                 {"messages": [{"role": "user", "content": "hello there world"}],
+                                 {"model": "mock-a",
+                                  "messages": [{"role": "user", "content": "hello there world"}],
                                   "attribution": {"team": "alpha", "company": "acme"}})
         assert status == 200
         assert body["usage"]["total_tokens"] > 0
@@ -86,7 +87,8 @@ def test_batch_routing_via_chat_completion_and_results_retrieval() -> None:
     base = f"http://127.0.0.1:{port}"
     try:
         status, submitted = _request("POST", f"{base}/v1/chat/completions", token,
-                                     {"messages": [{"role": "user", "content": "batch this"}],
+                                     {"model": "mock-a",
+                                      "messages": [{"role": "user", "content": "batch this"}],
                                       "routing": {"latency_tolerant": True},
                                       "attribution": {"company": "acme"}})
         assert status == 202
@@ -114,7 +116,7 @@ def test_batch_routing_jobs_endpoint_submits_multiple_requests() -> None:
         status, job = _request("POST", f"{base}/api/v1/batch_routing_jobs", token, {
             "attribution": {"company": "acme"},
             "requests": [
-                {"messages": [{"role": "user", "content": "one"}]},
+                {"model": "mock-a", "messages": [{"role": "user", "content": "one"}]},
                 {"messages": [{"role": "user", "content": "two"}], "attribution": {"team": "beta"}},
             ],
         })
