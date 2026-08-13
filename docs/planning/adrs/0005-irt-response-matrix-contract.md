@@ -137,6 +137,8 @@ mandatory under ADR 0006.
 | Polytomous category count can be inferred from a partial sample. | Require explicit n_categories at the integration boundary. | Implemented |
 | Continuous criterion scores are not inherently ordinal observations. | Keep the projection explicit and calibrate category-count effects before fitting. | Ongoing |
 | IRT estimation quality also depends on persons, item information, and factor coverage. | Add sample-size, item-information, and factor-anchor gates to the benchmark before interpreting fit. | Required next |
+| Public numerical fitters could still receive one-item matrices when a caller bypassed the cross-component helper. | Enforce the same multi-item validator at public IRT fitter boundaries while leaving explicitly diagnostic low-level primitives compatible. | Implemented on fast-mlsirm follow-up branch; exact-head integration pending |
+| contextual-orchestrator previously discarded fast-mlsirm criterion scores after deriving accepted/rejected, so downstream IRT consumers could not see the multi-item output contract. | Preserve only validated criterion scores and the fast-mlsirm dichotomous multi-item projection in verification metadata; reject an invalid projection rather than padding, collapsing, or repairing it. | Implemented in current local head; exact-head CI/review follow-up required |
 | Low-level APIs and integration APIs have different compatibility goals. | Keep this contract documented and do not silently apply it to every existing primitive. | Implemented |
 
 ## Risks and Mitigations

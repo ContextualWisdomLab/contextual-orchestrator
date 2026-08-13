@@ -141,8 +141,10 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
             return type("Result", (), {
                 "accepted": True,
                 "rationale": "structured score exceeded threshold",
+                "criterion_scores": {"evidence_quality": 0.8, "risk_signal": 0.9},
                 "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
                 "orchestration_mode": self.mode,
+                "to_irt_row": lambda *, item_type: (1, 1),
             })
 
     class _FormatError(Exception):
@@ -178,9 +180,109 @@ def test_fast_mlsirm_path_is_used_when_available() -> None:
     assert result["accepted"] is True
     assert result["judge"] == "model"
     assert result["judge_agent_id"] == "backup_judge"
-    assert result["judge_orchestration_mode"] == "conduct"
+    assert result["judge_orchestration_mode"] == "route"
     assert result["judge_usage"] == {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+    assert result["judge_criterion_scores"] == {"evidence_quality": 0.8, "risk_signal": 0.9}
+    assert result["judge_irt_item_type"] == "dichotomous"
+    assert result["judge_irt_row"] == [1, 1]
     assert result["reason"] == "structured score exceeded threshold"
+
+
+def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
+    orchestrator, _ = _orch("unused")
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator,
+        "task",
+        "general_agent",
+        mode="route",
+    )
+    with patch.object(
+        orchestrator,
+        "_invoke",
+        return_value=("judge completion", "general_agent", None),
+    ):
+        completion = adapter.complete(
+            [{"role": "user", "content": "ping"}],
+            mode="conduct",
+        )
+    assert completion["answer"] == "judge completion"
+    assert completion["mode"] == "conduct"
+
+
+def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:
+    class _Judge:
+        def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:
+            assert mode == "route"
+            assert accept_threshold == 0.7
+
+        def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
+            assert task == "task"
+            assert answer == "report"
+            assert len(criteria) == 2
+            return type("Result", (), {
+                "accepted": True,
+                "rationale": "valid",
+                "usage": {},
+                "orchestration_mode": "route",
+            })
+
+    class _Criterion:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            self.criterion_id = criterion_id
+            self.description = description
+            self.weight = weight
+
+    orchestrator, _ = _orch("unused")
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_Judge,
+            criterion_cls=_Criterion,
+            format_error=ValueError,
+        ),
+    ):
+        result = orchestrator._model_judge_verification("task", {"verifier_output": "report"})
+
+    assert result["accepted"] is True
+    assert result["judge_orchestration_mode"] == "route"
+
+
+def test_fast_mlsirm_invalid_irt_projection_fails_closed() -> None:
+    class _Judge:
+        def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:
+            del mode, accept_threshold
+
+        def judge(self, **_) -> object:
+            return type("Result", (), {
+                "accepted": True,
+                "rationale": "valid score but invalid item vector",
+                "criterion_scores": {"only_item": 0.8},
+                "usage": {},
+                "orchestration_mode": "route",
+                "to_irt_row": lambda *, item_type: (1,),
+            })
+
+    class _Criterion:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            self.criterion_id = criterion_id
+            self.description = description
+            self.weight = weight
+
+    orchestrator, _ = _orch("unused")
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_Judge,
+            criterion_cls=_Criterion,
+            format_error=ValueError,
+        ),
+    ):
+        result = orchestrator._model_judge_verification("task", {"verifier_output": "report"})
+
+    assert result["accepted"] is False
+    assert "multi-item IRT projection" in result["reason"]
 
 
 def test_fast_mlsirm_format_error_fails_closed() -> None:
@@ -215,6 +317,19 @@ def test_fast_mlsirm_format_error_fails_closed() -> None:
     assert result["accepted"] is False
     assert result["judge"] == "model"
     assert result["reason"] == "model judge returned an invalid structured verdict; verification failed closed"
+
+
+def test_broken_fast_mlsirm_import_does_not_bypass_required_judge_path() -> None:
+    orchestrator, _ = _orch("unused")
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        side_effect=RuntimeError("broken fast-mlsirm import"),
+    ):
+        result = orchestrator._model_judge_verification("task", {"verifier_output": "report"})
+
+    assert result["accepted"] is False
+    assert result["reason"] == "fast-mlsirm judge could not be loaded; verification failed closed"
 
 
 @pytest.mark.parametrize(

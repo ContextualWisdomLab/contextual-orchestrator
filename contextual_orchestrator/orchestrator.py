@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
+from collections.abc import Mapping
 from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 import copy
@@ -80,10 +81,10 @@ def _resolve_fast_mlsirm_components() -> FastMLSIRMJudgeComponents | None:
     """Resolve the fast-mlsirm adapter symbols without importing unconditionally."""
     try:
         from fast_mlsirm import ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError
-    except ModuleNotFoundError:
-        return None
-    except Exception:
-        return None
+    except ModuleNotFoundError as exc:
+        if exc.name == "fast_mlsirm":
+            return None
+        raise
     return FastMLSIRMJudgeComponents(ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError)
 
 
@@ -97,7 +98,9 @@ class _FastMLSIJudgeAdapter:
     served_agent_id: str | None = None
     mode: str = "auto"
 
-    def complete(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
+        if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
+            raise ValueError("mode must be auto, route, or conduct")
         output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="verifier")
         self.served_agent_id = served_id
         trace = [
@@ -113,16 +116,12 @@ class _FastMLSIJudgeAdapter:
             trace[0]["usage"] = usage
         return {
             "answer": output,
-            "mode": self.mode,
+            "mode": self.mode if mode is None else mode,
             "trace": trace,
         }
 
     def _agent(self) -> ModelAgent:
         return self.orchestrator._agent(self.judge)
-
-
-def _fast_mlsirm_judge_enabled() -> bool:
-    return os.getenv("CONTEXTUAL_ORCHESTRATOR_USE_FAST_MLSIRM_JUDGE", "1").strip().lower() not in {"0", "false", "no", "off"}
 
 
 def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
@@ -2094,60 +2093,95 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-        if _fast_mlsirm_judge_enabled():
+        try:
             components = _resolve_fast_mlsirm_components()
-            if components is not None:
-                try:
-                    judge = self._select_agent(task, "verifier")
-                    judge_adapter = _FastMLSIJudgeAdapter(self, task, judge.id, mode=self.policy.workflow_planning)
-                    fast_judge = components.judge_cls(
-                        judge_adapter,
-                        mode=self.policy.workflow_planning,
-                        accept_threshold=0.7,
-                    )
-                    result = fast_judge.judge(
-                        task=task,
-                        answer=verifier_output,
-                        criteria=(
-                            components.criterion_cls(
-                                criterion_id="evidence_quality",
-                                description="Does the verifier output identify concrete evidence and caveats with actionable impact?",
-                                weight=1.0,
-                            ),
-                            components.criterion_cls(
-                                criterion_id="risk_signal",
-                                description="Does the verifier output mention substantive risks and constraints with support?",
-                                weight=1.0,
-                            ),
+        except Exception:  # noqa: BLE001 - a broken installed judge must not bypass the required path
+            return {
+                "accepted": False,
+                "reason": "fast-mlsirm judge could not be loaded; verification failed closed",
+                "verifier_output": verifier_output,
+                "judge": "model",
+            }
+        if components is not None:
+            try:
+                judge = self._select_agent(task, "verifier")
+                # The judge is one bounded provider call.  Do not pass the
+                # planning strategy ("template"/"generated") as an
+                # orchestration mode or recursively conduct another workflow.
+                judge_adapter = _FastMLSIJudgeAdapter(self, task, judge.id, mode="route")
+                fast_judge = components.judge_cls(
+                    judge_adapter,
+                    mode="route",
+                    accept_threshold=0.7,
+                )
+                result = fast_judge.judge(
+                    task=task,
+                    answer=verifier_output,
+                    criteria=(
+                        components.criterion_cls(
+                            criterion_id="evidence_quality",
+                            description="Does the verifier output identify concrete evidence and caveats with actionable impact?",
+                            weight=1.0,
                         ),
-                        accept_threshold=0.7,
-                    )
-                    verification = {
-                        "accepted": result.accepted,
-                        "reason": result.rationale,
-                        "verifier_output": verifier_output,
-                        "judge": "model",
-                    }
-                    if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
-                        verification["judge_agent_id"] = judge_adapter.served_agent_id
-                    if result.usage:
-                        verification["judge_usage"] = result.usage
-                    verification["judge_orchestration_mode"] = result.orchestration_mode
-                    return verification
-                except components.format_error:
-                    return {
-                        "accepted": False,
-                        "reason": "model judge returned an invalid structured verdict; verification failed closed",
-                        "verifier_output": verifier_output,
-                        "judge": "model",
-                    }
-                except Exception:  # noqa: BLE001 - judge failure must not break the request
-                    return {
-                        "accepted": False,
-                        "reason": "model judge unavailable; verification failed closed",
-                        "verifier_output": verifier_output,
-                        "judge": "model",
-                    }
+                        components.criterion_cls(
+                            criterion_id="risk_signal",
+                            description="Does the verifier output mention substantive risks and constraints with support?",
+                            weight=1.0,
+                        ),
+                    ),
+                )
+                verification = {
+                    "accepted": result.accepted,
+                    "reason": result.rationale,
+                    "verifier_output": verifier_output,
+                    "judge": "model",
+                }
+                if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
+                    verification["judge_agent_id"] = judge_adapter.served_agent_id
+                if result.usage:
+                    verification["judge_usage"] = result.usage
+                verification["judge_orchestration_mode"] = result.orchestration_mode
+                criterion_scores = getattr(result, "criterion_scores", None)
+                to_irt_row = getattr(result, "to_irt_row", None)
+                if isinstance(criterion_scores, Mapping) and callable(to_irt_row):
+                    try:
+                        irt_row = to_irt_row(item_type="dichotomous")
+                    except Exception:  # noqa: BLE001 - invalid IRT projection must not be published
+                        return {
+                            "accepted": False,
+                            "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
+                            "verifier_output": verifier_output,
+                            "judge": "model",
+                        }
+                    if (
+                        len(criterion_scores) < 2
+                        or type(irt_row) not in (tuple, list)
+                        or len(irt_row) != len(criterion_scores)
+                    ):
+                        return {
+                            "accepted": False,
+                            "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
+                            "verifier_output": verifier_output,
+                            "judge": "model",
+                        }
+                    verification["judge_criterion_scores"] = dict(criterion_scores)
+                    verification["judge_irt_item_type"] = "dichotomous"
+                    verification["judge_irt_row"] = list(irt_row)
+                return verification
+            except components.format_error:
+                return {
+                    "accepted": False,
+                    "reason": "model judge returned an invalid structured verdict; verification failed closed",
+                    "verifier_output": verifier_output,
+                    "judge": "model",
+                }
+            except Exception:  # noqa: BLE001 - judge failure must not break the request
+                return {
+                    "accepted": False,
+                    "reason": "model judge unavailable; verification failed closed",
+                    "verifier_output": verifier_output,
+                    "judge": "model",
+                }
 
         judge = self._select_agent(task, "verifier")
         try:

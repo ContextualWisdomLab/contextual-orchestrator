@@ -253,7 +253,7 @@ parse status and cost, and accept only a final strict schema result.
 | A cached local 3B judge failed to emit valid or ordinally coherent structured output in 7/18 good-plan calls, and framing changed some K=7 scores. | Keep every malformed/monotonicity failure in the denominator; compare a separately measured bounded retry or stronger local judge only through contextual-orchestrator, and never add keyword, positional, or silent-drop repair. | Recorded in the 2026-08-12 benchmark; reliability/framing calibration required |
 | An identical second contextual-orchestrator completion recovered none of four cumulative-threshold failures in a follow-up 3B probe, while direct K-way scores shifted across K and framing. | Keep blind retry out of the production contract. If recovery is pursued, compare a bounded independent binary-threshold decomposition or stronger local judge on held-out paired cases, record added latency/tokens and first/final parse status, and preserve strict fail-closed parsing. | Measured 2026-08-12; Goal expanded and calibration required |
 | A live bearer-authenticated gateway probe on the same Llama 3B answer and two criteria at `K=5` produced direct `1.0000` (`4/4`, accepted) versus cumulative-threshold `0.0000` (`0/0`, rejected), with both strict parses valid and one contextual-orchestrator trace step each. | Treat this as paired method sensitivity, not as a positive-bias conclusion. Keep method/K/trace/usage in the denominator, compare balanced held-out cases, and retain the multi-item polytomous validator; never repair the disagreement lexically or positionally. | New evidence 2026-08-12; calibration required |
-| OA metadata does not guarantee that the original PDF can be downloaded into the local Zotero library: Zotero 9 exposes read-only Local API reads, SAGE returned anti-bot `403` for the Jones--Loe PDF, and the Iannario repository exposed a request-only copy while the publisher returned an empty `202`. | Record the official landing/PDF URL and retrieval evidence, attach only byte-verified original PDFs through the local Connector/API, and retry inaccessible OA sources from an authorized route or a Zotero version with local write/file-upload support. Never regenerate, OCR-rebuild, or substitute a PDF while claiming it is the original. | Required follow-up |
+| OA metadata does not guarantee that the original PDF can be downloaded into the local Zotero library: Zotero 9 exposes read-only Local API reads and SAGE returned anti-bot `403` for the Jones--Loe PDF. The Iannario publisher/aggregator record currently reports full-text restriction, so it is citation-only rather than an outstanding OA-PDF obligation. | Record the official landing/PDF URL and retrieval evidence, attach only byte-verified original PDFs through the local Connector/API, and retry the Jones--Loe OA source from an authorized route or a Zotero version with local write/file-upload support. Never regenerate, OCR-rebuild, or substitute a PDF while claiming it is the original. | Required follow-up |
 
 ## Risks and Mitigations
 
@@ -284,48 +284,48 @@ experimental and do not use it for a production IRT claim.
 ## More Information
 
 The local Zotero collection was searched through the running Zotero Local
-Connector API. It now contains the relevant records and four accessible OA
-PDF attachments: Li et al. item SHLVYKJC with attachment TVZMTEB8; Zheng et
-al. item GSZ4D83U with attachment J44YVR37; Pezeshkpour and Hruschka item
-UFZQ8WN6 with attachment S5KQCN97; and Sharma et al. item YDM7VXSG with
-attachment 47VH4PC7. Response-category records MYPNHHWJ and CWY355RP were
-also added for the psychometric comparison. The Iannario and Jones--Loe
-records are OA metadata records with their publisher PDF URLs retained; the
-local Connector could not download those two originals during this run
-(De Gruyter returned an empty 202 response and SAGE returned an anti-bot 403).
-They remain explicit follow-up attachment work rather than being represented
-by fabricated or regenerated PDFs.
+Connector API. It contains four accessible PDF attachments: Li et al. item
+SHLVYKJC with attachment TVZMTEB8; Zheng et al. item GSZ4D83U with attachment
+J44YVR37; Pezeshkpour and Hruschka item UFZQ8WN6 with attachment S5KQCN97; and Sharma et al. item
+YDM7VXSG with attachment 47VH4PC7. The first, third, and fourth records expose
+permissive OA terms used by the repository manifest; Zheng's PDF is retained
+in Zotero for local research but its redistribution terms are not asserted.
+Response-category records MYPNHHWJ and CWY355RP were also added for the
+psychometric comparison. Jones--Loe is an OA SAGE Open record whose official
+PDF endpoint returned anti-bot `403` locally; Iannario's publisher/aggregator
+record reports full-text restriction. Neither is represented by a fabricated
+or regenerated PDF.
 
-The Jones--Loe publisher page and PDF are marked open access/CC BY and the
-original PDF is independently readable through the web research path, but the
-local download path still returned 403. The Iannario institutional record
-labels the editorial PDF as public-domain metadata while requiring an
-authorized copy request; this is not sufficient evidence of a locally
-retrievable file. The four attached PDFs above remain the only attachments
-counted as verified originals until each additional file passes a PDF magic
-header, size, checksum, and Zotero attachment-parent check.
+The Jones--Loe publisher page and PDF are marked open access and the original
+is readable through the web research path, but the local download path still
+returned 403. The Iannario publisher/aggregator record reports restricted
+full-text access; a public metadata page or an archive capture is not a
+redistribution license. The four attached PDFs above remain the only
+attachments counted as verified originals until an additional OA file passes
+a PDF magic header, size, checksum, and Zotero attachment-parent check.
 
 Revalidation on 2026-08-12 confirmed the four attachment records and their
 local files: `TVZMTEB8`, `J44YVR37`, `S5KQCN97`, and `47VH4PC7` each have a
 matching PDF file size and MD5 recorded by the Zotero Local API. The running
 client reports `X-Zotero-Version: 9.0.6`, so its Local API is read-only and
-cannot perform the write/file-upload phase needed for the two remaining
-attachments. Direct retries against the official Iannario PDF URL returned
-HTTP 202 with zero bytes, while the official Jones--Loe PDF URL returned HTTP
-403. The OA landing pages and canonical PDF URLs remain recorded below; web
-crawler text, an HTML error page, a regenerated PDF, or an unauthorised mirror
-must not be counted as the original. The Goal therefore remains open until
-each OA citation either has a byte-verified parent attachment or has a
-documented, authorised retrieval route available to a write-capable Zotero
-client.
+cannot perform the write/file-upload phase needed for the Jones--Loe
+attachment. Official Zotero documentation now describes local writes and file
+uploads for Zotero 10+ with an authorized local API key; this installation is
+not that write-capable path. Direct retries against the official Iannario PDF
+URL returned HTTP 202 with zero bytes, while the official Jones--Loe PDF URL
+returned HTTP 403. The OA landing pages and canonical PDF URLs remain
+recorded below; web-crawler text, an HTML error page, a regenerated PDF, or an
+unauthorised mirror must not be counted as the original. The Goal therefore
+remains open for the Jones--Loe original until a byte-verified parent
+attachment or a documented, authorised retrieval route is available.
 
 An Internet Archive capture of the canonical De Gruyter PDF was also
 revalidated on 2026-08-12 as a 19-page PDF (1,074,249 bytes, MD5
 `263d2effa1d7cc5bdc2748878e7f32d4`) captured from the publisher URL on
-2024-04-13. It is a retrievable published-PDF capture, but not yet a Zotero
-parent attachment and not evidence that the current publisher endpoint is
-available; it must remain clearly labelled as an archive capture until a
-write-capable local Zotero path stores it under `MYPNHHWJ`.
+2024-04-13. It is historical retrieval evidence only: it is not a current
+publisher endpoint, not a Zotero parent attachment, and not a redistribution
+license. It must not be counted as the requested OA original or copied into
+the repository until an authorized route establishes those rights.
 
 Primary sources:
 
