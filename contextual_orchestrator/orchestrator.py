@@ -247,6 +247,12 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    def take_finish_reason(self) -> str:
+        """Return and clear finish_reason from the most recent chat() on this thread."""
+        reason = getattr(self._local, "finish_reason", None) or "stop"
+        self._local.finish_reason = None
+        return reason
+
     def chat(
         self,
         agent: ModelAgent,
@@ -268,11 +274,14 @@ class ModelClient:
         penalty fields are forwarded to real providers when set.
         """
         self._local.usage = None
+        self._local.finish_reason = "stop"
         token_limit = self.max_output_tokens if max_tokens is None else max_tokens
         if agent.base_url.startswith("mock://"):
-            return self._apply_sampling_limits(
+            text, finish_reason = self._apply_sampling_limits(
                 self._mock(agent, messages), token_limit, stop
             )
+            self._local.finish_reason = finish_reason
+            return text
 
         self._validate_provider(agent)  # pragma: no cover
         api_key = get_credential(agent.credential_name)  # pragma: no cover
@@ -303,8 +312,12 @@ class ModelClient:
     @staticmethod
     def _apply_sampling_limits(
         text: str, max_tokens: int, stop: list[str] | None = None
-    ) -> str:
-        """Apply max_tokens (~4 chars/token) and stop sequences for mock agents."""
+    ) -> tuple[str, str]:
+        """Apply max_tokens (~4 chars/token) and stop sequences for mock agents.
+
+        Returns ``(text, finish_reason)`` where finish_reason is OpenAI ``length``
+        when the max_tokens cap truncates output, else ``stop``.
+        """
         if stop:
             cut = len(text)
             for seq in stop:
@@ -313,11 +326,11 @@ class ModelClient:
                     cut = idx
             text = text[:cut]
         if max_tokens <= 0:
-            return ""
+            return "", "length"
         char_cap = max_tokens * 4
         if len(text) <= char_cap:
-            return text
-        return text[:char_cap]
+            return text, "stop"
+        return text[:char_cap], "length"
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
@@ -354,6 +367,11 @@ class ModelClient:
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
+        choices = data.get("choices") or []
+        if choices and isinstance(choices[0], dict):
+            finish = choices[0].get("finish_reason")
+            if isinstance(finish, str) and finish:
+                self._local.finish_reason = finish
         return data["choices"][0]["message"]["content"]
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
@@ -385,7 +403,10 @@ class ModelClient:
         """
         token_limit = self.max_output_tokens if max_tokens is None else max_tokens
         if agent.base_url.startswith("mock://"):
-            answer = self._apply_sampling_limits(self._mock(agent, messages), token_limit, stop)
+            answer, finish_reason = self._apply_sampling_limits(
+                self._mock(agent, messages), token_limit, stop
+            )
+            self._local.finish_reason = finish_reason
             for start in range(0, len(answer), 24):
                 yield answer[start : start + 24]
             return
@@ -1104,6 +1125,7 @@ class TaskOrchestrator:
             "policy_mode": mode,
             "prompt_text": prompt,
             "answer": result["answer"],
+            "finish_reason": result.get("finish_reason") or "stop",
             "trace": result["trace"],
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
@@ -1468,6 +1490,11 @@ class TaskOrchestrator:
             role="worker",
             **sample,
         )
+        finish_reason = (
+            self.client.take_finish_reason()
+            if hasattr(self.client, "take_finish_reason")
+            else "stop"
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
             "id": 0,
@@ -1477,6 +1504,7 @@ class TaskOrchestrator:
             "access": [],
             "latency_ms": round(latency_ms, 2),
             "output": answer,
+            "finish_reason": finish_reason,
         }
         if usage is not None:
             row["usage"] = usage
@@ -1486,6 +1514,7 @@ class TaskOrchestrator:
         return {
             "mode": "route",
             "answer": answer,
+            "finish_reason": finish_reason,
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
             "trace": [row],
         }
@@ -8719,7 +8748,7 @@ def chat_completion_response(
             {
                 "index": 0,
                 "message": {"role": "assistant", "content": result["answer"]},
-                "finish_reason": "stop",
+                "finish_reason": result.get("finish_reason") or "stop",
             }
         ],
         "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
@@ -8742,6 +8771,7 @@ def chat_completion_chunks(
     token-by-token streaming — real token streaming requires a streaming ModelClient.
     """
     answer = result.get("answer", "")
+    finish_reason = result.get("finish_reason") or "stop"
     completion_id = f"chatcmpl-{int(time.time() * 1000)}"
     created = int(time.time())
     base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
@@ -8760,7 +8790,7 @@ def chat_completion_chunks(
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
-    final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
+    final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": finish_reason}]}
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)
     return chunks

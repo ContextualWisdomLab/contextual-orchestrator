@@ -79,10 +79,22 @@ def test_mock_client_truncates_to_max_tokens() -> None:
     agent = ModelAgent("general_agent", "mock-generalist")
     messages = [{"role": "user", "content": "please write a long detailed answer about systems"}]
     full = client.chat(agent, messages)
+    assert client.take_finish_reason() == "stop"
     capped = client.chat(agent, messages, max_tokens=5)
     assert len(full) > len(capped)
     assert len(capped) <= 5 * 4
     assert full.startswith(capped)
+    assert client.take_finish_reason() == "length"
+
+
+def test_route_once_finish_reason_length_when_capped() -> None:
+    orchestrator = build()
+    messages = [{"role": "user", "content": "please write a long detailed answer about systems"}]
+    capped = orchestrator.route_once(messages, sampling={"max_tokens": 4})
+    assert capped["finish_reason"] == "length"
+    assert capped["trace"][0]["finish_reason"] == "length"
+    full = orchestrator.route_once(messages)
+    assert full["finish_reason"] == "stop"
 
 
 def test_route_once_honors_max_tokens() -> None:
@@ -215,12 +227,15 @@ def test_http_max_tokens_shortens_route_answer() -> None:
     capped_text = capped["choices"][0]["message"]["content"]
     assert len(full_text) > len(capped_text)
     assert len(capped_text) <= 6 * 4
+    assert full["choices"][0]["finish_reason"] == "stop"
+    assert capped["choices"][0]["finish_reason"] == "length"
 
 
 if __name__ == "__main__":
     test_validate_sampling_accepts_temperature_and_max_tokens()
     test_validate_sampling_rejects_bad_n_and_temperature()
     test_mock_client_truncates_to_max_tokens()
+    test_route_once_finish_reason_length_when_capped()
     test_route_once_honors_max_tokens()
     test_stop_sequence_truncates_mock_output()
     test_http_stop_string_shortens_answer()
