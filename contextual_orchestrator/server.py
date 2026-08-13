@@ -42,7 +42,7 @@ ALLOWED_CHAT_KEYS = {
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
-    "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "model", "input", "instructions", "stream", "stream_options", "metadata", "reasoning",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -175,6 +175,32 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _validate_responses_stream_options(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI Responses ``stream_options`` — only ``include_usage`` boolean supported."""
+    if "stream_options" not in body:
+        return None
+    stream_options = body.get("stream_options")
+    if not isinstance(stream_options, dict):
+        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    unknown = sorted(set(stream_options) - {"include_usage"})
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported keys",
+            {"fields": unknown},
+        )
+    if "include_usage" in stream_options and not isinstance(
+        stream_options.get("include_usage"), bool
+    ):
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_usage must be a boolean",
+        )
+    return stream_options
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +888,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_stream_options(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
