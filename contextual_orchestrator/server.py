@@ -43,6 +43,8 @@ ALLOWED_CHAT_KEYS = {
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    # Multi-turn continuity: chain a follow-up to a prior response id.
+    "previous_response_id",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -175,6 +177,26 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _validate_previous_response_id(body: dict[str, Any]) -> str | None:
+    """OpenAI Responses ``previous_response_id`` — non-empty string ≤128 when set."""
+    if "previous_response_id" not in body:
+        return None
+    value = body.get("previous_response_id")
+    if not isinstance(value, str) or not value.strip():
+        raise RequestError(
+            400,
+            "invalid_previous_response_id",
+            "previous_response_id must be a non-empty string",
+        )
+    if len(value) > 128:
+        raise RequestError(
+            400,
+            "invalid_previous_response_id",
+            "previous_response_id must be at most 128 characters",
+        )
+    return value
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +884,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_previous_response_id(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
