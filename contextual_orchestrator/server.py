@@ -38,7 +38,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
-    "include_orchestration_trace", "stream", "attribution", "routing",
+    "include_orchestration_trace", "stream", "stream_options", "attribution", "routing",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
@@ -222,6 +222,26 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
     if channel is not None and channel not in {"sync", "batch"}:
         raise RequestError(400, "invalid_routing", "routing.channel must be sync or batch")
     return routing
+
+
+def _validate_stream_options(stream_options: Any) -> dict[str, Any] | None:
+    """OpenAI ``stream_options`` — currently only ``include_usage`` is supported."""
+    if stream_options is None:
+        return None
+    if not isinstance(stream_options, dict):
+        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    unknown = sorted(set(stream_options) - {"include_usage"})
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported keys",
+            {"fields": unknown},
+        )
+    include_usage = stream_options.get("include_usage", False)
+    if not isinstance(include_usage, bool):
+        raise RequestError(400, "invalid_stream_options", "stream_options.include_usage must be a boolean")
+    return {"include_usage": include_usage}
 
 
 def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[BatchRequest]:
@@ -737,12 +757,20 @@ def build_server(
                     stream = body.get("stream", False)
                     if not isinstance(stream, bool):
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    stream_options = _validate_stream_options(body.get("stream_options"))
+                    include_usage = bool(stream_options and stream_options.get("include_usage"))
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
                     if stream and orchestrator.would_route(messages, mode):
-                        self._stream_route_completion(orchestrator, security, messages, model_name)
+                        self._stream_route_completion(
+                            orchestrator,
+                            security,
+                            messages,
+                            model_name,
+                            include_usage=include_usage,
+                        )
                         orchestrator.record_analytics_event(
                             "chat_completion_requested",
                             {
@@ -790,7 +818,13 @@ def build_server(
                         },
                     )
                     if stream:
-                        chunks = chat_completion_chunks(result, model=model_name, include_trace=include_trace)
+                        chunks = chat_completion_chunks(
+                            result,
+                            model=model_name,
+                            include_trace=include_trace,
+                            include_usage=include_usage,
+                            usage=result.get("usage"),
+                        )
                         self._send_sse(sse_stream_body(chunks))
                         return
                     self._send(chat_completion_response(
@@ -1019,7 +1053,15 @@ def build_server(
             self.wfile.write(frame.encode("utf-8"))
             self.wfile.flush()
 
-        def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
+        def _stream_route_completion(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+            *,
+            include_usage: bool = False,
+        ) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = f"chatcmpl-{int(time.time() * 1000)}"
@@ -1039,10 +1081,32 @@ def build_server(
             try:
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
+                parts: list[str] = []
                 try:
                     for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                        parts.append(delta)
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
+                    if include_usage:
+                        # OpenAI: final usage chunk has empty choices before [DONE].
+                        from contextual_orchestrator.token_counting import HeuristicTokenCounter
+
+                        counter = HeuristicTokenCounter()
+                        prompt_tokens = counter.count_messages(messages, model_name)
+                        completion_tokens = counter.count_text("".join(parts), model_name)
+                        usage_payload = {
+                            "id": completion_id,
+                            "object": "chat.completion.chunk",
+                            "created": created,
+                            "model": model_name,
+                            "choices": [],
+                            "usage": {
+                                "prompt_tokens": prompt_tokens,
+                                "completion_tokens": completion_tokens,
+                                "total_tokens": prompt_tokens + completion_tokens,
+                            },
+                        }
+                        self._write_sse(f"data: {json.dumps(usage_payload, ensure_ascii=False)}\n\n")
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
                     self._write_sse(frame({}, finish="error"))
                 self._write_sse("data: [DONE]\n\n")

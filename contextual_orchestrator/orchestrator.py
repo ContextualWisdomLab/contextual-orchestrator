@@ -8524,12 +8524,19 @@ def chat_completion_chunks(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
     include_trace: bool = False,
+    *,
+    include_usage: bool = False,
+    usage: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Frame an orchestration result as OpenAI-compatible ``chat.completion.chunk`` deltas.
 
     The engine produces the full answer before framing, so this yields a correct-shape
     SSE stream (role delta, content deltas, terminal stop delta) rather than true
     token-by-token streaming — real token streaming requires a streaming ModelClient.
+
+    When ``include_usage`` is true (OpenAI ``stream_options.include_usage``), an extra
+    trailing chunk carries ``usage`` with an empty ``choices`` list before the SSE
+    ``[DONE]`` terminator.
     """
     answer = result.get("answer", "")
     completion_id = f"chatcmpl-{int(time.time() * 1000)}"
@@ -8553,6 +8560,9 @@ def chat_completion_chunks(
     final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)
+    if include_usage:
+        token_usage = usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        chunks.append({**base, "choices": [], "usage": token_usage})
     return chunks
 
 
