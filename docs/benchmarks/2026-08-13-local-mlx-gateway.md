@@ -165,6 +165,16 @@ collapsed and `c=64` is not an acceptable default. Failed saturation points
 remain recorded rather than being hidden, and callers must re-measure after
 changing model, prompt, output budget, server flags, or memory pressure.
 
+### Cost-routing integration smoke
+
+After the default batch-backend fix, an eight-request run through
+`CostRoutingCoordinator.submit_batch()` and `retrieve_batch()` used the same
+3B loopback service, `local_concurrency=8`, temperature `0`, disabled thinking,
+and `max_output_tokens=16`. It completed in `4.371 s` (`1.830 req/s`), returned
+`8/8` non-empty answers, and retained the submitted custom-ID order. This is
+integration evidence for the concurrency handoff and result contract, not a
+new cross-workload tuning recommendation.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
