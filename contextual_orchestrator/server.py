@@ -183,6 +183,88 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
+
+def _message_has_input_audio_content(messages: Any) -> bool:
+    """True when any message content part is an OpenAI input_audio part."""
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "input_audio":
+                return True
+    return False
+
+
+def _normalize_message_content(content: Any) -> str:
+    """Normalize OpenAI message content to plain text for orchestration.
+
+    Accepts a string or content-part array with ``text`` and ``input_audio``
+    parts. Audio-only messages normalize to ``[audio]``; multi-modal messages
+    with ``input_audio`` force single-agent passthrough in the chat handler.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list) or not content:
+        raise RequestError(400, "invalid_message", "message role or content is invalid")
+    text_parts: list[str] = []
+    has_audio = False
+    for part in content:
+        if isinstance(part, str):
+            if part:
+                text_parts.append(part)
+            continue
+        if not isinstance(part, dict):
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        part_type = part.get("type", "text")
+        if part_type == "text":
+            text_val = part.get("text")
+            if not isinstance(text_val, str):
+                raise RequestError(400, "invalid_message", "message role or content is invalid")
+            if text_val:
+                text_parts.append(text_val)
+            continue
+        if part_type == "input_audio":
+            input_audio = part.get("input_audio")
+            if not isinstance(input_audio, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "input_audio content part must include an input_audio object",
+                )
+            data = input_audio.get("data")
+            if not isinstance(data, str) or not data.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "input_audio.data must be a non-empty base64 string",
+                )
+            fmt = input_audio.get("format")
+            if fmt is not None and (not isinstance(fmt, str) or not fmt.strip()):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "input_audio.format must be a non-empty string when present",
+                )
+            has_audio = True
+            continue
+        raise RequestError(
+            400,
+            "invalid_message_content",
+            f"content part type {part_type!r} is not supported",
+            {"part_type": part_type},
+        )
+    if not text_parts and not has_audio:
+        raise RequestError(400, "invalid_message", "message role or content is invalid")
+    if not text_parts and has_audio:
+        return "[audio]"
+    return "\n".join(text_parts)
+
+
 def _validate_messages(messages: Any) -> list[dict[str, str]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
@@ -191,9 +273,9 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
-        content = message.get("content")
-        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
+        content = _normalize_message_content(message.get("content"))
         validated.append({"role": role, "content": content})
     return validated
 
@@ -713,9 +795,15 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
-                    if PASSTHROUGH_TRIGGER_KEYS & set(body):
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
+                    # Validate multi-modal content shapes before proxy/orchestration.
+                    if isinstance(body.get("messages"), list):
+                        for message in body["messages"]:
+                            if isinstance(message, dict) and "content" in message:
+                                _normalize_message_content(message.get("content"))
+                    if PASSTHROUGH_TRIGGER_KEYS & set(body) or _message_has_input_audio_content(body.get("messages")):
+                        # response_format / tools / input_audio parts cannot be
+                        # merged across multi-agent verifiers; proxy to one agent.
+
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
