@@ -130,6 +130,7 @@ verification or URL validation.
 | Semgrep flagged the reviewed `HTTPSConnection` API despite its explicit verifying context. | Keep the verifying context and add only the exact rule-specific suppression at that call site; retain transport regression tests. | Implemented |
 | DNS could return a safe address during validation and a different address during connection. | Return the validated sockaddr and pin every HTTP, HTTPS, streaming, passthrough, and batch connection to it while retaining hostname SNI/Host semantics. | Implemented |
 | A scanner-clean result could regress without a transport test. | Add a non-HTTP rejection regression and rerun the full SAST/CI gate. | Implemented / ongoing CI confirmation |
+| `actionlint`/ShellCheck flagged unquoted `FUZZ_SECONDS` expansions in every fuzz target, leaving the workflow vulnerable to word-splitting/globbing if the time-budget value changed. | Quote the shell expansion at every fuzz invocation and require the workflow lint gate to remain clean. | Fixed locally 2026-08-13; exact-head CI/SAST revalidation required |
 
 ## Risks and Mitigations
 
