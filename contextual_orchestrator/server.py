@@ -177,6 +177,50 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_response_format(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI ``response_format`` — object with type text|json_object|json_schema.
+
+    Applied on chat completions and Responses so structured-output SDKs get the
+    same schema checks on both surfaces.
+    """
+    if "response_format" not in body:
+        return None
+    response_format = body.get("response_format")
+    if not isinstance(response_format, dict):
+        raise RequestError(400, "invalid_response_format", "response_format must be an object")
+    format_type = response_format.get("type")
+    if format_type not in {"text", "json_object", "json_schema"}:
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.type must be text, json_object, or json_schema",
+        )
+    if format_type == "json_schema":
+        schema_wrapper = response_format.get("json_schema")
+        if not isinstance(schema_wrapper, dict):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema must be an object when type is json_schema",
+            )
+        name = schema_wrapper.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must be a non-empty string",
+            )
+        schema = schema_wrapper.get("schema")
+        if schema is not None and not isinstance(schema, dict):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.schema must be an object",
+            )
+    return response_format
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +757,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_response_format(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +907,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_response_format(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
