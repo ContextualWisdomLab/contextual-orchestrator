@@ -46,7 +46,7 @@ ALLOWED_RESPONSES_KEYS = {
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
-ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
+ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool", "developer"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
@@ -184,6 +184,7 @@ def _validate_mode(mode: Any) -> str:
 
 
 def _validate_messages(messages: Any) -> list[dict[str, str]]:
+    """Validate chat messages; accept OpenAI ``developer`` role (o-series SDKs)."""
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
     validated: list[dict[str, str]] = []

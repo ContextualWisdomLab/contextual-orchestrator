@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -494,7 +494,10 @@ class ModelClient:
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         role = "worker"
-        system = messages[0]["content"] if messages and messages[0].get("role") == "system" else ""
+        # OpenAI o-series SDKs use developer in place of system; treat both as prefix instructions.
+        system = ""
+        if messages and messages[0].get("role") in {"system", "developer"}:
+            system = messages[0]["content"]
         match = re.search(r"Role: ([a-z]+)", system)
         if match:
             role = match.group(1)
