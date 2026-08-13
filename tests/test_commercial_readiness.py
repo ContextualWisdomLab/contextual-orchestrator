@@ -172,7 +172,7 @@ def test_commercial_readiness_endpoint_openapi_admin_and_docs_contract() -> None
         )
         chat_status, _ = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
-            {"messages": [{"role": "user", "content": "Analyze, verify, and summarize commercial readiness."}]},
+            {"model": "mock-planner", "messages": [{"role": "user", "content": "Analyze, verify, and summarize commercial readiness."}]},
             "inference_secret",
         )
         readiness_status, readiness = get_json(
