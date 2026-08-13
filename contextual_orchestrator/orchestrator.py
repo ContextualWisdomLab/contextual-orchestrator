@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -8478,6 +8478,20 @@ def _space_size(search_space: dict[str, list[Any]]) -> int:
     return size
 
 
+def _normalize_usage(usage: dict[str, Any] | None) -> dict[str, int]:
+    """Ensure OpenAI usage has non-negative ints and total_tokens = prompt + completion when missing."""
+    if not usage:
+        return {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+    prompt = max(0, int(usage.get("prompt_tokens") or 0))
+    completion = max(0, int(usage.get("completion_tokens") or 0))
+    total_raw = usage.get("total_tokens")
+    if total_raw is None:
+        total = prompt + completion
+    else:
+        total = max(0, int(total_raw))
+    return {"prompt_tokens": prompt, "completion_tokens": completion, "total_tokens": total}
+
+
 def chat_completion_response(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
@@ -8512,7 +8526,7 @@ def chat_completion_response(
                 "finish_reason": "stop",
             }
         ],
-        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
+        "usage": _normalize_usage(usage),
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
     }
 

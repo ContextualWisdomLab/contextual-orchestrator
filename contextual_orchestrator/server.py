@@ -177,6 +177,29 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_chat_metadata(metadata: Any) -> dict[str, str] | None:
+    """Validate OpenAI chat ``metadata``: string→string map, at most 16 pairs.
+
+    OpenAI SDKs attach request metadata for tracing and billing correlation.
+    Non-object or non-string values must fail closed so clients do not silently
+    lose attribution tags.
+    """
+    if metadata is None:
+        return None
+    if not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_metadata", "metadata must be an object")
+    if len(metadata) > 16:
+        raise RequestError(400, "invalid_metadata", "metadata may contain at most 16 key-value pairs")
+    cleaned: dict[str, str] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not key:
+            raise RequestError(400, "invalid_metadata", "metadata keys must be non-empty strings")
+        if not isinstance(value, str):
+            raise RequestError(400, "invalid_metadata", "metadata values must be strings")
+        cleaned[key] = value
+    return cleaned
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +736,9 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    chat_metadata = _validate_chat_metadata(body.get("metadata"))
+                    if chat_metadata is not None:
+                        body["metadata"] = chat_metadata
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
