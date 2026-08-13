@@ -606,6 +606,24 @@ method and keeping direct K-way selection explicit calibration-only. No
 keyword matching, positional inference, retry, repair, or silent drop was
 used.
 
+The same default binary case was then repeated with the gateway's bounded
+local concurrency capability. The server remained configured with prompt and
+decode concurrency `1`; all four variants stayed at gold `4/4` with rows
+`(2,2)`.
+
+| gateway `local_concurrency` | elapsed | status | gold exact agreement |
+| ---: | ---: | --- | ---: |
+| `1` | `17.096 s` | `4 passed` | `4/4` |
+| `4` | `14.843 s` | `4 passed` | `4/4` |
+| `8` | `14.816 s` | `4 passed` | `4/4` |
+
+Concurrency `4` is the smallest tested setting at the observed plateau;
+raising it to `8` added no meaningful throughput. Keep the library default at
+`1` for interactive or single-queue workloads, and let latency-tolerant batch
+callers retune within the gateway bound after changing model, server queue, or
+prompt budget. This is a workload-specific throughput result, not a quality
+claim.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
