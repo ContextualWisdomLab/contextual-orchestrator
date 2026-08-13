@@ -48,6 +48,7 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+_MAX_MESSAGE_CONTENT_CHARS = 1_000_000  # per-message content cap (gateway DoS guard)
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -194,6 +195,13 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
         content = message.get("content")
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
+        if len(content) > _MAX_MESSAGE_CONTENT_CHARS:
+            raise RequestError(
+                400,
+                "invalid_message",
+                f"message content must be at most {_MAX_MESSAGE_CONTENT_CHARS} characters",
+                {"length": len(content), "max_length": _MAX_MESSAGE_CONTENT_CHARS},
+            )
         validated.append({"role": role, "content": content})
     return validated
 
