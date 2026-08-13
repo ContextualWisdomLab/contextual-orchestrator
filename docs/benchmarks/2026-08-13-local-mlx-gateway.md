@@ -437,7 +437,7 @@ queue.
 
 ### Anchored K=5 calibration after ordinal prompt hardening — 2026-08-14
 
-The linked fast-mlsirm source was then advanced to
+The linked fast-mlsirm implementation was advanced to
 `17e19ec90643a8dfcc464cd7dde0b63949539a32` and exercised through the exact
 `ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
 ModelClient -> mlx-lm` path. The prompt was changed to state that each Boolean
@@ -468,6 +468,12 @@ establish bias removal, model quality, or IRT readiness. Preserve all failed
 comparisons and semantic over-scores in the denominator; require a larger
 held-out human/gold set, prompt/order perturbations, and category occupancy
 before any model promotion.
+
+The fast PR branch subsequently reconciled its GitHub pull ref at exact head
+`2cd12090f6f4ef8188da15fc6a5704a6ad7063c7` (a documentation-only follow-up
+recording the temporary branch/pull-ref drift). All review and required-check
+evidence is bound to that final PR head, while the calibration implementation
+remains the `17e19ec` ancestor.
 
 ## IRT boundary
 
