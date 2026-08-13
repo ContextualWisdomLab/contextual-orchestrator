@@ -154,10 +154,51 @@ class SecurityConfig:
         }
 
 
-def _error_payload(error_code: str, error_message: str, error_detail: dict[str, Any] | None = None) -> dict[str, Any]:
+def _openai_error_type(status: int, error_code: str) -> str:
+    """Map HTTP status + gateway code to OpenAI ``error.type`` values.
+
+    OpenAI SDKs branch on ``error.type`` (e.g. ``invalid_request_error``,
+    ``authentication_error``). Without it, clients fall back to fragile
+    status-code-only handling and treat the gateway as non-compatible.
+    """
+    if status == 401 or error_code in {"unauthorized", "missing_token", "invalid_token"}:
+        return "authentication_error"
+    if status == 403 or error_code in {"forbidden", "admin_required"}:
+        return "permission_error"
+    if status == 404:
+        return "not_found_error"
+    if status == 409:
+        return "conflict_error"
+    if status == 413 or error_code in {"payload_too_large", "request_too_large"}:
+        return "invalid_request_error"
+    if status == 415:
+        return "invalid_request_error"
+    if status == 429 or error_code in {"rate_limited", "rate_limit_exceeded"}:
+        return "rate_limit_error"
+    if status >= 500:
+        return "server_error"
+    if status >= 400:
+        return "invalid_request_error"
+    return "api_error"
+
+
+def _error_payload(
+    error_code: str,
+    error_message: str,
+    error_detail: dict[str, Any] | None = None,
+    *,
+    status: int = 400,
+) -> dict[str, Any]:
     detail = error_detail or {}
+    error_type = _openai_error_type(status, error_code)
     return {
-        "error": {"code": error_code, "message": error_message, "detail": detail},
+        "error": {
+            "message": error_message,
+            "type": error_type,
+            "param": detail.get("param"),
+            "code": error_code,
+            "detail": detail,
+        },
         "error_code": error_code,
         "error_message": error_message,
         "error_detail": detail,
@@ -976,7 +1017,15 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
-            self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
+            self._send(
+                _error_payload(
+                    code,
+                    message,
+                    {"request_id": uuid.uuid4().hex, **(detail or {})},
+                    status=status,
+                ),
+                status,
+            )
 
         def _send(self, payload: dict[str, Any], status: int = 200) -> None:
             raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")

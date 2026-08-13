@@ -5,7 +5,7 @@
 - API version prefix: `/api/v1`.
 - Resource names: plural lower snake_case, at least two words.
 - Operation IDs: verb plus resource, lower snake_case.
-- Error shape: `{"error_code": "...", "error_message": "...", "error_detail": {...}}` in production.
+- Error shape: OpenAI-compatible `error.{message,type,param,code}` plus legacy `error_code` / `error_message` / `error_detail` for existing clients.
 - Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
 - OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
 
