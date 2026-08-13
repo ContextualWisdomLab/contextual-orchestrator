@@ -86,7 +86,7 @@ def test_http_over_budget_returns_429() -> None:
     port = server.server_address[1]
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
-        data=json.dumps({"messages": [{"role": "user", "content": "blocked"}]}).encode("utf-8"),
+        data=json.dumps({"model": "test-model", "messages": [{"role": "user", "content": "blocked"}]}).encode("utf-8"),
         headers={"content-type": "application/json", "authorization": f"Bearer {token}", "connection": "close"},
         method="POST",
     )
