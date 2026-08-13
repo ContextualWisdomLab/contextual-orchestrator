@@ -33,6 +33,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
     "response_format", "tools", "tool_choice", "functions", "function_call",
     "modalities", "prediction", "store", "service_tier",
+    "audio",
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
@@ -175,6 +176,29 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+def _validate_audio_object(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI chat ``audio`` object for voice modalities when present.
+
+    Requires object with string ``voice`` and optional string ``format``.
+    Gateway accepts the shape for schema parity and proxies when tools/passthrough
+    apply; does not synthesize audio itself.
+    """
+    if "audio" not in body:
+        return None
+    audio = body.get("audio")
+    if not isinstance(audio, dict):
+        raise RequestError(400, "invalid_audio", "audio must be an object")
+    voice = audio.get("voice")
+    if not isinstance(voice, str) or not voice.strip():
+        raise RequestError(400, "invalid_audio", "audio.voice must be a non-empty string")
+    if "format" in audio:
+        fmt = audio.get("format")
+        if not isinstance(fmt, str) or not fmt.strip():
+            raise RequestError(400, "invalid_audio", "audio.format must be a non-empty string when present")
+    return audio
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +737,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_audio_object(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
