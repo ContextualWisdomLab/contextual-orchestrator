@@ -9,7 +9,7 @@ import os
 import sys
 
 from .credentials import get_credential, register_credential
-from .orchestrator import ModelClient, TaskOrchestrator, load_agents
+from .orchestrator import MAX_LOCAL_CONCURRENCY, ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
 DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
@@ -25,6 +25,16 @@ def _positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError("positive integer required") from exc
     if parsed < 1:
         raise argparse.ArgumentTypeError("positive integer required")
+    return parsed
+
+
+def _local_concurrency(value: str) -> int:
+    """Parse a bounded local batch concurrency value."""
+    parsed = _positive_int(value)
+    if parsed > MAX_LOCAL_CONCURRENCY:
+        raise argparse.ArgumentTypeError(
+            f"integer in 1..{MAX_LOCAL_CONCURRENCY} required"
+        )
     return parsed
 
 
@@ -137,8 +147,8 @@ def main() -> None:
     )
     parser.add_argument("--max-output-tokens", type=int, default=2048,
                         help="Default provider output token cap (default: 2048).")
-    parser.add_argument("--local-concurrency", type=_positive_int, default=1,
-                        help="Concurrent requests for explicit mlx:// local batch work (default: 1).")
+    parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
+                        help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--route-text-length-threshold", type=_positive_int, default=None,
                         help="Auto-mode minimum prompt length that can trigger conduct instead of route.")
     parser.add_argument("--conduct-hint-threshold", type=_positive_int, default=None,

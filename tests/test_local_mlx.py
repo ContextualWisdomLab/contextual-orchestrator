@@ -310,6 +310,8 @@ def test_local_provider_scheme_validation_rejects_remote_and_malformed_ports() -
         {"local_max_retries": True},
         {"local_concurrency": 0},
         {"local_concurrency": False},
+        {"local_concurrency": 1.5},
+        {"local_concurrency": 65},
     ],
 )
 def test_local_transport_limits_reject_invalid_values(kwargs: dict[str, object]) -> None:

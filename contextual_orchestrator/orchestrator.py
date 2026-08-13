@@ -35,6 +35,7 @@ from .credentials import NotConfigured, get_credential
 
 ChatMessage = dict[str, str]
 ProviderDestination = tuple[int, tuple[Any, ...]]
+MAX_LOCAL_CONCURRENCY = 64
 
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
@@ -494,9 +495,11 @@ class ModelClient:
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
         self.temperature = temperature
-        if isinstance(local_concurrency, bool) or local_concurrency < 1:
-            raise ValueError("local_concurrency must be >= 1")
-        self.local_concurrency = int(local_concurrency)
+        if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
+            raise ValueError(
+                f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
+            )
+        self.local_concurrency = local_concurrency
         self.chat_template_args = dict(chat_template_args or {})
         self.allowed_provider_hosts = self._normalize_allowed_provider_hosts(allowed_provider_hosts)
         # Seam so tests can observe/skip real sleeping during backoff.

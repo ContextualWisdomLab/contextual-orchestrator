@@ -84,6 +84,7 @@ def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
     invalid_options = (
         (["--local-concurrency", "0"], "positive integer"),
         (["--local-concurrency", "-1"], "positive integer"),
+        (["--local-concurrency", "65"], "1..64"),
         (["--chat-template-args", "[]"], "JSON object"),
         (["--chat-template-args", "null"], "JSON object"),
         (["--chat-template-args", "{"], "valid JSON object"),
