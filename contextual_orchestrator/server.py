@@ -177,6 +177,29 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_openai_metadata(metadata: Any) -> dict[str, str] | None:
+    """OpenAI ``metadata`` — string→string map with at most 16 pairs when present."""
+    if metadata is None:
+        return None
+    if not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_metadata", "metadata must be an object")
+    if len(metadata) > 16:
+        raise RequestError(
+            400,
+            "invalid_metadata",
+            "metadata may contain at most 16 key-value pairs",
+        )
+    validated: dict[str, str] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not key.strip():
+            raise RequestError(400, "invalid_metadata", "metadata keys must be non-empty strings")
+        if not isinstance(value, str):
+            raise RequestError(400, "invalid_metadata", "metadata values must be strings")
+        validated[key] = value
+    return validated
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -184,16 +207,23 @@ def _validate_mode(mode: Any) -> str:
 
 
 def _validate_messages(messages: Any) -> list[dict[str, str]]:
+    """Validate OpenAI chat messages; require non-empty content for user/system roles."""
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
     validated: list[dict[str, str]] = []
-    for message in messages:
+    for index, message in enumerate(messages):
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
         content = message.get("content")
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
+        if role in {"user", "system"} and not content.strip():
+            raise RequestError(
+                400,
+                "invalid_message",
+                f"messages[{index}].content must be non-empty for {role} role",
+            )
         validated.append({"role": role, "content": content})
     return validated
 
@@ -713,6 +743,9 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    chat_metadata = _validate_openai_metadata(body.get("metadata"))
+                    if chat_metadata is not None:
+                        body["metadata"] = chat_metadata
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +895,9 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    resp_metadata = _validate_openai_metadata(body.get("metadata"))
+                    if resp_metadata is not None:
+                        body["metadata"] = resp_metadata
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
