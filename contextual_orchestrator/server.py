@@ -43,6 +43,7 @@ ALLOWED_CHAT_KEYS = {
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "max_tool_calls",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -175,6 +176,19 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+def _validate_responses_max_tool_calls(body: dict[str, Any]) -> int | None:
+    """OpenAI Responses ``max_tool_calls`` — positive integer when present."""
+    if "max_tool_calls" not in body:
+        return None
+    value = body.get("max_tool_calls")
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RequestError(400, "invalid_max_tool_calls", "max_tool_calls must be an integer")
+    if value < 1:
+        raise RequestError(400, "invalid_max_tool_calls", "max_tool_calls must be at least 1")
+    return value
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +876,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_max_tool_calls(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
