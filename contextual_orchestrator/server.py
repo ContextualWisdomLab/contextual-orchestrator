@@ -177,6 +177,44 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_responses_prediction(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI ``prediction`` content shape for predicted outputs (Responses).
+
+    Accepts ``{"type": "content", "content": <string|array>}`` when present.
+    """
+    if "prediction" not in body:
+        return None
+    prediction = body.get("prediction")
+    if not isinstance(prediction, dict):
+        raise RequestError(400, "invalid_prediction", "prediction must be an object")
+    ptype = prediction.get("type")
+    if ptype != "content":
+        raise RequestError(400, "invalid_prediction", "prediction.type must be content")
+    content = prediction.get("content")
+    if isinstance(content, str):
+        if not content:
+            raise RequestError(400, "invalid_prediction", "prediction.content must be non-empty")
+        return prediction
+    if isinstance(content, list):
+        if not content:
+            raise RequestError(400, "invalid_prediction", "prediction.content must be a non-empty array")
+        for part in content:
+            if not isinstance(part, dict):
+                raise RequestError(400, "invalid_prediction", "each prediction content part must be an object")
+            if part.get("type") != "text":
+                raise RequestError(400, "invalid_prediction", "prediction content parts must have type text")
+            text_val = part.get("text")
+            if not isinstance(text_val, str) or not text_val:
+                raise RequestError(400, "invalid_prediction", "prediction content part text must be a non-empty string")
+        return prediction
+    raise RequestError(
+        400,
+        "invalid_prediction",
+        "prediction.content must be a non-empty string or content-part array",
+    )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +900,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_prediction(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
