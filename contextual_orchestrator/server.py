@@ -48,6 +48,7 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+_MAX_MESSAGE_NAME_CHARS = 64  # OpenAI per-message name hard cap
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -187,14 +188,31 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
     validated: list[dict[str, str]] = []
-    for message in messages:
+    for index, message in enumerate(messages):
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
         content = message.get("content")
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        validated.append({"role": role, "content": content})
+        row: dict[str, str] = {"role": role, "content": content}
+        if "name" in message:
+            name = message.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_name",
+                    f"messages[{index}].name must be a non-empty string",
+                )
+            if len(name) > _MAX_MESSAGE_NAME_CHARS:
+                raise RequestError(
+                    400,
+                    "invalid_message_name",
+                    f"messages[{index}].name must be at most {_MAX_MESSAGE_NAME_CHARS} characters",
+                    {"length": len(name), "max_length": _MAX_MESSAGE_NAME_CHARS},
+                )
+            row["name"] = name
+        validated.append(row)
     return validated
 
 
