@@ -177,6 +177,17 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _reject_responses_storage_not_implemented(method: str, path: str) -> None:
+    """Raise 501 for Responses retrieve/list/delete (gateway is create-proxy only)."""
+    raise RequestError(
+        501,
+        "not_implemented",
+        f"{method} {path} is not implemented; this gateway proxies POST /v1/responses "
+        "and does not store response objects for retrieve/list/delete",
+    )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -355,6 +366,11 @@ def build_server(
                         self._send(coordinator.embeddings_batch_document(batch_id))
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
+                    return
+                # OpenAI Responses retrieve/list — gateway is create-proxy only.
+                if path == "/v1/responses" or path.startswith("/v1/responses/"):
+                    self._authorize("inference")
+                    _reject_responses_storage_not_implemented("GET", path)
                     return
                 self._authorize("admin")
                 if path == "/api/v1/cost_attribution_dimensions":
@@ -678,8 +694,12 @@ def build_server(
 
         def do_DELETE(self) -> None:  # noqa: N802
             try:
-                self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
+                if path == "/v1/responses" or path.startswith("/v1/responses/"):
+                    self._authorize("inference")
+                    _reject_responses_storage_not_implemented("DELETE", path)
+                    return
+                self._authorize("admin")
                 if path.startswith("/api/v1/agent_pools/") and "/worker_agents/" in path:
                     segments = [part for part in path.split("/") if part]
                     if len(segments) != 6 or segments[:3] != ["api", "v1", "agent_pools"] or segments[4] != "worker_agents":
