@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -8514,6 +8514,29 @@ def chat_completion_response(
         ],
         "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
+    }
+
+
+def text_completion_response(
+    result: dict[str, Any],
+    model: str = "contextual-orchestrator",
+    usage: dict[str, int] | None = None,
+) -> dict[str, Any]:  # pragma: no cover
+    """Wrap orchestration output as OpenAI legacy ``text_completion`` (``/v1/completions``)."""
+    return {
+        "id": f"cmpl-{int(time.time() * 1000)}",
+        "object": "text_completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "text": result["answer"],
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
 
