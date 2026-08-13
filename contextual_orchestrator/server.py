@@ -48,6 +48,12 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+# Responses API ``reasoning`` object enums (OpenAI-compatible; model subsets apply upstream).
+ALLOWED_REASONING_EFFORT_VALUES = {"none", "minimal", "low", "medium", "high", "xhigh", "max"}
+ALLOWED_REASONING_SUMMARY_VALUES = {"auto", "concise", "detailed"}
+ALLOWED_REASONING_MODE_VALUES = {"standard", "pro"}
+ALLOWED_REASONING_CONTEXT_VALUES = {"auto", "current_turn", "all_turns"}
+ALLOWED_REASONING_OBJECT_KEYS = {"effort", "summary", "mode", "context"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -175,6 +181,61 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _validate_responses_reasoning(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI Responses API ``reasoning`` object when present.
+
+    Accepts effort/summary/mode/context enums used by current reasoning models.
+    Unknown keys are rejected fail-closed so clients cannot smuggle fields past
+    the gateway into the proxied provider payload.
+    """
+    if "reasoning" not in body:
+        return None
+    reasoning = body.get("reasoning")
+    if not isinstance(reasoning, dict):
+        raise RequestError(400, "invalid_reasoning", "reasoning must be an object")
+    unknown = sorted(set(reasoning) - ALLOWED_REASONING_OBJECT_KEYS)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_reasoning",
+            "reasoning contains unsupported fields",
+            {"fields": unknown},
+        )
+    if "effort" in reasoning:
+        effort = reasoning.get("effort")
+        if not isinstance(effort, str) or effort not in ALLOWED_REASONING_EFFORT_VALUES:
+            raise RequestError(
+                400,
+                "invalid_reasoning",
+                "reasoning.effort must be one of: none, minimal, low, medium, high, xhigh, max",
+            )
+    if "summary" in reasoning:
+        summary = reasoning.get("summary")
+        if not isinstance(summary, str) or summary not in ALLOWED_REASONING_SUMMARY_VALUES:
+            raise RequestError(
+                400,
+                "invalid_reasoning",
+                "reasoning.summary must be one of: auto, concise, detailed",
+            )
+    if "mode" in reasoning:
+        mode = reasoning.get("mode")
+        if not isinstance(mode, str) or mode not in ALLOWED_REASONING_MODE_VALUES:
+            raise RequestError(
+                400,
+                "invalid_reasoning",
+                "reasoning.mode must be one of: standard, pro",
+            )
+    if "context" in reasoning:
+        context = reasoning.get("context")
+        if not isinstance(context, str) or context not in ALLOWED_REASONING_CONTEXT_VALUES:
+            raise RequestError(
+                400,
+                "invalid_reasoning",
+                "reasoning.context must be one of: auto, current_turn, all_turns",
+            )
+    return reasoning
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +923,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_reasoning(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
