@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 import secrets
 import threading
 import time
@@ -175,6 +176,44 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+
+_OPENAI_SCHEMA_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _validate_json_schema_name_pattern(body: dict[str, Any]) -> None:
+    """OpenAI ``response_format.json_schema.name`` must match function-name pattern.
+
+    When type is ``json_schema``, the schema name is 1–64 chars of
+    ``a-zA-Z0-9_-`` (same contract as tool/function names).
+    """
+    response_format = body.get("response_format")
+    if not isinstance(response_format, dict):
+        return
+    if response_format.get("type") != "json_schema":
+        return
+    wrapper = response_format.get("json_schema")
+    if not isinstance(wrapper, dict):
+        # shape validation is owned by other PRs; only pattern-check present names
+        return
+    if "name" not in wrapper:
+        return
+    name = wrapper.get("name")
+    if not isinstance(name, str) or not name:
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.json_schema.name must be a non-empty string",
+        )
+    if not _OPENAI_SCHEMA_NAME_RE.fullmatch(name):
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.json_schema.name must match ^[a-zA-Z0-9_-]{1,64}$",
+            {"name": name},
+        )
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +752,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_json_schema_name_pattern(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +902,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_json_schema_name_pattern(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
