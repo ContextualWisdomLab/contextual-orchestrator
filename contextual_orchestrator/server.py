@@ -546,6 +546,12 @@ def build_server(
                 if path == "/api/v1/orchestration_policies/default_policy":
                     self._send(orchestrator.admin_state()["policy"])
                     return
+                if path == "/api/v1/provider_readiness/latest":
+                    raw_refresh = (query.get("refresh") or ["false"])[0].lower()
+                    if raw_refresh not in {"true", "false"}:
+                        raise ValueError("refresh must be true or false")
+                    self._send(orchestrator.provider_readiness_report(refresh=raw_refresh == "true"))
+                    return
                 if path == "/api/v1/analytics_snapshots/latest":
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
                     return

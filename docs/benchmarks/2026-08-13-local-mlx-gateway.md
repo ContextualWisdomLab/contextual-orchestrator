@@ -417,6 +417,24 @@ calibration denominator and do not promote Gemma 4 e4b, change verifier
 priority, or repair the row without balanced held-out gold and perturbation
 evidence.
 
+### Explicit provider readiness refresh — 2026-08-14
+
+The new `TaskOrchestrator.provider_readiness_report(refresh=True)` path was
+exercised against the live `mlx-lm` service through `ModelClient`, using
+`mlx-community/gemma-4-e4b-it-4bit`, `temperature=0`, disabled thinking, a
+three-second probe bound, and zero local retries. `/health` returned `{"status":
+"ok"}` and the explicit one-token chat probe returned `ready` in `718.03 ms`
+with `15` provider tokens (`14` prompt, `1` completion). The authenticated
+`GET /api/v1/provider_readiness/latest?refresh=true` contract then returned
+HTTP `200`, `status=ready`, and the same worker-specific usage shape (`250.55
+ms` on the warm second probe).
+
+This is serving-readiness evidence only: it proves a bounded chat completion
+can pass now, not that the model is semantically calibrated or suitable for
+LLM-as-a-Judge. The refresh is explicit, sequential per worker, and
+non-retrying so the liveness endpoint cannot hide or multiply a stuck MLX
+queue.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple

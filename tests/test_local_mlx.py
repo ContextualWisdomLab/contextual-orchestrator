@@ -79,6 +79,96 @@ def test_mlx_loopback_uses_http_without_a_credential() -> None:
     assert client.take_usage()["total_tokens"] == 3
 
 
+def test_provider_probe_uses_one_bounded_completion_without_retry() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_retries=2, local_max_retries=2, chat_template_args={"enable_thinking": False})
+    seen: list[tuple[object, float | None]] = []
+
+    def open_provider(request, _destination=None, *, timeout=None):
+        seen.append((request, timeout))
+        return _Response({
+            "choices": [{"message": {"content": "OK"}}],
+            "usage": {"prompt_tokens": 6, "completion_tokens": 1, "total_tokens": 7},
+        })
+
+    with patch.object(client, "_open_provider", side_effect=open_provider):
+        report = client.probe(agent, timeout=1.25)
+
+    assert report["status"] == "ready"
+    assert report["usage"]["total_tokens"] == 7
+    assert len(seen) == 1
+    assert seen[0][1] == 1.25
+    import json
+
+    payload = json.loads(seen[0][0].data)
+    assert payload["max_tokens"] == 1
+    assert payload["temperature"] == 0.0
+    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_provider_probe_reports_timeout_without_retry() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_retries=2, local_max_retries=2)
+    with patch.object(client, "_open_provider", side_effect=TimeoutError("probe timeout")) as open_provider:
+        report = client.probe(agent, timeout=0.5)
+
+    assert report["status"] == "not_ready"
+    assert report["error_type"] == "TimeoutError"
+    assert open_provider.call_count == 1
+
+
+def test_provider_readiness_report_keeps_liveness_unprobed_until_refresh() -> None:
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([
+        ModelAgent("ready_agent", "ready-model"),
+        ModelAgent("disabled_agent", "disabled-model", disabled=True),
+    ], client=client)
+    with patch.object(client, "probe", return_value={"status": "ready", "agent_id": "ready_agent", "model": "ready-model"}) as probe:
+        unprobed = orchestrator.provider_readiness_report()
+        refreshed = orchestrator.provider_readiness_report(refresh=True, timeout=2.0)
+
+    assert unprobed["status"] == "unprobed"
+    assert unprobed["items"][0]["status"] == "unprobed"
+    assert refreshed["status"] == "ready"
+    assert refreshed["ready_agent_count"] == 1
+    assert refreshed["items"][1]["status"] == "disabled"
+    probe.assert_called_once_with(orchestrator.agents[0], timeout=2.0)
+
+
+def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
+    import threading
+
+    client = ModelClient()
+    orchestrator = TaskOrchestrator([ModelAgent("ready_agent", "ready-model")], client=client)
+    entered = threading.Event()
+    release = threading.Event()
+    counters = {"active": 0, "max_active": 0}
+    counter_lock = threading.Lock()
+
+    def probe(_agent, *, timeout):
+        del timeout
+        with counter_lock:
+            counters["active"] += 1
+            counters["max_active"] = max(counters["max_active"], counters["active"])
+        entered.set()
+        release.wait(timeout=2)
+        with counter_lock:
+            counters["active"] -= 1
+        return {"status": "ready", "agent_id": "ready_agent", "model": "ready-model"}
+
+    with patch.object(client, "probe", side_effect=probe):
+        first = threading.Thread(target=lambda: orchestrator.provider_readiness_report(refresh=True))
+        second = threading.Thread(target=lambda: orchestrator.provider_readiness_report(refresh=True))
+        first.start()
+        assert entered.wait(timeout=2)
+        second.start()
+        release.set()
+        first.join(timeout=2)
+        second.join(timeout=2)
+
+    assert counters["max_active"] == 1
+
+
 def test_reasoning_only_response_explains_local_template_fix() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=0)

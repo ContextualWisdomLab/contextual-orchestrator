@@ -14,6 +14,7 @@ import http.client
 import io
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -36,6 +37,21 @@ from .credentials import NotConfigured, get_credential
 ChatMessage = dict[str, str]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
+DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
+MAX_PROVIDER_PROBE_TIMEOUT = 30.0
+
+
+def _validate_provider_probe_timeout(timeout: float) -> float:
+    """Validate the finite, bounded timeout used by explicit readiness probes."""
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise ValueError("provider probe timeout must be a finite number")
+    value = float(timeout)
+    if not math.isfinite(value) or not 0.1 <= value <= MAX_PROVIDER_PROBE_TIMEOUT:
+        raise ValueError(
+            f"provider probe timeout must be between 0.1 and {MAX_PROVIDER_PROBE_TIMEOUT:g} seconds"
+        )
+    return value
+
 
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
@@ -579,15 +595,70 @@ class ModelClient:
             payload["chat_template_kwargs"] = self.chat_template_args
         return self._send_with_retry(agent, payload, destination)
 
+    def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
+        """Run one bounded completion probe without changing workflow state.
+
+        ``/health`` and ``/v1/models`` only prove process/model-registry liveness;
+        this deliberately exercises the chat path with one output token. It never
+        retries, so a stuck local queue cannot be multiplied by the readiness check.
+        """
+        probe_timeout = _validate_provider_probe_timeout(timeout)
+        started = time.monotonic()
+        self._local.usage = None
+        try:
+            if agent.base_url.startswith("mock://"):
+                content = self._mock(agent, [{"role": "user", "content": "Reply with exactly OK."}])
+                usage = None
+            else:
+                destination = self._validate_provider(agent)
+                payload: dict[str, Any] = {
+                    "model": agent.model,
+                    "messages": [{"role": "user", "content": "Reply with exactly OK."}],
+                    "temperature": 0.0,
+                    "stream": False,
+                    "max_tokens": 1,
+                }
+                if _is_local_provider_url(agent.base_url) and self.chat_template_args:
+                    payload["chat_template_kwargs"] = self.chat_template_args
+                content = self._send(agent, payload, destination, timeout=probe_timeout)
+                usage = self.take_usage()
+            if not content.strip():
+                raise RuntimeError(f"provider {agent.id} returned empty probe content")
+            return {
+                "agent_id": agent.id,
+                "model": agent.model,
+                "status": "ready",
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "usage": usage,
+            }
+        except Exception as exc:  # noqa: BLE001 - readiness reports failures, it does not serve them
+            return {
+                "agent_id": agent.id,
+                "model": agent.model,
+                "status": "not_ready",
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "error_type": type(exc).__name__,
+                "error": redact_text(str(exc))[:256],
+            }
+
     def _send_with_retry(
-        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
-                return self._send(agent, payload, destination)
+                return (
+                    self._send(agent, payload, destination)
+                    if timeout is None
+                    else self._send(agent, payload, destination, timeout=timeout)
+                )
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
@@ -606,7 +677,12 @@ class ModelClient:
         return random.uniform(0.0, ceiling)
 
     def _send(
-        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
         api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
@@ -619,7 +695,12 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request, destination) as response:
+        opened = (
+            self._open_provider(request, destination)
+            if timeout is None
+            else self._open_provider(request, destination, timeout=timeout)
+        )
+        with opened as response:
             data = json.loads(response.read().decode("utf-8"))
         usage = data.get("usage")
         if isinstance(usage, dict):
@@ -670,7 +751,11 @@ class ModelClient:
         return resolved
 
     def _open_provider(
-        self, request: urllib.request.Request, destination: ProviderDestination | None = None
+        self,
+        request: urllib.request.Request,
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
     ) -> Any:
         """Open a validated HTTP(S) request without generic URL-handler dispatch."""
         parsed = urlparse(request.full_url)
@@ -688,17 +773,18 @@ class ModelClient:
             raise RuntimeError("provider request URL has an invalid port") from exc
         if destination is None:
             destination = self._resolve_addresses(parsed.hostname, port)[0]
+        connection_timeout = self.timeout if timeout is None else timeout
         connection: http.client.HTTPConnection
         if parsed.scheme == "https":
             # The explicit verifying context is the security control for this reviewed API.
             connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
                 parsed.hostname,
                 port,
-                timeout=self.timeout,
+                timeout=connection_timeout,
                 context=self._ssl_context,
             )
         else:
-            connection = http.client.HTTPConnection(parsed.hostname, port, timeout=self.timeout)
+            connection = http.client.HTTPConnection(parsed.hostname, port, timeout=connection_timeout)
         connection._create_connection = (  # type: ignore[attr-defined]
             lambda _address, timeout, source_address: self._connect_validated(
                 destination, timeout, source_address
@@ -1331,6 +1417,7 @@ class TaskOrchestrator:
         # so a persistently failing provider is skipped until it cools down.
         self._circuit: dict[str, dict[str, float]] = {}
         self._circuit_lock = threading.Lock()
+        self._provider_readiness_lock = threading.Lock()
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -1348,6 +1435,53 @@ class TaskOrchestrator:
             self._pool_store.close()
         if self._store is not None:
             self._store.close()
+
+    def provider_readiness_report(
+        self,
+        *,
+        refresh: bool = False,
+        timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT,
+    ) -> dict[str, Any]:
+        """Report provider liveness separately from an explicit chat readiness probe."""
+        if type(refresh) is not bool:
+            raise ValueError("refresh must be a boolean")
+        probe_timeout = _validate_provider_probe_timeout(timeout)
+        items: list[dict[str, Any]] = []
+        with self._provider_readiness_lock:
+            for agent in self.candidates:
+                provider = agent.provider_name or self._infer_provider_name(agent.base_url)
+                if agent.disabled:
+                    items.append({
+                        "agent_id": agent.id,
+                        "model": agent.model,
+                        "provider": provider,
+                        "status": "disabled",
+                    })
+                    continue
+                if refresh:
+                    item = dict(self.client.probe(agent, timeout=probe_timeout))
+                    item["provider"] = provider
+                    items.append(redact_value(item))
+                else:
+                    items.append({
+                        "agent_id": agent.id,
+                        "model": agent.model,
+                        "provider": provider,
+                        "status": "unprobed",
+                    })
+        active = [item for item in items if item["status"] != "disabled"]
+        status = "unprobed" if not refresh else (
+            "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
+        )
+        return {
+            "status": status,
+            "probe": "refresh" if refresh else "none",
+            "timeout_seconds": probe_timeout,
+            "checked_at": int(time.time()) if refresh else None,
+            "agent_count": len(active),
+            "ready_agent_count": sum(item["status"] == "ready" for item in active),
+            "items": items,
+        }
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
