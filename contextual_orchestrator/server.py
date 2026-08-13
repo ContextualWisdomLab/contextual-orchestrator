@@ -177,6 +177,25 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+
+def _validate_top_logprobs_requires_logprobs(body: dict[str, Any]) -> None:
+    """OpenAI requires ``logprobs=true`` whenever ``top_logprobs`` is set.
+
+    Avoids opaque provider 400s when clients request top-k logprobs without
+    enabling the parent flag (chat completions and Responses).
+    """
+    if "top_logprobs" not in body:
+        return
+    logprobs = body.get("logprobs")
+    if logprobs is not True:
+        raise RequestError(
+            400,
+            "invalid_top_logprobs",
+            "top_logprobs requires logprobs to be true",
+        )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +732,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_top_logprobs_requires_logprobs(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +882,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_top_logprobs_requires_logprobs(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
