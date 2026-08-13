@@ -328,6 +328,7 @@ def build_server(
 
     class Handler(BaseHTTPRequestHandler):
         def do_GET(self) -> None:  # noqa: N802
+            self._request_started_at = time.perf_counter()
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -654,6 +655,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            self._request_started_at = time.perf_counter()
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -677,6 +679,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            self._request_started_at = time.perf_counter()
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -697,6 +700,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            self._request_started_at = time.perf_counter()
             try:
                 path = urllib.parse.urlparse(self.path).path
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
@@ -1054,6 +1058,11 @@ def build_server(
             self.send_header("referrer-policy", "no-referrer")
             self.send_header("cache-control", "no-store")
             self.send_header("x-frame-options", "DENY")
+            started = getattr(self, "_request_started_at", None)
+            if isinstance(started, (int, float)):
+                # OpenAI-compatible processing latency for client-side SLOs / dashboards.
+                elapsed_ms = max(0, int(round((time.perf_counter() - float(started)) * 1000)))
+                self.send_header("openai-processing-ms", str(elapsed_ms))
 
     return ThreadingHTTPServer((host, port), Handler)
 
