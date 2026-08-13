@@ -43,6 +43,8 @@ ALLOWED_CHAT_KEYS = {
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    # Responses-native OpenAI fields (not all shared with chat/completions).
+    "max_output_tokens", "previous_response_id", "truncation", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -175,6 +177,87 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
+    """OpenAI Responses ``max_output_tokens`` — positive integer when present."""
+    if "max_output_tokens" not in body:
+        return None
+    value = body.get("max_output_tokens")
+    if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+        raise RequestError(
+            400,
+            "invalid_max_output_tokens",
+            "max_output_tokens must be a positive integer",
+        )
+    return value
+
+
+def _validate_responses_previous_response_id(body: dict[str, Any]) -> str | None:
+    """OpenAI Responses ``previous_response_id`` — non-empty string when present."""
+    if "previous_response_id" not in body:
+        return None
+    value = body.get("previous_response_id")
+    if not isinstance(value, str) or not value.strip():
+        raise RequestError(
+            400,
+            "invalid_previous_response_id",
+            "previous_response_id must be a non-empty string",
+        )
+    if len(value) > 256:
+        raise RequestError(
+            400,
+            "invalid_previous_response_id",
+            "previous_response_id must be at most 256 characters",
+        )
+    return value
+
+
+def _validate_responses_truncation(body: dict[str, Any]) -> str | None:
+    """OpenAI Responses ``truncation`` — auto or disabled when present."""
+    if "truncation" not in body:
+        return None
+    value = body.get("truncation")
+    if value not in {"auto", "disabled"}:
+        raise RequestError(
+            400,
+            "invalid_truncation",
+            "truncation must be auto or disabled",
+        )
+    return value
+
+
+def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI Responses ``text`` configuration object when present."""
+    if "text" not in body:
+        return None
+    value = body.get("text")
+    if not isinstance(value, dict):
+        raise RequestError(400, "invalid_text", "text must be an object")
+    allowed = {"format", "verbosity"}
+    unknown = sorted(set(value) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text contains unsupported fields",
+            {"fields": unknown},
+        )
+    if "format" in value:
+        fmt = value.get("format")
+        if not isinstance(fmt, dict):
+            raise RequestError(400, "invalid_text", "text.format must be an object")
+        if "type" in fmt and not isinstance(fmt.get("type"), str):
+            raise RequestError(400, "invalid_text", "text.format.type must be a string")
+    if "verbosity" in value:
+        verbosity = value.get("verbosity")
+        if verbosity not in {"low", "medium", "high"}:
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.verbosity must be low, medium, or high",
+            )
+    return value
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +945,10 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_max_output_tokens(body)
+                    _validate_responses_previous_response_id(body)
+                    _validate_responses_truncation(body)
+                    _validate_responses_text(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
