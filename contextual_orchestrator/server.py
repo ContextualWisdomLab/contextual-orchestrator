@@ -177,6 +177,34 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_stop_sequences(body: dict[str, Any]) -> list[str] | None:
+    """OpenAI ``stop`` — string or array of up to 4 non-empty strings when present."""
+    if "stop" not in body:
+        return None
+    stop = body.get("stop")
+    if isinstance(stop, str):
+        if not stop:
+            raise RequestError(400, "invalid_stop", "stop string must be non-empty")
+        return [stop]
+    if isinstance(stop, list):
+        if not stop:
+            raise RequestError(400, "invalid_stop", "stop array must be non-empty")
+        if len(stop) > 4:
+            raise RequestError(400, "invalid_stop", "stop array may contain at most 4 sequences")
+        validated: list[str] = []
+        for index, item in enumerate(stop):
+            if not isinstance(item, str) or not item:
+                raise RequestError(
+                    400,
+                    "invalid_stop",
+                    f"stop[{index}] must be a non-empty string",
+                )
+            validated.append(item)
+        return validated
+    raise RequestError(400, "invalid_stop", "stop must be a string or array of strings")
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +741,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_stop_sequences(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
