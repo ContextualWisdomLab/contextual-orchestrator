@@ -44,6 +44,7 @@ class RoutingHints:
     channel: Optional[str] = None  # explicit "sync" | "batch" request
     latency_tolerant: bool = False
     priority: str = "normal"  # "interactive" | "normal" | "bulk"
+    cost_preference: Optional[str] = None  # free_first | balanced | quality | cheapest
 
     @classmethod
     def from_mapping(cls, data: Optional[Dict[str, Any]]) -> "RoutingHints":
@@ -52,10 +53,14 @@ class RoutingHints:
         channel = data.get("channel")
         if channel is not None:
             channel = str(channel).lower()
+        cost_preference = data.get("cost_preference")
+        if cost_preference is not None:
+            cost_preference = str(cost_preference).lower()
         return cls(
             channel=channel,
             latency_tolerant=bool(data.get("latency_tolerant", False)),
             priority=str(data.get("priority", "normal")).lower(),
+            cost_preference=cost_preference,
         )
 
 

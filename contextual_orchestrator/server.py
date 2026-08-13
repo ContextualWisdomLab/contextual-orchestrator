@@ -211,16 +211,48 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
 
 
 def _validate_routing(routing: Any) -> dict[str, Any] | None:
+    """Validate OpenAI-gateway routing hints including free-form cost preference.
+
+    Supported keys:
+    - ``channel``: sync | batch
+    - ``latency_tolerant``: boolean
+    - ``priority``: interactive | normal | bulk
+    - ``cost_preference``: free_first | balanced | quality | cheapest (free-form
+      buyer hint for upstream selection among equal-capability agents)
+    """
     if routing is None:
         return None
     if not isinstance(routing, dict):
         raise RequestError(400, "invalid_routing", "routing must be an object")
-    unknown = sorted(set(routing) - {"channel", "latency_tolerant", "priority"})
+    allowed = {"channel", "latency_tolerant", "priority", "cost_preference"}
+    unknown = sorted(set(routing) - allowed)
     if unknown:
         raise RequestError(400, "invalid_routing", "routing contains unsupported keys", {"fields": unknown})
     channel = routing.get("channel")
     if channel is not None and channel not in {"sync", "batch"}:
         raise RequestError(400, "invalid_routing", "routing.channel must be sync or batch")
+    if "latency_tolerant" in routing and not isinstance(routing.get("latency_tolerant"), bool):
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.latency_tolerant must be a boolean",
+        )
+    if "priority" in routing:
+        priority = routing.get("priority")
+        if priority not in {"interactive", "normal", "bulk"}:
+            raise RequestError(
+                400,
+                "invalid_routing",
+                "routing.priority must be interactive, normal, or bulk",
+            )
+    if "cost_preference" in routing:
+        pref = routing.get("cost_preference")
+        if pref not in {"free_first", "balanced", "quality", "cheapest"}:
+            raise RequestError(
+                400,
+                "invalid_routing",
+                "routing.cost_preference must be free_first, balanced, quality, or cheapest",
+            )
     return routing
 
 
