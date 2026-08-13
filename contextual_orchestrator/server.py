@@ -683,6 +683,101 @@ def _validate_chat_tool_message_ids(body: dict[str, Any]) -> None:
             )
 
 
+def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
+    """OpenAI assistant ``tool_calls`` array shape on chat messages.
+
+    Each entry must be a function tool call with non-empty ``id``,
+    ``function.name``, and string ``function.arguments`` (JSON text).
+    Validated before passthrough so multi-turn tool histories fail closed.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if "tool_calls" not in message:
+            continue
+        if message.get("role") != "assistant":
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_calls is only valid on assistant messages",
+            )
+        tool_calls = message.get("tool_calls")
+        if not isinstance(tool_calls, list) or not tool_calls:
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_calls must be a non-empty array",
+            )
+        if len(tool_calls) > 128:
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_calls must contain at most 128 entries",
+            )
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry must be an object",
+                )
+            call_id = call.get("id")
+            if not isinstance(call_id, str) or not call_id.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry requires a non-empty id string",
+                )
+            if len(call_id) > 128:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls id must be at most 128 characters",
+                )
+            if call.get("type") != "function":
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry type must be function",
+                )
+            function = call.get("function")
+            if not isinstance(function, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry requires a function object",
+                )
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.name must be a non-empty string",
+                )
+            if len(name) > 64:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.name must be at most 64 characters",
+                )
+            if not all(ch.isalnum() or ch in "_-" for ch in name):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.name must match [a-zA-Z0-9_-]",
+                )
+            arguments = function.get("arguments")
+            if not isinstance(arguments, str):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.arguments must be a string",
+                )
+
+
 def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
     if attribution is None:
         return None
@@ -1498,6 +1593,7 @@ def build_server(
                         )
                     # Shape-check tool results before passthrough or orchestration.
                     _validate_chat_tool_message_ids(body)
+                    _validate_chat_assistant_tool_calls(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "tools" in body:
