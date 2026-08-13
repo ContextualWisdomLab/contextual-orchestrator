@@ -43,6 +43,7 @@ ALLOWED_CHAT_KEYS = {
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "conversation",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -175,6 +176,40 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+def _validate_responses_conversation(body: dict[str, Any]) -> str | dict[str, Any] | None:
+    """OpenAI Responses ``conversation`` — non-empty string id or {id: str}.
+
+    Accepted for multi-turn continuity schema parity; the gateway proxies the
+    value and does not yet own conversation state storage.
+    """
+    if "conversation" not in body:
+        return None
+    value = body.get("conversation")
+    if isinstance(value, str):
+        if not value.strip():
+            raise RequestError(
+                400,
+                "invalid_conversation",
+                "conversation must be a non-empty string id",
+            )
+        return value
+    if isinstance(value, dict):
+        conv_id = value.get("id")
+        if not isinstance(conv_id, str) or not conv_id.strip():
+            raise RequestError(
+                400,
+                "invalid_conversation",
+                "conversation.id must be a non-empty string",
+            )
+        return value
+    raise RequestError(
+        400,
+        "invalid_conversation",
+        "conversation must be a string id or an object with id",
+    )
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +897,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_conversation(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
