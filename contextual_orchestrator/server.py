@@ -22,6 +22,7 @@ from .orchestrator import (
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
+    text_completion_response,
     redact_value,
     sse_stream_body,
 )
@@ -46,6 +47,11 @@ ALLOWED_RESPONSES_KEYS = {
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
+ALLOWED_COMPLETIONS_KEYS = {
+    "model", "prompt", "stream", "stream_options", "echo", "suffix", "best_of",
+    "logprobs", "n", "max_tokens", "temperature", "top_p", "stop", "user", "seed",
+    "presence_penalty", "frequency_penalty", "logit_bias",
+} | {"attribution", "routing"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -169,6 +175,124 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RequestError(400, "invalid_json", "request body must be a JSON object")
     return value
+
+
+
+def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
+    """Legacy Completions ``prompt`` → single user message list."""
+    if isinstance(prompt, str):
+        if not prompt.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        return [{"role": "user", "content": prompt}]
+    if isinstance(prompt, list):
+        if not prompt:
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        parts: list[str] = []
+        for item in prompt:
+            if not isinstance(item, str):
+                raise RequestError(400, "invalid_prompt", "prompt array items must be strings")
+            parts.append(item)
+        joined = "\n".join(parts)
+        if not joined.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        return [{"role": "user", "content": joined}]
+    raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+
+
+def _validate_completions_stream(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``stream`` — strict boolean; ``true`` is not supported here.
+
+    OpenAI Completions accepts streaming, but this gateway rejects ``stream=true``
+    with a clear redirect to chat completions. Non-boolean values fail closed.
+    """
+    if "stream" not in body:
+        return None
+    stream = body.get("stream")
+    if not isinstance(stream, bool):
+        raise RequestError(400, "invalid_stream", "stream must be a boolean")
+    if stream is True:
+        raise RequestError(
+            400,
+            "invalid_stream",
+            "stream is not supported on /v1/completions; use /v1/chat/completions",
+        )
+    return stream
+
+
+def _validate_completions_echo(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``echo`` — strict boolean (include prompt in completion)."""
+    if "echo" not in body:
+        return None
+    echo = body.get("echo")
+    if not isinstance(echo, bool):
+        raise RequestError(400, "invalid_echo", "echo must be a boolean")
+    return echo
+
+
+def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``best_of`` — positive integer and ``best_of >= n``.
+
+    OpenAI generates ``best_of`` candidates server-side and returns the top ``n``.
+    ``n`` defaults to 1 when omitted. Boolean ``True``/``False`` are rejected
+    (``bool`` is a subclass of ``int`` in Python).
+    """
+    if "best_of" not in body:
+        return None
+    best_of = body.get("best_of")
+    if isinstance(best_of, bool) or not isinstance(best_of, int) or best_of < 1:
+        raise RequestError(400, "invalid_best_of", "best_of must be a positive integer")
+    n = body.get("n", 1)
+    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+        raise RequestError(400, "invalid_n", "n must be a positive integer")
+    if best_of < n:
+        raise RequestError(
+            400,
+            "invalid_best_of",
+            "best_of must be greater than or equal to n",
+        )
+    return best_of
+
+
+def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Legacy Completions ``stream_options`` — object with boolean flags; requires stream=true.
+
+    Mirrors OpenAI chat Completions: ``stream_options`` is only valid when streaming.
+    This gateway rejects Completions streaming, so a well-formed ``stream_options``
+    still fails closed once ``stream`` is checked (or here if ``stream`` is not true).
+    """
+    if "stream_options" not in body:
+        return None
+    opts = body.get("stream_options")
+    if not isinstance(opts, dict):
+        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    if body.get("stream") is not True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options requires stream=true",
+        )
+    allowed = {"include_usage", "include_obfuscation"}
+    unknown = sorted(set(opts) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported fields",
+            {"fields": unknown},
+        )
+    if "include_usage" in opts and not isinstance(opts["include_usage"], bool):
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_usage must be a boolean",
+        )
+    if "include_obfuscation" in opts and not isinstance(opts["include_obfuscation"], bool):
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_obfuscation must be a boolean",
+        )
+    return opts
 
 
 def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
@@ -711,6 +835,40 @@ def build_server(
                     self._send(orchestrator.add_agent(segments[3], body), 201)
                     return
 
+                if path == "/v1/completions":
+                    # Legacy OpenAI Completions: prompt → route → text_completion.
+                    _reject_unknown_keys(body, ALLOWED_COMPLETIONS_KEYS)
+                    _validate_completions_stream(body)
+                    _validate_completions_stream_options(body)
+                    _validate_completions_best_of(body)
+                    _validate_completions_echo(body)
+                    messages = _validate_completion_prompt(body.get("prompt"))
+                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    attribution = _validate_attribution(body.get("attribution"))
+                    routing = _validate_routing(body.get("routing"))
+                    started_at = time.perf_counter()
+                    result = self._run(lambda: coordinator.complete(
+                        messages,
+                        mode="route",
+                        attribution=attribution,
+                        hints=routing,
+                        model_name=model_name,
+                        workflow_run_id=f"run_{uuid.uuid4().hex}",
+                    ))
+                    orchestrator.record_analytics_event(
+                        "text_completion_requested",
+                        {
+                            "endpoint_path": "/v1/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "run_mode": "route",
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(text_completion_response(
+                        result, model=model_name, usage=result.get("usage"),
+                    ))
+                    return
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
