@@ -583,6 +583,29 @@ not a claim that the larger models are unbiased. Model promotion requires
 more persons/items, balanced correct-option positions and counts, framing and
 contamination controls, and human/gold recall.
 
+### Direct-versus-binary paired calibration follow-up — 2026-08-14
+
+The current local `mlx-lm` process was configured for Gemma 4 e4b. Using the
+real `fast-mlsirm.ContextualOrchestratorJudge -> contextual-orchestrator ->
+mlx-lm` route, temperature `0`, disabled thinking, `max_output_tokens=192`,
+zero retries, `local_concurrency=1`, K=`3`, two complete category anchors, and
+caller-declared `held_out` status, the same four paired MCQ variants were run
+with the explicit `direct` method and with the default method (which resolves
+to independent `binary_threshold` calls).
+
+| method | passed | judge failures | gold exact agreement | rows among passed | elapsed |
+| --- | ---: | ---: | ---: | --- | ---: |
+| explicit `direct` | `2/4` | `2` | `1/2` | baseline `(2,1)`, replacement `(2,2)` | `12.204 s` |
+| default `binary_threshold` | `4/4` | `0` | `4/4` | all `(2,2)` | `17.096 s` |
+
+The direct run's option-only and shuffled variants failed closed at the judge
+format boundary; they were retained in the denominator. The binary result is
+one anchored case, not evidence of universal accuracy or bias removal, but it
+supports retaining binary thresholds as the implicit production polytomous
+method and keeping direct K-way selection explicit calibration-only. No
+keyword matching, positional inference, retry, repair, or silent drop was
+used.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
