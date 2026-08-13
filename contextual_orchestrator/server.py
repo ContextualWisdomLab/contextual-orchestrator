@@ -177,6 +177,39 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_max_tokens_fields(body: dict[str, Any]) -> int | None:
+    """OpenAI ``max_tokens`` / ``max_completion_tokens`` — positive ints; not both with conflict.
+
+    When both are present they must agree; either alone must be a positive integer.
+    """
+    has_max = "max_tokens" in body
+    has_completion = "max_completion_tokens" in body
+    if not has_max and not has_completion:
+        return None
+
+    def _coerce(field_name: str, value: Any) -> int:
+        if not isinstance(value, int) or isinstance(value, bool) or value < 1:
+            raise RequestError(
+                400,
+                "invalid_max_tokens",
+                f"{field_name} must be a positive integer",
+            )
+        return value
+
+    max_tokens = _coerce("max_tokens", body["max_tokens"]) if has_max else None
+    max_completion = (
+        _coerce("max_completion_tokens", body["max_completion_tokens"]) if has_completion else None
+    )
+    if max_tokens is not None and max_completion is not None and max_tokens != max_completion:
+        raise RequestError(
+            400,
+            "invalid_max_tokens",
+            "max_tokens and max_completion_tokens must match when both are set",
+        )
+    return max_completion if max_completion is not None else max_tokens
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +746,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_max_tokens_fields(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
