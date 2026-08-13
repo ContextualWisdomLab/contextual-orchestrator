@@ -2558,7 +2558,7 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.
-                    _validate_responses_model(body)
+                    request_model = _validate_responses_model(body)
                     if "reasoning" in body:
                         _validate_responses_reasoning(body)
                     if "instructions" in body:
@@ -2590,6 +2590,13 @@ def build_server(
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
                     )
+                    # Buyer honesty: response model echoes the validated request
+                    # model. Passthrough remaps upstream to the selected agent
+                    # model for routing, but the HTTP contract must not silently
+                    # rewrite the client-visible model id.
+                    if isinstance(proxied, dict):
+                        proxied = dict(proxied)
+                        proxied["model"] = request_model
                     orchestrator.record_analytics_event(
                         "responses_passthrough",
                         {

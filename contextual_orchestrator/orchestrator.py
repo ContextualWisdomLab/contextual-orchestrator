@@ -452,10 +452,12 @@ class ModelClient:
             if key in payload
         }
         if endpoint.strip("/") == "responses":
+            # Prefer client-requested model when present so passthrough echo is honest.
+            response_model = payload.get("model") if isinstance(payload.get("model"), str) else agent.model
             return {
                 "id": f"resp_mock_{agent.id}",
                 "object": "response",
-                "model": agent.model,
+                "model": response_model or agent.model,
                 "output": [
                     {
                         "type": "message",
