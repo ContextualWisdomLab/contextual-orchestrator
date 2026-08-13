@@ -67,10 +67,30 @@ the explicit concurrency knob:
 | 2 | `8.140` | `0.983` | `8/8` |
 | 4 | `8.108` | `0.987` | `8/8` |
 
-On this machine, concurrency `2` reaches the observed server throughput
-ceiling; `4` adds no material gain. Interactive route/conduct paths therefore
-remain sequential, while latency-tolerant local batch callers should start at
-`--local-concurrency 2` and re-measure after changing the MLX server or model.
+This was an earlier eight-request snapshot. It is retained as historical
+evidence, not as a universal tuning result: the later repeated probe below
+used different request cardinality and warm-cache state.
+
+### Repeated warm-cache concurrency probe
+
+The follow-up used two trials per concurrency after one warm-up request per
+model, temperature `0`, thinking disabled, `max_output_tokens=32`, and unique
+short prompts. The 3B run used 16 requests; the 1B and Gemma 4B runs used
+eight. Every cell completed with non-empty content for every request.
+
+| model | requests | c=1 median seconds (req/s) | c=2 median seconds (req/s) | c=4 median seconds (req/s) | c=8 median seconds (req/s) |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| `llama-3.2-3b-instruct-4bit` | 16 | `25.585` (`0.625`) | `15.139` (`1.057`) | `10.956` (`1.460`) | `7.928` (`2.018`) |
+| `llama-3.2-1b-instruct-4bit` | 8 | `2.825` (`2.832`) | — | `1.631` (`4.906`) | `1.524` (`5.251`) |
+| `gemma-4-e4b-it-4bit` | 8 | `7.765` (`1.030`) | — | `5.003` (`1.599`) | `3.654` (`2.189`) |
+
+For this running mlx-lm service, `local_concurrency=8` is the fastest tested
+batch setting across all three models. Keep interactive route/conduct paths
+sequential and keep the library default at `1`; latency-tolerant batch callers
+may start at `--local-concurrency 8` (or the equivalent constructor value),
+then re-measure after changing the model, server flags, prompt size, or device
+memory pressure. This is still a throughput/transport result, not a quality
+ranking.
 
 ## IRT boundary
 
