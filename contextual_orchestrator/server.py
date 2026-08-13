@@ -177,6 +177,39 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_response_format_strict(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI ``response_format.json_schema.strict`` boolean when present.
+
+    Lightweight companion to full response_format validation: when
+    ``response_format.type`` is ``json_schema``, require ``strict`` to be a
+    boolean if supplied (common structured-output SDK flag).
+    """
+    if "response_format" not in body:
+        return None
+    response_format = body.get("response_format")
+    if not isinstance(response_format, dict):
+        raise RequestError(400, "invalid_response_format", "response_format must be an object")
+    if response_format.get("type") != "json_schema":
+        return response_format
+    schema_wrapper = response_format.get("json_schema")
+    if schema_wrapper is None:
+        return response_format
+    if not isinstance(schema_wrapper, dict):
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.json_schema must be an object when type is json_schema",
+        )
+    if "strict" in schema_wrapper and not isinstance(schema_wrapper.get("strict"), bool):
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.json_schema.strict must be a boolean",
+        )
+    return response_format
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +746,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_response_format_strict(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +896,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_response_format_strict(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
