@@ -1,7 +1,7 @@
 """Runtime integrity guards for execution identity and embedding provenance.
 
 This module centralizes fail-closed rules that must hold even while the legacy
-HTTP and cost-routing surfaces are being consolidated.  It deliberately keeps
+HTTP and cost-routing surfaces are being consolidated. It deliberately keeps
 caller-supplied attribution descriptive: execution identity (provider/model)
 is derived from the operation that actually ran, never from untrusted request
 metadata.
@@ -11,11 +11,8 @@ from __future__ import annotations
 
 from typing import Any, Dict, List, Optional
 
-from .batch_routing import BatchBackend, EmbeddingBatchBackend, LocalEmbeddingBatchBackend
-from .cost_ledger import CostLedger, PriceBook
+from .batch_routing import LocalEmbeddingBatchBackend
 from .cost_router import CostRoutingCoordinator as _BaseCostRoutingCoordinator
-from .kv_config import InMemoryConfigStore
-from .batch_routing import RoutingPolicy
 
 
 LOCAL_HEURISTIC_EMBEDDING_MODEL = "local-heuristic-embedding"
@@ -26,7 +23,7 @@ def _descriptive_attribution(attribution: Optional[Dict[str, Any]]) -> Dict[str,
     """Return attribution with caller-controlled execution identity removed.
 
     ``model_name`` and provider aliases are evidence produced by execution, not
-    labels a caller may choose.  Account/service/team/group/company remain valid
+    labels a caller may choose. Account/service/team/group/company remain valid
     descriptive dimensions.
     """
 
@@ -39,10 +36,10 @@ def _descriptive_attribution(attribution: Optional[Dict[str, Any]]) -> Dict[str,
 class IntegrityCostRoutingCoordinator(_BaseCostRoutingCoordinator):
     """Cost-routing coordinator with fail-closed execution provenance.
 
-    The local embedding backend is an offline deterministic test backend.  It
+    The local embedding backend is an offline deterministic test backend. It
     therefore accepts only the explicit ``local-heuristic-embedding`` model id;
     an arbitrary chat/provider model can never be represented by its SHA-derived
-    vector.  Caller attribution is also prevented from overwriting provider or
+    vector. Caller attribution is also prevented from overwriting provider or
     model evidence in the usage ledger.
     """
 
