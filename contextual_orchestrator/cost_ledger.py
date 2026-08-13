@@ -222,6 +222,13 @@ class UsageRecord:
 
     def as_dict(self) -> Dict[str, Any]:
         """Flatten the record (attribution inlined) for JSON + SQL storage."""
+        # Prefer an explicit attribution model_name (client tag) for rollups;
+        # otherwise the served model id on the record.
+        rollup_model = (
+            self.attribution.model_name
+            if self.attribution.model_name != UNATTRIBUTED
+            else self.model_name
+        )
         row = {
             "usage_record_id": self.usage_record_id,
             "created_at": self.created_at,
@@ -229,7 +236,7 @@ class UsageRecord:
             "request_channel": self.request_channel,
             "route_mode": self.route_mode,
             "provider_name": self.provider_name,
-            "model_name": self.model_name,
+            "model_name": rollup_model,
             "prompt_tokens": self.prompt_tokens,
             "completion_tokens": self.completion_tokens,
             "total_tokens": self.total_tokens,
@@ -583,12 +590,12 @@ class SqlLedgerStore:
         ph = self._placeholder()
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
+            cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: only the DB-API placeholder char is interpolated; the value is bound.
                 f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
                 (name,),
             )
             if cur.fetchone() is None:
-                cur.execute(
+                cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: only DB-API placeholder chars are interpolated; values are bound.
                     "INSERT INTO cost_attribution_dimensions "
                     f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
                     (name, label, order),
@@ -602,7 +609,7 @@ class SqlLedgerStore:
         placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(
+        cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: columns are the fixed _USAGE_COLUMNS constant; values are bound.
             f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
@@ -622,7 +629,7 @@ class SqlLedgerStore:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.  # nosemgrep -- sqlalchemy-execute-raw-query FP: fixed columns and clause templates; all values are bound.
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 
