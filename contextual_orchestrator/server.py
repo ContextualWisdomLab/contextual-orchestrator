@@ -48,6 +48,7 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+_MAX_FUNCTION_DESCRIPTION_CHARS = 1024  # OpenAI-style tool/function description cap
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -175,6 +176,65 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+
+def _validate_function_descriptions(body: dict[str, Any]) -> None:
+    """Cap OpenAI tool/function ``description`` strings at 1024 characters.
+
+    Descriptions are optional; when present they must be strings and must not
+    exceed the gateway hard cap (matches common OpenAI tooling limits).
+    """
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for index, tool in enumerate(tools):
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function")
+            if not isinstance(function, dict) or "description" not in function:
+                continue
+            description = function.get("description")
+            if not isinstance(description, str):
+                raise RequestError(
+                    400,
+                    "invalid_tools",
+                    f"tools[{index}].function.description must be a string when set",
+                )
+            if len(description) > _MAX_FUNCTION_DESCRIPTION_CHARS:
+                raise RequestError(
+                    400,
+                    "invalid_tools",
+                    f"tools[{index}].function.description must be at most "
+                    f"{_MAX_FUNCTION_DESCRIPTION_CHARS} characters",
+                    {
+                        "length": len(description),
+                        "max_length": _MAX_FUNCTION_DESCRIPTION_CHARS,
+                    },
+                )
+    functions = body.get("functions")
+    if isinstance(functions, list):
+        for index, function in enumerate(functions):
+            if not isinstance(function, dict) or "description" not in function:
+                continue
+            description = function.get("description")
+            if not isinstance(description, str):
+                raise RequestError(
+                    400,
+                    "invalid_functions",
+                    f"functions[{index}].description must be a string when set",
+                )
+            if len(description) > _MAX_FUNCTION_DESCRIPTION_CHARS:
+                raise RequestError(
+                    400,
+                    "invalid_functions",
+                    f"functions[{index}].description must be at most "
+                    f"{_MAX_FUNCTION_DESCRIPTION_CHARS} characters",
+                    {
+                        "length": len(description),
+                        "max_length": _MAX_FUNCTION_DESCRIPTION_CHARS,
+                    },
+                )
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +773,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_function_descriptions(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +923,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_function_descriptions(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
