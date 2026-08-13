@@ -67,6 +67,23 @@ insufficient for `validate_irt_experiment_readiness` or any IRT fit. The
 result is therefore retained as a calibration observation, with K, method,
 trace, usage, parse status, and readiness status kept separate.
 
+### Live cumulative-threshold semantic spot-check — 2026-08-13
+
+A fresh two-criterion call used the same strict gateway path with
+`category_count=5` and `category_method="cumulative_threshold"`. The answer
+explicitly described canary rollout, monitoring, independent review, and
+rollback rehearsal. The response parsed successfully and produced the valid
+two-item polytomous row `(4, 0)`, with score `0.5), one trace step, and
+`625` total provider tokens; the judge assigned
+`evidence_quality=4` and `risk_awareness=0`.
+
+This is a semantic calibration miss, not a parser or transport failure:
+structured output can be valid while an item-level judgment under-recognizes
+evidence present in the answer. No keyword, lexical, positional, or
+silent-drop repair is allowed. The result must remain in the calibration
+denominator and be addressed with balanced held-out cases and human/gold
+anchors before any quality or IRT interpretation.
+
 ## Additional local model and batch-throughput probe
 
 Using the same loopback `mlx-lm` server, temperature `0`, disabled thinking,
