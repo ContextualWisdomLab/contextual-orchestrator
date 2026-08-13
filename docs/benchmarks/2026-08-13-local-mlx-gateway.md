@@ -107,13 +107,36 @@ eight. Every cell completed with non-empty content for every request.
 | `llama-3.2-1b-instruct-4bit` | 8 | `2.825` (`2.832`) | — | `1.631` (`4.906`) | `1.524` (`5.251`) |
 | `gemma-4-e4b-it-4bit` | 8 | `7.765` (`1.030`) | — | `5.003` (`1.599`) | `3.654` (`2.189`) |
 
-For this running mlx-lm service, `local_concurrency=8` is the fastest tested
-batch setting across all three models. Keep interactive route/conduct paths
-sequential and keep the library default at `1`; latency-tolerant batch callers
-may start at `--local-concurrency 8` (or the equivalent constructor value),
-then re-measure after changing the model, server flags, prompt size, or device
-memory pressure. This is still a throughput/transport result, not a quality
-ranking.
+For the three-model comparison, `local_concurrency=8` is the fastest tested
+cross-model setting. Keep interactive route/conduct paths sequential and keep
+the library default at `1`; latency-tolerant batch callers should still
+measure the target model before selecting a larger value.
+
+### Current 3B saturation probe
+
+A follow-up warm-cache probe on the same running service used the 3B model,
+temperature `0`, disabled thinking, and short unique prompts. All requests
+returned non-empty content. The 16-request trial compared concurrency through
+`16`; the 32-request trial tested the higher settings after the c=16 result
+was fastest.
+
+| requests | max output tokens | `local_concurrency` | elapsed seconds | requests/second | non-empty |
+| ---: | ---: | ---: | ---: | ---: | ---: |
+| 16 | 24 | 1 | `4.847` | `3.301` | `16/16` |
+| 16 | 24 | 2 | `5.467` | `2.927` | `16/16` |
+| 16 | 24 | 4 | `3.373` | `4.744` | `16/16` |
+| 16 | 24 | 8 | `2.757` | `5.804` | `16/16` |
+| 16 | 24 | 16 | `2.344` | `6.827` | `16/16` |
+| 32 | 16 | 16 | `5.123` | `6.246` | `32/32` |
+| 32 | 16 | 24 | `6.599` | `4.849` | `32/32` |
+| 32 | 16 | 32 | `6.235` | `5.132` | `32/32` |
+
+For this specific 3B workload, `local_concurrency=16` is the best measured
+setting; raising it to `24` or `32` reduced throughput. This is a bounded
+transport result, not a universal hardware optimum or a quality ranking.
+Use `--local-concurrency 16` only for latency-tolerant 3B batches after a
+warm-cache check, and re-measure after changing the model, server flags,
+prompt/output budgets, or device memory pressure.
 
 ## IRT boundary
 
