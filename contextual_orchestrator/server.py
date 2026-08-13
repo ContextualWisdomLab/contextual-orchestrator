@@ -210,6 +210,28 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
     return {key: str(value) for key, value in attribution.items()}
 
 
+def _merge_openai_user_attribution(
+    body: dict[str, Any],
+    attribution: dict[str, Any] | None,
+) -> dict[str, Any] | None:
+    """Map OpenAI ``user`` into the cost-ledger ``account`` dimension when unset.
+
+    OpenAI clients send ``user`` for abuse tracking and multi-tenant billing.
+    Explicit ``attribution.account`` always wins so gateway operators retain
+    control of the cost dimension.
+    """
+    raw_user = body.get("user")
+    if raw_user is None:
+        return attribution
+    if not isinstance(raw_user, str) or not raw_user.strip():
+        raise RequestError(400, "invalid_user", "user must be a non-empty string")
+    user_id = raw_user.strip()
+    merged = dict(attribution or {})
+    if not merged.get("account"):
+        merged["account"] = user_id
+    return merged
+
+
 def _validate_routing(routing: Any) -> dict[str, Any] | None:
     if routing is None:
         return None
@@ -737,7 +759,10 @@ def build_server(
                     stream = body.get("stream", False)
                     if not isinstance(stream, bool):
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
-                    attribution = _validate_attribution(body.get("attribution"))
+                    attribution = _merge_openai_user_attribution(
+                        body,
+                        _validate_attribution(body.get("attribution")),
+                    )
                     routing = _validate_routing(body.get("routing"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
