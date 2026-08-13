@@ -435,6 +435,40 @@ LLM-as-a-Judge. The refresh is explicit, sequential per worker, and
 non-retrying so the liveness endpoint cannot hide or multiply a stuck MLX
 queue.
 
+### Anchored K=5 calibration after ordinal prompt hardening — 2026-08-14
+
+The linked fast-mlsirm source was then advanced to
+`17e19ec90643a8dfcc464cd7dde0b63949539a32` and exercised through the exact
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm` path. The prompt was changed to state that each Boolean
+call asks whether the answer meets *at least* the requested category (not
+exactly that category), that stronger evidence remains true at lower
+boundaries, and that criterion/task relevance is required. Generic intent,
+unrelated detail, admissions that a control is missing, and rubric repetition
+are not evidence.
+
+On a balanced six-case set with two criteria, K=5, complete per-criterion
+anchors, temperature 0, disabled thinking, `local_concurrency=4`, and no local
+retries, three complete reruns produced the following calibration-only
+evidence:
+
+| prompt version | complete comparisons | failed closed | cell accuracy among complete rows | exact-case accuracy | provider tokens |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| pre-hardening | `2/6` | `4/6` | `25.0%` | `0.0%` | `20,274` |
+| minimum-boundary clarification | `5/6` | `1/6` | `40.0%` | `16.7%` | `22,925` |
+| relevance clarification repeat | `4/6` | `2/6` | `37.5%` | `16.7%` | `25,528` |
+
+The first two token totals are sums of the per-case usage records retained in
+the detailed run output. The third run used `25,528` provider tokens over
+`77.907 s`. Complete rows still over-scored partial or
+unsupported evidence (`partial_plan` and `evidence_without_safety`), while
+non-monotone outputs for unsafe/irrelevant cases were rejected. The prompt
+change therefore improves the ordinal contract's protection but does not
+establish bias removal, model quality, or IRT readiness. Preserve all failed
+comparisons and semantic over-scores in the denominator; require a larger
+held-out human/gold set, prompt/order perturbations, and category occupancy
+before any model promotion.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
