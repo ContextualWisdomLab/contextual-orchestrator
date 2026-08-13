@@ -177,6 +177,66 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+
+def _message_texts_for_json_instruction(body: dict[str, Any]) -> list[str]:
+    """Collect plain-text fragments from chat messages or Responses input."""
+    texts: list[str] = []
+    messages = body.get("messages")
+    if isinstance(messages, list):
+        for message in messages:
+            if not isinstance(message, dict):
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                texts.append(content)
+            elif isinstance(content, list):
+                for part in content:
+                    if isinstance(part, dict) and isinstance(part.get("text"), str):
+                        texts.append(part["text"])
+    raw_input = body.get("input")
+    if isinstance(raw_input, str):
+        texts.append(raw_input)
+    elif isinstance(raw_input, list):
+        for item in raw_input:
+            if isinstance(item, str):
+                texts.append(item)
+            elif isinstance(item, dict):
+                if isinstance(item.get("content"), str):
+                    texts.append(item["content"])
+                text_val = item.get("text")
+                if isinstance(text_val, str):
+                    texts.append(text_val)
+                elif isinstance(text_val, dict) and isinstance(text_val.get("value"), str):
+                    texts.append(text_val["value"])
+    instructions = body.get("instructions")
+    if isinstance(instructions, str):
+        texts.append(instructions)
+    return texts
+
+
+def _validate_json_object_requires_json_instruction(body: dict[str, Any]) -> None:
+    """OpenAI JSON mode requires the client to mention JSON in the prompt.
+
+    When ``response_format.type`` is ``json_object``, at least one message /
+    input / instructions string must contain the substring ``json``
+    (case-insensitive). Prevents the well-known provider 400.
+    """
+    response_format = body.get("response_format")
+    if not isinstance(response_format, dict):
+        return
+    if response_format.get("type") != "json_object":
+        return
+    texts = _message_texts_for_json_instruction(body)
+    if any("json" in text.lower() for text in texts):
+        return
+    raise RequestError(
+        400,
+        "invalid_response_format",
+        "response_format type json_object requires a message that mentions JSON",
+    )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +773,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_json_object_requires_json_instruction(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +923,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_json_object_requires_json_instruction(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
