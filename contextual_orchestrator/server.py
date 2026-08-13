@@ -177,6 +177,86 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_temperature(body: dict[str, Any]) -> float | None:
+    """OpenAI ``temperature`` — number in [0, 2] when present."""
+    if "temperature" not in body:
+        return None
+    temperature = body.get("temperature")
+    if not isinstance(temperature, (int, float)) or isinstance(temperature, bool):
+        raise RequestError(400, "invalid_temperature", "temperature must be a number")
+    temperature_f = float(temperature)
+    if temperature_f < 0 or temperature_f > 2:
+        raise RequestError(400, "invalid_temperature", "temperature must be between 0 and 2")
+    return temperature_f
+
+
+def _validate_n_choices(body: dict[str, Any]) -> int | None:
+    """OpenAI ``n`` — this gateway returns a single choice; only ``n=1`` is accepted."""
+    if "n" not in body:
+        return None
+    n = body.get("n")
+    if not isinstance(n, int) or isinstance(n, bool):
+        raise RequestError(400, "invalid_n", "n must be an integer")
+    if n != 1:
+        raise RequestError(
+            400,
+            "invalid_n",
+            "n must be 1; multi-choice completions are not supported",
+        )
+    return n
+
+
+def _validate_prediction(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI Predicted Outputs ``prediction`` — {type: content, content: string|parts}."""
+    if "prediction" not in body:
+        return None
+    prediction = body.get("prediction")
+    if not isinstance(prediction, dict):
+        raise RequestError(400, "invalid_prediction", "prediction must be an object")
+    pred_type = prediction.get("type")
+    if pred_type != "content":
+        raise RequestError(
+            400,
+            "invalid_prediction",
+            "prediction.type must be content",
+        )
+    content = prediction.get("content")
+    if isinstance(content, str):
+        if not content:
+            raise RequestError(400, "invalid_prediction", "prediction.content must be non-empty")
+        return prediction
+    if isinstance(content, list):
+        if not content:
+            raise RequestError(400, "invalid_prediction", "prediction.content array must be non-empty")
+        for index, part in enumerate(content):
+            if not isinstance(part, dict):
+                raise RequestError(
+                    400,
+                    "invalid_prediction",
+                    f"prediction.content[{index}] must be an object",
+                )
+            if part.get("type") != "text":
+                raise RequestError(
+                    400,
+                    "invalid_prediction",
+                    f"prediction.content[{index}].type must be text",
+                )
+            text_value = part.get("text")
+            if not isinstance(text_value, str) or not text_value:
+                raise RequestError(
+                    400,
+                    "invalid_prediction",
+                    f"prediction.content[{index}].text must be a non-empty string",
+                )
+        return prediction
+    raise RequestError(
+        400,
+        "invalid_prediction",
+        "prediction.content must be a non-empty string or content-part array",
+    )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +793,9 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_temperature(body)
+                    _validate_n_choices(body)
+                    _validate_prediction(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
