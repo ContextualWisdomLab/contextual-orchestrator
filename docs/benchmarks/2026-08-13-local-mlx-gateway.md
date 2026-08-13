@@ -471,9 +471,12 @@ before any model promotion.
 
 The fast PR branch subsequently reconciled its GitHub pull ref at exact head
 `2cd12090f6f4ef8188da15fc6a5704a6ad7063c7` (a documentation-only follow-up
-recording the temporary branch/pull-ref drift). All review and required-check
-evidence is bound to that final PR head, while the calibration implementation
-remains the `17e19ec` ancestor.
+recording the temporary branch/pull-ref drift). A later fast-mlsirm follow-up
+advanced the linked PR to `ebd76b4664147c18a3e1cfcc3d689e916a2fff08`; it records
+the validated `meets_threshold` Boolean in bounded non-monotone failure
+evidence without retaining full model output. That push invalidates all
+predecessor review/check evidence; the calibration implementation remains the
+`17e19ec` ancestor, and the new exact head requires fresh review and checks.
 
 ## IRT boundary
 
