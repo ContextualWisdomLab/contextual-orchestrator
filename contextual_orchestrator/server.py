@@ -22,6 +22,7 @@ from .orchestrator import (
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
+    text_completion_response,
     redact_value,
     sse_stream_body,
 )
@@ -46,6 +47,13 @@ ALLOWED_RESPONSES_KEYS = {
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
+ALLOWED_COMPLETIONS_KEYS = {
+    "model", "prompt", "stream", "echo", "suffix", "best_of", "logprobs",
+    "n", "max_tokens", "temperature", "top_p", "stop", "user", "seed",
+    "presence_penalty", "frequency_penalty", "logit_bias",
+} | {"attribution", "routing"}
+_MIN_COMPLETIONS_LOGIT_BIAS = -100
+_MAX_COMPLETIONS_LOGIT_BIAS = 100
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -169,6 +177,56 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RequestError(400, "invalid_json", "request body must be a JSON object")
     return value
+
+
+
+def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
+    """Legacy Completions ``prompt`` → single user message list."""
+    if isinstance(prompt, str):
+        if not prompt.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        return [{"role": "user", "content": prompt}]
+    if isinstance(prompt, list):
+        if not prompt:
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        parts: list[str] = []
+        for item in prompt:
+            if not isinstance(item, str):
+                raise RequestError(400, "invalid_prompt", "prompt array items must be strings")
+            parts.append(item)
+        joined = "\n".join(parts)
+        if not joined.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        return [{"role": "user", "content": joined}]
+    raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+
+
+def _validate_completions_logit_bias(body: dict[str, Any]) -> dict[str, float] | None:
+    """Legacy Completions ``logit_bias`` — object of token-id keys → numbers in [-100, 100]."""
+    if "logit_bias" not in body:
+        return None
+    logit_bias = body.get("logit_bias")
+    if not isinstance(logit_bias, dict):
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must be an object")
+    normalized: dict[str, float] = {}
+    for key, value in logit_bias.items():
+        key_str = str(key)
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RequestError(
+                400,
+                "invalid_logit_bias",
+                f"logit_bias[{key_str!r}] must be a number",
+            )
+        bias = float(value)
+        if bias < _MIN_COMPLETIONS_LOGIT_BIAS or bias > _MAX_COMPLETIONS_LOGIT_BIAS:
+            raise RequestError(
+                400,
+                "invalid_logit_bias",
+                f"logit_bias values must be between {_MIN_COMPLETIONS_LOGIT_BIAS} and {_MAX_COMPLETIONS_LOGIT_BIAS}",
+                {"token": key_str, "value": bias},
+            )
+        normalized[key_str] = bias
+    return normalized
 
 
 def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
@@ -711,6 +769,43 @@ def build_server(
                     self._send(orchestrator.add_agent(segments[3], body), 201)
                     return
 
+                if path == "/v1/completions":
+                    # Legacy OpenAI Completions: prompt → route → text_completion.
+                    _reject_unknown_keys(body, ALLOWED_COMPLETIONS_KEYS)
+                    _validate_completions_logit_bias(body)
+                    if body.get("stream") is True:
+                        raise RequestError(
+                            400,
+                            "invalid_request",
+                            "stream is not supported on /v1/completions; use /v1/chat/completions",
+                        )
+                    messages = _validate_completion_prompt(body.get("prompt"))
+                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    attribution = _validate_attribution(body.get("attribution"))
+                    routing = _validate_routing(body.get("routing"))
+                    started_at = time.perf_counter()
+                    result = self._run(lambda: coordinator.complete(
+                        messages,
+                        mode="route",
+                        attribution=attribution,
+                        hints=routing,
+                        model_name=model_name,
+                        workflow_run_id=f"run_{uuid.uuid4().hex}",
+                    ))
+                    orchestrator.record_analytics_event(
+                        "text_completion_requested",
+                        {
+                            "endpoint_path": "/v1/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "run_mode": "route",
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(text_completion_response(
+                        result, model=model_name, usage=result.get("usage"),
+                    ))
+                    return
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
