@@ -199,6 +199,7 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
 
 
 def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
+    """Validate cost-ledger attribution dimensions as non-empty string values."""
     if attribution is None:
         return None
     if not isinstance(attribution, dict):
@@ -206,8 +207,29 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
     allowed = set(ATTRIBUTION_DIMENSIONS) | {"provider"}
     unknown = sorted(set(attribution) - allowed)
     if unknown:
-        raise RequestError(400, "invalid_attribution", "attribution contains unsupported dimensions", {"fields": unknown})
-    return {key: str(value) for key, value in attribution.items()}
+        raise RequestError(
+            400,
+            "invalid_attribution",
+            "attribution contains unsupported dimensions",
+            {"fields": unknown},
+        )
+    validated: dict[str, Any] = {}
+    for key, value in attribution.items():
+        if isinstance(value, bool) or not isinstance(value, (str, int, float)):
+            raise RequestError(
+                400,
+                "invalid_attribution",
+                f"attribution.{key} must be a string or number",
+            )
+        text_value = str(value).strip()
+        if not text_value:
+            raise RequestError(
+                400,
+                "invalid_attribution",
+                f"attribution.{key} must be a non-empty string",
+            )
+        validated[key] = text_value
+    return validated
 
 
 def _validate_routing(routing: Any) -> dict[str, Any] | None:
