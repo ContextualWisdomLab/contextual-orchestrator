@@ -99,6 +99,11 @@ class _FastMLSIJudgeAdapter:
     served_agent_id: str | None = None
     mode: str = "auto"
 
+    @property
+    def client(self) -> ModelClient:
+        """Expose the existing gateway client capability to fast-mlsirm."""
+        return self.orchestrator.client
+
     def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")

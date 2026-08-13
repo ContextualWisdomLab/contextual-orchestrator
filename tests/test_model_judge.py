@@ -258,6 +258,7 @@ def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
         "general_agent",
         mode="route",
     )
+    assert adapter.client is orchestrator.client
     with patch.object(
         orchestrator,
         "_invoke",
