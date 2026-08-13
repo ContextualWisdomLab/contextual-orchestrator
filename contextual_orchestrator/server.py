@@ -177,6 +177,38 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_top_p(body: dict[str, Any]) -> float | None:
+    """OpenAI ``top_p`` — number in [0, 1] when present."""
+    if "top_p" not in body:
+        return None
+    top_p = body.get("top_p")
+    if not isinstance(top_p, (int, float)) or isinstance(top_p, bool):
+        raise RequestError(400, "invalid_top_p", "top_p must be a number")
+    top_p_f = float(top_p)
+    if top_p_f < 0 or top_p_f > 1:
+        raise RequestError(400, "invalid_top_p", "top_p must be between 0 and 1")
+    return top_p_f
+
+
+def _validate_penalty_fields(body: dict[str, Any]) -> dict[str, float]:
+    """OpenAI presence_penalty / frequency_penalty — numbers in [-2, 2] when present."""
+    out: dict[str, float] = {}
+    for field_name, error_code in (
+        ("presence_penalty", "invalid_presence_penalty"),
+        ("frequency_penalty", "invalid_frequency_penalty"),
+    ):
+        if field_name not in body:
+            continue
+        value = body.get(field_name)
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise RequestError(400, error_code, f"{field_name} must be a number")
+        value_f = float(value)
+        if value_f < -2 or value_f > 2:
+            raise RequestError(400, error_code, f"{field_name} must be between -2 and 2")
+        out[field_name] = value_f
+    return out
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +745,8 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_top_p(body)
+                    _validate_penalty_fields(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
