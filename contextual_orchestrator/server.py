@@ -22,6 +22,7 @@ from .orchestrator import (
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
+    text_completion_response,
     redact_value,
     sse_stream_body,
 )
@@ -46,6 +47,11 @@ ALLOWED_RESPONSES_KEYS = {
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
+ALLOWED_COMPLETIONS_KEYS = {
+    "model", "prompt", "stream", "stream_options", "echo", "suffix", "best_of",
+    "logprobs", "n", "max_tokens", "temperature", "top_p", "stop", "user", "seed",
+    "presence_penalty", "frequency_penalty", "logit_bias",
+} | {"attribution", "routing"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -169,6 +175,439 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RequestError(400, "invalid_json", "request body must be a JSON object")
     return value
+
+
+
+def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
+    """Legacy Completions ``prompt`` → single user message list.
+
+    Accepts a non-empty string or an array of strings (at most 128 items). OpenAI
+    also allows arrays of token IDs (integers); this gateway rejects token-id
+    prompts fail-closed with ``invalid_prompt`` so SDKs get a clear migration
+    path to string prompts.
+    """
+    if isinstance(prompt, str):
+        if not prompt.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        if len(prompt) > 32_000:
+            raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+        return [{"role": "user", "content": prompt}]
+    if isinstance(prompt, list):
+        if not prompt:
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        if len(prompt) > 128:
+            raise RequestError(
+                400,
+                "invalid_prompt",
+                "prompt array must contain at most 128 items",
+            )
+        # Token-id form: list of ints, or list of list of ints (batch of token sequences).
+        if all(isinstance(item, int) and not isinstance(item, bool) for item in prompt):
+            raise RequestError(
+                400,
+                "invalid_prompt",
+                "token-id prompts are not supported; pass a string or array of strings",
+            )
+        if all(isinstance(item, list) for item in prompt):
+            raise RequestError(
+                400,
+                "invalid_prompt",
+                "token-id prompts are not supported; pass a string or array of strings",
+            )
+        parts: list[str] = []
+        for item in prompt:
+            if not isinstance(item, str):
+                raise RequestError(400, "invalid_prompt", "prompt array items must be strings")
+            if not item.strip():
+                raise RequestError(
+                    400,
+                    "invalid_prompt",
+                    "prompt array items must be non-empty strings",
+                )
+            parts.append(item)
+        joined = "\n".join(parts)
+        if not joined.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        if len(joined) > 32_000:
+            raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+        return [{"role": "user", "content": joined}]
+    raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+
+
+def _validate_completions_stream(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``stream`` — strict boolean; ``true`` is not supported here.
+
+    OpenAI Completions accepts streaming, but this gateway rejects ``stream=true``
+    with a clear redirect to chat completions. Non-boolean values fail closed.
+    """
+    if "stream" not in body:
+        return None
+    stream = body.get("stream")
+    if not isinstance(stream, bool):
+        raise RequestError(400, "invalid_stream", "stream must be a boolean")
+    if stream is True:
+        raise RequestError(
+            400,
+            "invalid_stream",
+            "stream is not supported on /v1/completions; use /v1/chat/completions",
+        )
+    return stream
+
+
+def _validate_completions_echo(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``echo`` — strict boolean; ``true`` is not supported.
+
+    OpenAI can prepend the prompt to the completion when ``echo`` is true. This
+    gateway does not implement that behaviour, so ``echo=true`` fails closed with
+    a clear ``invalid_echo`` error. ``false`` and omit remain valid.
+    """
+    if "echo" not in body:
+        return None
+    echo = body.get("echo")
+    if not isinstance(echo, bool):
+        raise RequestError(400, "invalid_echo", "echo must be a boolean")
+    if echo is True:
+        raise RequestError(
+            400,
+            "invalid_echo",
+            "echo=true is not supported on /v1/completions",
+        )
+    return echo
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _validate_completions_logit_bias(body: dict[str, Any]) -> dict[str, float] | None:
+    """Legacy Completions ``logit_bias`` — type-checked then rejected (not applied).
+
+    OpenAI uses logit_bias to bias token sampling. This gateway validates map shape
+    (digit keys, values in [-100, 100], ≤300 entries) but does not apply biases on
+    the Completions route path, so any provided ``logit_bias`` fails closed.
+    """
+    if "logit_bias" not in body:
+        return None
+    bias = body.get("logit_bias")
+    if not isinstance(bias, dict):
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must be an object of token biases")
+    if len(bias) > 300:
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must contain at most 300 entries")
+    for key, value in bias.items():
+        token = str(key)
+        if not token.isdigit():
+            raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be digit token ids")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
+        number = float(value)
+        if number < -100 or number > 100:
+            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
+    raise RequestError(
+        400,
+        "invalid_logit_bias",
+        "logit_bias is not supported on /v1/completions",
+    )
+
+
+
+def _validate_completions_user(body: dict[str, Any]) -> str | None:
+    """Legacy Completions ``user`` — optional string end-user id, max 64 characters."""
+    if "user" not in body:
+        return None
+    user = body.get("user")
+    if not isinstance(user, str):
+        raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
+    if not user.strip():
+        raise RequestError(400, "invalid_user", "user must be a non-empty string of at most 64 characters")
+    if len(user) > 64:
+        raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
+    return user
+
+def _validate_completions_n(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``n`` — positive integer; only ``n=1`` is supported.
+
+    OpenAI can return multiple completions when ``n > 1``. This gateway always
+    returns a single choice, so ``n > 1`` fails closed. ``n=1`` and omit remain
+    valid. Cap 128 is retained for clear range errors before the support check.
+    """
+    if "n" not in body:
+        return None
+    n = body.get("n")
+    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+        raise RequestError(400, "invalid_n", "n must be a positive integer")
+    if n > 128:
+        raise RequestError(400, "invalid_n", "n must be at most 128")
+    if n > 1:
+        raise RequestError(
+            400,
+            "invalid_n",
+            "n greater than 1 is not supported on /v1/completions",
+        )
+    return n
+
+def _validate_completions_stop(body: dict[str, Any]) -> str | list[str] | None:
+    """Legacy Completions ``stop`` — type-checked then rejected (not applied).
+
+    OpenAI uses stop sequences to cut generation early. This gateway validates
+    shape (string or ≤4 non-empty strings, each ≤256 chars) but does not apply
+    stop sequences on the Completions path, so any provided ``stop`` fails closed.
+    """
+    if "stop" not in body:
+        return None
+    stop = body.get("stop")
+    if isinstance(stop, str):
+        if not stop:
+            raise RequestError(400, "invalid_stop", "stop sequences must be non-empty strings")
+        if len(stop) > 256:
+            raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+    elif isinstance(stop, list):
+        if not stop or len(stop) > 4:
+            raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+        for item in stop:
+            if not isinstance(item, str) or not item:
+                raise RequestError(400, "invalid_stop", "stop sequences must be non-empty strings")
+            if len(item) > 256:
+                raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+    else:
+        raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+    raise RequestError(
+        400,
+        "invalid_stop",
+        "stop sequences are not supported on /v1/completions",
+    )
+
+
+
+def _validate_completions_seed(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``seed`` — type-checked then rejected (not applied).
+
+    OpenAI uses seed for best-effort deterministic sampling. This gateway validates
+    signed int64 integers but does not apply seed on the Completions route path,
+    so any provided ``seed`` fails closed. Omit remains valid.
+    """
+    if "seed" not in body:
+        return None
+    seed = body.get("seed")
+    if isinstance(seed, bool) or not isinstance(seed, int):
+        raise RequestError(400, "invalid_seed", "seed must be an integer")
+    if seed < -(2**63) or seed > (2**63 - 1):
+        raise RequestError(400, "invalid_seed", "seed must fit in a signed 64-bit integer")
+    raise RequestError(
+        400,
+        "invalid_seed",
+        "seed is not supported on /v1/completions",
+    )
+
+
+
+def _validate_completions_frequency_penalty(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``frequency_penalty`` — number in [-2, 2]."""
+    if "frequency_penalty" not in body:
+        return None
+    value = body.get("frequency_penalty")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RequestError(400, "invalid_frequency_penalty", "frequency_penalty must be a number in [-2, 2]")
+    number = float(value)
+    if number < -2 or number > 2:
+        raise RequestError(400, "invalid_frequency_penalty", "frequency_penalty must be a number in [-2, 2]")
+    return number
+
+def _validate_completions_presence_penalty(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``presence_penalty`` — number in [-2, 2]."""
+    if "presence_penalty" not in body:
+        return None
+    value = body.get("presence_penalty")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RequestError(400, "invalid_presence_penalty", "presence_penalty must be a number in [-2, 2]")
+    number = float(value)
+    if number < -2 or number > 2:
+        raise RequestError(400, "invalid_presence_penalty", "presence_penalty must be a number in [-2, 2]")
+    return number
+
+def _validate_completions_temperature(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``temperature`` — number in [0, 2]."""
+    if "temperature" not in body:
+        return None
+    temperature = body.get("temperature")
+    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
+        raise RequestError(400, "invalid_temperature", "temperature must be a number in [0, 2]")
+    value = float(temperature)
+    if value < 0 or value > 2:
+        raise RequestError(400, "invalid_temperature", "temperature must be a number in [0, 2]")
+    return value
+
+def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``top_p`` — number in (0, 1] (OpenAI nucleus sampling)."""
+    if "top_p" not in body:
+        return None
+    top_p = body.get("top_p")
+    if isinstance(top_p, bool) or not isinstance(top_p, (int, float)):
+        raise RequestError(400, "invalid_top_p", "top_p must be a number in (0, 1]")
+    value = float(top_p)
+    if value <= 0 or value > 1:
+        raise RequestError(400, "invalid_top_p", "top_p must be a number in (0, 1]")
+    return value
+
+def _validate_completions_model(body: dict[str, Any]) -> str:
+    """Legacy Completions ``model`` — required non-empty string (OpenAI parity)."""
+    if "model" not in body:
+        raise RequestError(400, "invalid_model", "model is required")
+    model = body.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    return model
+
+def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``max_tokens`` — positive integer capped at 1_048_576."""
+    if "max_tokens" not in body:
+        return None
+    max_tokens = body.get("max_tokens")
+    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
+        raise RequestError(400, "invalid_max_tokens", "max_tokens must be a positive integer")
+    if max_tokens > 1_048_576:
+        raise RequestError(
+            400,
+            "invalid_max_tokens",
+            "max_tokens must be at most 1048576",
+        )
+    return max_tokens
+
+def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
+    """Legacy Completions ``logprobs`` — only ``false``/omit; token logprobs unsupported.
+
+    OpenAI accepts ``false`` or an integer 0–5 for top logprob counts. This gateway
+    always returns ``logprobs: null`` on text completions, so integer logprobs
+    (including 0–5) and boolean ``true`` fail closed. ``false`` and omit remain valid.
+    """
+    if "logprobs" not in body:
+        return None
+    logprobs = body.get("logprobs")
+    if logprobs is False:
+        return False
+    if isinstance(logprobs, bool):  # True
+        raise RequestError(
+            400,
+            "invalid_logprobs",
+            "logprobs must be false; token logprobs are not supported on /v1/completions",
+        )
+    if isinstance(logprobs, int) and not isinstance(logprobs, bool):
+        raise RequestError(
+            400,
+            "invalid_logprobs",
+            "token logprobs are not supported on /v1/completions; pass false or omit",
+        )
+    raise RequestError(
+        400,
+        "invalid_logprobs",
+        "logprobs must be false; token logprobs are not supported on /v1/completions",
+    )
+
+def _validate_completions_suffix(body: dict[str, Any]) -> str | None:
+    """Legacy Completions ``suffix`` — optional string; non-empty is not supported.
+
+    OpenAI appends ``suffix`` after the model completion. This gateway does not
+    implement that insertion, so a non-empty suffix fails closed. Empty string
+    and omit remain valid. Non-string values and oversized strings still fail.
+    """
+    if "suffix" not in body:
+        return None
+    suffix = body.get("suffix")
+    if not isinstance(suffix, str):
+        raise RequestError(400, "invalid_suffix", "suffix must be a string")
+    if len(suffix) > 8_000:
+        raise RequestError(400, "invalid_suffix", "suffix must be at most 8000 characters")
+    if suffix:
+        raise RequestError(
+            400,
+            "invalid_suffix",
+            "non-empty suffix is not supported on /v1/completions",
+        )
+    return suffix
+
+
+def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``best_of`` — positive integer, ``best_of >= n``, max 1.
+
+    OpenAI generates ``best_of`` candidates server-side and returns the top ``n``.
+    This gateway runs a single completion path, so ``best_of > 1`` fails closed
+    rather than silently returning one unranked candidate. ``best_of=1`` (and
+    omit) remain valid. Boolean ``True``/``False`` are rejected.
+    """
+    if "best_of" not in body:
+        return None
+    best_of = body.get("best_of")
+    if isinstance(best_of, bool) or not isinstance(best_of, int) or best_of < 1:
+        raise RequestError(400, "invalid_best_of", "best_of must be a positive integer")
+    if best_of > 128:
+        raise RequestError(400, "invalid_best_of", "best_of must be at most 128")
+    if best_of > 1:
+        raise RequestError(
+            400,
+            "invalid_best_of",
+            "best_of greater than 1 is not supported on /v1/completions",
+        )
+    n = body.get("n", 1)
+    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+        raise RequestError(400, "invalid_n", "n must be a positive integer")
+    if best_of < n:
+        raise RequestError(
+            400,
+            "invalid_best_of",
+            "best_of must be greater than or equal to n",
+        )
+    return best_of
+
+
+def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Legacy Completions ``stream_options`` — object with boolean flags; requires stream=true.
+
+    Mirrors OpenAI chat Completions: ``stream_options`` is only valid when streaming.
+    This gateway rejects Completions streaming, so a well-formed ``stream_options``
+    still fails closed once ``stream`` is checked (or here if ``stream`` is not true).
+    """
+    if "stream_options" not in body:
+        return None
+    opts = body.get("stream_options")
+    if not isinstance(opts, dict):
+        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    if body.get("stream") is not True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options requires stream=true",
+        )
+    allowed = {"include_usage", "include_obfuscation"}
+    unknown = sorted(set(opts) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported fields",
+            {"fields": unknown},
+        )
+    if "include_usage" in opts and not isinstance(opts["include_usage"], bool):
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_usage must be a boolean",
+        )
+    if "include_obfuscation" in opts and not isinstance(opts["include_obfuscation"], bool):
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_obfuscation must be a boolean",
+        )
+    return opts
 
 
 def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
@@ -711,6 +1150,88 @@ def build_server(
                     self._send(orchestrator.add_agent(segments[3], body), 201)
                     return
 
+                if path == "/v1/completions":
+                    # Legacy OpenAI Completions: prompt → route → text_completion.
+                    _reject_unknown_keys(body, ALLOWED_COMPLETIONS_KEYS)
+                    _validate_completions_stream(body)
+                    _validate_completions_stream_options(body)
+                    _validate_completions_best_of(body)
+                    _validate_completions_echo(body)
+                    _validate_completions_suffix(body)
+                    _validate_completions_logprobs(body)
+                    max_tokens = _validate_completions_max_tokens(body)
+                    model_name = _validate_completions_model(body)
+                    top_p = _validate_completions_top_p(body)
+                    temperature = _validate_completions_temperature(body)
+                    presence_penalty = _validate_completions_presence_penalty(body)
+                    frequency_penalty = _validate_completions_frequency_penalty(body)
+                    _validate_completions_seed(body)
+                    _validate_completions_stop(body)
+                    _validate_completions_n(body)
+                    end_user_id = _validate_completions_user(body)
+                    _validate_completions_logit_bias(body)
+                    if "prompt" not in body:
+                        raise RequestError(400, "invalid_prompt", "prompt is required")
+                    messages = _validate_completion_prompt(body.get("prompt"))
+                    attribution = _validate_attribution(body.get("attribution"))
+                    attribution = dict(attribution or {})
+                    # OpenAI ``user`` → cost-ledger account when attribution.account is unset.
+                    if end_user_id is not None and not attribution.get("account"):
+                        attribution["account"] = end_user_id
+                    # Request model id → model_name dimension when unset (cost rollups).
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    # Endpoint product surface → service dimension when unset.
+                    if not attribution.get("service"):
+                        attribution["service"] = "completions_api"
+                    routing = _validate_routing(body.get("routing"))
+                    started_at = time.perf_counter()
+                    # Apply request sampling knobs to the provider client for this call.
+                    model_client = orchestrator.client
+                    previous_max_tokens = model_client.max_output_tokens
+                    previous_temperature = model_client.default_temperature
+                    previous_top_p = model_client.default_top_p
+                    previous_presence = model_client.default_presence_penalty
+                    previous_frequency = model_client.default_frequency_penalty
+                    if max_tokens is not None:
+                        model_client.max_output_tokens = max_tokens
+                    if temperature is not None:
+                        model_client.default_temperature = temperature
+                    if top_p is not None:
+                        model_client.default_top_p = top_p
+                    if presence_penalty is not None:
+                        model_client.default_presence_penalty = presence_penalty
+                    if frequency_penalty is not None:
+                        model_client.default_frequency_penalty = frequency_penalty
+                    try:
+                        result = self._run(lambda: coordinator.complete(
+                            messages,
+                            mode="route",
+                            attribution=attribution,
+                            hints=routing,
+                            model_name=model_name,
+                            workflow_run_id=f"run_{uuid.uuid4().hex}",
+                        ))
+                    finally:
+                        model_client.max_output_tokens = previous_max_tokens
+                        model_client.default_temperature = previous_temperature
+                        model_client.default_top_p = previous_top_p
+                        model_client.default_presence_penalty = previous_presence
+                        model_client.default_frequency_penalty = previous_frequency
+                    orchestrator.record_analytics_event(
+                        "text_completion_requested",
+                        {
+                            "endpoint_path": "/v1/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "run_mode": "route",
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(text_completion_response(
+                        result, model=model_name, usage=result.get("usage"),
+                    ))
+                    return
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
@@ -740,29 +1261,168 @@ def build_server(
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
-                    started_at = time.perf_counter()
-                    if stream and orchestrator.would_route(messages, mode):
-                        self._stream_route_completion(orchestrator, security, messages, model_name)
-                        orchestrator.record_analytics_event(
-                            "chat_completion_requested",
-                            {
-                                "endpoint_path": "/v1/chat/completions",
-                                "actor_scope": "inference",
-                                "status_code": 200,
-                                "run_mode": "route",
-                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                                "response_streamed": True,
-                            },
+                    attribution = dict(attribution or {})
+                    # OpenAI chat ``user`` → account when unset.
+                    user_val = body.get("user")
+                    if isinstance(user_val, str) and user_val.strip():
+                        if len(user_val) > 64:
+                            raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
+                        if not attribution.get("account"):
+                            attribution["account"] = user_val
+                    elif "user" in body and user_val is not None:
+                        raise RequestError(400, "invalid_user", "user must be a non-empty string of at most 64 characters")
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    if not attribution.get("service"):
+                        attribution["service"] = "chat_completions_api"
+                    temperature = None
+                    top_p = None
+                    max_tokens = None
+                    presence_penalty = None
+                    frequency_penalty = None
+                    if "temperature" in body:
+                        temperature = _validate_completions_temperature(body)
+                    if "top_p" in body:
+                        top_p = _validate_completions_top_p(body)
+                    if "max_tokens" in body:
+                        max_tokens = _validate_completions_max_tokens(body)
+                    if "presence_penalty" in body:
+                        presence_penalty = _validate_completions_presence_penalty(body)
+                    if "frequency_penalty" in body:
+                        frequency_penalty = _validate_completions_frequency_penalty(body)
+                    if "seed" in body:
+                        # Type-check then fail closed: chat route does not apply seed.
+                        _validate_completions_seed(body)
+                        raise RequestError(
+                            400,
+                            "invalid_seed",
+                            "seed is not supported on /v1/chat/completions",
                         )
-                        return
-                    result = self._run(lambda: coordinator.complete(
-                        messages,
-                        mode=mode,
-                        attribution=attribution,
-                        hints=routing,
-                        model_name=model_name,
-                        workflow_run_id=f"run_{uuid.uuid4().hex}",
-                    ))
+                    if "logit_bias" in body:
+                        _validate_completions_logit_bias(body)
+                        raise RequestError(
+                            400,
+                            "invalid_logit_bias",
+                            "logit_bias is not supported on /v1/chat/completions",
+                        )
+                    if "stop" in body:
+                        try:
+                            _validate_completions_stop(body)
+                        except RequestError as exc:
+                            # Completions helper fails closed with a Completions path message;
+                            # re-surface for chat with the chat endpoint string.
+                            if exc.code == "invalid_stop" and "not supported" in exc.message:
+                                raise RequestError(
+                                    400,
+                                    "invalid_stop",
+                                    "stop sequences are not supported on /v1/chat/completions",
+                                ) from exc
+                            raise
+                        raise RequestError(
+                            400,
+                            "invalid_stop",
+                            "stop sequences are not supported on /v1/chat/completions",
+                        )
+                    if "n" in body:
+                        try:
+                            _validate_completions_n(body)
+                        except RequestError as exc:
+                            if exc.code == "invalid_n" and "not supported" in exc.message:
+                                raise RequestError(
+                                    400,
+                                    "invalid_n",
+                                    "n greater than 1 is not supported on /v1/chat/completions",
+                                ) from exc
+                            raise
+                    if "logprobs" in body or "top_logprobs" in body:
+                        # Chat route path does not return token logprobs; fail closed.
+                        if "logprobs" in body:
+                            lp = body.get("logprobs")
+                            if not isinstance(lp, bool):
+                                raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
+                            if lp is True:
+                                raise RequestError(
+                                    400,
+                                    "invalid_logprobs",
+                                    "logprobs=true is not supported on /v1/chat/completions",
+                                )
+                        if "top_logprobs" in body:
+                            raise RequestError(
+                                400,
+                                "invalid_top_logprobs",
+                                "top_logprobs is not supported on /v1/chat/completions",
+                            )
+                    if "store" in body:
+                        store = body.get("store")
+                        if not isinstance(store, bool):
+                            raise RequestError(400, "invalid_store", "store must be a boolean")
+                        # Gateway does not persist chat for OpenAI store=true semantics; accept false, reject true.
+                        if store is True:
+                            raise RequestError(
+                                400,
+                                "invalid_store",
+                                "store=true is not supported on /v1/chat/completions",
+                            )
+                    if "prediction" in body:
+                        # Predicted outputs (latency optimization) are not applied by this gateway.
+                        pred = body.get("prediction")
+                        if not isinstance(pred, dict):
+                            raise RequestError(
+                                400,
+                                "invalid_prediction",
+                                "prediction must be an object",
+                            )
+                        raise RequestError(
+                            400,
+                            "invalid_prediction",
+                            "prediction is not supported on /v1/chat/completions",
+                        )
+                    started_at = time.perf_counter()
+                    model_client = orchestrator.client
+                    previous_max_tokens = model_client.max_output_tokens
+                    previous_temperature = model_client.default_temperature
+                    previous_top_p = model_client.default_top_p
+                    previous_presence = model_client.default_presence_penalty
+                    previous_frequency = model_client.default_frequency_penalty
+                    if max_tokens is not None:
+                        model_client.max_output_tokens = max_tokens
+                    if temperature is not None:
+                        model_client.default_temperature = temperature
+                    if top_p is not None:
+                        model_client.default_top_p = top_p
+                    if presence_penalty is not None:
+                        model_client.default_presence_penalty = presence_penalty
+                    if frequency_penalty is not None:
+                        model_client.default_frequency_penalty = frequency_penalty
+                    try:
+                        if stream and orchestrator.would_route(messages, mode):
+                            self._stream_route_completion(orchestrator, security, messages, model_name)
+                            orchestrator.record_analytics_event(
+                                "chat_completion_requested",
+                                {
+                                    "endpoint_path": "/v1/chat/completions",
+                                    "actor_scope": "inference",
+                                    "status_code": 200,
+                                    "run_mode": "route",
+                                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                    "response_streamed": True,
+                                },
+                            )
+                            return
+                        result = self._run(lambda: coordinator.complete(
+                            messages,
+                            mode=mode,
+                            attribution=attribution,
+                            hints=routing,
+                            model_name=model_name,
+                            workflow_run_id=f"run_{uuid.uuid4().hex}",
+                        ))
+                    finally:
+                        model_client.max_output_tokens = previous_max_tokens
+                        model_client.default_temperature = previous_temperature
+                        model_client.default_top_p = previous_top_p
+                        model_client.default_presence_penalty = previous_presence
+                        model_client.default_frequency_penalty = previous_frequency
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(
