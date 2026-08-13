@@ -230,7 +230,9 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            # Explicit dev-only opt-out gated behind an opt-in verify_tls=False caller argument
+            # (default is True/verified) -- not reachable unless a caller deliberately asks for it.
+            return ssl._create_unverified_context()  # nosec B323 -- nosemgrep: python.lang.security.unverified-ssl-context.unverified-ssl-context
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -319,8 +321,14 @@ class ModelClient:
         return data["choices"][0]["message"]["content"]
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        """Open a provider request built from a validated provider URL.
+
+        ``request.full_url`` is built by ``_provider_url()`` (rejects non-http(s)
+        schemes) after ``_validate_provider()`` (rejects private/loopback/
+        link-local/reserved resolved addresses) -- both run ahead of every call
+        site (``chat``, ``stream_chat``, ``proxy_send``) before this is reached.
+        """
+        return urllib.request.urlopen(  # nosec B310 -- nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected -- request URL comes from _provider_url after provider validation.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
