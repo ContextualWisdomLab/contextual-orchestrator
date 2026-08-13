@@ -177,6 +177,35 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_functions(body: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """Legacy OpenAI ``functions`` array — non-empty list of named function objects."""
+    if "functions" not in body:
+        return None
+    functions = body.get("functions")
+    if not isinstance(functions, list) or not functions:
+        raise RequestError(400, "invalid_functions", "functions must be a non-empty array")
+    validated: list[dict[str, Any]] = []
+    for index, function in enumerate(functions):
+        if not isinstance(function, dict):
+            raise RequestError(400, "invalid_functions", f"functions[{index}] must be an object")
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_functions",
+                f"functions[{index}].name must be a non-empty string",
+            )
+        if "parameters" in function and not isinstance(function.get("parameters"), dict):
+            raise RequestError(
+                400,
+                "invalid_functions",
+                f"functions[{index}].parameters must be an object when set",
+            )
+        validated.append(function)
+    return validated
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +742,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_functions(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
