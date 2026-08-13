@@ -7,7 +7,7 @@
 - Operation IDs: verb plus resource, lower snake_case.
 - Error shape: `{"error_code": "...", "error_message": "...", "error_detail": {...}}` in production.
 - Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
-- OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
+- OpenAI-compatible compatibility endpoint remains `/v1/chat/completions` (message `content` may be a string or text content-part array).
 
 ## Current Endpoints
 
