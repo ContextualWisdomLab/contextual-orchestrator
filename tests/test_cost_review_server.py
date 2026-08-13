@@ -114,7 +114,7 @@ def test_batch_routing_jobs_endpoint_submits_multiple_requests() -> None:
         status, job = _request("POST", f"{base}/api/v1/batch_routing_jobs", token, {
             "attribution": {"company": "acme"},
             "requests": [
-                {"messages": [{"role": "user", "content": "one"}]},
+                {"model": "mock-generalist", "messages": [{"role": "user", "content": "one"}]},
                 {"messages": [{"role": "user", "content": "two"}], "attribution": {"team": "beta"}},
             ],
         })

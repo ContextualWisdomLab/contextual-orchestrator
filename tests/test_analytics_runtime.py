@@ -114,7 +114,7 @@ def test_analytics_endpoint_and_admin_console_use_source_backed_snapshot() -> No
     try:
         chat_status, _ = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
-            {"messages": [{"role": "user", "content": "hello"}]},
+            {"model": "mock-generalist", "messages": [{"role": "user", "content": "hello"}]},
             "secret_token",
         )
         snapshot_status, snapshot = get_json(
