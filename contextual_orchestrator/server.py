@@ -177,6 +177,23 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_parallel_tool_calls_requires_tools(body: dict[str, Any]) -> None:
+    """OpenAI requires a non-empty ``tools`` array when ``parallel_tool_calls`` is true.
+
+    Prevents opaque provider errors when clients enable parallel tool execution
+    without declaring any tools.
+    """
+    if body.get("parallel_tool_calls") is not True:
+        return
+    tools = body.get("tools")
+    if not isinstance(tools, list) or not tools:
+        raise RequestError(
+            400,
+            "invalid_parallel_tool_calls",
+            "parallel_tool_calls requires a non-empty tools array",
+        )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +730,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_parallel_tool_calls_requires_tools(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +880,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_parallel_tool_calls_requires_tools(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
