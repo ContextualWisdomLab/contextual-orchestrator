@@ -33,6 +33,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
     "response_format", "tools", "tool_choice", "functions", "function_call",
     "modalities", "prediction", "store", "service_tier",
+    "tool_resources",
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
@@ -175,6 +176,61 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+def _validate_tool_resources(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI ``tool_resources`` object for file_search / code_interpreter.
+
+    Accepts an object; validates known nested resource keys when present.
+    """
+    if "tool_resources" not in body:
+        return None
+    resources = body.get("tool_resources")
+    if not isinstance(resources, dict):
+        raise RequestError(400, "invalid_tool_resources", "tool_resources must be an object")
+    allowed = {"file_search", "code_interpreter"}
+    unknown = sorted(set(resources) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_tool_resources",
+            "tool_resources contains unsupported keys",
+            {"fields": unknown},
+        )
+    if "file_search" in resources:
+        fs = resources.get("file_search")
+        if not isinstance(fs, dict):
+            raise RequestError(
+                400,
+                "invalid_tool_resources",
+                "tool_resources.file_search must be an object",
+            )
+        if "vector_store_ids" in fs:
+            ids = fs.get("vector_store_ids")
+            if not isinstance(ids, list) or not all(isinstance(i, str) and i for i in ids):
+                raise RequestError(
+                    400,
+                    "invalid_tool_resources",
+                    "tool_resources.file_search.vector_store_ids must be a list of non-empty strings",
+                )
+    if "code_interpreter" in resources:
+        ci = resources.get("code_interpreter")
+        if not isinstance(ci, dict):
+            raise RequestError(
+                400,
+                "invalid_tool_resources",
+                "tool_resources.code_interpreter must be an object",
+            )
+        if "file_ids" in ci:
+            ids = ci.get("file_ids")
+            if not isinstance(ids, list) or not all(isinstance(i, str) and i for i in ids):
+                raise RequestError(
+                    400,
+                    "invalid_tool_resources",
+                    "tool_resources.code_interpreter.file_ids must be a list of non-empty strings",
+                )
+    return resources
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +769,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_tool_resources(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +919,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_tool_resources(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
