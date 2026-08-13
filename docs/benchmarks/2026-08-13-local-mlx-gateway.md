@@ -540,7 +540,7 @@ the same server and prompt configuration.
 ### Paired option-count and framing controls — 2026-08-14
 
 The new fast-mlsirm calibration controls at exact head
-`0d6dc45f51b2f2b1fbb26c8cf8d8db2faf9d2c38` were exercised through the same
+`5a072705c840ea70d87a73bf737d5b193ef428cb` were exercised through the same
 `ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
 ModelClient -> mlx-lm` route with Gemma 4 e4b, temperature `0`, disabled
 thinking, `max_output_tokens=192`, zero retries, `local_concurrency=1`, K=`3`,
