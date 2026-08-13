@@ -177,6 +177,38 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_logprobs_fields(body: dict[str, Any]) -> dict[str, Any]:
+    """OpenAI ``logprobs`` (bool) and ``top_logprobs`` (int 0–20) when present."""
+    out: dict[str, Any] = {}
+    if "logprobs" in body:
+        logprobs = body.get("logprobs")
+        if not isinstance(logprobs, bool):
+            raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
+        out["logprobs"] = logprobs
+    if "top_logprobs" in body:
+        top_logprobs = body.get("top_logprobs")
+        if not isinstance(top_logprobs, int) or isinstance(top_logprobs, bool):
+            raise RequestError(400, "invalid_top_logprobs", "top_logprobs must be an integer")
+        if top_logprobs < 0 or top_logprobs > 20:
+            raise RequestError(
+                400,
+                "invalid_top_logprobs",
+                "top_logprobs must be between 0 and 20",
+            )
+        out["top_logprobs"] = top_logprobs
+        # OpenAI requires logprobs=true when top_logprobs is set.
+        if body.get("logprobs") is not True and out.get("logprobs") is not True:
+            # only enforce when logprobs key absent or false
+            if "logprobs" not in body or body.get("logprobs") is False:
+                raise RequestError(
+                    400,
+                    "invalid_top_logprobs",
+                    "top_logprobs requires logprobs to be true",
+                )
+    return out
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +745,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_logprobs_fields(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
