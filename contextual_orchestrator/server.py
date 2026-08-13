@@ -48,6 +48,7 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+ALLOWED_REASONING_EFFORT = {"minimal", "low", "medium", "high"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -175,6 +176,20 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _validate_responses_reasoning_effort(body: dict[str, Any]) -> str | None:
+    """OpenAI Responses ``reasoning_effort`` — minimal|low|medium|high when present."""
+    if "reasoning_effort" not in body:
+        return None
+    value = body.get("reasoning_effort")
+    if not isinstance(value, str) or value not in ALLOWED_REASONING_EFFORT:
+        raise RequestError(
+            400,
+            "invalid_reasoning_effort",
+            "reasoning_effort must be one of: minimal, low, medium, high",
+        )
+    return value
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +877,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_reasoning_effort(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
