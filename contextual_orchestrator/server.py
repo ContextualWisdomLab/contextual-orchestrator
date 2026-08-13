@@ -177,6 +177,36 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _messages_require_passthrough(messages: Any) -> bool:
+    """True when chat history carries tool-call turns that multi-agent merge cannot reconstruct.
+
+    OpenAI tool loops continue after the first response with assistant ``tool_calls``
+    and ``role=tool`` result messages — often without re-sending the ``tools`` array.
+    Those turns must stay on single-agent provider passthrough or they 400 on the
+    strict orchestrated message validator.
+    """
+    if not isinstance(messages, list):
+        return False
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if role == "tool":
+            return True
+        if message.get("tool_calls") or message.get("function_call"):
+            return True
+    return False
+
+
+def _needs_provider_passthrough(body: dict[str, Any]) -> bool:
+    """True when the request must be proxied to one agent without multi-agent merge."""
+    if PASSTHROUGH_TRIGGER_KEYS & set(body):
+        return True
+    if _messages_require_passthrough(body.get("messages")):
+        return True
+    return False
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,9 +743,9 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
-                    if PASSTHROUGH_TRIGGER_KEYS & set(body):
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
+                    if _needs_provider_passthrough(body):
+                        # tools / response_format / tool-history turns cannot be merged
+                        # across agents; proxy the full request to one agent verbatim.
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
