@@ -320,6 +320,23 @@ contextual-orchestrator MLX route, the failure now records
 evidence is retained as a failed calibration comparison; it is not converted
 to an IRT category and is not a semantic-quality score.
 
+### Anchored judge model comparison — 2026-08-14
+
+Using fast-mlsirm `dd44a95`, the same two-criterion K=5 anchored rubric was
+executed through `_FastMLSIJudgeAdapter` and contextual-orchestrator's MLX
+route. The results separate model capability from transport:
+
+| model | result | usage | elapsed |
+|---|---|---:|---:|
+| Gemma 4 e4b | strict `(4,4)`, score `1.0`, accepted | `3,031` tokens | `11.96 s` |
+| Llama 3B | repeated safe false negative `(0,0)` and anchored non-monotone output | `2,497`–`3,119` tokens | `3.23`–`5.54 s` |
+| Llama 1B | malformed JSON on all eight boundaries; failed closed | `4,764` tokens | `8.04 s` |
+
+Gemma 4 e4b is a measured candidate for quality/latency follow-up, not a
+production conclusion. The Llama results remain in the denominator, and no
+model is promoted to IRT use without balanced held-out gold recall, parse
+success, category occupancy, and perturbation checks.
+
 The integrated path was then checked separately after an audit found that the
 contextual `_FastMLSIJudgeAdapter` did not expose the gateway client capability
 used by the fast judge. With contextual commit `d82e592` and exact fast judge
@@ -346,6 +363,25 @@ The result verifies admission behavior, not a throughput or quality ranking;
 the accepted requests necessarily changed provider queue pressure. The secure
 default remains `8`, and operators must explicitly set
 `--max-concurrent-runs` alongside a measured `--local-concurrency` value.
+
+### Current route throughput recheck — 2026-08-14
+
+A fresh warm-cache route probe used the same 3B Llama worker, temperature `0`,
+thinking disabled, `max_output_tokens=32`, and 16 concurrent route requests.
+Every response was non-empty and the run used the real contextual-orchestrator
+`TaskOrchestrator.route_once` path.
+
+| `local_concurrency` | successes | elapsed | requests/s |
+|---:|---:|---:|---:|
+| 1 | 16/16 | `8.166 s` | `1.959` |
+| 4 | 16/16 | `2.608 s` | `6.136` |
+| 8 | 16/16 | `2.534 s` | `6.315` |
+| 16 | 16/16 | `2.760 s` | `5.797` |
+
+Under this exact workload, `local_concurrency=8` was the fastest measured
+setting; this supersedes neither the earlier model/prompt-specific c=16 probe
+nor the secure HTTP admission default. It is throughput evidence only, not a
+quality or semantic-judge result.
 
 ## IRT boundary
 
