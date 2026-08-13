@@ -56,7 +56,15 @@ def _serve():
             provider_name="mock",
             tags=("reasoning", "coding", "writing"),
             priority=1,
-        )
+        ),
+        ModelAgent(
+            id="embedding_worker",
+            model="text-embedding-test",
+            base_url="mock://embed",
+            provider_name="acme-provider",
+            tags=("embedding", "offline_test"),
+            priority=2,
+        ),
     ]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
