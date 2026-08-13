@@ -33,6 +33,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
     "response_format", "tools", "tool_choice", "functions", "function_call",
     "modalities", "prediction", "store", "service_tier",
+    "web_search_options",
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
@@ -175,6 +176,52 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+def _validate_web_search_options(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI ``web_search_options`` object shape when present.
+
+    Accepts an object; validates optional ``search_context_size`` enum and
+    optional ``user_location`` object so web-search SDKs get clear 400s.
+    """
+    if "web_search_options" not in body:
+        return None
+    options = body.get("web_search_options")
+    if not isinstance(options, dict):
+        raise RequestError(400, "invalid_web_search_options", "web_search_options must be an object")
+    allowed = {"search_context_size", "user_location"}
+    unknown = sorted(set(options) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_web_search_options",
+            "web_search_options contains unsupported keys",
+            {"fields": unknown},
+        )
+    if "search_context_size" in options:
+        size = options.get("search_context_size")
+        if size not in {"low", "medium", "high"}:
+            raise RequestError(
+                400,
+                "invalid_web_search_options",
+                "web_search_options.search_context_size must be low, medium, or high",
+            )
+    if "user_location" in options:
+        loc = options.get("user_location")
+        if not isinstance(loc, dict):
+            raise RequestError(
+                400,
+                "invalid_web_search_options",
+                "web_search_options.user_location must be an object",
+            )
+        if "type" in loc and loc.get("type") != "approximate":
+            raise RequestError(
+                400,
+                "invalid_web_search_options",
+                "web_search_options.user_location.type must be approximate",
+            )
+    return options
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +760,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_web_search_options(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +910,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_web_search_options(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
