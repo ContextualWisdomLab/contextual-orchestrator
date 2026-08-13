@@ -34,11 +34,20 @@ from .cost_ledger import (
     UsageRecord,
     dimension_catalog,
 )
-from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .runtime_integrity import (
+    IntegrityCostRoutingCoordinator,
+    LOCAL_HEURISTIC_EMBEDDING_MODEL,
+    install_runtime_integrity_guards,
+)
 from .token_counting import HeuristicTokenCounter, build_token_counter
+
+# Install execution-identity hardening before public callers import the HTTP
+# server, which resolves CostRoutingCoordinator from the cost_router module.
+install_runtime_integrity_guards()
+CostRoutingCoordinator = IntegrityCostRoutingCoordinator
 
 __all__ = [
     "ModelAgent",
@@ -83,6 +92,7 @@ __all__ = [
     "EmbeddingBatchResultItem",
     "LocalEmbeddingBatchBackend",
     "PgLlmBatchEmbeddingBackend",
+    "LOCAL_HEURISTIC_EMBEDDING_MODEL",
     "heuristic_embedding",
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
