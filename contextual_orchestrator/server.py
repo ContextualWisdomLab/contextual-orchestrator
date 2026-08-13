@@ -177,6 +177,19 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_stream_flag(body: dict[str, Any], *, required: bool = False) -> bool:
+    """OpenAI ``stream`` — strict boolean; defaults false when omitted unless required."""
+    if "stream" not in body:
+        if required:
+            raise RequestError(400, "invalid_stream", "stream is required")
+        return False
+    stream = body.get("stream")
+    if not isinstance(stream, bool):
+        raise RequestError(400, "invalid_stream", "stream must be a boolean")
+    return stream
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -734,9 +747,7 @@ def build_server(
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    stream = body.get("stream", False)
-                    if not isinstance(stream, bool):
-                        raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    stream = _validate_stream_flag(body)
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
@@ -862,6 +873,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_stream_flag(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
