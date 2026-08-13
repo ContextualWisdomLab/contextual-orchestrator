@@ -177,6 +177,33 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_responses_metadata(body: dict[str, Any]) -> dict[str, str] | None:
+    """OpenAI Responses ``metadata`` — string→string map, at most 16 pairs when present."""
+    if "metadata" not in body:
+        return None
+    metadata = body.get("metadata")
+    if not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_metadata", "metadata must be an object")
+    if len(metadata) > 16:
+        raise RequestError(
+            400,
+            "invalid_metadata",
+            "metadata may contain at most 16 key-value pairs",
+        )
+    validated: dict[str, str] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not key.strip():
+            raise RequestError(400, "invalid_metadata", "metadata keys must be non-empty strings")
+        if not isinstance(value, str):
+            raise RequestError(400, "invalid_metadata", "metadata values must be strings")
+        if len(key) > 64:
+            raise RequestError(400, "invalid_metadata", "metadata keys must be at most 64 characters")
+        if len(value) > 512:
+            raise RequestError(400, "invalid_metadata", "metadata values must be at most 512 characters")
+        validated[key] = value
+    return validated
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +889,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_metadata(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
