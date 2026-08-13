@@ -229,6 +229,30 @@ fail-closed calibration probe, not a production default or proof of unbiased
 judgment. Its call count, latency, usage, semantic recall, and human/gold
 agreement must be measured before any default change.
 
+### Binary-threshold bounded concurrency follow-up — 2026-08-14
+
+The fast-mlsirm follow-up at exact commit `61e6be9` now reuses the injected
+contextual-orchestrator `client.local_concurrency` for independent binary
+boundary calls. It does not add a provider client or fallback transport;
+generic injected orchestrators remain sequential, the request order in the
+evidence record is deterministic, and all returned boundaries are still
+validated for monotonicity before a result is produced. A bounded live probe
+used the same 3B loopback path with `local_concurrency=8`:
+
+| case | K | result | elapsed | provider usage |
+|---|---:|---|---:|---:|
+| safe release | 5 | failed closed: non-monotone thresholds | `3.004 s` | not retained as a valid result |
+| safe release | 7 | failed closed: non-monotone thresholds | `7.839 s` | not retained as a valid result |
+| unsafe release | 5 | score `0.0`, categories `(0,0)` | `5.756 s` | `8` calls, `2,422` tokens |
+| unsafe release | 7 | score `0.0`, categories `(0,0)` | `7.719 s` | `12` calls, `3,620` tokens |
+
+The lower serial time observed in a prior run is not treated as a causal
+speedup because provider queue/cache state differed. The controlled contract
+evidence is bounded concurrency, stable ordering, preserved trace/usage, and
+fail-closed semantics; quality and bias remain unproven. The exact-source fast
+tests passed `58`, and the rebuilt full suite passed `3630` with one skip and
+two existing warnings.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple

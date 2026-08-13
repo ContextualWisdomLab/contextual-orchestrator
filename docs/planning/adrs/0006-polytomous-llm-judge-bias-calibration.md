@@ -188,6 +188,16 @@ does not justify a blind retry: any future recovery must be independently
 specified, remain on the contextual-orchestrator path, retain first/final
 parse status and cost, and accept only a final strict schema result.
 
+The binary-threshold calibration method was subsequently optimized at
+fast-mlsirm exact commit `61e6be9`: when the injected contextual-orchestrator
+exposes its already-bounded `client.local_concurrency`, independent boundary
+calls reuse that limit. Generic injected orchestrators remain sequential by
+default. This is a transport/latency optimization only; it does not reorder
+criteria in the retained evidence, repair malformed output, infer a threshold,
+or change the fail-closed monotonicity rule. The live MLX follow-up retained
+both valid and failed cases, including unsafe K=5/K=7 results at `5.756/7.719 s`
+and `2,422/3,620` tokens, while safe K=5/K=7 remained non-monotone failures.
+
 ### Consequences
 
 * Good, because the suspected positive drift becomes measurable and
