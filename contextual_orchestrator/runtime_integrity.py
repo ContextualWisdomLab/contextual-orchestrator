@@ -9,28 +9,64 @@ metadata.
 
 from __future__ import annotations
 
+from functools import wraps
 from typing import Any, Dict, List, Optional
 
 from .batch_routing import LocalEmbeddingBatchBackend
+from .cost_ledger import CostLedger
 from .cost_router import CostRoutingCoordinator as _BaseCostRoutingCoordinator
 
 
 LOCAL_HEURISTIC_EMBEDDING_MODEL = "local-heuristic-embedding"
 _EXECUTION_IDENTITY_KEYS = frozenset({"model_name", "provider", "upstream_api"})
+_LEDGER_GUARD_MARKER = "__contextual_orchestrator_execution_identity_guard__"
 
 
-def _descriptive_attribution(attribution: Optional[Dict[str, Any]]) -> Dict[str, Any]:
+def _descriptive_attribution(attribution: Any) -> Dict[str, Any]:
     """Return attribution with caller-controlled execution identity removed.
 
     ``model_name`` and provider aliases are evidence produced by execution, not
     labels a caller may choose. Account/service/team/group/company remain valid
-    descriptive dimensions.
+    descriptive dimensions. Both mappings and AttributionDimensions-like
+    objects are accepted because :meth:`CostLedger.record_usage` exposes both.
     """
 
-    cleaned = dict(attribution or {})
+    if attribution is None:
+        cleaned: Dict[str, Any] = {}
+    elif isinstance(attribution, dict):
+        cleaned = dict(attribution)
+    else:
+        as_dict = getattr(attribution, "as_dict", None)
+        if not callable(as_dict):
+            raise TypeError("attribution must be a mapping or attribution dimensions object")
+        cleaned = dict(as_dict())
     for key in _EXECUTION_IDENTITY_KEYS:
         cleaned.pop(key, None)
     return cleaned
+
+
+def _install_cost_ledger_identity_guard() -> None:
+    """Make execution identity authoritative for every public ledger write.
+
+    The cost ledger is exported as a public API, so protecting only the HTTP
+    coordinator leaves a bypass: a direct caller could otherwise provide
+    ``attribution.model_name`` or a provider alias and cause persisted rollups to
+    disagree with the provider/model used to price the request. The wrapper is
+    idempotent and preserves the original method's behavior for descriptive
+    attribution.
+    """
+
+    current = CostLedger.record_usage
+    if getattr(current, _LEDGER_GUARD_MARKER, False):
+        return
+
+    @wraps(current)
+    def guarded_record_usage(self: CostLedger, *args: Any, **kwargs: Any):
+        kwargs["attribution"] = _descriptive_attribution(kwargs.get("attribution"))
+        return current(self, *args, **kwargs)
+
+    setattr(guarded_record_usage, _LEDGER_GUARD_MARKER, True)
+    CostLedger.record_usage = guarded_record_usage  # type: ignore[method-assign]
 
 
 class IntegrityCostRoutingCoordinator(_BaseCostRoutingCoordinator):
@@ -92,13 +128,15 @@ class IntegrityCostRoutingCoordinator(_BaseCostRoutingCoordinator):
 
 
 def install_runtime_integrity_guards() -> None:
-    """Install the hardened coordinator as the canonical cost-router class.
+    """Install hardened provenance guards for all public runtime entrypoints.
 
     ``server`` imports ``CostRoutingCoordinator`` from the module at import time,
-    so installing the alias during package initialization gives every public
-    entrypoint the same provenance contract without duplicating endpoint logic.
+    so installing the alias during package initialization gives every HTTP
+    entrypoint the same provenance contract. The ledger guard closes the direct
+    public-API bypass as well.
     """
 
     from . import cost_router
 
+    _install_cost_ledger_identity_guard()
     cost_router.CostRoutingCoordinator = IntegrityCostRoutingCoordinator
