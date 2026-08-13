@@ -383,6 +383,40 @@ setting; this supersedes neither the earlier model/prompt-specific c=16 probe
 nor the secure HTTP admission default. It is throughput evidence only, not a
 quality or semantic-judge result.
 
+### Current exact-head anchored rerun and provider-readiness incident — 2026-08-14
+
+The current fast-mlsirm source at `26b9ccc590a65cebf23537ce00f292f4d5f9e6f7`
+and contextual-orchestrator source at
+`18d8c3b63eba471f439dd50f36f0f1e395d202d7` were exercised through the real
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm` path. The candidate was Gemma 4 e4b, with two criteria,
+K=5 complete category anchors, temperature 0, disabled thinking, client
+`local_concurrency=4`, and an explicit server `prompt-concurrency=1` /
+`decode-concurrency=1`.
+
+The first attempt failed closed at the provider boundary: `/health` and
+`/v1/models` returned HTTP 200, but every `/v1/chat/completions` request
+returned no bytes before a 15–20 second timeout. The eight judge boundaries
+therefore recorded `0/8` completed calls, zero usage, and about 60.7 seconds
+elapsed. The loopback mlx-lm process had accumulated many closed/CLOSE_WAIT
+connections; it was restarted with the explicit Gemma 4 e4b model and bounded
+server concurrency. A direct post-restart completion returned HTTP 200 in
+0.316 seconds. This is provider-readiness evidence, not a LibreSSL or TLS
+verification failure.
+
+The post-restart anchored rerun completed and parsed all eight Boolean calls in
+14.118 seconds with `3,625` provider tokens and eight trace steps, but failed
+the ordinal semantic gate: the evidence-quality boundaries were
+`false,false,true,true` and the risk-signal boundaries were
+`false,true,true,true`. Because a higher threshold became true after a lower
+threshold was false, the result was rejected as `semantic_status=non_monotone`;
+no category row, acceptance decision, or IRT observation was produced. Anchor
+presence was true, but anchor binding and strict JSON parsing do not guarantee
+semantic threshold consistency. Retain this complete failure in the
+calibration denominator and do not promote Gemma 4 e4b, change verifier
+priority, or repair the row without balanced held-out gold and perturbation
+evidence.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
