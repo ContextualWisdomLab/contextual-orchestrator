@@ -48,6 +48,8 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+MAX_EMBEDDINGS_BATCH_SIZE = 2048
+MAX_EMBEDDING_INPUT_CHARS = 8192
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -229,7 +231,13 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     if not isinstance(raw_requests, list) or not raw_requests:
         raise RequestError(400, "invalid_request", "requests must be a non-empty array")
     default_attribution = _validate_attribution(body.get("attribution")) or {}
-    default_model = str(body.get("model", "contextual-orchestrator"))
+    if "model" in body:
+        top_model = body.get("model")
+        if not isinstance(top_model, str) or not top_model.strip():
+            raise RequestError(400, "invalid_model", "model must be a non-empty string")
+        default_model = top_model.strip()
+    else:
+        default_model = "contextual-orchestrator"
     batch: list[BatchRequest] = []
     for item in raw_requests:
         if not isinstance(item, dict):
@@ -238,9 +246,16 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
         attribution = _validate_attribution(item.get("attribution"))
         merged = {**default_attribution, **(attribution or {})}
         mode = _validate_mode(item.get("mode", "auto"))
+        item_model = item.get("model", default_model)
+        if not isinstance(item_model, str) or not str(item_model).strip():
+            raise RequestError(
+                400,
+                "invalid_model",
+                "each batch request model must be a non-empty string",
+            )
         batch.append(BatchRequest(
             messages=messages,
-            model=str(item.get("model", default_model)),
+            model=str(item_model).strip(),
             attribution=merged,
             mode=mode,
         ))
@@ -248,20 +263,72 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
 
 
 def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
-    """Validate the embeddings batch inputs (accepts ``inputs`` or ``input``)."""
+    """Validate embeddings inputs (``input`` or ``inputs``) with OpenAI-style limits."""
     raw = body.get("inputs")
     if raw is None:
         raw = body.get("input")
     if isinstance(raw, str):
         raw = [raw]
     if not isinstance(raw, list) or not raw:
-        raise RequestError(400, "invalid_request", "input/inputs must be a non-empty array of strings")
+        raise RequestError(
+            400,
+            "invalid_embeddings_input",
+            "input/inputs must be a non-empty array of strings",
+        )
+    if len(raw) > MAX_EMBEDDINGS_BATCH_SIZE:
+        raise RequestError(
+            400,
+            "invalid_embeddings_input",
+            f"input/inputs may contain at most {MAX_EMBEDDINGS_BATCH_SIZE} strings",
+        )
     inputs: list[str] = []
-    for item in raw:
+    for index, item in enumerate(raw):
         if not isinstance(item, str):
-            raise RequestError(400, "invalid_request", "each embedding input must be a string")
+            raise RequestError(
+                400,
+                "invalid_embeddings_input",
+                f"input[{index}] must be a string",
+            )
+        if not item.strip():
+            raise RequestError(
+                400,
+                "invalid_embeddings_input",
+                f"input[{index}] must be a non-empty string",
+            )
+        if len(item) > MAX_EMBEDDING_INPUT_CHARS:
+            raise RequestError(
+                400,
+                "invalid_embeddings_input",
+                f"input[{index}] must be at most {MAX_EMBEDDING_INPUT_CHARS} characters",
+            )
         inputs.append(item)
     return inputs
+
+
+def _validate_embeddings_model(body: dict[str, Any]) -> str:
+    """Embeddings request ``model`` — non-empty string when present, else gateway default."""
+    if "model" not in body:
+        return "contextual-orchestrator"
+    model = body.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    return model
+
+
+def _validate_embeddings_endpoint(body: dict[str, Any]) -> str | None:
+    """Optional embeddings ``endpoint`` alias — non-empty string when set."""
+    if "endpoint" not in body:
+        return None
+    endpoint = body.get("endpoint")
+    if not isinstance(endpoint, str) or not endpoint.strip():
+        raise RequestError(
+            400,
+            "invalid_endpoint",
+            "endpoint must be a non-empty string when set",
+        )
+    return endpoint
 
 
 def _embeddings_attribution(body: dict[str, Any]) -> dict[str, Any]:
@@ -800,12 +867,12 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    model_name = _validate_embeddings_model(body)
                     attribution = _embeddings_attribution(body)
                     submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
-                    endpoint_alias = body.get("endpoint")
+                    endpoint_alias = _validate_embeddings_endpoint(body)
                     if endpoint_alias:
-                        submit_metadata["endpoint_alias"] = str(endpoint_alias)
+                        submit_metadata["endpoint_alias"] = endpoint_alias
                     document = self._run(lambda: coordinator.complete_embeddings_batch(
                         inputs,
                         model=model_name,
