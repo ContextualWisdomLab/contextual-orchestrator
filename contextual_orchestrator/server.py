@@ -177,6 +177,22 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_max_tokens_exclusive(body: dict[str, Any]) -> None:
+    """OpenAI rejects simultaneous ``max_tokens`` and ``max_completion_tokens``.
+
+    Newer chat models prefer ``max_completion_tokens``; legacy clients still send
+    ``max_tokens``. Accept either alone (range checks live in other PRs); reject
+    both together with a clear 400 so SDKs do not hit opaque provider errors.
+    """
+    if "max_tokens" in body and "max_completion_tokens" in body:
+        raise RequestError(
+            400,
+            "invalid_max_tokens",
+            "max_tokens and max_completion_tokens are mutually exclusive; send only one",
+        )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +729,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_max_tokens_exclusive(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +879,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_max_tokens_exclusive(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
