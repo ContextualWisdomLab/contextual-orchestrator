@@ -177,6 +177,30 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+_MAX_OPENAI_TOOLS = 128
+
+
+def _validate_tools_max_count(body: dict[str, Any]) -> None:
+    """OpenAI hard-caps the ``tools`` array at 128 entries.
+
+    When ``tools`` is present, require a list and reject more than 128 tools
+    with ``invalid_tools`` so clients fail at the gateway, not the provider.
+    """
+    if "tools" not in body:
+        return
+    tools = body.get("tools")
+    if not isinstance(tools, list):
+        raise RequestError(400, "invalid_tools", "tools must be an array when present")
+    if len(tools) > _MAX_OPENAI_TOOLS:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"tools must contain at most {_MAX_OPENAI_TOOLS} entries",
+            {"count": len(tools), "max_count": _MAX_OPENAI_TOOLS},
+        )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +737,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_tools_max_count(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +887,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_tools_max_count(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
