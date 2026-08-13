@@ -177,6 +177,36 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_logit_bias(body: dict[str, Any]) -> dict[str, float] | None:
+    """OpenAI ``logit_bias`` — map of token-id strings to biases in [-100, 100]."""
+    if "logit_bias" not in body:
+        return None
+    logit_bias = body.get("logit_bias")
+    if not isinstance(logit_bias, dict):
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must be an object")
+    validated: dict[str, float] = {}
+    for key, value in logit_bias.items():
+        token_key = key if isinstance(key, str) else str(key)
+        if not token_key:
+            raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be non-empty token ids")
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise RequestError(
+                400,
+                "invalid_logit_bias",
+                f"logit_bias[{token_key!r}] must be a number",
+            )
+        bias = float(value)
+        if bias < -100 or bias > 100:
+            raise RequestError(
+                400,
+                "invalid_logit_bias",
+                f"logit_bias[{token_key!r}] must be between -100 and 100",
+            )
+        validated[token_key] = bias
+    return validated
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +743,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_logit_bias(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
