@@ -540,7 +540,7 @@ the same server and prompt configuration.
 ### Paired option-count and framing controls — 2026-08-14
 
 The new fast-mlsirm calibration controls at exact head
-`a57ef506812cb54abe40d44494dd5a8a1028eb2e` were exercised through the same
+`0d6dc45f51b2f2b1fbb26c8cf8d8db2faf9d2c38` were exercised through the same
 `ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
 ModelClient -> mlx-lm` route with Gemma 4 e4b, temperature `0`, disabled
 thinking, `max_output_tokens=192`, zero retries, `local_concurrency=1`, K=`3`,
@@ -561,6 +561,27 @@ retained contamination status, per-variant categories, IRT rows, trace-step
 counts, and usage while excluding raw model output. Replication must expand
 persons/items, correct-option positions, option counts, models, framing, and
 human/gold anchors before any bias or IRT-readiness claim.
+
+### Model-size reliability comparison — 2026-08-14
+
+Using the same held-out three-option case, K=`3`, two anchored criteria,
+temperature `0`, disabled thinking, `local_concurrency=1`, and the four paired
+variants, the real contextual-orchestrator route produced these exploratory
+results:
+
+| model | passed variants | gold exact agreement | paired score deltas | elapsed | provider tokens |
+| --- | ---: | ---: | --- | ---: | ---: |
+| Llama 1B | `0/4` | not scored | not scored | `25.334 s` | first summary omitted usage; follow-up retained `2,302`–`2,681` tokens/variant |
+| Llama 3B | `4/4` | `4/4` | all `0.0` | `24.139 s` | `7,960` |
+| Gemma 4 e4b | `4/4` | `4/4` | all `0.0` | `39.731 s` | `7,860` |
+
+The 1B follow-up retained four complete boundary-failure records: all four
+provider calls completed, JSON parsing failed on three or four boundaries per
+variant, and the report preserved `2,302`–`2,681` provider tokens per variant
+without retaining raw output. This is structured-output reliability evidence,
+not a claim that the larger models are unbiased. Model promotion requires
+more persons/items, balanced correct-option positions and counts, framing and
+contamination controls, and human/gold recall.
 
 ## IRT boundary
 
