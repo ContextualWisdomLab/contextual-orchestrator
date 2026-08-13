@@ -77,6 +77,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** â
 One public interface:
 
 - `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
+- Optional `Idempotency-Key` on non-stream `POST /v1/chat/completions` caches the response process-locally (24h TTL) so safe client retries replay the same JSON with `Idempotent-Replayed: true`; same key with a different body returns HTTP 409, and `stream=true` rejects the key.
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline â€” per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
@@ -256,6 +257,7 @@ python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
 python tests/test_security_hardening.py
+python tests/test_idempotency_key.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py
