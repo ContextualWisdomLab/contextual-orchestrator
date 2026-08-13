@@ -114,14 +114,18 @@ bounded answer to `json.loads` and rejects prefixes, suffixes, and Markdown
 fences instead of extracting the first and last braces. README ADR links use
 the immutable contextual commit that contains ADR 0005 and ADR 0006.
 
-The follow-up polytomous path adds opt-in `category_method="cumulative_threshold"`.
-With an explicit category count, the model returns one Boolean decision for each
-ordered boundary of each criterion. The adapter rejects wrong-length,
-non-Boolean, and false-then-true vectors, derives the category and weighted
-score itself, and retains the existing exact-schema, contextual-orchestrator,
-and multi-item IRT requirements. Direct K-way categories remain available for
-compatibility but stay experimental until category-method and prompt-perturbation
-calibration supports them.
+The follow-up polytomous path adds explicit
+`category_method="cumulative_threshold"` and bounded
+`category_method="binary_threshold"` modes. With an explicit category count,
+the binary mode asks one Boolean question for each ordered boundary of each
+criterion. The adapter rejects malformed or false-then-true responses, derives
+the category and weighted score itself, and retains the existing exact-schema,
+contextual-orchestrator, and multi-item IRT requirements. Direct K-way
+categories remain available only for explicit calibration. Omitting the method
+now selects binary thresholds for polytomous output because a live 3B probe
+changed an unsafe answer from `0.0` at K=2 to `0.8333` at K=7 and changed a
+partial answer from `0.0` to `1.0` at K=5; binary output remains a fail-closed
+guard, not a claim of unbiased or high-recall judgment.
 
 ## Problem Register and Remediation Directions
 
@@ -144,6 +148,7 @@ calibration supports them.
 | A polytomous K-way choice can expose the judge to score-ID and category-count effects. | Add an opt-in cumulative-threshold mode with explicit K, exact criterion IDs, Boolean boundary vectors, monotonicity validation, derived categories, and focused IRT-row tests. | Implemented on fast-mlsirm follow-up branch; exact-head review pending |
 | Threshold output can be syntactically valid but ordinally incoherent, or can disagree with direct K-way output. | Fail closed on non-monotone thresholds and record category method, K, score, acceptance, parse status, trace, and token usage in paired MLX calibration runs; do not claim bias removal. | Implemented in adapter/tests and 2026-08-12 exploratory run; calibration ongoing |
 | The 2026-08-14 paired 3B probe showed direct scores rising with K for a safe case (`0.5 -> 1.0 -> 1.0`) and for an unsafe case at K=7 (`0.0 -> 0.0 -> 0.3333`); cumulative parsing/monotonicity failures remained 4/6. | Keep direct and cumulative methods experimental; add the bounded `binary_threshold` method as a fail-closed calibration probe, record its extra calls/tokens/latency and semantic misses, and require held-out human/gold agreement before changing a default. Never use keyword, positional, or silent repair. | Goal expanded 2026-08-14; binary method implemented on fast-mlsirm exact follow-up, calibration ongoing |
+| A fresh same-route 3B probe returned the unsafe answer at direct scores `0.0`, `0.5`, `0.8333` and the partial answer at `0.0`, `1.0`, `0.0` for K=`2,5,7`; a binary probe returned `0.0` for both safe and unsafe answers at K=`5,7`, including a safe semantic false negative. | Make omitted polytomous method selection fail closed into bounded binary thresholds; keep direct K-way explicit and calibration-only, preserve the false negative in the denominator, and require held-out human/gold recall before any IRT production claim. Never use keyword, positional, or silent repair. | Implemented on fast-mlsirm `608cfbd`; exact-head review/check follow-up required |
 | Binary-threshold boundary calls were independent but serial, making larger K calibration expensive even though contextual-orchestrator already exposes bounded local concurrency. | Reuse the injected gateway's `client.local_concurrency` only for independent boundary calls; keep generic injected transports sequential, preserve deterministic evidence order, aggregate trace/usage, and validate all thresholds before returning. | Implemented in fast-mlsirm `61e6be9`; exact-source targeted `58 passed`, full `3630 passed`, live MLX evidence retained |
 | The cached local Llama 3B judge failed strict structured parsing in 7/18 good-plan calls, including invalid JSON, an out-of-range category, and a non-monotone threshold vector; framing also shifted some K=7 scores. | Keep failures in the reliability denominator and test any bounded retry or stronger local-judge selection as a separate contextual-orchestrator experiment. Never repair by keyword/position or silently omit a failed call. | Recorded in 2026-08-12 benchmark; required calibration follow-up |
 

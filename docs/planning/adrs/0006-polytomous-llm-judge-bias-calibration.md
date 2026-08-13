@@ -147,13 +147,17 @@ so the comparison was stopped and no quality conclusion was drawn for it.
 This adds a reliability gate: the largest or most capable-looking local model
 is not a performance win if it cannot return a bounded, parseable judge result.
 
-For high-stakes polytomous use, the fast adapter now provides an opt-in
-`category_method="cumulative_threshold"` mode with an explicit `category_count`.
-It asks the model whether each criterion clears each ordered boundary, validates
-that the Boolean boundary vector is monotone, and derives the category from the
-number of cleared thresholds. This reduces dependence on one K-way score-ID
-choice, but it does not make the judge unbiased: the same answer must still be
-calibrated across K, prompt perturbations, models, and gold labels.
+For high-stakes polytomous use, the fast adapter now provides an explicit
+`category_method="cumulative_threshold"` mode and a bounded
+`category_method="binary_threshold"` mode with an explicit `category_count`.
+The binary method asks the model whether each criterion clears each ordered
+boundary, validates the Boolean responses as monotone, and derives the
+category from the number of cleared thresholds. When callers provide
+`category_count` without a method, binary thresholds are now the default;
+direct K-way output remains an explicit calibration-only choice. This reduces
+dependence on one K-way score-ID choice, but it does not make the judge
+unbiased: the same answer must still be calibrated across K, prompt
+perturbations, models, and gold labels.
 
 The first direct-versus-threshold extension run on 2026-08-12 used the same
 Gemma 4 e4b MLX judge, worker answer, two criteria, disabled thinking,
@@ -255,6 +259,8 @@ and `2,422/3,620` tokens, while safe K=5/K=7 remained non-monotone failures.
 | User framing can induce positive or negative sycophantic feedback. | Add neutral, liked, disliked, and authored framing controls; compare to content-only gold. | Required next |
 | Equal-width score bins can create artificial polytomous thresholds. | Implement cumulative threshold judging or calibrated category mapping before production IRT use. | Ongoing |
 | A K-way prompt can make the model choose among many score identifiers even when the underlying evidence is unchanged. | Expose opt-in cumulative-threshold judging with explicit K, exact Boolean arrays, monotonicity validation, derived categories, and the same multi-item IRT validator; keep direct K-way output experimental until paired calibration supports it. | Implemented on fast-mlsirm follow-up PR; calibration ongoing |
+| A fresh same-route 3B MLX direct probe scored the unsafe case `0.0`, `0.5`, `0.8333` and the partial-evidence case `0.0`, `1.0`, `0.0` at K=`2,5,7`; acceptance therefore changed with the number of score identifiers | Resolve an omitted method to bounded binary thresholds whenever `category_count` is present; retain direct K-way only for explicit calibration and record every semantic miss as failed evidence rather than repairing it | Implemented in fast-mlsirm follow-up; exact-head review required |
+| The paired binary probe returned score `0.0` for both safe and unsafe answers at K=`5,7`, avoiding the direct positive drift in this sample but under-recognizing the safe answer | Keep the default fail-closed and require held-out human/gold recall, category occupancy, and parse/provider denominators before treating any local model/prompt as IRT-ready; do not claim bias removal from this probe | Observed 2026-08-14; calibration gate remains open |
 | A cumulative-threshold prompt can still produce inconsistent or non-monotone boundary judgments, and its score can differ from direct K-way output. | Reject non-Boolean, wrong-length, or false-then-true vectors; record category method, K, trace, usage, parse success, score, acceptance, and perturbation deltas in every benchmark. | Implemented in adapter/tests; calibration ongoing |
 | Multiple criteria can still be correlated or cover one latent dimension poorly. | Require item coverage review, factor anchors, and sample-size checks before interpreting IRT fit. | Required next |
 | A single judge call can hide model drift. | Preserve contextual-orchestrator trace, model identity, prompt variant, category count, and usage in benchmark records. | Implemented in adapter trace and the 2026-08-11 benchmark artifact |

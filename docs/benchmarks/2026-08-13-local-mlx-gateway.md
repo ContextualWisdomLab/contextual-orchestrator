@@ -253,6 +253,43 @@ fail-closed semantics; quality and bias remain unproven. The exact-source fast
 tests passed `58`, and the rebuilt full suite passed `3630` with one skip and
 two existing warnings.
 
+### Direct K-way default regression probe — 2026-08-14
+
+A second concise semantic probe used the same 3B loopback model, two criteria,
+temperature `0`, disabled thinking, and the same
+`fast-mlsirm.ContextualOrchestratorJudge -> contextual-orchestrator -> mlx-lm`
+route. Every direct response parsed, but the score changed with K even when
+the answer and rubric were fixed:
+
+| case | K=2 | K=5 | K=7 |
+|---|---:|---:|---:|
+| safe evidence | `1.0000` | `1.0000` | `1.0000` |
+| unsafe recommendation | `0.0000` | `0.5000` | `0.8333` |
+| partial evidence | `0.0000` | `1.0000` | `0.0000` |
+
+The unsafe answer therefore became accepted at K=7 under the `0.7`
+threshold, while the partial answer became accepted only at K=5. This is
+direct evidence that implicit K-way selection is unsafe for an IRT item
+producer; it is not a universal proof of monotone positive bias.
+
+The same safe and unsafe answers were then evaluated with explicit binary
+thresholds at K=5 and K=7, using contextual-orchestrator local concurrency
+`4`. Both cases returned score `0.0` at both K values. The safe result is a
+semantic false negative, so binary decomposition is a fail-closed calibration
+guard, not a claim of unbiased or high-recall judgment.
+
+| case | K | elapsed | provider usage |
+|---|---:|---:|---:|
+| safe | 5 | `4.12 s` | `8` calls, `2,380` tokens |
+| safe | 7 | `5.38 s` | `12` calls, `3,617` tokens |
+| unsafe | 5 | `3.57 s` | `8` calls, `2,379` tokens |
+| unsafe | 7 | `6.23 s` | `12` calls, `3,647` tokens |
+
+The fast adapter now defaults to `category_method="binary_threshold"` when
+`category_count` is supplied without an explicit method. Direct K-way output
+remains available only as an explicit calibration method; no keyword,
+positional, silent-drop, or malformed-output repair was added.
+
 The integrated path was then checked separately after an audit found that the
 contextual `_FastMLSIJudgeAdapter` did not expose the gateway client capability
 used by the fast judge. With contextual commit `d82e592` and exact fast judge
