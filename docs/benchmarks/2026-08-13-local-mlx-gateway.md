@@ -175,6 +175,11 @@ and `max_output_tokens=16`. It completed in `4.371 s` (`1.830 req/s`), returned
 integration evidence for the concurrency handoff and result contract, not a
 new cross-workload tuning recommendation.
 
+A repeated warm-cache smoke after the circuit-breaker lock fix completed in
+`2.267 s` (`3.529 req/s`) with the same `8/8` non-empty, ordered result
+contract. The difference from the first smoke is retained as warm-cache and
+provider scheduling variance, not as a quality or universal throughput claim.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
