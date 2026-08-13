@@ -46,6 +46,7 @@ ALLOWED_RESPONSES_KEYS = {
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
+_MAX_OUTPUT_TOKENS_CAP = 1_048_576  # practical gateway hard ceiling for max_tokens fields
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -169,6 +170,38 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RequestError(400, "invalid_json", "request body must be a JSON object")
     return value
+
+
+
+def _validate_max_tokens_upper_bound(body: dict[str, Any]) -> None:
+    """Cap OpenAI ``max_tokens`` / ``max_completion_tokens`` at 1_048_576 when present.
+
+    Values must be positive integers not exceeding the gateway hard ceiling.
+    Mutual-exclusion / equality rules are owned by dedicated validators.
+    """
+    for field_name in ("max_tokens", "max_completion_tokens"):
+        if field_name not in body:
+            continue
+        value = body.get(field_name)
+        if isinstance(value, bool) or not isinstance(value, int):
+            raise RequestError(
+                400,
+                "invalid_max_tokens",
+                f"{field_name} must be a positive integer",
+            )
+        if value < 1:
+            raise RequestError(
+                400,
+                "invalid_max_tokens",
+                f"{field_name} must be a positive integer",
+            )
+        if value > _MAX_OUTPUT_TOKENS_CAP:
+            raise RequestError(
+                400,
+                "invalid_max_tokens",
+                f"{field_name} must be at most {_MAX_OUTPUT_TOKENS_CAP}",
+                {"field": field_name, "value": value, "max_value": _MAX_OUTPUT_TOKENS_CAP},
+            )
 
 
 def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
@@ -713,6 +746,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_max_tokens_upper_bound(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +896,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_max_tokens_upper_bound(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
