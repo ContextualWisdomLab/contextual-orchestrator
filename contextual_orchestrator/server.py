@@ -177,6 +177,30 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_responses_temperature(body: dict[str, Any]) -> float | None:
+    """OpenAI Responses ``temperature`` — number in [0, 2] when present."""
+    if "temperature" not in body:
+        return None
+    value = body.get("temperature")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RequestError(400, "invalid_temperature", "temperature must be a number")
+    if value < 0 or value > 2:
+        raise RequestError(400, "invalid_temperature", "temperature must be between 0 and 2 inclusive")
+    return float(value)
+
+
+def _validate_responses_top_p(body: dict[str, Any]) -> float | None:
+    """OpenAI Responses ``top_p`` — number in (0, 1] when present."""
+    if "top_p" not in body:
+        return None
+    value = body.get("top_p")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise RequestError(400, "invalid_top_p", "top_p must be a number")
+    if value <= 0 or value > 1:
+        raise RequestError(400, "invalid_top_p", "top_p must be greater than 0 and at most 1")
+    return float(value)
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +886,8 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_temperature(body)
+                    _validate_responses_top_p(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
