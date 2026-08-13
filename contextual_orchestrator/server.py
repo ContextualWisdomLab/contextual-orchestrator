@@ -177,6 +177,123 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_responses_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """OpenAI Responses ``tools`` — non-empty array of tool objects when present.
+
+    Accepts function tools (chat-compatible nested ``function`` or Responses
+    flat ``name``/``parameters``) and built-in tool types identified by ``type``.
+    """
+    if "tools" not in body:
+        return None
+    tools = body.get("tools")
+    if not isinstance(tools, list) or not tools:
+        raise RequestError(400, "invalid_tools", "tools must be a non-empty array")
+    validated: list[dict[str, Any]] = []
+    for index, tool in enumerate(tools):
+        if not isinstance(tool, dict):
+            raise RequestError(400, "invalid_tools", f"tools[{index}] must be an object")
+        tool_type = tool.get("type")
+        if not isinstance(tool_type, str) or not tool_type.strip():
+            raise RequestError(
+                400,
+                "invalid_tools",
+                f"tools[{index}].type must be a non-empty string",
+            )
+        if tool_type == "function":
+            # Chat-style nested function object.
+            if "function" in tool:
+                function = tool.get("function")
+                if not isinstance(function, dict):
+                    raise RequestError(
+                        400,
+                        "invalid_tools",
+                        f"tools[{index}].function must be an object",
+                    )
+                name = function.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise RequestError(
+                        400,
+                        "invalid_tools",
+                        f"tools[{index}].function.name must be a non-empty string",
+                    )
+                if "parameters" in function and not isinstance(function.get("parameters"), dict):
+                    raise RequestError(
+                        400,
+                        "invalid_tools",
+                        f"tools[{index}].function.parameters must be an object when set",
+                    )
+            else:
+                # Responses-style flat function tool.
+                name = tool.get("name")
+                if not isinstance(name, str) or not name.strip():
+                    raise RequestError(
+                        400,
+                        "invalid_tools",
+                        f"tools[{index}].name must be a non-empty string for function tools",
+                    )
+                if "parameters" in tool and not isinstance(tool.get("parameters"), dict):
+                    raise RequestError(
+                        400,
+                        "invalid_tools",
+                        f"tools[{index}].parameters must be an object when set",
+                    )
+        validated.append(tool)
+    return validated
+
+
+def _validate_responses_tool_choice(body: dict[str, Any]) -> Any:
+    """OpenAI Responses ``tool_choice`` — none|auto|required or function object."""
+    if "tool_choice" not in body:
+        return None
+    tool_choice = body.get("tool_choice")
+    if isinstance(tool_choice, str):
+        if tool_choice not in {"none", "auto", "required"}:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice string must be none, auto, or required",
+            )
+        return tool_choice
+    if isinstance(tool_choice, dict):
+        choice_type = tool_choice.get("type")
+        if choice_type != "function":
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice object type must be function",
+            )
+        # Nested function.name (chat) or flat name (Responses).
+        if "function" in tool_choice:
+            function = tool_choice.get("function")
+            if not isinstance(function, dict):
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.function must be an object",
+                )
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.function.name must be a non-empty string",
+                )
+        else:
+            name = tool_choice.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.name must be a non-empty string when function object is flat",
+                )
+        return tool_choice
+    raise RequestError(
+        400,
+        "invalid_tool_choice",
+        "tool_choice must be a string or object",
+    )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +979,8 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_tools(body)
+                    _validate_responses_tool_choice(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
