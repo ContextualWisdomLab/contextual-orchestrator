@@ -274,6 +274,21 @@ def _validate_sampling(body: dict[str, Any]) -> dict[str, Any] | None:
         else:
             raise RequestError(400, "invalid_stop", "stop must be a string or array of strings")
 
+    if "top_p" in body:
+        top_p = body["top_p"]
+        if not isinstance(top_p, (int, float)) or isinstance(top_p, bool):
+            raise RequestError(400, "invalid_top_p", "top_p must be a number")
+        top_p_f = float(top_p)
+        if top_p_f < 0 or top_p_f > 1:
+            raise RequestError(400, "invalid_top_p", "top_p must be between 0 and 1")
+        sampling["top_p"] = top_p_f
+
+    if "seed" in body:
+        seed = body["seed"]
+        if not isinstance(seed, int) or isinstance(seed, bool):
+            raise RequestError(400, "invalid_seed", "seed must be an integer")
+        sampling["seed"] = seed
+
     return sampling or None
 
 

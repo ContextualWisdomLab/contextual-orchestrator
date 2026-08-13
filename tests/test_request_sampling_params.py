@@ -31,6 +31,7 @@ def test_validate_sampling_accepts_temperature_and_max_tokens() -> None:
     }
     assert _validate_sampling({"max_completion_tokens": 16}) == {"max_tokens": 16}
     assert _validate_sampling({"n": 1}) is None
+    assert _validate_sampling({"top_p": 0.9, "seed": 42}) == {"top_p": 0.9, "seed": 42}
 
 
 def test_validate_sampling_rejects_bad_n_and_temperature() -> None:
@@ -51,6 +52,16 @@ def test_validate_sampling_rejects_bad_n_and_temperature() -> None:
         raise AssertionError("expected invalid_max_tokens")
     except RequestError as exc:
         assert exc.code == "invalid_max_tokens"
+    try:
+        _validate_sampling({"top_p": 1.5})
+        raise AssertionError("expected invalid_top_p")
+    except RequestError as exc:
+        assert exc.code == "invalid_top_p"
+    try:
+        _validate_sampling({"seed": 1.2})
+        raise AssertionError("expected invalid_seed")
+    except RequestError as exc:
+        assert exc.code == "invalid_seed"
 
 
 def test_mock_client_truncates_to_max_tokens() -> None:

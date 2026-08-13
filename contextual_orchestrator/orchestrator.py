@@ -255,12 +255,15 @@ class ModelClient:
         *,
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        top_p: float | None = None,
+        seed: int | None = None,
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
         ``max_tokens`` overrides the client default ``max_output_tokens`` for this
         call when set (OpenAI-compatible request sampling). ``stop`` truncates the
-        mock path and is forwarded to real providers.
+        mock path and is forwarded to real providers. ``top_p`` and ``seed`` are
+        forwarded to real providers when set.
         """
         self._local.usage = None
         token_limit = self.max_output_tokens if max_tokens is None else max_tokens
@@ -285,6 +288,10 @@ class ModelClient:
         }
         if stop:
             payload["stop"] = stop
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if seed is not None:
+            payload["seed"] = seed
         return self._send_with_retry(agent, payload)
 
     @staticmethod
@@ -359,6 +366,8 @@ class ModelClient:
         *,
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        top_p: float | None = None,
+        seed: int | None = None,
     ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
@@ -383,6 +392,10 @@ class ModelClient:
         }
         if stop:
             payload["stop"] = stop
+        if top_p is not None:
+            payload["top_p"] = top_p
+        if seed is not None:
+            payload["seed"] = seed
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
@@ -1011,15 +1024,9 @@ class TaskOrchestrator:
         """
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
-        temperature, max_tokens, stop = self._sampling_kwargs(sampling)
+        sample = self._sampling_kwargs(sampling)
         parts: list[str] = []
-        for delta in self.client.stream_chat(
-            agent,
-            messages,
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stop=stop,
-        ):
+        for delta in self.client.stream_chat(agent, messages, **sample):
             parts.append(delta)
             yield delta
         answer = "".join(parts)
@@ -1440,16 +1447,14 @@ class TaskOrchestrator:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
-        temperature, max_tokens, stop = self._sampling_kwargs(sampling)
+        sample = self._sampling_kwargs(sampling)
         start = time.perf_counter()
         answer, served_id, usage = self._invoke(
             agent,
             messages,
             text=text,
             role="worker",
-            temperature=temperature,
-            max_tokens=max_tokens,
-            stop=stop,
+            **sample,
         )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
@@ -1647,21 +1652,22 @@ class TaskOrchestrator:
         return selected
 
     @staticmethod
-    def _sampling_kwargs(
-        sampling: dict[str, Any] | None,
-    ) -> tuple[float, int | None, list[str] | None]:
-        """Unpack validated sampling map into temperature, max_tokens, stop."""
-        temperature = 0.2
-        max_tokens: int | None = None
-        stop: list[str] | None = None
-        if sampling:
-            if "temperature" in sampling:
-                temperature = float(sampling["temperature"])
-            if "max_tokens" in sampling:
-                max_tokens = int(sampling["max_tokens"])
-            if "stop" in sampling:
-                stop = list(sampling["stop"])
-        return temperature, max_tokens, stop
+    def _sampling_kwargs(sampling: dict[str, Any] | None) -> dict[str, Any]:
+        """Unpack validated sampling map into kwargs for ``ModelClient.chat`` / ``stream_chat``."""
+        kwargs: dict[str, Any] = {"temperature": 0.2}
+        if not sampling:
+            return kwargs
+        if "temperature" in sampling:
+            kwargs["temperature"] = float(sampling["temperature"])
+        if "max_tokens" in sampling:
+            kwargs["max_tokens"] = int(sampling["max_tokens"])
+        if "stop" in sampling:
+            kwargs["stop"] = list(sampling["stop"])
+        if "top_p" in sampling:
+            kwargs["top_p"] = float(sampling["top_p"])
+        if "seed" in sampling:
+            kwargs["seed"] = int(sampling["seed"])
+        return kwargs
 
     def _invoke(
         self,
@@ -1673,6 +1679,8 @@ class TaskOrchestrator:
         temperature: float = 0.2,
         max_tokens: int | None = None,
         stop: list[str] | None = None,
+        top_p: float | None = None,
+        seed: int | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -1683,15 +1691,16 @@ class TaskOrchestrator:
         """
         candidates = self._failover_candidates(primary, text, role)
         last_error: Exception | None = None
+        sample = {
+            "temperature": temperature,
+            "max_tokens": max_tokens,
+            "stop": stop,
+            "top_p": top_p,
+            "seed": seed,
+        }
         for agent in candidates:
             try:
-                output = self._client_chat(
-                    agent,
-                    messages,
-                    temperature=temperature,
-                    max_tokens=max_tokens,
-                    stop=stop,
-                )
+                output = self._client_chat(agent, messages, **sample)
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
                 self._record_failure(agent.id)
@@ -1707,13 +1716,16 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         *,
         temperature: float,
-        max_tokens: int | None,
+        max_tokens: int | None = None,
         stop: list[str] | None = None,
+        top_p: float | None = None,
+        seed: int | None = None,
     ) -> str:
         """Call ``client.chat`` with sampling kwargs only when the client accepts them.
 
         Test doubles often implement a narrow ``chat(agent, messages, temperature=…)``
-        signature; production ``ModelClient`` also accepts ``max_tokens`` and ``stop``.
+        signature; production ``ModelClient`` also accepts ``max_tokens``, ``stop``,
+        ``top_p``, and ``seed``.
         """
         kwargs: dict[str, Any] = {}
         try:
@@ -1727,6 +1739,10 @@ class TaskOrchestrator:
             kwargs["max_tokens"] = max_tokens
         if stop and ("stop" in params or accepts_var_kw):
             kwargs["stop"] = stop
+        if top_p is not None and ("top_p" in params or accepts_var_kw):
+            kwargs["top_p"] = top_p
+        if seed is not None and ("seed" in params or accepts_var_kw):
+            kwargs["seed"] = seed
         return self.client.chat(agent, messages, **kwargs)
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
