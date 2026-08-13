@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import json
+import re
 import secrets
 import threading
 import time
@@ -175,6 +176,62 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+
+_OPENAI_FUNCTION_NAME_RE = re.compile(r"^[a-zA-Z0-9_-]{1,64}$")
+
+
+def _require_openai_function_name(name: Any, *, field_path: str) -> str:
+    """OpenAI function names: 1–64 chars of ``a-zA-Z0-9_-``."""
+    if not isinstance(name, str) or not name:
+        raise RequestError(400, "invalid_function_name", f"{field_path} must be a non-empty string")
+    if not _OPENAI_FUNCTION_NAME_RE.fullmatch(name):
+        raise RequestError(
+            400,
+            "invalid_function_name",
+            f"{field_path} must match ^[a-zA-Z0-9_-]{{1,64}}$",
+            {"name": name},
+        )
+    return name
+
+
+def _validate_function_names(body: dict[str, Any]) -> None:
+    """Validate OpenAI function names on tools, functions, tool_choice, function_call."""
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for index, tool in enumerate(tools):
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function")
+            if isinstance(function, dict) and "name" in function:
+                _require_openai_function_name(
+                    function.get("name"),
+                    field_path=f"tools[{index}].function.name",
+                )
+    functions = body.get("functions")
+    if isinstance(functions, list):
+        for index, function in enumerate(functions):
+            if isinstance(function, dict) and "name" in function:
+                _require_openai_function_name(
+                    function.get("name"),
+                    field_path=f"functions[{index}].name",
+                )
+    tool_choice = body.get("tool_choice")
+    if isinstance(tool_choice, dict):
+        function = tool_choice.get("function")
+        if isinstance(function, dict) and "name" in function:
+            _require_openai_function_name(
+                function.get("name"),
+                field_path="tool_choice.function.name",
+            )
+    function_call = body.get("function_call")
+    if isinstance(function_call, dict) and "name" in function_call:
+        _require_openai_function_name(
+            function_call.get("name"),
+            field_path="function_call.name",
+        )
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +770,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_function_names(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +920,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_function_names(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
