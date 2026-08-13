@@ -224,6 +224,41 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
     return routing
 
 
+def _validate_sampling(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Validate OpenAI sampling fields honored on the orchestrated route path.
+
+    Returns a compact ``{temperature?, max_tokens?}`` map, or ``None`` when the
+    client did not send any of these fields. Multi-completion ``n`` other than 1
+    is rejected fail-closed (the gateway returns a single choice).
+    """
+    n = body.get("n")
+    if n is not None:
+        if not isinstance(n, int) or isinstance(n, bool) or n != 1:
+            raise RequestError(400, "invalid_n", "n must be 1; multi-completion is not supported")
+
+    sampling: dict[str, Any] = {}
+    if "temperature" in body:
+        temperature = body["temperature"]
+        if not isinstance(temperature, (int, float)) or isinstance(temperature, bool):
+            raise RequestError(400, "invalid_temperature", "temperature must be a number")
+        temperature_f = float(temperature)
+        if temperature_f < 0 or temperature_f > 2:
+            raise RequestError(400, "invalid_temperature", "temperature must be between 0 and 2")
+        sampling["temperature"] = temperature_f
+
+    max_tokens = body.get("max_completion_tokens", body.get("max_tokens"))
+    if max_tokens is not None:
+        if not isinstance(max_tokens, int) or isinstance(max_tokens, bool) or max_tokens < 1:
+            raise RequestError(
+                400,
+                "invalid_max_tokens",
+                "max_tokens / max_completion_tokens must be a positive integer",
+            )
+        sampling["max_tokens"] = max_tokens
+
+    return sampling or None
+
+
 def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[BatchRequest]:
     raw_requests = body.get("requests")
     if not isinstance(raw_requests, list) or not raw_requests:
@@ -737,12 +772,19 @@ def build_server(
                     stream = body.get("stream", False)
                     if not isinstance(stream, bool):
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    sampling = _validate_sampling(body)
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
                     if stream and orchestrator.would_route(messages, mode):
-                        self._stream_route_completion(orchestrator, security, messages, model_name)
+                        self._stream_route_completion(
+                            orchestrator,
+                            security,
+                            messages,
+                            model_name,
+                            sampling=sampling,
+                        )
                         orchestrator.record_analytics_event(
                             "chat_completion_requested",
                             {
@@ -762,6 +804,7 @@ def build_server(
                         hints=routing,
                         model_name=model_name,
                         workflow_run_id=f"run_{uuid.uuid4().hex}",
+                        sampling=sampling,
                     ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
@@ -1019,7 +1062,15 @@ def build_server(
             self.wfile.write(frame.encode("utf-8"))
             self.wfile.flush()
 
-        def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
+        def _stream_route_completion(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+            *,
+            sampling: dict[str, Any] | None = None,
+        ) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = f"chatcmpl-{int(time.time() * 1000)}"
@@ -1040,7 +1091,9 @@ def build_server(
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                    for delta in orchestrator.stream_route(
+                        messages, workflow_run_id=run_id, sampling=sampling
+                    ):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame

@@ -116,6 +116,7 @@ class CostRoutingCoordinator:
         hints: Optional[Dict[str, Any]] = None,
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
+        sampling: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -123,6 +124,7 @@ class CostRoutingCoordinator:
         augmented with ``channel``, ``routing_reason``, ``usage``, and the
         ``usage_record_id``. Batch requests are dispatched to the batch backend
         and return a job envelope; their cost is recorded on retrieval.
+        ``sampling`` (temperature / max_tokens) is forwarded on the sync route path.
         """
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
@@ -145,7 +147,9 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        result = self.orchestrator.run(messages, mode=mode, workflow_run_id=workflow_run_id)
+        result = self.orchestrator.run(
+            messages, mode=mode, workflow_run_id=workflow_run_id, sampling=sampling
+        )
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),

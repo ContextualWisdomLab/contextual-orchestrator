@@ -8,6 +8,7 @@ import copy
 from dataclasses import dataclass, replace
 from functools import wraps
 import hashlib
+import inspect
 import ipaddress
 import json
 import os
@@ -230,7 +231,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -246,11 +247,23 @@ class ModelClient:
         self._local.usage = None
         return usage
 
-    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
-        """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
+    def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float = 0.2,
+        *,
+        max_tokens: int | None = None,
+    ) -> str:
+        """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
+
+        ``max_tokens`` overrides the client default ``max_output_tokens`` for this
+        call when set (OpenAI-compatible request sampling).
+        """
         self._local.usage = None
+        token_limit = self.max_output_tokens if max_tokens is None else max_tokens
         if agent.base_url.startswith("mock://"):
-            return self._mock(agent, messages)
+            return self._apply_max_tokens(self._mock(agent, messages), token_limit)
 
         self._validate_provider(agent)  # pragma: no cover
         api_key = get_credential(agent.credential_name)  # pragma: no cover
@@ -264,9 +277,19 @@ class ModelClient:
             "messages": messages,
             "temperature": temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": token_limit,
         }
         return self._send_with_retry(agent, payload)
+
+    @staticmethod
+    def _apply_max_tokens(text: str, max_tokens: int) -> str:
+        """Approximate max_tokens for mock agents (~4 chars/token) so offline tests exercise the cap."""
+        if max_tokens <= 0:
+            return ""
+        char_cap = max_tokens * 4
+        if len(text) <= char_cap:
+            return text
+        return text[:char_cap]
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
@@ -307,21 +330,29 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
         )
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+    def stream_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float = 0.2,
+        *,
+        max_tokens: int | None = None,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        token_limit = self.max_output_tokens if max_tokens is None else max_tokens
         if agent.base_url.startswith("mock://"):
-            answer = self._mock(agent, messages)
+            answer = self._apply_max_tokens(self._mock(agent, messages), token_limit)
             for start in range(0, len(answer), 24):
                 yield answer[start : start + 24]
             return
@@ -332,7 +363,7 @@ class ModelClient:
             "messages": messages,
             "temperature": temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": token_limit,
         }
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
@@ -909,22 +940,38 @@ class TaskOrchestrator:
         upstream["stream"] = False
         return self.client.proxy_send(agent, endpoint, upstream)
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
-        """Return a route or conducted completion without persisting a workflow run."""
+    def complete(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        sampling: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Return a route or conducted completion without persisting a workflow run.
+
+        ``sampling`` may include OpenAI request fields ``temperature`` and ``max_tokens``
+        honored on the single-worker route path.
+        """
         if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
+            return self._dispatch(messages, mode, sampling=sampling)
+        key = self._cache_key(messages, mode, sampling=sampling)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._dispatch(messages, mode)
+        result = self._dispatch(messages, mode, sampling=sampling)
         self._cache.put(key, result)
         return result
 
-    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
+    def _dispatch(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        *,
+        sampling: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
-            return self.route_once(messages)
+            return self.route_once(messages, sampling=sampling)
         return self.conduct(messages)
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
@@ -932,7 +979,13 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
 
-    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+    def stream_route(
+        self,
+        messages: list[ChatMessage],
+        workflow_run_id: str | None = None,
+        *,
+        sampling: dict[str, Any] | None = None,
+    ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
         True streaming for the route path. ponytail: no cross-agent failover here — bytes
@@ -940,8 +993,17 @@ class TaskOrchestrator:
         """
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
+        temperature = 0.2
+        max_tokens: int | None = None
+        if sampling:
+            if "temperature" in sampling:
+                temperature = float(sampling["temperature"])
+            if "max_tokens" in sampling:
+                max_tokens = int(sampling["max_tokens"])
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
+        for delta in self.client.stream_chat(
+            agent, messages, temperature=temperature, max_tokens=max_tokens
+        ):
             parts.append(delta)
             yield delta
         answer = "".join(parts)
@@ -971,17 +1033,34 @@ class TaskOrchestrator:
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+    def _cache_key(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        *,
+        sampling: dict[str, Any] | None = None,
+    ) -> str:
+        payload = json.dumps(
+            {"mode": mode, "messages": messages, "sampling": sampling or {}},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        *,
+        sampling: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        result = self.complete(messages, mode=mode, sampling=sampling)
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -1336,12 +1415,31 @@ class TaskOrchestrator:
         )
         return {"removed": worker_agent_id}
 
-    def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def route_once(
+        self,
+        messages: list[ChatMessage],
+        *,
+        sampling: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
+        temperature = 0.2
+        max_tokens: int | None = None
+        if sampling:
+            if "temperature" in sampling:
+                temperature = float(sampling["temperature"])
+            if "max_tokens" in sampling:
+                max_tokens = int(sampling["max_tokens"])
         start = time.perf_counter()
-        answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
+        answer, served_id, usage = self._invoke(
+            agent,
+            messages,
+            text=text,
+            role="worker",
+            temperature=temperature,
+            max_tokens=max_tokens,
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
             "id": 0,
@@ -1538,7 +1636,14 @@ class TaskOrchestrator:
         return selected
 
     def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        temperature: float = 0.2,
+        max_tokens: int | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -1551,7 +1656,9 @@ class TaskOrchestrator:
         last_error: Exception | None = None
         for agent in candidates:
             try:
-                output = self.client.chat(agent, messages)
+                output = self._client_chat(
+                    agent, messages, temperature=temperature, max_tokens=max_tokens
+                )
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
                 self._record_failure(agent.id)
@@ -1560,6 +1667,31 @@ class TaskOrchestrator:
             usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
             return output, agent.id, usage
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+
+    def _client_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        temperature: float,
+        max_tokens: int | None,
+    ) -> str:
+        """Call ``client.chat`` with sampling kwargs only when the client accepts them.
+
+        Test doubles often implement a narrow ``chat(agent, messages, temperature=…)``
+        signature; production ``ModelClient`` also accepts ``max_tokens``.
+        """
+        kwargs: dict[str, Any] = {}
+        try:
+            params = inspect.signature(self.client.chat).parameters
+        except (TypeError, ValueError):  # pragma: no cover - builtins without signatures
+            params = {}
+        accepts_var_kw = any(p.kind == inspect.Parameter.VAR_KEYWORD for p in params.values())
+        if "temperature" in params or accepts_var_kw:
+            kwargs["temperature"] = temperature
+        if max_tokens is not None and ("max_tokens" in params or accepts_var_kw):
+            kwargs["max_tokens"] = max_tokens
+        return self.client.chat(agent, messages, **kwargs)
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
