@@ -183,10 +183,15 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
-def _validate_messages(messages: Any) -> list[dict[str, str]]:
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
+    """Validate OpenAI chat messages; preserve optional per-message ``name``.
+
+    OpenAI allows an optional ``name`` on system/user/assistant messages for
+    multi-user dialogues and tool-author identity. Empty names are rejected.
+    """
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
-    validated: list[dict[str, str]] = []
+    validated: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
@@ -194,7 +199,17 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
         content = message.get("content")
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        validated.append({"role": role, "content": content})
+        row: dict[str, Any] = {"role": role, "content": content}
+        if "name" in message:
+            name = message.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_name",
+                    "message name must be a non-empty string",
+                )
+            row["name"] = name.strip()
+        validated.append(row)
     return validated
 
 
