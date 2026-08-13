@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import hashlib
 import json
 import secrets
 import threading
@@ -77,6 +78,81 @@ class RequestError(Exception):
         self.detail = detail or {}
 
 
+DEFAULT_IDEMPOTENCY_TTL_SECONDS = 24 * 60 * 60
+DEFAULT_MAX_IDEMPOTENCY_KEYS = 1024
+
+
+@dataclass
+class IdempotencyStore:
+    """Process-local Idempotency-Key cache for safe POST retries.
+
+    Keys map to a request fingerprint (hash of path + body) and a frozen JSON
+    response. Replays with the same key+fingerprint return the stored payload;
+    same key with a different body yields HTTP 409. Streaming requests are not
+    supported (clients must omit the key or disable stream).
+    """
+
+    ttl_seconds: int = DEFAULT_IDEMPOTENCY_TTL_SECONDS
+    max_entries: int = DEFAULT_MAX_IDEMPOTENCY_KEYS
+    _entries: dict[str, tuple[float, str, int, bytes]] = field(default_factory=dict, init=False, repr=False)
+    _lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if self.ttl_seconds < 1:
+            raise ValueError("idempotency ttl_seconds must be >= 1")
+        if self.max_entries < 1:
+            raise ValueError("idempotency max_entries must be >= 1")
+
+    @staticmethod
+    def fingerprint(path: str, body: dict[str, Any]) -> str:
+        """Stable hash of path + canonical JSON body for conflict detection."""
+        payload = json.dumps({"path": path, "body": body}, sort_keys=True, ensure_ascii=False, separators=(",", ":"))
+        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+    def lookup(self, key: str, fingerprint: str) -> tuple[int, bytes] | None:
+        """Return ``(status, body_bytes)`` for a matching key, else None.
+
+        Raises ``RequestError`` 409 when the key exists with a different fingerprint.
+        """
+        if not key:
+            return None
+        now = time.monotonic()
+        with self._lock:
+            self._purge_locked(now)
+            row = self._entries.get(key)
+            if row is None:
+                return None
+            expires_at, stored_fp, status, body = row
+            if now >= expires_at:
+                self._entries.pop(key, None)
+                return None
+            if stored_fp != fingerprint:
+                raise RequestError(
+                    409,
+                    "idempotency_key_conflict",
+                    "Idempotency-Key was reused with a different request body",
+                    {"idempotency_key": key},
+                )
+            return status, body
+
+    def store(self, key: str, fingerprint: str, status: int, body: bytes) -> None:
+        """Remember a completed non-stream response for ``key`` until TTL expiry."""
+        if not key or status >= 500:
+            return
+        now = time.monotonic()
+        with self._lock:
+            self._purge_locked(now)
+            while len(self._entries) >= self.max_entries:
+                oldest = min(self._entries, key=lambda sid: self._entries[sid][0])
+                self._entries.pop(oldest, None)
+            self._entries[key] = (now + float(self.ttl_seconds), fingerprint, status, body)
+
+    def _purge_locked(self, now: float) -> None:
+        stale = [sid for sid, (exp, *_rest) in self._entries.items() if now >= exp]
+        for sid in stale:
+            self._entries.pop(sid, None)
+
+
 @dataclass
 class SecurityConfig:
     """Runtime safety controls for the stdlib HTTP server."""
@@ -90,14 +166,21 @@ class SecurityConfig:
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
+    idempotency_ttl_seconds: int = DEFAULT_IDEMPOTENCY_TTL_SECONDS
+    max_idempotency_keys: int = DEFAULT_MAX_IDEMPOTENCY_KEYS
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
+    idempotency_store: IdempotencyStore = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
+        self.idempotency_store = IdempotencyStore(
+            ttl_seconds=self.idempotency_ttl_seconds,
+            max_entries=self.max_idempotency_keys,
+        )
 
     def check_bind(self, host: str) -> None:
         """Require explicit opt-in before binding the API to public interfaces."""
@@ -151,6 +234,9 @@ class SecurityConfig:
             "rate_limit_requests": self.rate_limit_requests,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "idempotency_ttl_seconds": self.idempotency_ttl_seconds,
+            "max_idempotency_keys": self.max_idempotency_keys,
+            "idempotency_storage": "process_local",
         }
 
 
@@ -713,6 +799,16 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    idem_key = (self.headers.get("idempotency-key") or "").strip()
+                    if len(idem_key) > 256:
+                        raise RequestError(400, "invalid_idempotency_key", "Idempotency-Key must be <= 256 characters")
+                    idem_fp = IdempotencyStore.fingerprint(path, body) if idem_key else ""
+                    if idem_key:
+                        cached = security.idempotency_store.lookup(idem_key, idem_fp)
+                        if cached is not None:
+                            status_code, raw_body = cached
+                            self._send_raw_json(raw_body, status_code, replayed=True)
+                            return
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -729,7 +825,7 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                             },
                         )
-                        self._send(proxied)
+                        self._send_json_cached(proxied, 200, idem_key=idem_key, idem_fp=idem_fp)
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
@@ -737,6 +833,12 @@ def build_server(
                     stream = body.get("stream", False)
                     if not isinstance(stream, bool):
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    if stream and idem_key:
+                        raise RequestError(
+                            400,
+                            "idempotency_not_supported",
+                            "Idempotency-Key is not supported with stream=true",
+                        )
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
@@ -775,7 +877,7 @@ def build_server(
                                 "batch_backend": result["backend"],
                             },
                         )
-                        self._send(result, 202)
+                        self._send_json_cached(result, 202, idem_key=idem_key, idem_fp=idem_fp)
                         return
                     orchestrator.record_analytics_event(
                         "chat_completion_requested",
@@ -793,9 +895,14 @@ def build_server(
                         chunks = chat_completion_chunks(result, model=model_name, include_trace=include_trace)
                         self._send_sse(sse_stream_body(chunks))
                         return
-                    self._send(chat_completion_response(
-                        result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
-                    ))
+                    self._send_json_cached(
+                        chat_completion_response(
+                            result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
+                        ),
+                        200,
+                        idem_key=idem_key,
+                        idem_fp=idem_fp,
+                    )
                     return
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
@@ -983,6 +1090,31 @@ def build_server(
             self.send_response(status)
             self.send_header("content-type", "application/json; charset=utf-8")
             self.send_header("content-length", str(len(raw)))
+            self._send_security_headers()
+            self.end_headers()
+            self.wfile.write(raw)
+
+        def _send_json_cached(
+            self,
+            payload: dict[str, Any],
+            status: int = 200,
+            *,
+            idem_key: str = "",
+            idem_fp: str = "",
+        ) -> None:
+            """Send JSON and optionally store it under an Idempotency-Key."""
+            raw = json.dumps(payload, ensure_ascii=False).encode("utf-8")
+            if idem_key:
+                security.idempotency_store.store(idem_key, idem_fp, status, raw)
+            self._send_raw_json(raw, status, replayed=False)
+
+        def _send_raw_json(self, raw: bytes, status: int = 200, *, replayed: bool = False) -> None:
+            """Send a frozen JSON body (used for idempotent replays)."""
+            self.send_response(status)
+            self.send_header("content-type", "application/json; charset=utf-8")
+            self.send_header("content-length", str(len(raw)))
+            if replayed:
+                self.send_header("idempotent-replayed", "true")
             self._send_security_headers()
             self.end_headers()
             self.wfile.write(raw)

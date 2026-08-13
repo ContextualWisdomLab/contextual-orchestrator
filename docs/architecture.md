@@ -38,6 +38,15 @@ This repository implements the interface and control plane, not the trained coor
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
+## Idempotency-Key (safe POST retries)
+
+`POST /v1/chat/completions` accepts an optional `Idempotency-Key` request header.
+The first successful (or client-error) non-stream response is stored process-locally
+for 24h under a fingerprint of path+body. Retries with the same key and body replay
+the frozen JSON and set `Idempotent-Replayed: true`. Reusing a key with a different
+body returns HTTP 409. Streaming requests cannot use the key (IETF-style idempotency
+patterns for payment/API POST retries; see also Stripe-style Idempotency-Key practice).
+
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
