@@ -53,7 +53,7 @@ ALLOWED_RESPONSES_KEYS = {
     "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
-ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions"}
 ALLOWED_EMBEDDINGS_KEYS = {
     "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution",
 }
@@ -1965,12 +1965,16 @@ def _validate_embeddings_model(body: dict[str, Any]) -> str:
     return model
 
 
-def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
+def _validate_embeddings_encoding_format(
+    body: dict[str, Any],
+    *,
+    endpoint_path: str = "/v1/embeddings",
+) -> str | None:
     """OpenAI ``encoding_format`` — omit or ``float`` only; base64 fail-closed.
 
     This gateway returns float vectors on the OpenAI list shape. ``base64`` is
     not produced, so requesting it fails closed rather than silently returning
-    floats.
+    floats. Same contract on sync and batch embeddings surfaces.
     """
     if "encoding_format" not in body:
         return None
@@ -1981,19 +1985,27 @@ def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
         raise RequestError(
             400,
             "invalid_encoding_format",
-            'only encoding_format "float" is supported on /v1/embeddings',
+            f'only encoding_format "float" is supported on {endpoint_path}',
         )
     return value
 
 
-def _validate_embeddings_dimensions(body: dict[str, Any]) -> None:
-    """OpenAI ``dimensions`` — not applied on this gateway; any value fails closed."""
+def _validate_embeddings_dimensions(
+    body: dict[str, Any],
+    *,
+    endpoint_path: str = "/v1/embeddings",
+) -> None:
+    """OpenAI ``dimensions`` — not applied on this gateway; any value fails closed.
+
+    Shared by ``/v1/embeddings`` and ``/v1/batch/embeddings`` so buyers never
+    believe a reduced vector width was applied on either surface.
+    """
     if "dimensions" not in body:
         return
     raise RequestError(
         400,
         "invalid_dimensions",
-        "dimensions is not supported on /v1/embeddings",
+        f"dimensions is not supported on {endpoint_path}",
     )
 
 
@@ -2959,6 +2971,14 @@ def build_server(
                         )
                     model_name = _validate_embeddings_model(body)
                     _require_pool_model(orchestrator, model_name)
+                    # OpenAI encoding_format / dimensions — same fail-closed honesty as sync.
+                    # Accept keys (not unknown_fields) so SDK clients get named errors.
+                    _validate_embeddings_encoding_format(
+                        body, endpoint_path="/v1/batch/embeddings"
+                    )
+                    _validate_embeddings_dimensions(
+                        body, endpoint_path="/v1/batch/embeddings"
+                    )
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
                     end_user_id = _validate_completions_user(body)
                     attribution = _embeddings_attribution(body)
