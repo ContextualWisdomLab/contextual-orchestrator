@@ -177,6 +177,31 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+
+def _validate_stream_n_exclusive(body: dict[str, Any]) -> None:
+    """OpenAI forbids streaming when ``n`` requests multiple choices.
+
+    Chat Completions (and Responses with ``n``) only stream a single choice;
+    ``stream=true`` with ``n>1`` yields opaque provider errors — reject early.
+    """
+    if body.get("stream") is not True:
+        return
+    if "n" not in body:
+        return
+    n_value = body.get("n")
+    if not isinstance(n_value, int) or isinstance(n_value, bool):
+        # type validation of n is owned by other PRs; only enforce pairing here
+        return
+    if n_value > 1:
+        raise RequestError(
+            400,
+            "invalid_request",
+            "stream is not supported when n is greater than 1",
+            {"n": n_value},
+        )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +738,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_stream_n_exclusive(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +888,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_stream_n_exclusive(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
