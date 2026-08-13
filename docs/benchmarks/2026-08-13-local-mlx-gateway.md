@@ -253,6 +253,15 @@ fail-closed semantics; quality and bias remain unproven. The exact-source fast
 tests passed `58`, and the rebuilt full suite passed `3630` with one skip and
 two existing warnings.
 
+The integrated path was then checked separately after an audit found that the
+contextual `_FastMLSIJudgeAdapter` did not expose the gateway client capability
+used by the fast judge. With contextual commit `d82e592` and exact fast judge
+code from `61e6be9`, a two-criterion K=3 smoke made four boundary calls through
+the adapter, reached peak concurrency `2` for `client.local_concurrency=2`,
+and returned score `0.5`. This was a fake-provider integration contract smoke,
+not a quality or MLX throughput claim; the original direct-injection evidence
+must not be reused as evidence for the integrated path.
+
 ### HTTP admission alignment follow-up — 2026-08-14
 
 The gateway's secure default `max_concurrent_runs=8` is an independent
