@@ -15,6 +15,7 @@
 |---|---|---|
 | `GET` | `/openapi.json` | API contract |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
+| `POST`/`GET` | `/v1/images/*`, `/v1/audio/*`, `/v1/moderations`, `/v1/files`, … | Explicit HTTP 501 `not_implemented` (not 404) for known OpenAI paths not yet supported |
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |

@@ -48,6 +48,21 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+# OpenAI surface paths not yet implemented: return 501 (not 404) so SDK clients
+# can distinguish "wrong path" from "gateway does not support this modality yet".
+OPENAI_NOT_IMPLEMENTED_PATHS = frozenset({
+    "/v1/images/generations",
+    "/v1/images/edits",
+    "/v1/images/variations",
+    "/v1/audio/transcriptions",
+    "/v1/audio/translations",
+    "/v1/audio/speech",
+    "/v1/moderations",
+    "/v1/files",
+    "/v1/fine_tuning/jobs",
+    "/v1/fine-tunes",
+    "/v1/engines",
+})
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -175,6 +190,18 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _reject_not_implemented_openai_path(path: str) -> None:
+    """Raise 501 for known-but-unimplemented OpenAI API paths."""
+    if path in OPENAI_NOT_IMPLEMENTED_PATHS or path.startswith("/v1/files/"):
+        raise RequestError(
+            501,
+            "not_implemented",
+            f"{path} is not implemented by this gateway; use /v1/chat/completions, "
+            f"/v1/responses, or /v1/batch/embeddings",
+            {"path": path},
+        )
 
 
 def _validate_mode(mode: Any) -> str:
@@ -332,6 +359,7 @@ def build_server(
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
             try:
+                _reject_not_implemented_openai_path(path)
                 if path == "/openapi.json":
                     self._send(OPENAPI_SPEC)
                     return
@@ -699,6 +727,7 @@ def build_server(
         def do_POST(self) -> None:  # noqa: N802
             try:
                 path = urllib.parse.urlparse(self.path).path
+                _reject_not_implemented_openai_path(path)
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
                 self._authorize(scope)
                 body = self._read_json()
