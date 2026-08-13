@@ -177,6 +177,16 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_responses_n(body: dict[str, Any]) -> int | None:
+    """OpenAI Responses ``n`` — only n=1 is supported when present."""
+    if "n" not in body:
+        return None
+    value = body.get("n")
+    if not isinstance(value, int) or isinstance(value, bool) or value != 1:
+        raise RequestError(400, "invalid_n", "n must be 1")
+    return value
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +872,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_n(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
