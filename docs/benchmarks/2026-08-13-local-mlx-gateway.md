@@ -500,9 +500,9 @@ one. Keep the safe client default at `1`; tune the server-side queue separately
 and repeat this workload after changing model, prompt budget, or server
 concurrency. This is throughput evidence only, not judge-quality evidence.
 
-### Current integrated two-item anchored smoke — 2026-08-14
+### Integrated two-item anchored smoke (pre-main-sync snapshot) — 2026-08-14
 
-The current local source trees were exercised through the complete
+The pre-main-sync local source trees were exercised through the complete
 `ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
 ModelClient -> mlx-lm` path with Gemma 4 e4b, temperature `0`, disabled
 thinking, `max_output_tokens=192`, zero retries, `local_concurrency=1`, K=`3`,
@@ -516,6 +516,26 @@ with `IRT output requires multiple criterion items; a scalar judge result is
 invalid`. No scalar padding, keyword matching, positional repair, or silent
 item synthesis was used. This is an integration and contract smoke, not proof
 of semantic quality or model promotion.
+
+### Post-protected-main integrated two-item smoke — 2026-08-14
+
+After fast-mlsirm was synchronized with protected `main` (source merge
+`bbf5d0e1d1185d4a51fae24fa95c3c18a3ea2f23`; subsequent head
+`c5727de` contains documentation only), the same complete
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm` path was rerun with Gemma 4 e4b, temperature `0`,
+disabled thinking, `max_output_tokens=192`, zero retries,
+`local_concurrency=1`, K=`3`, and two complete anchored criteria. Four
+Boolean boundary calls completed in `6.023 s` and used `1,872` provider
+tokens. The parsed categories remained `release_monitoring=2` and
+`rollback_safety=2`, with `category_method="binary_threshold"`, producing
+the required two-column polytomous row `[2, 2]` and score `1.0`.
+
+This confirms post-main synchronization integration and contract preservation,
+not semantic accuracy, bias removal, IRT sufficiency, or model promotion. The
+latency/token difference from the pre-sync snapshot is retained rather than
+normalized away; future performance comparison must use repeated runs under
+the same server and prompt configuration.
 
 ## IRT boundary
 
