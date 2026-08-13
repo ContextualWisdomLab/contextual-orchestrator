@@ -965,6 +965,9 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
     if "stream_options" not in body:
         return None
     opts = body.get("stream_options")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if opts is None:
+        return None
     if not isinstance(opts, dict):
         raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
     if stream is not True:
@@ -1063,9 +1066,12 @@ def _validate_responses_stream_options(body: dict[str, Any]) -> None:
 
     OpenAI pairs stream_options with stream=true. This gateway rejects
     stream=true on /v1/responses, so any present stream_options would be a
-    silent no-op; fail closed instead.
+    silent no-op; fail closed instead. Explicit JSON null is treat-as-omit.
     """
     if "stream_options" not in body:
+        return
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if body.get("stream_options") is None:
         return
     raise RequestError(
         400,
@@ -1492,13 +1498,14 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
     ``parallel_tool_calls=true`` fail closed with a chat migration path.
     """
     tools = body.get("tools") if "tools" in body else None
-    if isinstance(tools, list) and not tools:
+    # Empty array and explicit JSON null are omit-equivalent SDK defaults.
+    if tools is None or (isinstance(tools, list) and not tools):
         tools_present = False
     else:
         tools_present = "tools" in body
 
     functions = body.get("functions") if "functions" in body else None
-    if isinstance(functions, list) and not functions:
+    if functions is None or (isinstance(functions, list) and not functions):
         functions_present = False
     else:
         functions_present = "functions" in body
@@ -1520,7 +1527,7 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
         parallel_present = False
 
     if tools_present or functions_present or parallel_present or any(
-        key in body for key in ("tool_choice", "function_call")
+        key in body and body.get(key) is not None for key in ("tool_choice", "function_call")
     ):
         raise RequestError(
             400,
@@ -2932,13 +2939,18 @@ def build_server(
                                     "invalid_parallel_tool_calls",
                                     "parallel_tool_calls must be a boolean",
                                 )
-                            if ptc is True and "tools" not in body:
+                            if ptc is True and not tools_list:
                                 raise RequestError(
                                     400,
                                     "invalid_parallel_tool_calls",
                                     "parallel_tool_calls=true requires tools on /v1/chat/completions",
                                 )
-                    if PASSTHROUGH_TRIGGER_KEYS & set(body):
+                    # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
+                    # defaults) — do not force single-agent passthrough for null-only keys.
+                    if any(
+                        key in body and body.get(key) is not None
+                        for key in PASSTHROUGH_TRIGGER_KEYS
+                    ):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
                         started_at = time.perf_counter()
@@ -3077,17 +3089,19 @@ def build_server(
                             raise
                     if "logprobs" in body or "top_logprobs" in body:
                         # Chat route path does not return token logprobs; fail closed.
+                        # Explicit JSON null is treat-as-omit (SDK optional default).
                         if "logprobs" in body:
                             lp = body.get("logprobs")
-                            if not isinstance(lp, bool):
-                                raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
-                            if lp is True:
-                                raise RequestError(
-                                    400,
-                                    "invalid_logprobs",
-                                    "logprobs=true is not supported on /v1/chat/completions",
-                                )
-                        if "top_logprobs" in body:
+                            if lp is not None:
+                                if not isinstance(lp, bool):
+                                    raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
+                                if lp is True:
+                                    raise RequestError(
+                                        400,
+                                        "invalid_logprobs",
+                                        "logprobs=true is not supported on /v1/chat/completions",
+                                    )
+                        if "top_logprobs" in body and body.get("top_logprobs") is not None:
                             raise RequestError(
                                 400,
                                 "invalid_top_logprobs",

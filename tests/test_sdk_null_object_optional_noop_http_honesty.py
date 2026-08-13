@@ -49,6 +49,7 @@ def _server():
 
 
 def test_http_chat_accepts_null_metadata_tools_tool_choice() -> None:
+    """Null object/optionals are omit no-ops on the multi-agent chat path."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -67,6 +68,29 @@ def test_http_chat_accepts_null_metadata_tools_tool_choice() -> None:
                 "reasoning_effort": None,
                 "prediction": None,
                 "background": None,
+                "logprobs": None,
+                "top_logprobs": None,
+            },
+        )
+        assert status == 200, body
+        # Orchestration path (null tools/response_format must not force passthrough).
+        assert body.get("object") == "chat.completion", body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_accepts_null_stream_options_alone() -> None:
+    """stream_options:null must not 400 when stream is omitted (orchestration path)."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "null stream_options alone"}],
+                "stream_options": None,
             },
         )
         assert status == 200, body
@@ -89,6 +113,10 @@ def test_http_completions_accepts_null_stream_logit_bias_metadata() -> None:
                 "metadata": None,
                 "response_format": None,
                 "background": None,
+                "tools": None,
+                "tool_choice": None,
+                "functions": None,
+                "function_call": None,
             },
         )
         assert status == 200, body
@@ -113,6 +141,7 @@ def test_http_responses_accepts_null_instructions_metadata_tools() -> None:
                 "logit_bias": None,
                 "modalities": None,
                 "background": None,
+                "stream_options": None,
             },
         )
         assert status == 200, body
@@ -154,6 +183,26 @@ def test_http_chat_still_rejects_prediction_object() -> None:
         )
         assert status == 400, body
         assert "invalid_prediction" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_still_rejects_stream_options_without_stream() -> None:
+    """Non-null stream_options still requires stream=true (fail closed)."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "stream opts"}],
+                "stream_options": {"include_usage": False},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_stream_options" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
