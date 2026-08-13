@@ -478,6 +478,28 @@ evidence without retaining full model output. That push invalidates all
 predecessor review/check evidence; the calibration implementation remains the
 `17e19ec` ancestor, and the new exact head requires fresh review and checks.
 
+### Repeated local batch concurrency sweep — 2026-08-14
+
+The live `mlx-lm` worker was measured through contextual-orchestrator's
+`ModelClient.batch_chat` path with Gemma 4 e4b, eight identical short requests,
+temperature `0`, `max_output_tokens=32`, disabled thinking, and zero local or
+remote retries. The server was configured with `prompt-concurrency=1` and
+`decode-concurrency=1`. Each client-concurrency setting was repeated twice; all
+16 requests per setting completed and each run used 248 provider tokens.
+
+| client `local_concurrency` | mean throughput (req/s) | throughput stdev | mean elapsed (s) |
+| ---: | ---: | ---: | ---: |
+| 1 | `2.095` | `0.019` | `3.819` |
+| 2 | `2.083` | `0.028` | `3.840` |
+| 4 | `2.092` | `0.017` | `3.824` |
+| 8 | `2.088` | `0.025` | `3.832` |
+
+The differences are within this small-run variance and show no benefit from
+raising client concurrency while the worker's prompt/decode concurrency is
+one. Keep the safe client default at `1`; tune the server-side queue separately
+and repeat this workload after changing model, prompt budget, or server
+concurrency. This is throughput evidence only, not judge-quality evidence.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
