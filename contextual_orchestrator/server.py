@@ -177,6 +177,21 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_include_orchestration_trace(body: dict[str, Any], default: bool) -> bool:
+    """OpenAI-adjacent ``include_orchestration_trace`` — strict boolean when present."""
+    if "include_orchestration_trace" not in body:
+        return default
+    value = body.get("include_orchestration_trace")
+    if not isinstance(value, bool):
+        raise RequestError(
+            400,
+            "invalid_include_orchestration_trace",
+            "include_orchestration_trace must be a boolean",
+        )
+    return value
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -733,7 +748,9 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = _validate_include_orchestration_trace(
+                        body, security.expose_trace_by_default
+                    )
                     stream = body.get("stream", False)
                     if not isinstance(stream, bool):
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
@@ -884,7 +901,7 @@ def build_server(
                     if not isinstance(prompt, str):
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = _validate_include_orchestration_trace(body, security.expose_trace_by_default)
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace))
                     return
@@ -894,7 +911,7 @@ def build_server(
                     if not isinstance(prompt, str) or not prompt:
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = _validate_include_orchestration_trace(body, security.expose_trace_by_default)
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace), 201)
                     return
@@ -906,7 +923,7 @@ def build_server(
                     if not isinstance(prompts, list) or not prompts:
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = _validate_include_orchestration_trace(body, security.expose_trace_by_default)
                     evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
