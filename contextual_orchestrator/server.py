@@ -183,16 +183,78 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
-def _validate_messages(messages: Any) -> list[dict[str, str]]:
+def _validate_assistant_tool_calls(tool_calls: Any) -> list[dict[str, Any]]:
+    """OpenAI assistant ``tool_calls`` array shape for multi-turn tool history."""
+    if not isinstance(tool_calls, list) or not tool_calls:
+        raise RequestError(
+            400,
+            "invalid_tool_calls",
+            "assistant tool_calls must be a non-empty array when present",
+        )
+    validated: list[dict[str, Any]] = []
+    for call in tool_calls:
+        if not isinstance(call, dict):
+            raise RequestError(400, "invalid_tool_calls", "each tool_call must be an object")
+        call_id = call.get("id")
+        if not isinstance(call_id, str) or not call_id.strip():
+            raise RequestError(400, "invalid_tool_calls", "tool_call.id must be a non-empty string")
+        call_type = call.get("type", "function")
+        if call_type != "function":
+            raise RequestError(400, "invalid_tool_calls", "tool_call.type must be function")
+        function = call.get("function")
+        if not isinstance(function, dict):
+            raise RequestError(400, "invalid_tool_calls", "tool_call.function must be an object")
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_tool_calls",
+                "tool_call.function.name must be a non-empty string",
+            )
+        arguments = function.get("arguments")
+        if arguments is not None and not isinstance(arguments, str):
+            raise RequestError(
+                400,
+                "invalid_tool_calls",
+                "tool_call.function.arguments must be a string when present",
+            )
+        validated.append(call)
+    return validated
+
+
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
+    """Validate chat messages; allow assistant content null when tool_calls present.
+
+    OpenAI multi-turn tool loops send assistant messages with ``content: null``
+    (or omitted) alongside a non-empty ``tool_calls`` array. Accept that shape
+    for schema parity; the orchestrated path still normalizes content to a
+    string for multi-agent steps while passthrough preserves the full message.
+    """
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
-    validated: list[dict[str, str]] = []
+    validated: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
         content = message.get("content")
-        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        tool_calls = message.get("tool_calls")
+        if role == "assistant" and tool_calls is not None:
+            _validate_assistant_tool_calls(tool_calls)
+            if content is None:
+                content = ""
+            elif not isinstance(content, str):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "assistant content must be a string or null when tool_calls is present",
+                )
+            out: dict[str, Any] = {"role": role, "content": content, "tool_calls": tool_calls}
+            validated.append(out)
+            continue
+        if not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
         validated.append({"role": role, "content": content})
     return validated
@@ -713,9 +775,23 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
-                    if PASSTHROUGH_TRIGGER_KEYS & set(body):
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
+                    # Validate messages first so tool_calls shapes and null-content
+                    # assistant rules fail closed with 400 before proxy/orchestration.
+                    messages_preview = body.get("messages")
+                    if isinstance(messages_preview, list):
+                        _validate_messages(messages_preview)
+                    has_tool_history = False
+                    if isinstance(messages_preview, list):
+                        for msg in messages_preview:
+                            if isinstance(msg, dict) and (
+                                msg.get("tool_calls") is not None or msg.get("role") == "tool"
+                            ):
+                                has_tool_history = True
+                                break
+                    if PASSTHROUGH_TRIGGER_KEYS & set(body) or has_tool_history:
+                        # response_format / tools / multi-turn tool history cannot be
+                        # merged across multi-agent verifiers; proxy to one agent.
+
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
