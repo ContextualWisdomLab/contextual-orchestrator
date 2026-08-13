@@ -177,6 +177,16 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_seed(body: dict[str, Any]) -> int | None:
+    """OpenAI ``seed`` — integer when present (float/bool rejected fail-closed)."""
+    if "seed" not in body:
+        return None
+    seed = body.get("seed")
+    if not isinstance(seed, int) or isinstance(seed, bool):
+        raise RequestError(400, "invalid_seed", "seed must be an integer")
+    return seed
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +723,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_seed(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
