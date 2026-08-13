@@ -45,7 +45,7 @@ ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
-ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "encoding_format", "dimensions", "user", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -175,6 +175,47 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
+    """OpenAI embeddings ``encoding_format`` — float or base64 when present."""
+    if "encoding_format" not in body:
+        return None
+    encoding_format = body.get("encoding_format")
+    if encoding_format not in {"float", "base64"}:
+        raise RequestError(
+            400,
+            "invalid_encoding_format",
+            "encoding_format must be float or base64",
+        )
+    return encoding_format
+
+
+def _validate_embeddings_dimensions(body: dict[str, Any]) -> int | None:
+    """OpenAI embeddings ``dimensions`` — positive integer when present."""
+    if "dimensions" not in body:
+        return None
+    dimensions = body.get("dimensions")
+    if not isinstance(dimensions, int) or isinstance(dimensions, bool) or dimensions < 1:
+        raise RequestError(
+            400,
+            "invalid_dimensions",
+            "dimensions must be a positive integer",
+        )
+    return dimensions
+
+
+def _validate_embeddings_user(body: dict[str, Any]) -> str | None:
+    """OpenAI embeddings ``user`` — non-empty string ≤64 when present."""
+    if "user" not in body:
+        return None
+    user = body.get("user")
+    if not isinstance(user, str) or not user.strip():
+        raise RequestError(400, "invalid_user", "user must be a non-empty string")
+    if len(user) > 64:
+        raise RequestError(400, "invalid_user", "user must be at most 64 characters")
+    return user
 
 
 def _validate_mode(mode: Any) -> str:
@@ -799,6 +840,9 @@ def build_server(
                     return
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
+                    _validate_embeddings_encoding_format(body)
+                    _validate_embeddings_dimensions(body)
+                    _validate_embeddings_user(body)
                     inputs = _validate_embeddings_inputs(body)
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     attribution = _embeddings_attribution(body)
