@@ -309,6 +309,17 @@ failure, not a transport success; it remains in the denominator and is not
 coerced into a category. This is integrated contract evidence only, not a
 claim of high recall, unbiasedness, or sufficient IRT sample size.
 
+### Structured failure evidence follow-up — 2026-08-14
+
+The same integrated safe-case failure was rerun after fast-mlsirm
+`d1eca0c2fed89991e647802f0b27a91f0f6fe2bd` added bounded failure evidence to
+`JudgeFormatError`. Through the real `_FastMLSIJudgeAdapter` and the same
+contextual-orchestrator MLX route, the failure now records
+`semantic_status=non_monotone`, `parse_status=passed`, `8/8` completed calls,
+`8` trace steps, `2,639` provider tokens, and `2.88 s` elapsed time. The
+evidence is retained as a failed calibration comparison; it is not converted
+to an IRT category and is not a semantic-quality score.
+
 The integrated path was then checked separately after an audit found that the
 contextual `_FastMLSIJudgeAdapter` did not expose the gateway client capability
 used by the fast judge. With contextual commit `d82e592` and exact fast judge
