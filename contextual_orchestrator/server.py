@@ -177,6 +177,34 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_responses_logprobs(body: dict[str, Any]) -> dict[str, Any]:
+    """OpenAI Responses ``logprobs`` (bool) and ``top_logprobs`` (int 0–20)."""
+    out: dict[str, Any] = {}
+    if "logprobs" in body:
+        logprobs = body.get("logprobs")
+        if not isinstance(logprobs, bool):
+            raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
+        out["logprobs"] = logprobs
+    if "top_logprobs" in body:
+        top_logprobs = body.get("top_logprobs")
+        if not isinstance(top_logprobs, int) or isinstance(top_logprobs, bool):
+            raise RequestError(400, "invalid_top_logprobs", "top_logprobs must be an integer")
+        if top_logprobs < 0 or top_logprobs > 20:
+            raise RequestError(
+                400,
+                "invalid_top_logprobs",
+                "top_logprobs must be between 0 and 20",
+            )
+        if body.get("logprobs") is not True:
+            raise RequestError(
+                400,
+                "invalid_top_logprobs",
+                "top_logprobs requires logprobs to be true",
+            )
+        out["top_logprobs"] = top_logprobs
+    return out
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +890,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_logprobs(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
