@@ -177,6 +177,30 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_tool_choice_requires_tools(body: dict[str, Any]) -> None:
+    """OpenAI requires ``tools`` when ``tool_choice`` is set (and functions for function_call).
+
+    Prevents opaque provider errors when clients set tool_choice without declaring tools.
+    """
+    if "tool_choice" in body:
+        tools = body.get("tools")
+        if not isinstance(tools, list) or not tools:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice requires a non-empty tools array",
+            )
+    if "function_call" in body:
+        functions = body.get("functions")
+        if not isinstance(functions, list) or not functions:
+            raise RequestError(
+                400,
+                "invalid_function_call",
+                "function_call requires a non-empty functions array",
+            )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +737,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_tool_choice_requires_tools(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +887,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_tool_choice_requires_tools(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
