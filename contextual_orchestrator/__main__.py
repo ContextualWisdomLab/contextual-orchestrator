@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import argparse
+from dataclasses import replace
 import json
 import os
 import sys
@@ -136,6 +137,10 @@ def main() -> None:
                         help="Default provider output token cap (default: 2048).")
     parser.add_argument("--local-concurrency", type=_positive_int, default=1,
                         help="Concurrent requests for explicit mlx:// local batch work (default: 1).")
+    parser.add_argument("--route-text-length-threshold", type=_positive_int, default=None,
+                        help="Auto-mode minimum prompt length that can trigger conduct instead of route.")
+    parser.add_argument("--conduct-hint-threshold", type=_positive_int, default=None,
+                        help="Auto-mode hint-count minimum that can trigger conduct instead of route.")
     parser.add_argument("--chat-template-args", type=_json_object, default={},
                         help="JSON kwargs forwarded to local mlx-lm chat templates, e.g. '{\"enable_thinking\":false}'.")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
@@ -164,6 +169,14 @@ def main() -> None:
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
     )
+
+    if args.conduct_hint_threshold is not None or args.route_text_length_threshold is not None:
+        overrides: dict[str, int] = {}
+        if args.conduct_hint_threshold is not None:
+            overrides["conduct_hint_threshold"] = args.conduct_hint_threshold
+        if args.route_text_length_threshold is not None:
+            overrides["route_text_length_threshold"] = args.route_text_length_threshold
+        orchestrator.policy = replace(orchestrator.policy, **overrides)
 
     if args.eval:
         print(json.dumps(orchestrator.compare_to_baseline(args.eval, mode=args.mode), ensure_ascii=False, indent=2))

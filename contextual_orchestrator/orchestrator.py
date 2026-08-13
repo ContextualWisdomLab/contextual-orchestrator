@@ -67,6 +67,64 @@ DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
 MAX_MODEL_JUDGE_REPLY_CHARACTERS = 32_000
 
 
+@dataclass(frozen=True)
+class FastMLSIRMJudgeComponents:
+    """Resolved fast-mlsirm symbols used by model verification."""
+
+    judge_cls: type[Any]
+    criterion_cls: type[Any]
+    format_error: type[Exception]
+
+
+def _resolve_fast_mlsirm_components() -> FastMLSIRMJudgeComponents | None:
+    """Resolve the fast-mlsirm adapter symbols without importing unconditionally."""
+    try:
+        from fast_mlsirm import ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError
+    except ModuleNotFoundError:
+        return None
+    except Exception:
+        return None
+    return FastMLSIRMJudgeComponents(ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError)
+
+
+@dataclass
+class _FastMLSIJudgeAdapter:
+    """Adapter that exposes `complete()` for `ContextualOrchestratorJudge`."""
+
+    orchestrator: "TaskOrchestrator"
+    text: str
+    judge: str
+    served_agent_id: str | None = None
+    mode: str = "auto"
+
+    def complete(self, messages: list[ChatMessage]) -> dict[str, Any]:
+        output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="verifier")
+        self.served_agent_id = served_id
+        trace = [
+            {
+                "id": 0,
+                "role": "verifier",
+                "agent_id": served_id,
+                "subtask": "LLM-as-a-Judge evaluation",
+                "output": output,
+            }
+        ]
+        if usage is not None:
+            trace[0]["usage"] = usage
+        return {
+            "answer": output,
+            "mode": self.mode,
+            "trace": trace,
+        }
+
+    def _agent(self) -> ModelAgent:
+        return self.orchestrator._agent(self.judge)
+
+
+def _fast_mlsirm_judge_enabled() -> bool:
+    return os.getenv("CONTEXTUAL_ORCHESTRATOR_USE_FAST_MLSIRM_JUDGE", "1").strip().lower() not in {"0", "false", "no", "off"}
+
+
 def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
     """Parse one exact, duplicate-free model-judge verdict."""
     if not isinstance(reply, str) or len(reply) > MAX_MODEL_JUDGE_REPLY_CHARACTERS:
@@ -190,6 +248,7 @@ class OrchestrationPolicy:
 
     route_p95_seconds: float = 2.5
     conduct_hint_threshold: int = 2
+    route_text_length_threshold: int = 700
     verifier_required: bool = True
     # Conductor-style planning (arXiv:2512.04388): "generated" asks the planner model to
     # emit the workflow (subtasks, worker assignment, access lists); "template" keeps the
@@ -203,12 +262,15 @@ class OrchestrationPolicy:
     def __post_init__(self) -> None:
         if self.verifier_judge != "model":
             raise ValueError("keyword-based verifier_judge modes are unsupported; use 'model'")
+        if type(self.route_text_length_threshold) is not int or self.route_text_length_threshold < 1:
+            raise ValueError("route_text_length_threshold must be a positive integer")
 
     def as_dict(self) -> dict[str, Any]:
         """Return the API-safe policy snapshot for workflow records."""
         return {
             "route_p95_seconds": self.route_p95_seconds,
             "conduct_hint_threshold": self.conduct_hint_threshold,
+            "route_text_length_threshold": self.route_text_length_threshold,
             "verifier_required": self.verifier_required,
             "workflow_planning": self.workflow_planning,
             "verifier_judge": self.verifier_judge,
@@ -1206,7 +1268,6 @@ class TaskOrchestrator:
         "검증",
         "논문",
     )
-
     def __init__(
         self,
         agents: list[ModelAgent],
@@ -2018,7 +2079,7 @@ class TaskOrchestrator:
     def _needs_workflow(self, text: str) -> bool:
         lowered = text.lower()
         hits = sum(1 for hint in self.COMPLEX_HINTS if hint in lowered)
-        return hits >= self.policy.conduct_hint_threshold or len(text) > 700
+        return hits >= self.policy.conduct_hint_threshold or len(text) > self.policy.route_text_length_threshold
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
@@ -2033,6 +2094,61 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
+        if _fast_mlsirm_judge_enabled():
+            components = _resolve_fast_mlsirm_components()
+            if components is not None:
+                try:
+                    judge = self._select_agent(task, "verifier")
+                    judge_adapter = _FastMLSIJudgeAdapter(self, task, judge.id, mode=self.policy.workflow_planning)
+                    fast_judge = components.judge_cls(
+                        judge_adapter,
+                        mode=self.policy.workflow_planning,
+                        accept_threshold=0.7,
+                    )
+                    result = fast_judge.judge(
+                        task=task,
+                        answer=verifier_output,
+                        criteria=(
+                            components.criterion_cls(
+                                criterion_id="evidence_quality",
+                                description="Does the verifier output identify concrete evidence and caveats with actionable impact?",
+                                weight=1.0,
+                            ),
+                            components.criterion_cls(
+                                criterion_id="risk_signal",
+                                description="Does the verifier output mention substantive risks and constraints with support?",
+                                weight=1.0,
+                            ),
+                        ),
+                        accept_threshold=0.7,
+                    )
+                    verification = {
+                        "accepted": result.accepted,
+                        "reason": result.rationale,
+                        "verifier_output": verifier_output,
+                        "judge": "model",
+                    }
+                    if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
+                        verification["judge_agent_id"] = judge_adapter.served_agent_id
+                    if result.usage:
+                        verification["judge_usage"] = result.usage
+                    verification["judge_orchestration_mode"] = result.orchestration_mode
+                    return verification
+                except components.format_error:
+                    return {
+                        "accepted": False,
+                        "reason": "model judge returned an invalid structured verdict; verification failed closed",
+                        "verifier_output": verifier_output,
+                        "judge": "model",
+                    }
+                except Exception:  # noqa: BLE001 - judge failure must not break the request
+                    return {
+                        "accepted": False,
+                        "reason": "model judge unavailable; verification failed closed",
+                        "verifier_output": verifier_output,
+                        "judge": "model",
+                    }
+
         judge = self._select_agent(task, "verifier")
         try:
             reply, served_id, usage = self._invoke(judge, [

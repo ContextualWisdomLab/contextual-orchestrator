@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from dataclasses import replace
 from pathlib import Path
+import contextual_orchestrator.orchestrator as orchestrator_module
 import sys
 from unittest.mock import patch
 
@@ -126,6 +127,94 @@ def test_judge_failure_fails_closed() -> None:
     assert result["verification"]["judge"] == "model"
     assert "failed closed" in result["verification"]["reason"]
     assert result["answer"] == "step-output(2)"
+
+
+def test_fast_mlsirm_path_is_used_when_available() -> None:
+    class _FakeJudge:
+        def __init__(self, orchestrator, mode: str = "route", accept_threshold: float = 0.7) -> None:
+            self.adapter = orchestrator
+            self.mode = mode
+            self.accept_threshold = accept_threshold
+
+        def judge(self, **_) -> object:
+            self.adapter.complete([{"role": "user", "content": "ping"}])
+            return type("Result", (), {
+                "accepted": True,
+                "rationale": "structured score exceeded threshold",
+                "usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+                "orchestration_mode": self.mode,
+            })
+
+    class _FormatError(Exception):
+        pass
+
+    class _Criterion:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            self.criterion_id = criterion_id
+            self.description = description
+            self.weight = weight
+
+    orchestrator, _ = _orch("unused")
+    orchestrator.policy = replace(orchestrator.policy, workflow_planning="conduct")
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_FakeJudge,
+            criterion_cls=_Criterion,
+            format_error=_FormatError,
+        ),
+    ):
+        with patch.object(
+            orchestrator,
+            "_invoke",
+            return_value=("judge completion", "backup_judge", {"total_tokens": 7}),
+        ):
+            result = orchestrator._model_judge_verification(
+                "task",
+                {"verifier_output": "report"},
+            )
+
+    assert result["accepted"] is True
+    assert result["judge"] == "model"
+    assert result["judge_agent_id"] == "backup_judge"
+    assert result["judge_orchestration_mode"] == "conduct"
+    assert result["judge_usage"] == {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7}
+    assert result["reason"] == "structured score exceeded threshold"
+
+
+def test_fast_mlsirm_format_error_fails_closed() -> None:
+    class _FormatError(Exception):
+        pass
+
+    class _FlakyJudge:
+        def __init__(self, _orchestrator, mode: str = "route", accept_threshold: float = 0.7) -> None:
+            del mode, accept_threshold
+
+        def judge(self, **_) -> None:
+            raise _FormatError("invalid structured verdict")
+
+    class _Criterion:
+        def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+            self.criterion_id = criterion_id
+            self.description = description
+            self.weight = weight
+
+    orchestrator, _ = _orch("unused")
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=orchestrator_module.FastMLSIRMJudgeComponents(
+            judge_cls=_FlakyJudge,
+            criterion_cls=_Criterion,
+            format_error=_FormatError,
+        ),
+    ):
+        result = orchestrator._model_judge_verification("task", {"verifier_output": "report"})
+
+    assert result["accepted"] is False
+    assert result["judge"] == "model"
+    assert result["reason"] == "model judge returned an invalid structured verdict; verification failed closed"
 
 
 @pytest.mark.parametrize(

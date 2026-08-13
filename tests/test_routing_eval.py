@@ -10,6 +10,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from dataclasses import replace
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -63,6 +64,25 @@ def test_eval_does_not_persist_runs() -> None:
     orchestrator = _orch()
     orchestrator.compare_to_baseline(["measure me only"], mode="conduct")
     assert orchestrator._workflow_runs == {}
+
+
+def test_auto_route_uses_length_threshold() -> None:
+    orchestrator = _orch()
+    orchestrator.policy = replace(
+        orchestrator.policy,
+        route_text_length_threshold=10_000,
+        conduct_hint_threshold=99,
+    )
+
+    prompt = "x" * 2000
+    assert orchestrator.would_route([{"role": "user", "content": prompt}], mode="auto")
+
+    orchestrator.policy = replace(
+        orchestrator.policy,
+        route_text_length_threshold=1,
+        conduct_hint_threshold=99,
+    )
+    assert not orchestrator.would_route([{"role": "user", "content": prompt}], mode="auto")
 
 
 if __name__ == "__main__":
