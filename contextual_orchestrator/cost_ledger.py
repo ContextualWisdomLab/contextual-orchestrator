@@ -222,6 +222,8 @@ class UsageRecord:
 
     def as_dict(self) -> Dict[str, Any]:
         """Flatten the record (attribution inlined) for JSON + SQL storage."""
+        # Execution identity is evidence of what ran — never a client-chosen tag.
+        # Account/service/team/group/company remain descriptive attribution.
         row = {
             "usage_record_id": self.usage_record_id,
             "created_at": self.created_at,
@@ -583,12 +585,12 @@ class SqlLedgerStore:
         ph = self._placeholder()
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
+            cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: only the DB-API placeholder char is interpolated; the value is bound.
                 f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
                 (name,),
             )
             if cur.fetchone() is None:
-                cur.execute(
+                cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: only DB-API placeholder chars are interpolated; values are bound.
                     "INSERT INTO cost_attribution_dimensions "
                     f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
                     (name, label, order),
@@ -602,7 +604,7 @@ class SqlLedgerStore:
         placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(
+        cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: columns are the fixed _USAGE_COLUMNS constant; values are bound.
             f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
@@ -622,7 +624,7 @@ class SqlLedgerStore:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.  # nosemgrep -- sqlalchemy-execute-raw-query FP: fixed columns and clause templates; all values are bound.
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 
@@ -681,14 +683,31 @@ class CostLedger:
     ) -> UsageRecord:
         """Compute cost, build a :class:`UsageRecord`, persist it, and return it."""
         if isinstance(attribution, dict) or attribution is None:
-            dims = AttributionDimensions.from_mapping(attribution)
+            # Strip caller-controlled execution identity before mapping so a
+            # client cannot spoof model/provider rollups (buyer-bill honesty).
+            if isinstance(attribution, dict):
+                cleaned = {
+                    key: value
+                    for key, value in attribution.items()
+                    if key not in {"model_name", "provider", "upstream_api"}
+                }
+            else:
+                cleaned = None
+            dims = AttributionDimensions.from_mapping(cleaned)
         else:
-            dims = attribution
-        # Keep the model_name dimension aligned with the served model unless the
-        # caller pinned it explicitly, and default the provider dimension too.
-        if dims.model_name == UNATTRIBUTED and model:
+            dims = AttributionDimensions(
+                account=attribution.account,
+                service=attribution.service,
+                upstream_api=UNATTRIBUTED,
+                model_name=UNATTRIBUTED,
+                team=attribution.team,
+                group=attribution.group,
+                company=attribution.company,
+            )
+        # Execution identity always wins — descriptive dimensions stay as-is.
+        if model:
             dims.model_name = model
-        if dims.upstream_api == UNATTRIBUTED and provider:
+        if provider:
             dims.upstream_api = provider
 
         cost_amount, currency = self.price_book.compute_cost(
