@@ -33,6 +33,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
     "response_format", "tools", "tool_choice", "functions", "function_call",
     "modalities", "prediction", "store", "service_tier",
+    "stream_options",
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
@@ -175,6 +176,36 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+def _validate_stream_options(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI ``stream_options`` — include_usage and include_obfuscation booleans.
+
+    Applied on chat completions and Responses when present.
+    """
+    if "stream_options" not in body:
+        return None
+    stream_options = body.get("stream_options")
+    if not isinstance(stream_options, dict):
+        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    allowed = {"include_usage", "include_obfuscation"}
+    unknown = sorted(set(stream_options) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported keys",
+            {"fields": unknown},
+        )
+    for key in ("include_usage", "include_obfuscation"):
+        if key in stream_options and not isinstance(stream_options.get(key), bool):
+            raise RequestError(
+                400,
+                "invalid_stream_options",
+                f"stream_options.{key} must be a boolean",
+            )
+    return stream_options
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +744,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_stream_options(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +894,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_stream_options(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
