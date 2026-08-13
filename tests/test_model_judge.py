@@ -11,6 +11,7 @@ from dataclasses import replace
 from pathlib import Path
 import contextual_orchestrator.orchestrator as orchestrator_module
 import sys
+from types import SimpleNamespace
 from unittest.mock import patch
 
 import pytest
@@ -50,6 +51,42 @@ def _orch(judge_reply: str) -> tuple[TaskOrchestrator, _ScriptedClient]:
     return orchestrator, client
 
 
+class _ScriptedCriterion:
+    def __init__(self, criterion_id: str, description: str, weight: float) -> None:
+        self.criterion_id = criterion_id
+        self.description = description
+        self.weight = weight
+
+
+class _ScriptedFastJudge:
+    def __init__(self, adapter, *, mode: str, accept_threshold: float) -> None:
+        self.adapter = adapter
+        self.mode = mode
+        self.accept_threshold = accept_threshold
+
+    def judge(self, *, task: str, answer: str, criteria: tuple) -> object:
+        del task, answer, criteria
+        completion = self.adapter.complete([{"role": "user", "content": "judge"}], mode=self.mode)
+        decision, reason = _parse_model_judge_reply(completion["answer"])
+        accepted = decision == "ACCEPT"
+        return SimpleNamespace(
+            accepted=accepted,
+            rationale=reason,
+            criterion_scores={"evidence_quality": 1.0, "risk_signal": 1.0},
+            usage=completion.get("usage"),
+            orchestration_mode=self.mode,
+            to_irt_row=lambda *, item_type: (int(accepted), int(accepted)),
+        )
+
+
+def _scripted_fast_components() -> orchestrator_module.FastMLSIRMJudgeComponents:
+    return orchestrator_module.FastMLSIRMJudgeComponents(
+        judge_cls=_ScriptedFastJudge,
+        criterion_cls=_ScriptedCriterion,
+        format_error=ValueError,
+    )
+
+
 MESSAGES = [{"role": "user", "content": "design and verify the migration plan"}]
 
 
@@ -72,7 +109,12 @@ def test_legacy_keyword_policy_is_rejected() -> None:
 
 def test_structured_model_judge_accepts() -> None:
     orchestrator, client = _orch('{"decision":"ACCEPT","reason":"The report supports the answer."}')
-    result = orchestrator.conduct(MESSAGES)
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is True
     assert result["verification"]["judge"] == "model"
     assert client.calls == 5
@@ -81,7 +123,12 @@ def test_structured_model_judge_accepts() -> None:
 
 def test_structured_model_judge_rejects() -> None:
     orchestrator, _ = _orch('{"decision":"REJECT","reason":"The migration plan loses writes."}')
-    result = orchestrator.conduct(MESSAGES)
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is False
     assert result["verification"]["judge"] == "model"
     assert result["answer"] == "step-output(2)"
@@ -89,7 +136,12 @@ def test_structured_model_judge_rejects() -> None:
 
 def test_plain_keyword_reply_is_rejected() -> None:
     orchestrator, _ = _orch("ACCEPT because the report looks fine")
-    result = orchestrator.conduct(MESSAGES)
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is False
     assert "invalid structured verdict" in result["verification"]["reason"]
     assert result["answer"] == "step-output(2)"
@@ -102,7 +154,12 @@ def test_judge_rejects_wrapped_extra_and_duplicate_json() -> None:
         '{"decision":"ACCEPT","decision":"REJECT","reason":"ambiguous"}',
     ):
         orchestrator, _ = _orch(reply)
-        result = orchestrator.conduct(MESSAGES)
+        with patch.object(
+            orchestrator_module,
+            "_resolve_fast_mlsirm_components",
+            return_value=_scripted_fast_components(),
+        ):
+            result = orchestrator.conduct(MESSAGES)
         assert result["verification"]["accepted"] is False
         assert "invalid structured verdict" in result["verification"]["reason"]
 
@@ -122,7 +179,12 @@ def test_judge_failure_fails_closed() -> None:
         [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing", "planning", "research"))],
         client=client,
     )
-    result = orchestrator.conduct(MESSAGES)
+    with patch.object(
+        orchestrator_module,
+        "_resolve_fast_mlsirm_components",
+        return_value=_scripted_fast_components(),
+    ):
+        result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is False
     assert result["verification"]["judge"] == "model"
     assert "failed closed" in result["verification"]["reason"]
@@ -350,26 +412,19 @@ def test_model_judge_parser_rejects_oversized_reply() -> None:
         _parse_model_judge_reply("x" * 32_001)
 
 
-def test_model_judge_records_failover_agent_and_usage() -> None:
+def test_missing_fast_mlsirm_does_not_use_a_direct_judge_fallback() -> None:
     orchestrator, _ = _orch("unused")
-    judge = orchestrator.agents[0]
-    with patch.object(orchestrator, "_select_agent", return_value=judge), patch.object(
-        orchestrator,
-        "_invoke",
-        return_value=(
-            '{"decision":"ACCEPT","reason":"The report supports the answer."}',
-            "backup_judge",
-            {"total_tokens": 7},
-        ),
-    ):
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None), patch.object(
+        orchestrator, "_invoke"
+    ) as invoke:
         result = orchestrator._model_judge_verification(
             "task",
             {"verifier_output": "report"},
         )
 
-    assert result["accepted"] is True
-    assert result["judge_agent_id"] == "backup_judge"
-    assert result["judge_usage"] == {"total_tokens": 7}
+    assert result["accepted"] is False
+    assert result["reason"] == "fast-mlsirm judge is unavailable; verification failed closed"
+    invoke.assert_not_called()
 
 
 if __name__ == "__main__":
