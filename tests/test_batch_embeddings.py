@@ -56,7 +56,16 @@ def _serve():
             provider_name="mock",
             tags=("reasoning", "coding", "writing"),
             priority=1,
-        )
+        ),
+        # Contract fixture model must be pool-matched (embeddings pool honesty).
+        ModelAgent(
+            id="embedding_worker",
+            model="text-embedding-test",
+            base_url="mock://embed",
+            provider_name="mock",
+            tags=("writing",),
+            priority=2,
+        ),
     ]
     orchestrator = TaskOrchestrator(agents)
     config = InMemoryConfigStore()
