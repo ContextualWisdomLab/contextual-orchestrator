@@ -43,6 +43,7 @@ ALLOWED_CHAT_KEYS = {
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "truncation",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -175,6 +176,29 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+
+ALLOWED_TRUNCATION_VALUES = {"auto", "disabled"}
+
+
+def _validate_truncation(body: dict[str, Any]) -> str | None:
+    """OpenAI Responses ``truncation`` — auto|disabled when present.
+
+    Controls context-window overflow handling: drop early items (auto) or
+    fail closed (disabled). Chat Completions has no equivalent field.
+    """
+    if "truncation" not in body:
+        return None
+    value = body.get("truncation")
+    if value not in ALLOWED_TRUNCATION_VALUES:
+        raise RequestError(
+            400,
+            "invalid_truncation",
+            "truncation must be auto or disabled",
+        )
+    return value
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +886,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_truncation(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
