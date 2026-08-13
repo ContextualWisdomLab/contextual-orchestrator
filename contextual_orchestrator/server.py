@@ -36,6 +36,8 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
+# Provider-native sampling diagnostics that multi-agent merge cannot reconstruct.
+PASSTHROUGH_PROVIDER_DIAGNOSTIC_KEYS = frozenset({"logprobs", "top_logprobs", "logit_bias"})
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
     "include_orchestration_trace", "stream", "attribution", "routing",
@@ -175,6 +177,26 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _needs_provider_passthrough(body: dict[str, Any]) -> bool:
+    """True when the request must be proxied to one agent without multi-agent merge.
+
+    Tools/response_format already trigger passthrough. logprobs, top_logprobs, and
+    logit_bias are provider-native diagnostics that cannot be reconstructed after
+    orchestration, so they also force single-agent passthrough when meaningfully set
+    (logprobs true, top_logprobs present, or non-empty logit_bias).
+    """
+    if PASSTHROUGH_TRIGGER_KEYS & set(body):
+        return True
+    if body.get("logprobs") is True:
+        return True
+    if body.get("top_logprobs") is not None:
+        return True
+    logit_bias = body.get("logit_bias")
+    if isinstance(logit_bias, dict) and logit_bias:
+        return True
+    return False
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,8 +735,8 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
-                    if PASSTHROUGH_TRIGGER_KEYS & set(body):
-                        # response_format / tools cannot be merged across agents;
+                    if _needs_provider_passthrough(body):
+                        # response_format / tools / logprobs cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
                         started_at = time.perf_counter()
                         proxied = self._run(

@@ -95,6 +95,50 @@ def _serve() -> tuple[object, int, str]:
     return server, server.server_address[1], token
 
 
+def test_needs_provider_passthrough_for_logprobs_and_logit_bias() -> None:
+    from contextual_orchestrator.server import _needs_provider_passthrough
+
+    assert _needs_provider_passthrough({"logprobs": True}) is True
+    assert _needs_provider_passthrough({"logprobs": False}) is False
+    assert _needs_provider_passthrough({"top_logprobs": 2}) is True
+    assert _needs_provider_passthrough({"logit_bias": {"50256": -100}}) is True
+    assert _needs_provider_passthrough({"logit_bias": {}}) is False
+    assert _needs_provider_passthrough({"tools": []}) is True
+    assert _needs_provider_passthrough({"messages": []}) is False
+
+
+def test_http_logprobs_true_forces_passthrough() -> None:
+    """Buyer path: logprobs cannot be reconstructed after multi-agent merge."""
+    server, port, token = _serve()
+    url = f"http://127.0.0.1:{port}/v1/chat/completions"
+    try:
+        status, body = _post(
+            url,
+            {
+                "messages": [{"role": "user", "content": "score tokens"}],
+                "logprobs": True,
+                "top_logprobs": 1,
+            },
+            token,
+        )
+        status_bias, body_bias = _post(
+            url,
+            {
+                "messages": [{"role": "user", "content": "bias tokens"}],
+                "logit_bias": {"50256": -100},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+
+    assert status == 200, body
+    assert body["object"] == "chat.completion"
+    assert body.get("echo", {}).get("logprobs") is True
+    assert status_bias == 200, body_bias
+    assert body_bias.get("echo", {}).get("logit_bias") == {"50256": -100}
+
+
 def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
