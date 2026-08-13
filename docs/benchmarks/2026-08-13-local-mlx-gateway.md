@@ -624,6 +624,29 @@ callers retune within the gateway bound after changing model, server queue, or
 prompt budget. This is a workload-specific throughput result, not a quality
 claim.
 
+### Zotero/OA literature audit and linked judge head — 2026-08-14
+
+The local Zotero Desktop reports version `9.0.6` and exposes read-only Local
+API reads. Jones--Loe item `CWY355RP` records `Open access` rights and has no
+child attachment; Iannario item `MYPNHHWJ` records `Creative Commons
+Attribution 4.0 International` rights and also has no child attachment. The
+local Connector API successfully created the Cao et al. citation as item
+`393S5NXZ`, but its all-rights-reserved record did not authorize copying the
+PDF. Item PATCH and `/api/local/authorize` were unavailable, so no local file
+upload was attempted.
+
+OpenAlex/Unpaywall/Crossref metadata support Jones--Loe CC BY gold OA and
+Iannario CC BY 4.0. The official SAGE download returned anti-bot `403` and the
+official De Gruyter download returned a WAF `202` with zero bytes. Those
+responses, crawler text, archived bytes without independently verified
+provenance, reconstructed PDFs, and unauthorized mirrors are not counted as
+original OA attachments. This keeps the PDF requirement open without
+misrepresenting retrieval failure as a licensing failure.
+
+The linked fast-mlsirm literature/calibration documentation is at exact head
+`e6c457d36f483b7580e56e5825528c70506dd780`. Its evidence remains a bounded
+calibration input, not an unbiasedness or IRT-readiness claim.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple

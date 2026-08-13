@@ -275,8 +275,8 @@ and `2,422/3,620` tokens, while safe K=5/K=7 remained non-monotone failures.
 | A live bearer-authenticated gateway probe on the same Llama 3B answer and two criteria at `K=5` produced direct `1.0000` (`4/4`, accepted) versus cumulative-threshold `0.0000` (`0/0`, rejected), with both strict parses valid and one contextual-orchestrator trace step each. | Treat this as paired method sensitivity, not as a positive-bias conclusion. Keep method/K/trace/usage in the denominator, compare balanced held-out cases, and retain the multi-item polytomous validator; never repair the disagreement lexically or positionally. | New evidence 2026-08-12; calibration required |
 | A fresh two-case 3B MLX probe through contextual-orchestrator produced direct scores of `0.5 -> 1.0 -> 1.0` for a safe release plan and `0.0 -> 0.0 -> 0.3333` for an unsafe plan at K `2,5,7`; cumulative thresholds parsed only at K=5 and failed JSON/monotonicity at K=2/7. | Preserve all 12 comparisons, including four strict-parse failures, in the denominator. Do not promote direct or cumulative to an unbiased default; add an opt-in bounded binary-threshold decomposition and compare its latency, calls, tokens, semantic recall, and human/gold agreement on held-out paired cases. | New evidence 2026-08-14; Goal/ADR expanded, calibration remains required |
 | The binary-threshold follow-up reduced each boundary to a Boolean contextual-orchestrator call, but the safe case still failed monotonicity at K=5/7 while the unsafe case parsed at score `0.0` using 8/12 calls and `2,606/3,940` tokens. | Keep binary decomposition experimental and fail-closed. Record its call budget and semantic under-recognition; do not short-circuit, synthesize, or repair higher categories without an explicit ordinal measurement design and held-out gold evidence. | New evidence 2026-08-14; method implemented, calibration required |
-| OA metadata does not guarantee that the original PDF can be downloaded into the local Zotero library: Zotero 9 exposes read-only Local API reads and SAGE returned anti-bot `403` for the Jones--Loe PDF. The Iannario publisher/aggregator record currently reports full-text restriction, so it is citation-only rather than an outstanding OA-PDF obligation. | Record the official landing/PDF URL and retrieval evidence, attach only byte-verified original PDFs through the local Connector/API, and retry the Jones--Loe OA source from an authorized route or a Zotero version with local write/file-upload support. Never regenerate, OCR-rebuild, or substitute a PDF while claiming it is the original. | Required follow-up |
-| OpenAlex revalidation identifies the Jones--Loe published version as gold OA with a CC BY license, and the official web research path can read the 10-page PDF, but the current shell download returns a 403 HTML response and Zotero Local API item `CWY355RP` still has no child attachment. A new AAAI-26 primary study (Cao et al.) also shows substantial option-only answer bias when the question is removed, with contamination more explanatory than position or answer popularity. | Keep Jones--Loe citation-only until an authorized route yields a byte-verified original parent attachment; never count the 403 HTML or a regenerated/mirror PDF. Add option-only/no-question, shuffled-option, replaced-distractor, and contamination-aware controls to the calibration matrix so a positive score at larger `K` is not misattributed to option count. Add the Cao et al. paper as citation-only because its PDF states all-rights-reserved. | Revalidated and expanded 2026-08-14; PDF retrieval and calibration controls remain required |
+| OA metadata, local Zotero attachment state, and network retrievability are separate: Zotero `9.0.6` exposes read-only Local API reads; the official Jones--Loe SAGE PDF returned anti-bot `403`; the official Iannario De Gruyter PDF returned a WAF `202` response with zero bytes; and Zotero items `CWY355RP`/`MYPNHHWJ` have no child attachment. | Record rights, canonical landing/PDF URLs, and retrieval evidence separately. Attach only byte-verified original PDFs through an authorized Zotero/API route, and retry from an authorized route or a write-capable Zotero version. Never regenerate, OCR-rebuild, or substitute a PDF while claiming it is the original. | Required follow-up |
+| OpenAlex/Unpaywall/Crossref revalidation identifies Jones--Loe as gold OA with CC BY metadata and Iannario as a CC BY 4.0 published version; local Zotero rights fields agree (`Open access` and `Creative Commons Attribution 4.0 International`), but neither record has a child attachment. The Cao et al. AAAI-26 study also shows substantial option-only answer bias when the question is removed, with contamination more explanatory than position or answer popularity. | Keep Jones--Loe and Iannario citation-only until an authorized route yields byte-verified original parent attachments; never count 403/202 HTML, reconstructed files, or unauthorized mirrors. Add option-only/no-question, shuffled-option, replaced-distractor, and contamination-aware controls so a positive score at larger `K` is not misattributed to option count. Keep Cao citation-only because its PDF is all-rights-reserved. | Revalidated and expanded 2026-08-14; rights are corrected, while PDF retrieval and calibration controls remain required |
 | Before this follow-up, fast-mlsirm had no bounded reusable control that ran baseline, option-only/no-question, shuffled-option, and distractor-replacement variants through the existing contextual-orchestrator judge while retaining provider/parse/IRT failures and gold agreement. | Implement `JudgeCalibrationCase`/`JudgeCalibrationReport` and run every variant through an injected `ContextualOrchestratorJudge`; preserve contamination status, caller-supplied gold categories, multi-criterion polytomous rows, trace/usage, and every failure. Do not retry, repair, keyword-match, infer category positions, or interpret score deltas as causal option-count bias. | Implemented in fast-mlsirm at exact head `5a072705c840ea70d87a73bf737d5b193ef428cb` 2026-08-14; exact-head review/check follow-up required |
 | A Gemma 4 e4b loopback smoke through the new paired controls completed four variants for both 3-option and 5-option cases at K=`3`; all 8 rows were `[2,2]`, all 8 matched the held-out gold categories, and every paired score delta was `0.0` (`20.442 s/7,868` and `20.277 s/8,110` provider tokens). | Record this as a bounded integration and negative-observation smoke only. Expand persons/items, correct-option positions, option counts, models, framing, contamination controls, and human/gold anchors before estimating or rejecting a general positive option-count effect or IRT readiness. | Observed 2026-08-14; semantic bias calibration remains open |
 | A same-case K=`3` model comparison through the real MLX route gave 1B Llama `0/4` passed with four bounded JSON/format failures; 3B Llama `4/4`, gold `4/4`, all deltas `0.0`, `24.139 s`, `7,960` tokens; Gemma 4 e4b `4/4`, gold `4/4`, all deltas `0.0`, `39.731 s`, `7,860` tokens. | Treat 1B as a structured-output reliability failure for this prompt, and 3B/Gemma as candidate models only. Expand balanced persons/items, option positions/counts, framing, contamination controls, and human/gold anchors before model promotion or IRT interpretation; latency/token differences are workload evidence, not quality proof. | Observed 2026-08-14; semantic calibration remains open |
@@ -318,17 +318,21 @@ permissive OA terms used by the repository manifest; Zheng's PDF is retained
 in Zotero for local research but its redistribution terms are not asserted.
 Response-category records MYPNHHWJ and CWY355RP were also added for the
 psychometric comparison. Jones--Loe is an OA SAGE Open record whose official
-PDF endpoint returned anti-bot `403` locally; Iannario's publisher/aggregator
-record reports full-text restriction. Neither is represented by a fabricated
-or regenerated PDF.
+PDF endpoint returned anti-bot `403` locally. Iannario's publisher, Crossref,
+OpenAlex, and local Zotero rights metadata identify the record as CC BY 4.0,
+but its official PDF endpoint returned a WAF response and the Zotero item has
+no child attachment. Cao et al. was added through the local Connector API as
+item `393S5NXZ`; its record is all-rights-reserved, so its PDF was not copied.
+None of these records is represented by a fabricated or regenerated PDF.
 
 The Jones--Loe publisher page and PDF are marked open access and the original
 is readable through the web research path, but the local download path still
-returned 403. The Iannario publisher/aggregator record reports restricted
-full-text access; a public metadata page or an archive capture is not a
-redistribution license. The four attached PDFs above remain the only
-attachments counted as verified originals until an additional OA file passes
-a PDF magic header, size, checksum, and Zotero attachment-parent check.
+returned 403. Iannario is licensed CC BY 4.0, but the local official download
+returned a WAF response; license metadata alone does not prove that a fetched
+byte stream is the publisher original or a valid Zotero parent attachment.
+The four attached PDFs above remain the only attachments counted as verified
+originals until an additional OA file passes a PDF magic header, size,
+checksum, provenance, and Zotero attachment-parent check.
 
 Revalidation on 2026-08-12 confirmed the four attachment records and their
 local files: `TVZMTEB8`, `J44YVR37`, `S5KQCN97`, and `47VH4PC7` each have a
@@ -337,21 +341,23 @@ client reports `X-Zotero-Version: 9.0.6`, so its Local API is read-only and
 cannot perform the write/file-upload phase needed for the Jones--Loe
 attachment. Official Zotero documentation now describes local writes and file
 uploads for Zotero 10+ with an authorized local API key; this installation is
-not that write-capable path. Direct retries against the official Iannario PDF
-URL returned HTTP 202 with zero bytes, while the official Jones--Loe PDF URL
+not that write-capable path; `/api/local/authorize` is also absent and item
+PATCH is unsupported. Direct retries against the official Iannario PDF URL
+returned HTTP 202 with zero bytes, while the official Jones--Loe PDF URL
 returned HTTP 403. The OA landing pages and canonical PDF URLs remain
 recorded below; web-crawler text, an HTML error page, a regenerated PDF, or an
 unauthorised mirror must not be counted as the original. The Goal therefore
-remains open for the Jones--Loe original until a byte-verified parent
-attachment or a documented, authorised retrieval route is available.
+remains open for both publisher-original attachments until a byte-verified
+parent attachment or a documented, authorised retrieval route is available.
 
 An Internet Archive capture of the canonical De Gruyter PDF was also
 revalidated on 2026-08-12 as a 19-page PDF (1,074,249 bytes, MD5
 `263d2effa1d7cc5bdc2748878e7f32d4`) captured from the publisher URL on
 2024-04-13. It is historical retrieval evidence only: it is not a current
-publisher endpoint, not a Zotero parent attachment, and not a redistribution
-license. It must not be counted as the requested OA original or copied into
-the repository until an authorized route establishes those rights.
+publisher endpoint, not a Zotero parent attachment, and its byte identity as
+the requested publisher original was not independently established. It must
+not be copied into the repository or counted as the requested OA original
+until provenance and authorization are verified.
 
 Primary sources:
 
