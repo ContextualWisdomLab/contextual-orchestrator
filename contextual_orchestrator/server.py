@@ -177,6 +177,39 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+def _validate_function_strict_flags(body: dict[str, Any]) -> None:
+    """OpenAI Structured Outputs ``strict`` on tools[].function and legacy functions[].
+
+    When present, ``strict`` must be a boolean (typically ``true`` for schema-bound
+    tool calling). Shape of tools/functions themselves is left to dedicated validators.
+    """
+    tools = body.get("tools")
+    if isinstance(tools, list):
+        for index, tool in enumerate(tools):
+            if not isinstance(tool, dict):
+                continue
+            function = tool.get("function")
+            if not isinstance(function, dict) or "strict" not in function:
+                continue
+            if not isinstance(function.get("strict"), bool):
+                raise RequestError(
+                    400,
+                    "invalid_function_strict",
+                    f"tools[{index}].function.strict must be a boolean when set",
+                )
+    functions = body.get("functions")
+    if isinstance(functions, list):
+        for index, function in enumerate(functions):
+            if not isinstance(function, dict) or "strict" not in function:
+                continue
+            if not isinstance(function.get("strict"), bool):
+                raise RequestError(
+                    400,
+                    "invalid_function_strict",
+                    f"functions[{index}].strict must be a boolean when set",
+                )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +746,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_function_strict_flags(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +896,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_function_strict_flags(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
