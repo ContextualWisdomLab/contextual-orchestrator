@@ -2,16 +2,16 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
     CostLedger,
     CostRoutingCoordinator,
-    InMemoryUsageTelemetrySink,
     InMemoryConfigStore,
+    InMemoryUsageTelemetrySink,
     ModelAgent,
     NonBlockingLedgerStore,
     PriceBook,
@@ -111,6 +111,21 @@ def test_batch_completion_records_on_retrieve() -> None:
     assert len(records) == 1
     assert records[0]["request_channel"] == "batch"
     assert records[0]["team_name"] == "beta"
+
+
+def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
+    class _Client:
+        local_concurrency = 3
+
+    class _Orchestrator:
+        client = _Client()
+
+        def complete(self, messages, *, mode):
+            return {"answer": messages[-1]["content"], "mode": mode}
+
+    coordinator = CostRoutingCoordinator(_Orchestrator())
+
+    assert coordinator.batch_backend.max_concurrency == 3
 
 
 def test_cost_report_rolls_up_across_sync_and_batch() -> None:

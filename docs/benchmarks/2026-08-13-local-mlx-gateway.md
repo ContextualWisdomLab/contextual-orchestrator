@@ -138,6 +138,33 @@ Use `--local-concurrency 16` only for latency-tolerant 3B batches after a
 warm-cache check, and re-measure after changing the model, server flags,
 prompt/output budgets, or device memory pressure.
 
+### 32-request saturation boundary
+
+The same warm service was probed again with 32 requests, the 3B model,
+temperature `0`, disabled thinking, unique short prompts, and
+`max_output_tokens=16`. All completed settings returned non-empty content;
+`c=64` did not complete within the client timeout (`TimeoutError: [Errno 60]`)
+even though the loopback `/v1/models` health request remained HTTP 200 after
+the probe.
+
+| `local_concurrency` | elapsed seconds | requests/second | non-empty |
+| ---: | ---: | ---: | ---: |
+| 1 | `18.117` | `1.766` | `32/32` |
+| 4 | `11.359` | `2.817` | `32/32` |
+| 8 | `9.966` | `3.211` | `32/32` |
+| 16 | `10.301` | `3.106` | `32/32` |
+| 24 | `11.375` | `2.813` | `32/32` |
+| 32 | `10.231` | `3.128` | `32/32` |
+| 48 | `14.530` | `2.202` | `32/32` |
+| 64 | timeout | — | not applicable |
+
+This boundary is provider saturation, not a LibreSSL failure: the requests
+used loopback `lo0`, and the health endpoint stayed available. For this
+short-output workload, `c=8` was the fastest stable setting; `c=48` already
+collapsed and `c=64` is not an acceptable default. Failed saturation points
+remain recorded rather than being hidden, and callers must re-measure after
+changing model, prompt, output budget, server flags, or memory pressure.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple

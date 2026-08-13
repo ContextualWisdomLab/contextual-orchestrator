@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+import threading
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,7 +19,6 @@ from contextual_orchestrator.batch_routing import (  # noqa: E402
 )
 from contextual_orchestrator.cost_ledger import PriceBook, PriceEntry  # noqa: E402
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
-
 
 # ---------------------------------------------------------------------------
 # Sync-vs-batch decision
@@ -103,6 +103,23 @@ def test_local_backend_runs_requests_in_process() -> None:
     results = backend.retrieve(job)
     answers = {item.custom_id: item.answer for item in results}
     assert answers == {"a": "echo:one", "b": "echo:two"}
+
+
+def test_local_backend_honors_bounded_concurrency() -> None:
+    barrier = threading.Barrier(2, timeout=1.0)
+
+    def runner(messages, mode):
+        barrier.wait()
+        return {"answer": messages[-1]["content"], "mode": mode}
+
+    backend = LocalBatchBackend(runner, max_concurrency=2)
+    requests = [
+        BatchRequest(messages=[{"role": "user", "content": "one"}], custom_id="a"),
+        BatchRequest(messages=[{"role": "user", "content": "two"}], custom_id="b"),
+    ]
+
+    job = backend.submit(requests)
+    assert {item.custom_id for item in backend.retrieve(job)} == {"a", "b"}
 
 
 # ---------------------------------------------------------------------------
