@@ -177,6 +177,56 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_responses_input(body: dict[str, Any]) -> Any:
+    """OpenAI Responses API ``input`` — required non-empty string or item array."""
+    if "input" not in body:
+        raise RequestError(400, "invalid_input", "input is required")
+    value = body.get("input")
+    if isinstance(value, str):
+        if not value.strip():
+            raise RequestError(400, "invalid_input", "input string must be non-empty")
+        return value
+    if isinstance(value, list):
+        if not value:
+            raise RequestError(400, "invalid_input", "input array must be non-empty")
+        for index, item in enumerate(value):
+            if isinstance(item, str):
+                if not item.strip():
+                    raise RequestError(
+                        400,
+                        "invalid_input",
+                        f"input[{index}] string must be non-empty",
+                    )
+                continue
+            if not isinstance(item, dict):
+                raise RequestError(
+                    400,
+                    "invalid_input",
+                    f"input[{index}] must be a string or object",
+                )
+        return value
+    raise RequestError(
+        400,
+        "invalid_input",
+        "input must be a non-empty string or a non-empty array",
+    )
+
+
+def _validate_responses_instructions(body: dict[str, Any]) -> str | None:
+    """OpenAI Responses API ``instructions`` — optional non-empty string when set."""
+    if "instructions" not in body:
+        return None
+    instructions = body.get("instructions")
+    if not isinstance(instructions, str) or not instructions.strip():
+        raise RequestError(
+            400,
+            "invalid_instructions",
+            "instructions must be a non-empty string when set",
+        )
+    return instructions
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -862,6 +912,8 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_input(body)
+                    _validate_responses_instructions(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
