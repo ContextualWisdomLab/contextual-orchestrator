@@ -136,7 +136,7 @@ def test_http_stream_non_boolean_is_rejected() -> None:
     finally:
         server.shutdown()
     assert status == 400
-    assert json.loads(body)["error"]["code"] == "invalid_request"
+    assert json.loads(body)["error"]["code"] == "invalid_stream"
 
 
 if __name__ == "__main__":
