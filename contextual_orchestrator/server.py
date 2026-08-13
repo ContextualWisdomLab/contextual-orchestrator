@@ -839,6 +839,69 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
     return validated
 
 
+def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | None:
+    """OpenAI chat ``tool_choice`` — none/auto/required or named function object.
+
+    When ``type`` is ``function``, ``function.name`` must match a tools entry
+    so clients cannot force a tool the request did not declare.
+    """
+    if "tool_choice" not in body:
+        return None
+    choice = body.get("tool_choice")
+    if isinstance(choice, str):
+        if choice not in ("none", "auto", "required"):
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice string must be one of none, auto, required",
+            )
+        return choice
+    if isinstance(choice, dict):
+        if choice.get("type") != "function":
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice object type must be function",
+            )
+        function = choice.get("function")
+        if not isinstance(function, dict):
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function must be an object with a name",
+            )
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function.name must be a non-empty string",
+            )
+        tools = body.get("tools")
+        tool_names: set[str] = set()
+        if isinstance(tools, list):
+            for item in tools:
+                if not isinstance(item, dict):
+                    continue
+                fn = item.get("function")
+                if isinstance(fn, dict):
+                    tool_name = fn.get("name")
+                    if isinstance(tool_name, str):
+                        tool_names.add(tool_name)
+        if name not in tool_names:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function.name must match a tools entry",
+            )
+        return choice
+    raise RequestError(
+        400,
+        "invalid_tool_choice",
+        "tool_choice must be a string or object",
+    )
+
+
 def _embeddings_attribution(body: dict[str, Any]) -> dict[str, Any]:
     """Build ledger attribution from the explicit ``attribution`` field merged
     with any attribution dimensions carried inside ``metadata``.
@@ -1391,6 +1454,8 @@ def build_server(
                         _validate_chat_response_format(body)
                     if "tools" in body:
                         _validate_chat_tools(body)
+                    if "tool_choice" in body:
+                        _validate_chat_tool_choice(body)
                     if "parallel_tool_calls" in body:
                         # Always type-check. With tools, true/false both valid for
                         # provider passthrough; without tools, true fails closed.
