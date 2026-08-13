@@ -177,6 +177,45 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+
+def _validate_tools_functions_exclusive(body: dict[str, Any]) -> None:
+    """OpenAI forbids mixing modern ``tools`` with legacy ``functions`` APIs.
+
+    Also rejects pairing ``tool_choice`` with ``function_call`` (or cross-pairing
+    tool_choice with functions / function_call with tools), which yields opaque
+    provider errors.
+    """
+    has_tools = "tools" in body
+    has_functions = "functions" in body
+    has_tool_choice = "tool_choice" in body
+    has_function_call = "function_call" in body
+    if has_tools and has_functions:
+        raise RequestError(
+            400,
+            "invalid_request",
+            "tools and functions cannot both be set; use tools with tool_choice",
+        )
+    if has_tool_choice and has_function_call:
+        raise RequestError(
+            400,
+            "invalid_request",
+            "tool_choice and function_call cannot both be set",
+        )
+    if has_tool_choice and has_functions and not has_tools:
+        raise RequestError(
+            400,
+            "invalid_request",
+            "tool_choice requires tools, not legacy functions",
+        )
+    if has_function_call and has_tools and not has_functions:
+        raise RequestError(
+            400,
+            "invalid_request",
+            "function_call requires functions, not tools",
+        )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +752,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_tools_functions_exclusive(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +902,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_tools_functions_exclusive(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
