@@ -253,6 +253,24 @@ fail-closed semantics; quality and bias remain unproven. The exact-source fast
 tests passed `58`, and the rebuilt full suite passed `3630` with one skip and
 two existing warnings.
 
+### HTTP admission alignment follow-up — 2026-08-14
+
+The gateway's secure default `max_concurrent_runs=8` is an independent
+admission limit. A live loopback smoke used the same 3B MLX model, temperature
+`0`, disabled thinking, `max_output_tokens=32`, and 16 simultaneous route
+requests. With `local_concurrency=16`, changing only the gateway admission
+setting produced:
+
+| `max_concurrent_runs` | HTTP 200 | HTTP 503 | elapsed | interpretation |
+|---:|---:|---:|---:|---|
+| `8` | `8` | `8` | `0.717 s` | secure default rejects excess simultaneous runs |
+| `16` | `16` | `0` | `2.245 s` | explicit operator setting admits the measured batch width |
+
+The result verifies admission behavior, not a throughput or quality ranking;
+the accepted requests necessarily changed provider queue pressure. The secure
+default remains `8`, and operators must explicitly set
+`--max-concurrent-runs` alongside a measured `--local-concurrency` value.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple

@@ -92,7 +92,7 @@ roles because this implementation has no bounded recursive self-call protocol;
 that is a routing safety constraint, not a disabled candidate. The registry is
 explicit; runtime discovery does not silently change the pool.
 
-Run an evaluation against that server with `--temperature 0` for repeatable judging. For reasoning-capable mlx models, pass `--chat-template-args '{"enable_thinking":false}'` when a short structured judge response is required. `--local-concurrency N` enables bounded concurrent local batch requests (`1..64`; the current measured starting point for this server is `8`); keep interactive route/conduct requests on the default sequential path.
+Run an evaluation against that server with `--temperature 0` for repeatable judging. For reasoning-capable mlx models, pass `--chat-template-args '{"enable_thinking":false}'` when a short structured judge response is required. `--local-concurrency N` enables bounded concurrent local batch requests (`1..64`; the current measured starting point for this server is `8`); when serving HTTP, set `--max-concurrent-runs N` explicitly as well if the measured batch concurrency exceeds the secure default of `8`. Keep interactive route/conduct requests on the default sequential path.
 
 Model-based conduct verification requires `fast-mlsirm` in the same runtime and fails closed when it is absent or broken; fast-mlsirm sends its judge completion through this contextual-orchestrator gateway, so no direct provider fallback is used. See [ADR 0001](docs/planning/adrs/0001-fail-closed-model-judgment.md).
 

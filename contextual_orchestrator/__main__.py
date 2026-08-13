@@ -3,13 +3,18 @@
 from __future__ import annotations
 
 import argparse
-from dataclasses import replace
 import json
 import os
 import sys
+from dataclasses import replace
 
 from .credentials import get_credential, register_credential
-from .orchestrator import MAX_LOCAL_CONCURRENCY, ModelClient, TaskOrchestrator, load_agents
+from .orchestrator import (
+    MAX_LOCAL_CONCURRENCY,
+    ModelClient,
+    TaskOrchestrator,
+    load_agents,
+)
 from .server import SecurityConfig, serve
 
 DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
@@ -149,6 +154,8 @@ def main() -> None:
                         help="Default provider output token cap (default: 2048).")
     parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
                         help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
+    parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
+                        help=f"Maximum simultaneous HTTP orchestration runs (default: 8; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--route-text-length-threshold", type=_positive_int, default=None,
                         help="Auto-mode minimum prompt length that can trigger conduct instead of route.")
     parser.add_argument("--conduct-hint-threshold", type=_positive_int, default=None,
@@ -238,6 +245,7 @@ def main() -> None:
                 auth_token=auth_token,
                 admin_token=admin_token,
                 inference_token=inference_token,
+                max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
             ),

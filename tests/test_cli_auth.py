@@ -85,6 +85,8 @@ def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
         (["--local-concurrency", "0"], "positive integer"),
         (["--local-concurrency", "-1"], "positive integer"),
         (["--local-concurrency", "65"], "1..64"),
+        (["--max-concurrent-runs", "0"], "positive integer"),
+        (["--max-concurrent-runs", "65"], "1..64"),
         (["--chat-template-args", "[]"], "JSON object"),
         (["--chat-template-args", "null"], "JSON object"),
         (["--chat-template-args", "{"], "valid JSON object"),
@@ -107,6 +109,31 @@ def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
                 assert expected_message in stderr.getvalue()
             else:  # pragma: no cover
                 raise AssertionError("invalid local provider option was accepted")
+
+
+def test_server_concurrency_is_explicit_and_bounded() -> None:
+    with (
+        patch.object(
+            sys,
+            "argv",
+            [
+                "contextual-orchestrator",
+                "--serve",
+                "--auth-token",
+                "token",
+                "--local-concurrency",
+                "16",
+                "--max-concurrent-runs",
+                "16",
+            ],
+        ),
+        patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
+        patch("contextual_orchestrator.__main__.ModelClient"),
+        patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        main()
+    assert serve.call_args.kwargs["security"].max_concurrent_runs == 16
 
 
 def test_sampling_temperature_uses_descriptive_name_and_legacy_alias() -> None:
