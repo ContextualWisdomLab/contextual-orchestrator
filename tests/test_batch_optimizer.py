@@ -9,9 +9,11 @@ from __future__ import annotations
 
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, optimize_orchestration  # noqa: E402
 
@@ -82,9 +84,10 @@ def test_optimizer_use_batch_routes_via_batch_and_matches_serial() -> None:
 
 def test_conduct_config_stays_serial_even_with_use_batch() -> None:
     client = _CountingClient()
-    optimize_orchestration(
-        [{"name": "conduct_cfg", "orchestrator": _orch(client), "mode": "conduct"}],
-        TASKS[:1], lambda task, answer: 1.0, use_batch=True)
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        optimize_orchestration(
+            [{"name": "conduct_cfg", "orchestrator": _orch(client), "mode": "conduct"}],
+            TASKS[:1], lambda task, answer: 1.0, use_batch=True)
     assert client.batch_calls == 0  # multi-step cannot batch
     assert client.chat_calls == 4  # thinker/worker/verifier/synthesizer; missing fast-mlsirm fails closed
 
