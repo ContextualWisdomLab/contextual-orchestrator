@@ -183,10 +183,16 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
-def _validate_messages(messages: Any) -> list[dict[str, str]]:
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
+    """Validate OpenAI chat messages; preserve optional per-message ``name``.
+
+    OpenAI allows an optional ``name`` on system/user/assistant messages for
+    multi-participant attribution. Dropping it breaks multi-user SDKs that send
+    speaker labels on every turn.
+    """
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
-    validated: list[dict[str, str]] = []
+    validated: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
@@ -194,8 +200,24 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
         content = message.get("content")
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        validated.append({"role": role, "content": content})
+        row: dict[str, Any] = {"role": role, "content": content}
+        if "name" in message:
+            name = message.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(400, "invalid_message_name", "message name must be a non-empty string")
+            row["name"] = name.strip()
+        validated.append(row)
     return validated
+
+
+def _validate_store_flag(body: dict[str, Any]) -> bool | None:
+    """OpenAI ``store`` flag — must be a boolean when present."""
+    if "store" not in body:
+        return None
+    store = body.get("store")
+    if not isinstance(store, bool):
+        raise RequestError(400, "invalid_store", "store must be a boolean")
+    return store
 
 
 def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
@@ -713,6 +735,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_store_flag(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
