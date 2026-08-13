@@ -44,6 +44,29 @@ starting another conduct workflow. The final rejection is a model-evaluation
 result, not a keyword rule; malformed or unavailable judge output would remain
 fail-closed.
 
+### Current-server polytomous judge probe
+
+On the same day, a fresh live probe used
+`ContextualOrchestratorJudge -> contextual-orchestrator -> mlx-lm` with the
+3B Llama model as judge, temperature `0`, disabled thinking, two criteria,
+`max_output_tokens=256`, and one strict call at each K. Every call parsed and
+produced a two-item row; no keyword, lexical, positional, or silent-drop
+fallback was used.
+
+| K | score | accepted | criterion categories (`evidence_quality`, `risk_awareness`) | IRT row | total tokens | seconds |
+|---:|---:|:---:|:---:|:---:|---:|---:|
+| 2 | `0.5000` | no | `(1, 0)` | `(1, 0)` | 594 | 8.147 |
+| 3 | `0.5000` | no | `(2, 0)` | `(2, 0)` | 600 | 3.972 |
+| 5 | `0.5000` | no | `(4, 0)` | `(4, 0)` | 606 | 4.220 |
+| 7 | `0.6667` | no | `(6, 2)` | `(6, 2)` | 612 | 4.122 |
+
+The criterion-level movement and K=7 score increase are fresh evidence of
+category-count sensitivity, not proof of a universal positive-bias law. The
+rows pass only the two-dimensional response-shape contract; one person is
+insufficient for `validate_irt_experiment_readiness` or any IRT fit. The
+result is therefore retained as a calibration observation, with K, method,
+trace, usage, parse status, and readiness status kept separate.
+
 ## Additional local model and batch-throughput probe
 
 Using the same loopback `mlx-lm` server, temperature `0`, disabled thinking,
