@@ -45,6 +45,7 @@ ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
+MAX_BATCH_ROUTING_REQUESTS = 100
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
@@ -228,8 +229,21 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     raw_requests = body.get("requests")
     if not isinstance(raw_requests, list) or not raw_requests:
         raise RequestError(400, "invalid_request", "requests must be a non-empty array")
+    if len(raw_requests) > MAX_BATCH_ROUTING_REQUESTS:
+        raise RequestError(
+            400,
+            "invalid_request",
+            f"requests must contain at most {MAX_BATCH_ROUTING_REQUESTS} items",
+            {"max_batch_routing_requests": MAX_BATCH_ROUTING_REQUESTS},
+        )
     default_attribution = _validate_attribution(body.get("attribution")) or {}
-    default_model = str(body.get("model", "contextual-orchestrator"))
+    if "model" in body:
+        top_model = body.get("model")
+        if not isinstance(top_model, str) or not top_model.strip():
+            raise RequestError(400, "invalid_model", "model must be a non-empty string")
+        default_model = top_model.strip()
+    else:
+        default_model = "contextual-orchestrator"
     batch: list[BatchRequest] = []
     for item in raw_requests:
         if not isinstance(item, dict):
@@ -238,9 +252,16 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
         attribution = _validate_attribution(item.get("attribution"))
         merged = {**default_attribution, **(attribution or {})}
         mode = _validate_mode(item.get("mode", "auto"))
+        item_model = item.get("model", default_model)
+        if not isinstance(item_model, str) or not str(item_model).strip():
+            raise RequestError(
+                400,
+                "invalid_model",
+                "each batch request model must be a non-empty string",
+            )
         batch.append(BatchRequest(
             messages=messages,
-            model=str(item.get("model", default_model)),
+            model=str(item_model).strip(),
             attribution=merged,
             mode=mode,
         ))
