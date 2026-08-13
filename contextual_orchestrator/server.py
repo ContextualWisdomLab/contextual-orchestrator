@@ -33,6 +33,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
     "response_format", "tools", "tool_choice", "functions", "function_call",
     "modalities", "prediction", "store", "service_tier",
+    "prompt_cache_key", "safety_identifier",
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
@@ -175,6 +176,46 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _validate_prompt_cache_key(body: dict[str, Any]) -> str | None:
+    """OpenAI ``prompt_cache_key`` — non-empty string ≤64 when present."""
+    if "prompt_cache_key" not in body:
+        return None
+    value = body.get("prompt_cache_key")
+    if not isinstance(value, str) or not value.strip():
+        raise RequestError(
+            400,
+            "invalid_prompt_cache_key",
+            "prompt_cache_key must be a non-empty string",
+        )
+    if len(value) > 64:
+        raise RequestError(
+            400,
+            "invalid_prompt_cache_key",
+            "prompt_cache_key must be at most 64 characters",
+        )
+    return value
+
+
+def _validate_safety_identifier(body: dict[str, Any]) -> str | None:
+    """OpenAI ``safety_identifier`` — non-empty string ≤64 when present."""
+    if "safety_identifier" not in body:
+        return None
+    value = body.get("safety_identifier")
+    if not isinstance(value, str) or not value.strip():
+        raise RequestError(
+            400,
+            "invalid_safety_identifier",
+            "safety_identifier must be a non-empty string",
+        )
+    if len(value) > 64:
+        raise RequestError(
+            400,
+            "invalid_safety_identifier",
+            "safety_identifier must be at most 64 characters",
+        )
+    return value
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +754,8 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_prompt_cache_key(body)
+                    _validate_safety_identifier(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +905,8 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_prompt_cache_key(body)
+                    _validate_safety_identifier(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
