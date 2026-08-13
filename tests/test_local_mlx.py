@@ -34,13 +34,23 @@ def test_local_candidate_registry_keeps_all_discovered_entries() -> None:
     }
     assert all(not agent.disabled for agent in orchestrator.candidates)
     assert len(orchestrator.candidates) == len(orchestrator.agents)
-    assert next(
-        agent for agent in orchestrator.candidates
-        if agent.model == "mlx-community/llama-3.2-1b-instruct-4bit"
-    ).provider_exclusions == ("verifier",)
+    verifier_exclusions = {
+        agent.model: agent.provider_exclusions
+        for agent in orchestrator.candidates
+        if agent.model in {
+            "mlx-community/llama-3.2-1b-instruct-4bit",
+            "mlx-community/gemma-4-31b-it-4bit",
+            "outlier-ai/deepseek-r1-distill-qwen-32b-mlx-4bit",
+        }
+    }
+    assert verifier_exclusions == {
+        "mlx-community/llama-3.2-1b-instruct-4bit": ("verifier",),
+        "mlx-community/gemma-4-31b-it-4bit": ("verifier",),
+        "outlier-ai/deepseek-r1-distill-qwen-32b-mlx-4bit": ("verifier",),
+    }
     assert orchestrator._select_agent(
         "Evaluate this answer for evidence and risk.", "verifier"
-    ).model != "mlx-community/llama-3.2-1b-instruct-4bit"
+    ).model == "mlx-community/gemma-4-e4b-it-4bit"
     assert any(
         agent.model == "contextual-orchestrator"
         and set(agent.provider_exclusions) == {"thinker", "worker", "verifier", "synthesizer"}

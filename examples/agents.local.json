@@ -15,7 +15,8 @@
       "base_url": "mlx://127.0.0.1:8080/v1",
       "provider_name": "mlx-lm",
       "tags": ["reasoning", "research", "coding", "writing", "verification"],
-      "priority": 4
+      "priority": 4,
+      "provider_exclusions": ["verifier"]
     },
     {
       "id": "mlx_deepseek_r1_qwen_32b",
@@ -23,7 +24,8 @@
       "base_url": "mlx://127.0.0.1:8080/v1",
       "provider_name": "mlx-lm",
       "tags": ["reasoning", "research", "coding", "verification"],
-      "priority": 4
+      "priority": 4,
+      "provider_exclusions": ["verifier"]
     },
     {
       "id": "mlx_gemma_4_e4b_it",
