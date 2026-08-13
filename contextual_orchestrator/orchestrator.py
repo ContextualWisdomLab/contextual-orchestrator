@@ -1741,6 +1741,44 @@ class TaskOrchestrator:
         end = start + page_size
         return [self._agent_to_admin_payload(agent) for agent in self.agents[start:end]]
 
+    def list_openai_models(self) -> dict[str, Any]:
+        """OpenAI ``GET /v1/models`` payload from the enabled agent pool.
+
+        Model ``id`` values are the deployment ids clients pass as ``model`` on
+        Completions/Chat/embeddings. Disabled agents are omitted so the listing
+        never advertises capacity the gateway would reject as ``invalid_model``.
+        Duplicate model ids across agents collapse to one entry (first owner).
+        """
+        seen: set[str] = set()
+        data: list[dict[str, Any]] = []
+        created = int(time.time())
+        for agent in self.agents:
+            if agent.disabled:
+                continue
+            model_id = agent.model
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            owned_by = agent.provider_name or self._infer_provider_name(agent.base_url) or "agent_pool"
+            data.append(
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "created": created,
+                    "owned_by": owned_by,
+                }
+            )
+        return {"object": "list", "data": data}
+
+    def get_openai_model(self, model_id: str) -> dict[str, Any]:
+        """OpenAI ``GET /v1/models/{model}`` payload for one pool deployment."""
+        if not isinstance(model_id, str) or not model_id.strip():
+            raise KeyError(model_id)
+        for item in self.list_openai_models()["data"]:
+            if item["id"] == model_id:
+                return item
+        raise KeyError(model_id)
+
     def list_recent_runs(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
         """Return a paginated list of recent workflow run records."""
         if page_number < 1 or page_size < 1:  # pragma: no cover

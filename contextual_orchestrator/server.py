@@ -1711,6 +1711,28 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
+                if path == "/v1/models":
+                    # OpenAI Models list: inference clients discover deployable ids.
+                    self._authorize("inference")
+                    self._send(orchestrator.list_openai_models())
+                    return
+                if path.startswith("/v1/models/"):
+                    self._authorize("inference")
+                    model_id = path[len("/v1/models/"):]
+                    if not model_id or "/" in model_id:
+                        self._send_error(404, "model_not_found", "model not found")
+                        return
+                    # Percent-decoded path segment (OpenAI allows ids with dots, colons).
+                    model_id = urllib.parse.unquote(model_id)
+                    try:
+                        self._send(orchestrator.get_openai_model(model_id))
+                    except KeyError:
+                        self._send_error(
+                            404,
+                            "model_not_found",
+                            f"model {model_id!r} is not available in the agent pool",
+                        )
+                    return
                 self._authorize("admin")
                 if path == "/api/v1/cost_attribution_dimensions":
                     self._send({"items": dimension_catalog(), "total_count": len(ATTRIBUTION_DIMENSIONS)})

@@ -1,0 +1,26 @@
+{
+  "contract_version": "1",
+  "description": "OpenAI-compatible Models listing served from the enabled agent pool. Clients (gyeot, scopeweave, OpenAI SDKs) call GET /v1/models to discover deployable model ids; those ids must match the model field accepted by Completions/Chat/embeddings.",
+  "endpoint": {
+    "list_method": "GET",
+    "list_path": "/v1/models",
+    "get_method": "GET",
+    "get_path_template": "/v1/models/{model_id}"
+  },
+  "list_response": {
+    "required_keys": ["object", "data"],
+    "object": "list",
+    "data_item_required_keys": ["id", "object", "created", "owned_by"],
+    "data_item_object": "model"
+  },
+  "get_response": {
+    "required_keys": ["id", "object", "created", "owned_by"],
+    "object": "model"
+  },
+  "honesty_rules": [
+    "only enabled agent.model values appear as data[].id",
+    "disabled agents are omitted",
+    "unknown model_id returns 404 model_not_found",
+    "listing requires inference bearer auth"
+  ]
+}

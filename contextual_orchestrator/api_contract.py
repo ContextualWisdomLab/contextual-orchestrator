@@ -477,6 +477,40 @@ OPENAPI_SPEC = {
                 },
             }
         },
+        "/v1/models": {
+            "get": {
+                "operationId": "list_models",
+                "summary": "List OpenAI-compatible model ids served by the enabled agent pool",
+                "security": [{"inference_bearer_auth": []}],
+                "responses": {
+                    "200": {
+                        "description": (
+                            "OpenAI Models list: {object: list, data: ["
+                            "{id, object: model, created, owned_by}, ...]}"
+                        )
+                    }
+                },
+            }
+        },
+        "/v1/models/{model_id}": {
+            "get": {
+                "operationId": "get_model",
+                "summary": "Retrieve one pool model by deployment id",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [
+                    {
+                        "name": "model_id",
+                        "in": "path",
+                        "required": True,
+                        "schema": {"type": "string"},
+                    }
+                ],
+                "responses": {
+                    "200": {"description": "OpenAI Model object"},
+                    "404": {"description": "Model not in the enabled agent pool"},
+                },
+            }
+        },
         "/api/v1/access_reports/{workflow_run_id}": {
             "get": {
                 "operationId": "get_access_report",
