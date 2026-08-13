@@ -230,7 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -8524,12 +8524,18 @@ def chat_completion_chunks(
     result: dict[str, Any],
     model: str = "contextual-orchestrator",
     include_trace: bool = False,
+    include_usage: bool = False,
+    usage: dict[str, int] | None = None,
 ) -> list[dict[str, Any]]:
     """Frame an orchestration result as OpenAI-compatible ``chat.completion.chunk`` deltas.
 
     The engine produces the full answer before framing, so this yields a correct-shape
     SSE stream (role delta, content deltas, terminal stop delta) rather than true
     token-by-token streaming — real token streaming requires a streaming ModelClient.
+
+    When ``include_usage`` is true (OpenAI ``stream_options.include_usage``), an extra
+    trailing chunk carries ``usage`` with an empty ``choices`` list before the SSE
+    terminator.
     """
     answer = result.get("answer", "")
     completion_id = f"chatcmpl-{int(time.time() * 1000)}"
@@ -8553,6 +8559,9 @@ def chat_completion_chunks(
     final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)
+    if include_usage:
+        token_usage = usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0}
+        chunks.append({**base, "choices": [], "usage": token_usage})
     return chunks
 
 
