@@ -44,7 +44,7 @@ ALLOWED_CHAT_KEYS = {
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
-ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
+ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model", "metadata"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
@@ -175,6 +175,33 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+def _validate_batch_metadata(body: dict[str, Any]) -> dict[str, str] | None:
+    """Batch routing job ``metadata`` — string→string map ≤16 pairs when present."""
+    if "metadata" not in body:
+        return None
+    metadata = body.get("metadata")
+    if not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_metadata", "metadata must be an object")
+    if len(metadata) > 16:
+        raise RequestError(
+            400,
+            "invalid_metadata",
+            "metadata may contain at most 16 key-value pairs",
+        )
+    validated: dict[str, str] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not key.strip():
+            raise RequestError(400, "invalid_metadata", "metadata keys must be non-empty strings")
+        if not isinstance(value, str):
+            raise RequestError(400, "invalid_metadata", "metadata values must be strings")
+        if len(key) > 64:
+            raise RequestError(400, "invalid_metadata", "metadata keys must be at most 64 characters")
+        if len(value) > 512:
+            raise RequestError(400, "invalid_metadata", "metadata values must be at most 512 characters")
+        validated[key] = value
+    return validated
 
 
 def _validate_mode(mode: Any) -> str:
@@ -828,6 +855,7 @@ def build_server(
                     return
                 if path == "/api/v1/batch_routing_jobs":
                     _reject_unknown_keys(body, ALLOWED_BATCH_KEYS)
+                    _validate_batch_metadata(body)
                     batch_requests = _validate_batch_requests(body, security.expose_trace_by_default)
                     metadata = {"actor_scope": "inference"}
                     job = self._run(lambda: coordinator.submit_batch(batch_requests, metadata=metadata))
