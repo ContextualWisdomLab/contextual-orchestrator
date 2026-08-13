@@ -47,7 +47,8 @@
       "base_url": "mlx://127.0.0.1:8080/v1",
       "provider_name": "mlx-lm",
       "tags": ["fast", "writing", "coding"],
-      "priority": 1
+      "priority": 1,
+      "provider_exclusions": ["verifier"]
     },
     {
       "id": "llama_cpp_embeddinggemma",
