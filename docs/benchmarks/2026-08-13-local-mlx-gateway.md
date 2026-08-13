@@ -500,6 +500,23 @@ one. Keep the safe client default at `1`; tune the server-side queue separately
 and repeat this workload after changing model, prompt budget, or server
 concurrency. This is throughput evidence only, not judge-quality evidence.
 
+### Current integrated two-item anchored smoke — 2026-08-14
+
+The current local source trees were exercised through the complete
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm` path with Gemma 4 e4b, temperature `0`, disabled
+thinking, `max_output_tokens=192`, zero retries, `local_concurrency=1`, K=`3`,
+and two complete anchored criteria. Four Boolean boundary calls completed in
+`4.404 s` and used `1,797` provider tokens. The parsed categories were
+`release_monitoring=2` and `rollback_safety=2`, producing the required
+two-column polytomous IRT row `[2, 2]`.
+
+A separate one-criterion attempt was rejected at the IRT projection boundary
+with `IRT output requires multiple criterion items; a scalar judge result is
+invalid`. No scalar padding, keyword matching, positional repair, or silent
+item synthesis was used. This is an integration and contract smoke, not proof
+of semantic quality or model promotion.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
