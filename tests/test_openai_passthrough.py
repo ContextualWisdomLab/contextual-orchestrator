@@ -35,6 +35,7 @@ def _build() -> TaskOrchestrator:
 def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> None:
     orch = _build()
     body = {
+        "model": "mock-generalist",
         "messages": [{"role": "user", "content": "extract JSON"}],
         "response_format": {"type": "json_schema", "json_schema": {"name": "x", "schema": {}}},
         "temperature": 0.1,
@@ -56,7 +57,7 @@ def test_proxy_completion_forwards_tools() -> None:
     orch = _build()
     tools = [{"type": "function", "function": {"name": "lookup", "parameters": {}}}]
     result = orch.proxy_completion(
-        {"messages": [{"role": "user", "content": "call a tool"}], "tools": tools}
+        {"model": "mock-generalist", "messages": [{"role": "user", "content": "call a tool"}], "tools": tools}
     )
     assert result["echo"]["tools"] == tools
 
@@ -102,6 +103,7 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
         status, body = _post(
             url,
             {
+                "model": "mock-generalist",
                 "messages": [{"role": "user", "content": "give me JSON"}],
                 "response_format": {"type": "json_object"},
             },
@@ -118,7 +120,7 @@ def test_http_responses_endpoint_passes_through() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/responses"
     try:
-        status, body = _post(url, {"input": "hello", "tools": []}, token)
+        status, body = _post(url, {"model": "mock-planner", "input": "hello"}, token)
     finally:
         server.shutdown()
     assert status == 200
@@ -129,7 +131,7 @@ def test_http_plain_prompt_still_uses_orchestration_path() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     try:
-        status, body = _post(url, {"messages": [{"role": "user", "content": "hi"}]}, token)
+        status, body = _post(url, {"model": "mock-planner", "messages": [{"role": "user", "content": "hi"}]}, token)
     finally:
         server.shutdown()
     assert status == 200

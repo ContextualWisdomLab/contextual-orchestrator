@@ -118,8 +118,8 @@ def test_http_route_stream_pipes_live_deltas() -> None:
             return response.headers.get("content-type", ""), response.read().decode("utf-8")
 
     try:
-        content_type, sse = post({"messages": [{"role": "user", "content": "stream this"}], "mode": "route", "stream": True})
-        _, ref = post({"messages": [{"role": "user", "content": "stream this"}], "mode": "route"})
+        content_type, sse = post({"model": "mock-generalist", "messages": [{"role": "user", "content": "stream this"}], "mode": "route", "stream": True})
+        _, ref = post({"model": "mock-generalist", "messages": [{"role": "user", "content": "stream this"}], "mode": "route"})
     finally:
         server.shutdown()
 
