@@ -119,7 +119,7 @@ def test_local_backend_honors_bounded_concurrency() -> None:
     ]
 
     job = backend.submit(requests)
-    assert {item.custom_id for item in backend.retrieve(job)} == {"a", "b"}
+    assert [item.custom_id for item in backend.retrieve(job)] == ["a", "b"]
 
 
 # ---------------------------------------------------------------------------
