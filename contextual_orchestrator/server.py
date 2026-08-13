@@ -183,18 +183,28 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
-def _validate_messages(messages: Any) -> list[dict[str, str]]:
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
-    validated: list[dict[str, str]] = []
-    for message in messages:
+    validated: list[dict[str, Any]] = []
+    for index, message in enumerate(messages):
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
         content = message.get("content")
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        validated.append({"role": role, "content": content})
+        row: dict[str, Any] = {"role": role, "content": content}
+        if role == "tool":
+            tool_call_id = message.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+                raise RequestError(
+                    400,
+                    "invalid_tool_call_id",
+                    f"messages[{index}].tool_call_id is required for tool role messages",
+                )
+            row["tool_call_id"] = tool_call_id
+        validated.append(row)
     return validated
 
 
@@ -221,6 +231,20 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
     channel = routing.get("channel")
     if channel is not None and channel not in {"sync", "batch"}:
         raise RequestError(400, "invalid_routing", "routing.channel must be sync or batch")
+    if "latency_tolerant" in routing and not isinstance(routing.get("latency_tolerant"), bool):
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.latency_tolerant must be a boolean",
+        )
+    if "priority" in routing:
+        priority = routing.get("priority")
+        if not isinstance(priority, str) or not priority.strip():
+            raise RequestError(
+                400,
+                "invalid_routing",
+                "routing.priority must be a non-empty string",
+            )
     return routing
 
 
