@@ -177,6 +177,70 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """OpenAI ``tools`` — non-empty array of function tool objects when present."""
+    if "tools" not in body:
+        return None
+    tools = body.get("tools")
+    if not isinstance(tools, list) or not tools:
+        raise RequestError(400, "invalid_tools", "tools must be a non-empty array")
+    validated: list[dict[str, Any]] = []
+    for index, tool in enumerate(tools):
+        if not isinstance(tool, dict):
+            raise RequestError(400, "invalid_tools", f"tools[{index}] must be an object")
+        tool_type = tool.get("type")
+        if tool_type != "function":
+            raise RequestError(400, "invalid_tools", f"tools[{index}].type must be function")
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            raise RequestError(400, "invalid_tools", f"tools[{index}].function must be an object")
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_tools",
+                f"tools[{index}].function.name must be a non-empty string",
+            )
+        if "parameters" in function and not isinstance(function.get("parameters"), dict):
+            raise RequestError(
+                400,
+                "invalid_tools",
+                f"tools[{index}].function.parameters must be an object when set",
+            )
+        validated.append(tool)
+    return validated
+
+
+def _validate_function_call(body: dict[str, Any]) -> Any:
+    """Legacy OpenAI ``function_call`` — none|auto or named function object."""
+    if "function_call" not in body:
+        return None
+    function_call = body.get("function_call")
+    if isinstance(function_call, str):
+        if function_call not in {"none", "auto"}:
+            raise RequestError(
+                400,
+                "invalid_function_call",
+                "function_call string must be none or auto",
+            )
+        return function_call
+    if isinstance(function_call, dict):
+        name = function_call.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_function_call",
+                "function_call.name must be a non-empty string",
+            )
+        return function_call
+    raise RequestError(
+        400,
+        "invalid_function_call",
+        "function_call must be a string or object",
+    )
+
+
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
@@ -713,6 +777,8 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_tools(body)
+                    _validate_function_call(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
