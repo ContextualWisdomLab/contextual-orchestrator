@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
 from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 import copy
@@ -481,6 +481,7 @@ class ModelClient:
         chat_template_args: dict[str, Any] | None = None,
         ca_bundle: str | None = None,
         verify_tls: bool = True,
+        allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
@@ -497,6 +498,7 @@ class ModelClient:
             raise ValueError("local_concurrency must be >= 1")
         self.local_concurrency = int(local_concurrency)
         self.chat_template_args = dict(chat_template_args or {})
+        self.allowed_provider_hosts = self._normalize_allowed_provider_hosts(allowed_provider_hosts)
         # Seam so tests can observe/skip real sleeping during backoff.
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
@@ -517,6 +519,27 @@ class ModelClient:
             except OSError as exc:
                 raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
         return ssl.create_default_context()
+
+    @staticmethod
+    def _normalize_allowed_provider_hosts(hosts: Iterable[str] | None) -> frozenset[str]:
+        """Normalize an explicit provider-host policy once at client construction."""
+        if hosts is None:
+            return frozenset()
+        if isinstance(hosts, (str, bytes)):
+            raise ValueError("allowed_provider_hosts must be an iterable of host strings")
+        normalized: set[str] = set()
+        try:
+            values = iter(hosts)
+        except TypeError as exc:
+            raise ValueError("allowed_provider_hosts must be an iterable of host strings") from exc
+        for host in values:
+            if type(host) is not str:
+                raise ValueError("allowed_provider_hosts must contain only strings")
+            value = host.strip().lower()
+            if not value or any(character in value for character in "/?#"):
+                raise ValueError("allowed_provider_hosts entries must be bare host names")
+            normalized.add(value)
+        return frozenset(normalized)
 
     def take_usage(self) -> dict[str, Any] | None:
         """Return and clear provider-reported usage from the most recent chat() on this thread."""
@@ -882,13 +905,8 @@ class ModelClient:
             raise RuntimeError(f"{agent.id} base_url must use https")
         if parsed.username or parsed.password or parsed.query or parsed.fragment:
             raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
-        allowed_hosts = {
-            host.strip().lower()
-            for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")
-            if host.strip()
-        }
         hostname = parsed.hostname.lower()
-        if allowed_hosts and hostname not in allowed_hosts:
+        if self.allowed_provider_hosts and hostname not in self.allowed_provider_hosts:
             raise RuntimeError(f"{agent.id} provider host is not allowlisted")
         addresses = self._resolve_addresses(hostname, parsed.port or 443)
         for _family, sockaddr in addresses:

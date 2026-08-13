@@ -125,6 +125,8 @@ def main() -> None:
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
+    parser.add_argument("--allowed-provider-host", action="append", dest="allowed_provider_hosts", default=None,
+                        help="Explicit remote provider host allowlist; repeat for multiple hosts (default: unrestricted public hosts).")
     parser.add_argument(
         "--sampling-temperature",
         "--temperature",
@@ -159,6 +161,7 @@ def main() -> None:
         max_output_tokens=args.max_output_tokens,
         local_concurrency=args.local_concurrency,
         chat_template_args=args.chat_template_args,
+        allowed_provider_hosts=args.allowed_provider_hosts,
     )
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),

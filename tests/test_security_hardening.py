@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -274,11 +276,9 @@ def test_external_provider_requires_resolvable_credential_and_public_https() -> 
 
 
 def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
-    client = ModelClient()
+    client = ModelClient(allowed_provider_hosts={"example.com"})
     insecure_agent = ModelAgent("insecure_agent", "gpt-example", "http://api.openai.com/v1", "MODEL_KEY")
     unlisted_agent = ModelAgent("unlisted_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY")
-    previous = os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS")
-    os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = "example.com"
     # Register the credential so validation proceeds to the host-safety checks.
     backend = InMemoryCredentialBackend()
     backend.set("MODEL_KEY", "sk-host-check")
@@ -300,10 +300,28 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
             raise AssertionError("unlisted provider should fail")
     finally:
         set_backend(None)
-        if previous is None:
-            os.environ.pop("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", None)
-        else:
-            os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
+
+
+def test_provider_allowlist_ignores_request_time_environment_changes() -> None:
+    client = ModelClient(allowed_provider_hosts={"provider.example"})
+    agent = ModelAgent(
+        "remote_agent",
+        "remote-model",
+        base_url="https://provider.example/v1",
+        credential_key="remote-key",
+    )
+    with patch.dict(
+        "contextual_orchestrator.orchestrator.os.environ",
+        {"CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": "other.example"},
+    ), patch(
+        "contextual_orchestrator.orchestrator.get_credential",
+        return_value="secret",
+    ), patch.object(
+        client,
+        "_resolve_addresses",
+        return_value=[(socket.AF_INET, ("93.184.216.34", 443))],
+    ):
+        assert client._validate_provider(agent) == (socket.AF_INET, ("93.184.216.34", 443))
 
 
 def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:

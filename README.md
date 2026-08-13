@@ -108,7 +108,7 @@ For a persistent KV-backed server token, seed a credential such as
 backend is process-local and is suitable only for tests; production auth
 registration and OIDC client secrets belong to the deployment/KV boundary.
 
-Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
+Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Pass `--allowed-provider-host HOST` once per approved gateway when an explicit host allowlist is required; it is bound at client construction and is not changed by request-time environment variables. External calls use a timeout and default output token cap.
 
 > The legacy `api_key_env` field is still accepted for back-compat, but its value is now treated as the **credential name** in the KV, not as an environment variable to read. This supersedes the old `api_key_env` env pattern.
 

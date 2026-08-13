@@ -439,10 +439,7 @@ def test_provider_validation_rejects_non_loopback_and_remote_query_data() -> Non
     with patch("contextual_orchestrator.orchestrator.get_credential", return_value="secret"):
         with pytest.raises(RuntimeError, match="query data"):
             client._validate_provider(remote_query)
-        with patch.dict(
-            "contextual_orchestrator.orchestrator.os.environ",
-            {"CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": ""},
-        ), patch.object(
+        with patch.object(
             client,
             "_resolve_addresses",
             return_value=[(socket.AF_INET, ("93.184.216.34", 443))],
