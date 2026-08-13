@@ -197,6 +197,38 @@ A repeated warm-cache smoke after the circuit-breaker lock fix completed in
 contract. The difference from the first smoke is retained as warm-cache and
 provider scheduling variance, not as a quality or universal throughput claim.
 
+### 2026-08-14 paired category-method probe
+
+To test the category-count concern against more than one semantic direction, a
+fresh two-case probe used the same
+`fast-mlsirm.ContextualOrchestratorJudge -> contextual-orchestrator -> mlx-lm`
+path, the 3B Llama judge, temperature `0`, disabled thinking, two criteria, and
+K in `{2, 5, 7}`. The cases were a release plan with canary monitoring,
+independent review, load testing, and rollback rehearsal, and an unsafe plan
+that explicitly omitted review and rollback rehearsal. Every valid output was
+converted to a two-item polytomous row; malformed and non-monotone outputs were
+not repaired.
+
+| case | method | K=2 | K=5 | K=7 |
+|---|---|---:|---:|---:|
+| safe release | direct score / categories | `0.5 / (1,0)` | `1.0 / (4,4)` | `1.0 / (6,6)` |
+| unsafe release | direct score / categories | `0.0 / (0,0)` | `0.0 / (0,0)` | `0.3333 / (2,2)` |
+| safe release | cumulative | parse failure | `0.0 / (0,0)` | monotonicity failure |
+| unsafe release | cumulative | parse failure | `0.0 / (0,0)` | parse failure |
+
+Direct K-way output therefore moved materially with K for both semantic cases;
+this is evidence of category-count sensitivity and a positive drift in this
+sample, not a universal law. Cumulative output was not a reliable mitigation
+in this run because four of six calls failed strict parsing or monotonicity.
+
+An opt-in `binary_threshold` follow-up asked one Boolean boundary question per
+criterion. The safe case failed monotonicity at K=5 and K=7; the unsafe case
+parsed at score `0.0`, using 8 calls/`2,606` tokens at K=5 and 12
+calls/`3,940` tokens at K=7. This makes the decomposition a useful
+fail-closed calibration probe, not a production default or proof of unbiased
+judgment. Its call count, latency, usage, semantic recall, and human/gold
+agreement must be measured before any default change.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
