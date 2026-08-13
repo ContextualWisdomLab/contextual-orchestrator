@@ -43,6 +43,8 @@ ALLOWED_CHAT_KEYS = {
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    # OpenAI Responses additional output selection (see Responses include=).
+    "include",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -175,6 +177,46 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+# Known OpenAI Responses ``include`` values (subset documented for gateway accept).
+ALLOWED_RESPONSES_INCLUDE_VALUES = {
+    "message.input_image.image_url",
+    "file_search_call.results",
+    "web_search_call.results",
+    "computer_call_output.output.image_url",
+    "code_interpreter_call.outputs",
+    "reasoning.encrypted_content",
+    "message.output_text.logprobs",
+}
+
+
+def _validate_responses_include(body: dict[str, Any]) -> list[str] | None:
+    """OpenAI Responses ``include`` — array of known include tokens when present."""
+    if "include" not in body:
+        return None
+    include = body.get("include")
+    if not isinstance(include, list):
+        raise RequestError(400, "invalid_include", "include must be an array of strings")
+    if not include:
+        raise RequestError(400, "invalid_include", "include must be a non-empty array when set")
+    validated: list[str] = []
+    for index, item in enumerate(include):
+        if not isinstance(item, str) or not item.strip():
+            raise RequestError(
+                400,
+                "invalid_include",
+                f"include[{index}] must be a non-empty string",
+            )
+        if item not in ALLOWED_RESPONSES_INCLUDE_VALUES:
+            raise RequestError(
+                400,
+                "invalid_include",
+                f"include[{index}] is not a supported Responses include value",
+                {"value": item, "allowed": sorted(ALLOWED_RESPONSES_INCLUDE_VALUES)},
+            )
+        validated.append(item)
+    return validated
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +904,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_include(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
