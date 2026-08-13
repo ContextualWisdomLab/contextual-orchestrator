@@ -43,8 +43,10 @@ This repository implements the interface and control plane, not the trained coor
 `POST /v1/chat/completions` and `/v1/responses` accept the gateway default model
 id `contextual-orchestrator` or any enabled agent `model` field. Unknown chat
 model ids return HTTP 404 `model_not_found` instead of silently routing to an
-unrelated worker (OpenAI-compatible fail-closed discovery). Embeddings batch
-model strings remain free-form cost/token labels for the embeddings backend.
+unrelated worker (OpenAI-compatible fail-closed discovery). When the requested
+model matches an agent in the pool, the route path steers the worker to that
+agent; the gateway default keeps capability ranking. Embeddings batch model
+strings remain free-form cost/token labels for the embeddings backend.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

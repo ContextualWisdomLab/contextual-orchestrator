@@ -1059,7 +1059,11 @@ def build_server(
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                    for delta in orchestrator.stream_route(
+                        messages,
+                        workflow_run_id=run_id,
+                        preferred_model=model_name,
+                    ):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
