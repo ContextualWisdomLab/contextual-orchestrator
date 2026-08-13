@@ -289,6 +289,20 @@ def _validate_sampling(body: dict[str, Any]) -> dict[str, Any] | None:
             raise RequestError(400, "invalid_seed", "seed must be an integer")
         sampling["seed"] = seed
 
+    for field_name, error_code in (
+        ("presence_penalty", "invalid_presence_penalty"),
+        ("frequency_penalty", "invalid_frequency_penalty"),
+    ):
+        if field_name not in body:
+            continue
+        value = body[field_name]
+        if not isinstance(value, (int, float)) or isinstance(value, bool):
+            raise RequestError(400, error_code, f"{field_name} must be a number")
+        value_f = float(value)
+        if value_f < -2 or value_f > 2:
+            raise RequestError(400, error_code, f"{field_name} must be between -2 and 2")
+        sampling[field_name] = value_f
+
     return sampling or None
 
 

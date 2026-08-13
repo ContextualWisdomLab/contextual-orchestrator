@@ -32,6 +32,10 @@ def test_validate_sampling_accepts_temperature_and_max_tokens() -> None:
     assert _validate_sampling({"max_completion_tokens": 16}) == {"max_tokens": 16}
     assert _validate_sampling({"n": 1}) is None
     assert _validate_sampling({"top_p": 0.9, "seed": 42}) == {"top_p": 0.9, "seed": 42}
+    assert _validate_sampling({"presence_penalty": 0.5, "frequency_penalty": -0.5}) == {
+        "presence_penalty": 0.5,
+        "frequency_penalty": -0.5,
+    }
 
 
 def test_validate_sampling_rejects_bad_n_and_temperature() -> None:
@@ -62,6 +66,11 @@ def test_validate_sampling_rejects_bad_n_and_temperature() -> None:
         raise AssertionError("expected invalid_seed")
     except RequestError as exc:
         assert exc.code == "invalid_seed"
+    try:
+        _validate_sampling({"presence_penalty": 3})
+        raise AssertionError("expected invalid_presence_penalty")
+    except RequestError as exc:
+        assert exc.code == "invalid_presence_penalty"
 
 
 def test_mock_client_truncates_to_max_tokens() -> None:

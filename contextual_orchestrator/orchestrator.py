@@ -257,13 +257,15 @@ class ModelClient:
         stop: list[str] | None = None,
         top_p: float | None = None,
         seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
         ``max_tokens`` overrides the client default ``max_output_tokens`` for this
         call when set (OpenAI-compatible request sampling). ``stop`` truncates the
-        mock path and is forwarded to real providers. ``top_p`` and ``seed`` are
-        forwarded to real providers when set.
+        mock path and is forwarded to real providers. ``top_p``, ``seed``, and
+        penalty fields are forwarded to real providers when set.
         """
         self._local.usage = None
         token_limit = self.max_output_tokens if max_tokens is None else max_tokens
@@ -292,6 +294,10 @@ class ModelClient:
             payload["top_p"] = top_p
         if seed is not None:
             payload["seed"] = seed
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
         return self._send_with_retry(agent, payload)
 
     @staticmethod
@@ -368,6 +374,8 @@ class ModelClient:
         stop: list[str] | None = None,
         top_p: float | None = None,
         seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
     ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
@@ -396,6 +404,10 @@ class ModelClient:
             payload["top_p"] = top_p
         if seed is not None:
             payload["seed"] = seed
+        if presence_penalty is not None:
+            payload["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None:
+            payload["frequency_penalty"] = frequency_penalty
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
@@ -1667,6 +1679,10 @@ class TaskOrchestrator:
             kwargs["top_p"] = float(sampling["top_p"])
         if "seed" in sampling:
             kwargs["seed"] = int(sampling["seed"])
+        if "presence_penalty" in sampling:
+            kwargs["presence_penalty"] = float(sampling["presence_penalty"])
+        if "frequency_penalty" in sampling:
+            kwargs["frequency_penalty"] = float(sampling["frequency_penalty"])
         return kwargs
 
     def _invoke(
@@ -1681,6 +1697,8 @@ class TaskOrchestrator:
         stop: list[str] | None = None,
         top_p: float | None = None,
         seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -1697,6 +1715,8 @@ class TaskOrchestrator:
             "stop": stop,
             "top_p": top_p,
             "seed": seed,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
         }
         for agent in candidates:
             try:
@@ -1720,12 +1740,14 @@ class TaskOrchestrator:
         stop: list[str] | None = None,
         top_p: float | None = None,
         seed: int | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
     ) -> str:
         """Call ``client.chat`` with sampling kwargs only when the client accepts them.
 
         Test doubles often implement a narrow ``chat(agent, messages, temperature=…)``
         signature; production ``ModelClient`` also accepts ``max_tokens``, ``stop``,
-        ``top_p``, and ``seed``.
+        ``top_p``, ``seed``, and penalty fields.
         """
         kwargs: dict[str, Any] = {}
         try:
@@ -1743,6 +1765,10 @@ class TaskOrchestrator:
             kwargs["top_p"] = top_p
         if seed is not None and ("seed" in params or accepts_var_kw):
             kwargs["seed"] = seed
+        if presence_penalty is not None and ("presence_penalty" in params or accepts_var_kw):
+            kwargs["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None and ("frequency_penalty" in params or accepts_var_kw):
+            kwargs["frequency_penalty"] = frequency_penalty
         return self.client.chat(agent, messages, **kwargs)
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
