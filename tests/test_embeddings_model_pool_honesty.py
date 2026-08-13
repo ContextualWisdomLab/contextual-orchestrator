@@ -12,9 +12,12 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import (  # noqa: E402
+    CostLedger,
     CostRoutingCoordinator,
+    InMemoryConfigStore,
     LOCAL_HEURISTIC_EMBEDDING_MODEL,
     ModelAgent,
+    PriceBook,
     TaskOrchestrator,
 )
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
@@ -149,7 +152,7 @@ def test_http_batch_embeddings_accepts_explicit_local_heuristic_model() -> None:
 
 
 def test_embedding_ledger_ignores_spoofed_execution_identity() -> None:
-    """Caller attribution cannot rename the model/provider that actually ran."""
+    """Coordinator callers cannot rename the model/provider that actually ran."""
 
     coordinator = CostRoutingCoordinator(build())
     document = coordinator.complete_embeddings_batch(
@@ -171,6 +174,31 @@ def test_embedding_ledger_ignores_spoofed_execution_identity() -> None:
     assert rows[0]["account_name"] == "buyer_account"
 
 
+def test_public_cost_ledger_ignores_spoofed_execution_identity() -> None:
+    """Direct ledger callers cannot overwrite provider/model execution evidence."""
+
+    config = InMemoryConfigStore()
+    ledger = CostLedger(PriceBook(config))
+    ledger.record_usage(
+        provider="actual_provider",
+        model="actual_model",
+        prompt_tokens=10,
+        completion_tokens=2,
+        attribution={
+            "account": "buyer_account",
+            "model_name": "spoofed_model",
+            "provider": "spoofed_provider",
+            "upstream_api": "spoofed_provider",
+        },
+    )
+    rows = ledger.store.query(None, None)
+    assert len(rows) == 1
+    assert rows[0]["model_name"] == "actual_model"
+    assert rows[0]["provider_name"] == "actual_provider"
+    assert rows[0]["upstream_api"] == "actual_provider"
+    assert rows[0]["account_name"] == "buyer_account"
+
+
 if __name__ == "__main__":
     test_http_embeddings_rejects_unknown_pool_model()
     test_http_embeddings_rejects_chat_model_even_when_pool_serves_it()
@@ -178,4 +206,5 @@ if __name__ == "__main__":
     test_http_batch_embeddings_rejects_chat_model()
     test_http_batch_embeddings_accepts_explicit_local_heuristic_model()
     test_embedding_ledger_ignores_spoofed_execution_identity()
+    test_public_cost_ledger_ignores_spoofed_execution_identity()
     print("ok")
