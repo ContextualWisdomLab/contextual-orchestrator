@@ -118,7 +118,22 @@ def test_http_responses_endpoint_passes_through() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/responses"
     try:
-        status, body = _post(url, {"input": "hello", "tools": []}, token)
+        # Responses always proxies; include a valid tools entry (empty tools arrays
+        # are rejected by OpenAI-compatible validation).
+        status, body = _post(
+            url,
+            {
+                "input": "hello",
+                "tools": [
+                    {
+                        "type": "function",
+                        "name": "lookup",
+                        "parameters": {"type": "object"},
+                    }
+                ],
+            },
+            token,
+        )
     finally:
         server.shutdown()
     assert status == 200
