@@ -24,6 +24,7 @@ from .orchestrator import (
     chat_completion_response,
     redact_value,
     sse_stream_body,
+    text_completion_response,
 )
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
@@ -39,6 +40,12 @@ PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "function
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
     "include_orchestration_trace", "stream", "attribution", "routing",
+} | OPENAI_PASSTHROUGH_PARAM_KEYS
+# Legacy OpenAI Completions API (prompt instead of messages).
+ALLOWED_COMPLETIONS_KEYS = {
+    "model", "prompt", "stream", "echo", "suffix", "best_of", "logprobs",
+    "attribution", "routing", "orchestration", "orchestration_mode", "mode",
+    "include_orchestration_trace",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
@@ -196,6 +203,27 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
         validated.append({"role": role, "content": content})
     return validated
+
+
+def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
+    """Map OpenAI legacy Completions ``prompt`` into a single user chat message."""
+    if isinstance(prompt, str):
+        if not prompt:
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array of strings")
+        return [{"role": "user", "content": prompt}]
+    if isinstance(prompt, list):
+        if not prompt:
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array of strings")
+        parts: list[str] = []
+        for item in prompt:
+            if not isinstance(item, str):
+                raise RequestError(400, "invalid_prompt", "prompt array items must be strings")
+            parts.append(item)
+        joined = "\n".join(parts)
+        if not joined.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array of strings")
+        return [{"role": "user", "content": joined}]
+    raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array of strings")
 
 
 def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
@@ -794,6 +822,67 @@ def build_server(
                         self._send_sse(sse_stream_body(chunks))
                         return
                     self._send(chat_completion_response(
+                        result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
+                    ))
+                    return
+                if path == "/v1/completions":
+                    # Legacy OpenAI Completions API: prompt → single-user chat → text_completion.
+                    _reject_unknown_keys(body, ALLOWED_COMPLETIONS_KEYS)
+                    stream = body.get("stream", False)
+                    if not isinstance(stream, bool):
+                        raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    if stream:
+                        raise RequestError(
+                            400,
+                            "invalid_request",
+                            "stream is not supported on /v1/completions; use /v1/chat/completions",
+                        )
+                    n = body.get("n")
+                    if n is not None and (not isinstance(n, int) or isinstance(n, bool) or n != 1):
+                        raise RequestError(400, "invalid_n", "n must be 1; multi-completion is not supported")
+                    messages = _validate_completion_prompt(body.get("prompt"))
+                    mode = _validate_mode(
+                        body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "route"
+                    )
+                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    attribution = _validate_attribution(body.get("attribution"))
+                    routing = _validate_routing(body.get("routing"))
+                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    started_at = time.perf_counter()
+                    result = self._run(lambda: coordinator.complete(
+                        messages,
+                        mode=mode,
+                        attribution=attribution,
+                        hints=routing,
+                        model_name=model_name,
+                        workflow_run_id=f"run_{uuid.uuid4().hex}",
+                    ))
+                    if result.get("channel") == "batch":
+                        orchestrator.record_analytics_event(
+                            "text_completion_batched",
+                            {
+                                "endpoint_path": "/v1/completions",
+                                "actor_scope": "inference",
+                                "status_code": 202,
+                                "batch_job_id": result["job_id"],
+                                "batch_backend": result["backend"],
+                            },
+                        )
+                        self._send(result, 202)
+                        return
+                    orchestrator.record_analytics_event(
+                        "text_completion_requested",
+                        {
+                            "endpoint_path": "/v1/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "run_mode": result["mode"],
+                            "workflow_run_id": result["workflow_run_id"],
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            "response_streamed": False,
+                        },
+                    )
+                    self._send(text_completion_response(
                         result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
                     ))
                     return

@@ -413,6 +413,41 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Batch results with recorded usage"}},
             }
         },
+        "/v1/completions": {
+            "post": {
+                "operationId": "create_text_completion",
+                "summary": "OpenAI-compatible legacy Completions API (prompt → route → text_completion)",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["prompt"],
+                                "properties": {
+                                    "model": {"type": "string"},
+                                    "prompt": {
+                                        "oneOf": [
+                                            {"type": "string"},
+                                            {"type": "array", "items": {"type": "string"}},
+                                        ]
+                                    },
+                                    "max_tokens": {"type": "integer"},
+                                    "temperature": {"type": "number"},
+                                    "stream": {"type": "boolean"},
+                                    "n": {"type": "integer"},
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {"description": "OpenAI text_completion object"},
+                    "400": {"description": "Invalid prompt or unsupported stream/n"},
+                },
+            }
+        },
         "/v1/batch/embeddings": {
             "post": {
                 "operationId": "create_batch_embeddings_job",
