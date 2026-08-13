@@ -118,7 +118,7 @@ def test_http_responses_endpoint_passes_through() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/responses"
     try:
-        status, body = _post(url, {"input": "hello", "tools": []}, token)
+        status, body = _post(url, {"model": "mock-planner", "input": "hello", "tools": []}, token)
     finally:
         server.shutdown()
     assert status == 200
