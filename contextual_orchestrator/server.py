@@ -48,6 +48,8 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+ALLOWED_REASONING_EFFORT = {"minimal", "low", "medium", "high"}
+ALLOWED_MODALITIES = {"text", "audio"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -175,6 +177,40 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+def _validate_reasoning_effort(body: dict[str, Any]) -> str | None:
+    """OpenAI ``reasoning_effort`` — minimal|low|medium|high when present."""
+    if "reasoning_effort" not in body:
+        return None
+    value = body.get("reasoning_effort")
+    if not isinstance(value, str) or value not in ALLOWED_REASONING_EFFORT:
+        raise RequestError(
+            400,
+            "invalid_reasoning_effort",
+            "reasoning_effort must be one of: minimal, low, medium, high",
+        )
+    return value
+
+
+def _validate_modalities(body: dict[str, Any]) -> list[str] | None:
+    """OpenAI ``modalities`` — non-empty list of text|audio when present."""
+    if "modalities" not in body:
+        return None
+    modalities = body.get("modalities")
+    if not isinstance(modalities, list) or not modalities:
+        raise RequestError(400, "invalid_modalities", "modalities must be a non-empty array")
+    validated: list[str] = []
+    for index, item in enumerate(modalities):
+        if not isinstance(item, str) or item not in ALLOWED_MODALITIES:
+            raise RequestError(
+                400,
+                "invalid_modalities",
+                f"modalities[{index}] must be one of: text, audio",
+            )
+        validated.append(item)
+    return validated
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +749,8 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_reasoning_effort(body)
+                    _validate_modalities(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
