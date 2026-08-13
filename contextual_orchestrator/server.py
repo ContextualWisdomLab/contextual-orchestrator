@@ -48,6 +48,8 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+_MAX_METADATA_STRING_CHARS = 64  # OpenAI metadata key/value hard cap
+_MAX_METADATA_PAIRS = 16
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -175,6 +177,51 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+
+def _validate_openai_metadata_map(body: dict[str, Any]) -> dict[str, str] | None:
+    """OpenAI ``metadata`` — ≤16 string→string pairs; keys/values ≤64 chars.
+
+    Rejects empty keys, non-string values, oversize strings, and more than
+    16 pairs so multi-tenant SDKs fail closed at the gateway.
+    """
+    if "metadata" not in body:
+        return None
+    metadata = body.get("metadata")
+    if not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_metadata", "metadata must be an object")
+    if len(metadata) > _MAX_METADATA_PAIRS:
+        raise RequestError(
+            400,
+            "invalid_metadata",
+            f"metadata may contain at most {_MAX_METADATA_PAIRS} key-value pairs",
+            {"count": len(metadata), "max_count": _MAX_METADATA_PAIRS},
+        )
+    normalized: dict[str, str] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str) or not key:
+            raise RequestError(400, "invalid_metadata", "metadata keys must be non-empty strings")
+        if len(key) > _MAX_METADATA_STRING_CHARS:
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                f"metadata keys must be at most {_MAX_METADATA_STRING_CHARS} characters",
+                {"key_length": len(key), "max_length": _MAX_METADATA_STRING_CHARS},
+            )
+        if not isinstance(value, str):
+            raise RequestError(400, "invalid_metadata", "metadata values must be strings")
+        if len(value) > _MAX_METADATA_STRING_CHARS:
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                f"metadata values must be at most {_MAX_METADATA_STRING_CHARS} characters",
+                {"value_length": len(value), "max_length": _MAX_METADATA_STRING_CHARS},
+            )
+        normalized[key] = value
+    body["metadata"] = normalized
+    return normalized
 
 
 def _validate_mode(mode: Any) -> str:
@@ -713,6 +760,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    _validate_openai_metadata_map(body)
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -862,6 +910,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_openai_metadata_map(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
