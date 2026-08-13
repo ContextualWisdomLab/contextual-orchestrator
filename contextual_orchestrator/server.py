@@ -43,6 +43,7 @@ ALLOWED_CHAT_KEYS = {
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "prompt",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -175,6 +176,23 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
+
+
+
+def _validate_responses_prompt(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI Responses ``prompt`` template reference — {id: str, ...} when present."""
+    if "prompt" not in body:
+        return None
+    prompt = body.get("prompt")
+    if not isinstance(prompt, dict):
+        raise RequestError(400, "invalid_prompt", "prompt must be an object")
+    prompt_id = prompt.get("id")
+    if not isinstance(prompt_id, str) or not prompt_id.strip():
+        raise RequestError(400, "invalid_prompt", "prompt.id must be a non-empty string")
+    variables = prompt.get("variables")
+    if variables is not None and not isinstance(variables, dict):
+        raise RequestError(400, "invalid_prompt", "prompt.variables must be an object when present")
+    return prompt
 
 
 def _validate_mode(mode: Any) -> str:
@@ -862,6 +880,7 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    _validate_responses_prompt(body)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
