@@ -33,8 +33,10 @@ This repository implements the interface and control plane, not the trained coor
 
 - `contextual_orchestrator.orchestrator.Agent`: one configured worker model.
 - `Orchestrator.route_once`: the low-latency routing path.
+- `Orchestrator.route_and_verify` (`mode="verify"`): one worker call plus one checked verifier judgment — for adjudication-shaped requests that need a verified verdict without the full four-step workflow's cost.
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
+- `reasoning_effort` (request-level, OpenAI-compatible `minimal`/`low`/`medium`/`high`): threads through every provider call in a request (`ModelClient.chat`/`stream_chat`), so a caller can request higher test-time compute for a single adjudication call while keeping cheap calls (e.g. embeddings) at default effort — the per-role/per-request test-time-compute allocation Fugu, Conductor, and TRINITY call for.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 

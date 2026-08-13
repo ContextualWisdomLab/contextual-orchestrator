@@ -116,6 +116,7 @@ class CostRoutingCoordinator:
         hints: Optional[Dict[str, Any]] = None,
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
+        reasoning_effort: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -123,6 +124,9 @@ class CostRoutingCoordinator:
         augmented with ``channel``, ``routing_reason``, ``usage``, and the
         ``usage_record_id``. Batch requests are dispatched to the batch backend
         and return a job envelope; their cost is recorded on retrieval.
+        ``reasoning_effort`` only applies to the sync path today — ``BatchRequest``
+        has no reasoning_effort field, so a request routed to the batch channel
+        drops the hint rather than partially threading it through pg-llm-batch.
         """
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
@@ -145,7 +149,9 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        result = self.orchestrator.run(messages, mode=mode, workflow_run_id=workflow_run_id)
+        result = self.orchestrator.run(
+            messages, mode=mode, workflow_run_id=workflow_run_id, reasoning_effort=reasoning_effort
+        )
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),

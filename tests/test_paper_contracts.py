@@ -12,8 +12,10 @@ class RecordingClient:
     def __init__(self) -> None:
         self.calls = []
 
-    def chat(self, agent: ModelAgent, messages, temperature: float = 0.2) -> str:
-        self.calls.append((agent.id, messages))
+    def chat(
+        self, agent: ModelAgent, messages, temperature: float = 0.2, reasoning_effort: str | None = None
+    ) -> str:
+        self.calls.append((agent.id, messages, reasoning_effort))
         return f"{agent.id}:{len(self.calls)}"
 
 
@@ -60,8 +62,66 @@ def test_conductor_contract_uses_access_lists_to_control_context() -> None:
     assert "Step 1: builder_agent:2" in verifier_prompt
 
 
+def test_reasoning_effort_threads_to_every_provider_call_in_a_conduct_run() -> None:
+    """Fugu/Conductor/TRINITY: test-time compute is a per-request knob, not fixed.
+
+    A caller asking for ``reasoning_effort="high"`` on a conducted (multi-step)
+    request expects every provider call in that request -- thinker, worker,
+    verifier, synthesizer -- to carry it, not just the first one.
+    """
+    client = RecordingClient()
+    build(client).conduct(
+        [{"role": "user", "content": "Analyze, implement, verify, and synthesize."}],
+        reasoning_effort="high",
+    )
+
+    assert len(client.calls) == 4
+    assert all(reasoning_effort == "high" for _, _, reasoning_effort in client.calls)
+
+
+def test_reasoning_effort_omitted_by_default() -> None:
+    """No caller opt-in means no behavior change for providers that reject unknown fields."""
+    client = RecordingClient()
+    build(client).route_once([{"role": "user", "content": "Write one sentence."}])
+
+    assert client.calls[0][2] is None
+
+
+def test_verify_mode_contract_returns_worker_and_checked_verifier_trace() -> None:
+    """mode="verify": one worker call + one checked verifier judgment, cheaper than conduct().
+
+    Grounds the "adjudication" use case Fugu/Conductor/TRINITY test-time-compute
+    allocation is meant to serve: a caller wanting a verified verdict on a single
+    judgment without paying for the full four-step workflow.
+    """
+    result = build().complete(
+        [{"role": "user", "content": "Does record B logically follow from record A?"}],
+        mode="verify",
+    )
+
+    assert result["mode"] == "verify"
+    assert [step["role"] for step in result["trace"]] == ["worker", "verifier"]
+    assert result["trace"][1]["access"] == [0]
+    assert "accepted" in result["verification"]
+
+
+def test_verify_mode_reasoning_effort_reaches_both_calls() -> None:
+    client = RecordingClient()
+    build(client).route_and_verify(
+        [{"role": "user", "content": "Does record B logically follow from record A?"}],
+        reasoning_effort="high",
+    )
+
+    assert len(client.calls) == 2
+    assert all(reasoning_effort == "high" for _, _, reasoning_effort in client.calls)
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_fugu_contract_fuses_fast_route_and_deep_workflow()
     test_trinity_contract_has_explicit_thinker_worker_verifier_roles()
     test_conductor_contract_uses_access_lists_to_control_context()
+    test_reasoning_effort_threads_to_every_provider_call_in_a_conduct_run()
+    test_reasoning_effort_omitted_by_default()
+    test_verify_mode_contract_returns_worker_and_checked_verifier_trace()
+    test_verify_mode_reasoning_effort_reaches_both_calls()
     print("ok")

@@ -47,7 +47,13 @@ ALLOWED_RESPONSES_KEYS = {
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
-ALLOWED_MODES = {"auto", "route", "conduct"}
+# "verify": one worker call + one checked verifier judgment (route_and_verify) --
+# cheaper than "conduct" for adjudication-shaped requests that still need a
+# checked verdict, without the full thinker/worker/verifier/synthesizer workflow.
+ALLOWED_MODES = {"auto", "route", "conduct", "verify"}
+# OpenAI-compatible reasoning-effort levels (Fugu/Conductor/TRINITY test-time-compute
+# allocation: role/request-specific reasoning effort, never assumed by default).
+ALLOWED_REASONING_EFFORT = {"minimal", "low", "medium", "high"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -179,8 +185,20 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
 
 def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
-        raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
+        raise RequestError(400, "invalid_mode", "mode must be auto, route, conduct, or verify")
     return mode
+
+
+def _validate_reasoning_effort(value: Any) -> str | None:
+    if value is None:
+        return None
+    if not isinstance(value, str) or value not in ALLOWED_REASONING_EFFORT:
+        raise RequestError(
+            400,
+            "invalid_reasoning_effort",
+            "reasoning_effort must be one of: minimal, low, medium, high",
+        )
+    return value
 
 
 def _validate_messages(messages: Any) -> list[dict[str, str]]:
@@ -739,10 +757,13 @@ def build_server(
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
+                    reasoning_effort = _validate_reasoning_effort(body.get("reasoning_effort"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
                     if stream and orchestrator.would_route(messages, mode):
-                        self._stream_route_completion(orchestrator, security, messages, model_name)
+                        self._stream_route_completion(
+                            orchestrator, security, messages, model_name, reasoning_effort=reasoning_effort
+                        )
                         orchestrator.record_analytics_event(
                             "chat_completion_requested",
                             {
@@ -762,6 +783,7 @@ def build_server(
                         hints=routing,
                         model_name=model_name,
                         workflow_run_id=f"run_{uuid.uuid4().hex}",
+                        reasoning_effort=reasoning_effort,
                     ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
@@ -1019,7 +1041,15 @@ def build_server(
             self.wfile.write(frame.encode("utf-8"))
             self.wfile.flush()
 
-        def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
+        def _stream_route_completion(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+            *,
+            reasoning_effort: str | None = None,
+        ) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = f"chatcmpl-{int(time.time() * 1000)}"
@@ -1040,7 +1070,9 @@ def build_server(
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                    for delta in orchestrator.stream_route(
+                        messages, workflow_run_id=run_id, reasoning_effort=reasoning_effort
+                    ):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame

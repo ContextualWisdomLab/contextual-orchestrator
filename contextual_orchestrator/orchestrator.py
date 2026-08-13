@@ -246,8 +246,19 @@ class ModelClient:
         self._local.usage = None
         return usage
 
-    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
-        """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
+    def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float = 0.2,
+        reasoning_effort: str | None = None,
+    ) -> str:
+        """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
+
+        ``reasoning_effort`` (minimal/low/medium/high, OpenAI-compatible) is omitted
+        from the upstream payload when None so providers that reject unknown fields
+        are unaffected by callers that never set it.
+        """
         self._local.usage = None
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
@@ -266,6 +277,8 @@ class ModelClient:
             "stream": False,
             "max_tokens": self.max_output_tokens,
         }
+        if reasoning_effort is not None:  # pragma: no cover
+            payload["reasoning_effort"] = reasoning_effort
         return self._send_with_retry(agent, payload)
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
@@ -313,7 +326,13 @@ class ModelClient:
             context=self._ssl_context,
         )
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+    def stream_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float = 0.2,
+        reasoning_effort: str | None = None,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
@@ -334,6 +353,8 @@ class ModelClient:
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
+        if reasoning_effort is not None:  # pragma: no cover
+            payload["reasoning_effort"] = reasoning_effort
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
@@ -909,30 +930,42 @@ class TaskOrchestrator:
         upstream["stream"] = False
         return self.client.proxy_send(agent, endpoint, upstream)
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
-        """Return a route or conducted completion without persisting a workflow run."""
+    def complete(
+        self, messages: list[ChatMessage], mode: str = "auto", *, reasoning_effort: str | None = None
+    ) -> dict[str, Any]:
+        """Return a route, verify, or conducted completion without persisting a workflow run."""
         if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
+            return self._dispatch(messages, mode, reasoning_effort=reasoning_effort)
+        key = self._cache_key(messages, mode, reasoning_effort)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._dispatch(messages, mode)
+        result = self._dispatch(messages, mode, reasoning_effort=reasoning_effort)
         self._cache.put(key, result)
         return result
 
-    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
+    def _dispatch(
+        self, messages: list[ChatMessage], mode: str, *, reasoning_effort: str | None = None
+    ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
+        if mode == "verify":
+            return self.route_and_verify(messages, reasoning_effort=reasoning_effort)
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
-            return self.route_once(messages)
-        return self.conduct(messages)
+            return self.route_once(messages, reasoning_effort=reasoning_effort)
+        return self.conduct(messages, reasoning_effort=reasoning_effort)
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
         text = self._latest_user_text(messages)
         return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
 
-    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+    def stream_route(
+        self,
+        messages: list[ChatMessage],
+        workflow_run_id: str | None = None,
+        *,
+        reasoning_effort: str | None = None,
+    ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
         True streaming for the route path. ponytail: no cross-agent failover here — bytes
@@ -941,7 +974,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
+        for delta in self.client.stream_chat(agent, messages, reasoning_effort=reasoning_effort):
             parts.append(delta)
             yield delta
         answer = "".join(parts)
@@ -971,17 +1004,28 @@ class TaskOrchestrator:
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+    def _cache_key(self, messages: list[ChatMessage], mode: str, reasoning_effort: str | None = None) -> str:
+        payload = json.dumps(
+            {"mode": mode, "messages": messages, "reasoning_effort": reasoning_effort},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        *,
+        reasoning_effort: str | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        result = self.complete(messages, mode=mode, reasoning_effort=reasoning_effort)
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -1336,12 +1380,16 @@ class TaskOrchestrator:
         )
         return {"removed": worker_agent_id}
 
-    def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def route_once(
+        self, messages: list[ChatMessage], *, reasoning_effort: str | None = None
+    ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         start = time.perf_counter()
-        answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
+        answer, served_id, usage = self._invoke(
+            agent, messages, text=text, role="worker", reasoning_effort=reasoning_effort
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
             "id": 0,
@@ -1364,13 +1412,96 @@ class TaskOrchestrator:
             "trace": [row],
         }
 
-    def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def route_and_verify(
+        self, messages: list[ChatMessage], *, reasoning_effort: str | None = None
+    ) -> dict[str, Any]:
+        """One worker call plus one checked verifier judgment — cheaper than ``conduct()``.
+
+        For adjudication-shaped requests ("does B follow from A?") that need a
+        verified verdict without paying for the full thinker/worker/verifier/
+        synthesizer workflow. ``reasoning_effort`` applies to both calls, so a
+        caller can request e.g. high effort for the judgment while still using a
+        single request/response round trip.
+        """
+        text = self._latest_user_text(messages)
+        worker = self._select_agent(text, "worker")
+        start = time.perf_counter()
+        answer, worker_served_id, worker_usage = self._invoke(
+            worker, messages, text=text, role="worker", reasoning_effort=reasoning_effort
+        )
+        worker_latency_ms = (time.perf_counter() - start) * 1000
+
+        verifier = self._select_agent(text, "verifier")
+        verifier_messages = [
+            {
+                "role": "system",
+                "content": (
+                    "Role: verifier\n"
+                    "Judge whether the worker's answer is sound, correct, and directly "
+                    "responsive to the task. State any concrete errors, gaps, or "
+                    "unsupported claims."
+                ),
+            },
+            {"role": "user", "content": f"Task:\n{text}\n\nWorker answer:\n{answer}"},
+        ]
+        verify_start = time.perf_counter()
+        verifier_output, verifier_served_id, verifier_usage = self._invoke(
+            verifier, verifier_messages, text=text, role="verifier", reasoning_effort=reasoning_effort
+        )
+        verifier_latency_ms = (time.perf_counter() - verify_start) * 1000
+
+        verification = self._judge_verifier_output(verifier_output, text, answer)
+        if self.policy.verifier_judge == "model":
+            verification = self._model_judge_verification(
+                text, verification, reasoning_effort=reasoning_effort
+            )
+
+        worker_row = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": worker.id,
+            "subtask": "Direct route",
+            "access": [],
+            "latency_ms": round(worker_latency_ms, 2),
+            "output": answer,
+        }
+        if worker_usage is not None:
+            worker_row["usage"] = worker_usage
+        if worker_served_id != worker.id:  # pragma: no cover
+            worker_row["served_agent_id"] = worker_served_id
+            worker_row["failover_from"] = worker.id
+
+        verifier_row = {
+            "id": 1,
+            "role": "verifier",
+            "agent_id": verifier.id,
+            "subtask": "Verify the worker's answer",
+            "access": [0],
+            "latency_ms": round(verifier_latency_ms, 2),
+            "output": verifier_output,
+        }
+        if verifier_usage is not None:
+            verifier_row["usage"] = verifier_usage
+        if verifier_served_id != verifier.id:  # pragma: no cover
+            verifier_row["served_agent_id"] = verifier_served_id
+            verifier_row["failover_from"] = verifier.id
+
+        return {
+            "mode": "verify",
+            "answer": answer,
+            "verification": verification,
+            "trace": [worker_row, verifier_row],
+        }
+
+    def conduct(
+        self, messages: list[ChatMessage], *, reasoning_effort: str | None = None
+    ) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
         plan_source = "template"
         if self.policy.workflow_planning == "generated":
             try:
-                steps = self._plan_generated(task)
+                steps = self._plan_generated(task, reasoning_effort=reasoning_effort)
                 plan_source = "generated"
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
                 steps = self._plan(task)
@@ -1398,7 +1529,9 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
-            output, served_id, usage = self._invoke(agent, step_messages, text=task, role=step.role)
+            output, served_id, usage = self._invoke(
+                agent, step_messages, text=task, role=step.role, reasoning_effort=reasoning_effort
+            )
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
@@ -1421,14 +1554,18 @@ class TaskOrchestrator:
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
             if self.policy.verifier_judge == "model":
-                verification = self._model_judge_verification(task, verification)
+                verification = self._model_judge_verification(
+                    task, verification, reasoning_effort=reasoning_effort
+                )
             answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
                 answer = last_output("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
             if self.policy.verifier_judge == "model":
-                verification = self._model_judge_verification(task, verification)
+                verification = self._model_judge_verification(
+                    task, verification, reasoning_effort=reasoning_effort
+                )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
@@ -1441,7 +1578,9 @@ class TaskOrchestrator:
             "plan_source": plan_source,
         }
 
-    def _plan_generated(self, task: str) -> list[WorkflowStep]:
+    def _plan_generated(
+        self, task: str, *, reasoning_effort: str | None = None
+    ) -> list[WorkflowStep]:
         """Ask the planner model to generate the workflow (Conductor, arXiv:2512.04388).
 
         The plan is JSON: natural-language subtasks, a worker assignment, and an access
@@ -1462,10 +1601,10 @@ class TaskOrchestrator:
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
-        raw = self.client.chat(planner, [
+        raw = self._client_chat(planner, [
             {"role": "system", "content": system},
             {"role": "user", "content": task},
-        ])
+        ], reasoning_effort)
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -1538,7 +1677,13 @@ class TaskOrchestrator:
         return selected
 
     def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        reasoning_effort: str | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -1551,7 +1696,7 @@ class TaskOrchestrator:
         last_error: Exception | None = None
         for agent in candidates:
             try:
-                output = self.client.chat(agent, messages)
+                output = self._client_chat(agent, messages, reasoning_effort)
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
                 self._record_failure(agent.id)
@@ -1560,6 +1705,20 @@ class TaskOrchestrator:
             usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
             return output, agent.id, usage
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+
+    def _client_chat(
+        self, agent: ModelAgent, messages: list[ChatMessage], reasoning_effort: str | None
+    ) -> str:
+        """Call ``self.client.chat``, only passing ``reasoning_effort`` when set.
+
+        Keeps compatibility with any pre-existing ``ModelClient``-shaped test
+        double or subclass whose ``chat`` doesn't accept ``reasoning_effort`` --
+        as long as a caller never actually requests a non-default effort against
+        one, its narrower signature keeps working unchanged.
+        """
+        if reasoning_effort is None:
+            return self.client.chat(agent, messages)
+        return self.client.chat(agent, messages, reasoning_effort=reasoning_effort)
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
@@ -1602,7 +1761,9 @@ class TaskOrchestrator:
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
 
-    def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
+    def _model_judge_verification(
+        self, task: str, fallback: dict[str, Any], *, reasoning_effort: str | None = None
+    ) -> dict[str, Any]:
         """Ask a model to judge the verifier report (fixes term-matching false negatives).
 
         The judge must answer ACCEPT or REJECT; an ambiguous reply or a judge failure
@@ -1613,14 +1774,14 @@ class TaskOrchestrator:
             return fallback
         judge = self._select_agent(task, "verifier")
         try:
-            reply = self.client.chat(judge, [
+            reply = self._client_chat(judge, [
                 {"role": "system", "content": (
                     "You are the verification judge. Read the verifier report about the task. "
                     "Reply with exactly one word: ACCEPT if the verified work is sound, "
                     "REJECT if it has disqualifying problems."
                 )},
                 {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
-            ])
+            ], reasoning_effort)
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return fallback
         upper = (reply or "").strip().upper()
