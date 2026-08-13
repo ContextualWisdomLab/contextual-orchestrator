@@ -108,8 +108,39 @@ def test_chat_completions_still_works() -> None:
     assert body["object"] == "chat.completion"
 
 
+
+
+def test_assistants_vector_stores_and_openai_batches_return_501() -> None:
+    """Buyer path: Assistants/Threads/Vector Stores/Batches SDKs get 501 not 404."""
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    paths = [
+        ("GET", "/v1/assistants", None),
+        ("POST", "/v1/assistants", {"model": "gpt-4o", "name": "helper"}),
+        ("GET", "/v1/assistants/asst_abc", None),
+        ("POST", "/v1/threads", {}),
+        ("GET", "/v1/threads/thread_abc", None),
+        ("GET", "/v1/vector_stores", None),
+        ("POST", "/v1/vector_stores", {"name": "kb"}),
+        ("GET", "/v1/vector_stores/vs_abc", None),
+        ("GET", "/v1/batches", None),
+        ("POST", "/v1/batches", {"input_file_id": "file_abc", "endpoint": "/v1/chat/completions"}),
+        ("GET", "/v1/batches/batch_abc", None),
+    ]
+    try:
+        for method, path, payload in paths:
+            status, body = _request(method, f"http://127.0.0.1:{port}{path}", payload)
+            assert status == 501, (path, body)
+            assert body["error"]["code"] == "not_implemented", path
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
 if __name__ == "__main__":
     test_images_generations_returns_501_not_404()
     test_audio_and_moderations_and_files_return_501()
+    test_assistants_vector_stores_and_openai_batches_return_501()
     test_chat_completions_still_works()
     print("ok")

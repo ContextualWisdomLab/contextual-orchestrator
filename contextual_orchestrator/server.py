@@ -62,7 +62,20 @@ OPENAI_NOT_IMPLEMENTED_PATHS = frozenset({
     "/v1/fine_tuning/jobs",
     "/v1/fine-tunes",
     "/v1/engines",
+    # Assistants v2 / Threads / Vector stores / OpenAI Batches API (not our routing batches)
+    "/v1/assistants",
+    "/v1/threads",
+    "/v1/vector_stores",
+    "/v1/batches",
 })
+OPENAI_NOT_IMPLEMENTED_PREFIXES = (
+    "/v1/files/",
+    "/v1/assistants/",
+    "/v1/threads/",
+    "/v1/vector_stores/",
+    "/v1/batches/",
+    "/v1/fine_tuning/jobs/",
+)
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -194,14 +207,15 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
 
 def _reject_not_implemented_openai_path(path: str) -> None:
     """Raise 501 for known-but-unimplemented OpenAI API paths."""
-    if path in OPENAI_NOT_IMPLEMENTED_PATHS or path.startswith("/v1/files/"):
+    if path in OPENAI_NOT_IMPLEMENTED_PATHS or any(
+        path.startswith(prefix) for prefix in OPENAI_NOT_IMPLEMENTED_PREFIXES
+    ):
         raise RequestError(
             501,
             "not_implemented",
-            f"{path} is not implemented by this gateway; use /v1/chat/completions, "
-            f"/v1/responses, or /v1/batch/embeddings",
-            {"path": path},
+            f"OpenAI path {path} is not implemented by this gateway",
         )
+
 
 
 def _validate_mode(mode: Any) -> str:
