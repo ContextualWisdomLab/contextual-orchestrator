@@ -633,8 +633,54 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
         content = message.get("content")
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        validated.append({"role": role, "content": content})
+        entry: dict[str, str] = {"role": role, "content": content}
+        if role == "tool":
+            # OpenAI tool messages bind results to a prior tool_call via tool_call_id.
+            tool_call_id = message.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "tool messages require a non-empty tool_call_id string",
+                )
+            if len(tool_call_id) > 128:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "tool_call_id must be at most 128 characters",
+                )
+            entry["tool_call_id"] = tool_call_id
+        validated.append(entry)
     return validated
+
+
+def _validate_chat_tool_message_ids(body: dict[str, Any]) -> None:
+    """Fail closed on role=tool messages missing a usable tool_call_id.
+
+    Runs before tools passthrough so multi-turn tool results are shape-checked
+    even when the body is proxied verbatim to a single provider agent.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "tool":
+            continue
+        tool_call_id = message.get("tool_call_id")
+        if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool messages require a non-empty tool_call_id string",
+            )
+        if len(tool_call_id) > 128:
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_call_id must be at most 128 characters",
+            )
 
 
 def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
@@ -1450,6 +1496,8 @@ def build_server(
                             "invalid_tool_choice",
                             "tool_choice requires tools on /v1/chat/completions",
                         )
+                    # Shape-check tool results before passthrough or orchestration.
+                    _validate_chat_tool_message_ids(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "tools" in body:
