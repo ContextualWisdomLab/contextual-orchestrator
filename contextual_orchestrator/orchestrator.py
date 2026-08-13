@@ -1325,6 +1325,7 @@ class TaskOrchestrator:
         # Per-agent circuit breaker: consecutive failures trip an agent "open"
         # so a persistently failing provider is skipped until it cools down.
         self._circuit: dict[str, dict[str, float]] = {}
+        self._circuit_lock = threading.Lock()
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -2072,23 +2073,26 @@ class TaskOrchestrator:
         return healthy or eligible or [primary]
 
     def _circuit_open(self, agent_id: str) -> bool:
-        state = self._circuit.get(agent_id)
-        if not state or state["failures"] < self.circuit_failure_threshold:
-            return False
-        if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
-            state["failures"] = 0.0
-            state["opened_at"] = 0.0
-            return False
-        return True
+        with self._circuit_lock:
+            state = self._circuit.get(agent_id)
+            if not state or state["failures"] < self.circuit_failure_threshold:
+                return False
+            if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
+                state["failures"] = 0.0
+                state["opened_at"] = 0.0
+                return False
+            return True
 
     def _record_failure(self, agent_id: str) -> None:
-        state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
-        state["failures"] += 1.0
-        if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
-            state["opened_at"] = time.monotonic()
+        with self._circuit_lock:
+            state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
+            state["failures"] += 1.0
+            if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
+                state["opened_at"] = time.monotonic()
 
     def _record_success(self, agent_id: str) -> None:
-        self._circuit.pop(agent_id, None)
+        with self._circuit_lock:
+            self._circuit.pop(agent_id, None)
 
     def _agent(self, agent_id: str) -> ModelAgent:
         for agent in self.candidates:

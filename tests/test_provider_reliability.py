@@ -6,17 +6,19 @@ the capability a model-orchestration gateway is bought for.
 
 from __future__ import annotations
 
-from pathlib import Path
 import socket
 import sys
+import threading
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
-    ModelClient,
     TRANSIENT_HTTP_STATUS,
+    ModelClient,
     is_transient_error,
 )
 
@@ -244,6 +246,22 @@ def test_success_clears_prior_failures() -> None:
     orchestrator._record_success("primary_worker")
     assert orchestrator._circuit_open("primary_worker") is False
     assert "primary_worker" not in orchestrator._circuit
+
+
+def test_circuit_breaker_counts_concurrent_failures() -> None:
+    orchestrator, _ = _two_worker_orchestrator(down_id="primary_worker")
+    calls = orchestrator.circuit_failure_threshold * 4
+    barrier = threading.Barrier(calls, timeout=2.0)
+
+    def record_failure(_index: int) -> None:
+        barrier.wait()
+        orchestrator._record_failure("primary_worker")
+
+    with ThreadPoolExecutor(max_workers=calls) as pool:
+        list(pool.map(record_failure, range(calls)))
+
+    assert orchestrator._circuit["primary_worker"]["failures"] == float(calls)
+    assert orchestrator._circuit_open("primary_worker") is True
 
 
 def test_mock_path_is_unchanged_no_failover_no_circuit_state() -> None:
