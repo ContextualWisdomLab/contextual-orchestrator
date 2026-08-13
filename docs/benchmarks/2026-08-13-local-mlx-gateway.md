@@ -44,6 +44,34 @@ starting another conduct workflow. The final rejection is a model-evaluation
 result, not a keyword rule; malformed or unavailable judge output would remain
 fail-closed.
 
+## Additional local model and batch-throughput probe
+
+Using the same loopback `mlx-lm` server, temperature `0`, disabled thinking,
+one fixed deployment-risk prompt, and `max_tokens=96`, three cached models
+returned valid Chat Completions after their load sample. The measured warm
+latencies (three sequential requests; the first load sample is excluded) were:
+
+| model | prompt tokens | completion tokens | warm seconds | finish |
+| --- | ---: | ---: | ---: | --- |
+| `mlx-community/llama-3.2-1b-instruct-4bit` | 65 | 38 | `1.557, 2.120, 1.728` | stop |
+| `mlx-community/llama-3.2-3b-instruct-4bit` | 65 | 27 | `2.211, 2.013, 1.820` | stop |
+| `mlx-community/gemma-4-e4b-it-4bit` | 37 | 23 | `2.811, 2.267, 2.106` | stop |
+
+This is a transport/performance probe only; it is not a quality ranking. A
+separate eight-request 3B local batch through `ModelClient.batch_chat` measured
+the explicit concurrency knob:
+
+| `local_concurrency` | elapsed seconds | requests/second | non-empty outputs |
+| ---: | ---: | ---: | ---: |
+| 1 | `18.547` | `0.431` | `8/8` |
+| 2 | `8.140` | `0.983` | `8/8` |
+| 4 | `8.108` | `0.987` | `8/8` |
+
+On this machine, concurrency `2` reaches the observed server throughput
+ceiling; `4` adds no material gain. Interactive route/conduct paths therefore
+remain sequential, while latency-tolerant local batch callers should start at
+`--local-concurrency 2` and re-measure after changing the MLX server or model.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
