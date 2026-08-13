@@ -1,0 +1,175 @@
+"""Responses max_tokens / max_completion_tokens honesty over HTTP (fail-closed)."""
+
+from __future__ import annotations
+
+import json
+import threading
+import urllib.error
+import urllib.request
+from pathlib import Path
+import sys
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+
+_TEST_AUTH_TOKEN = "responses_max_tokens_http_honesty_token"  # noqa: S105
+
+
+def build() -> TaskOrchestrator:
+    return TaskOrchestrator(
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
+    )
+
+
+def _post(port: int, payload: dict) -> tuple[int, dict]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/responses",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def _server():
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, server.server_address[1]
+
+
+def test_http_responses_accepts_omitted_token_budgets() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, {"model": "mock-planner", "input": "hello omit budgets"})
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_accepts_valid_max_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {"model": "mock-planner", "input": "hello max_tokens", "max_tokens": 64},
+        )
+        assert status == 200, body
+        # Passthrough mock echoes max_tokens so buyers can assert forwarding.
+        assert body.get("echo", {}).get("max_tokens") == 64
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_accepts_valid_max_completion_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "hello max_completion_tokens",
+                "max_completion_tokens": 128,
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_non_positive_max_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        for bad in (0, -1, True, 1.5, "10"):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "input": "bad max_tokens",
+                    "max_tokens": bad,
+                },
+            )
+            assert status == 400, (bad, body)
+            assert "invalid_max_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_oversized_max_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "oversized max_tokens",
+                "max_tokens": 1_048_577,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_max_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_non_positive_max_completion_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        for bad in (0, -3, False, 2.5, "128"):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "input": "bad max_completion_tokens",
+                    "max_completion_tokens": bad,
+                },
+            )
+            assert status == 400, (bad, body)
+            assert "invalid_max_completion_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_oversized_max_completion_tokens() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "oversized max_completion_tokens",
+                "max_completion_tokens": 2_000_000,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_max_completion_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+if __name__ == "__main__":
+    test_http_responses_accepts_omitted_token_budgets()
+    test_http_responses_accepts_valid_max_tokens()
+    test_http_responses_accepts_valid_max_completion_tokens()
+    test_http_responses_rejects_non_positive_max_tokens()
+    test_http_responses_rejects_oversized_max_tokens()
+    test_http_responses_rejects_non_positive_max_completion_tokens()
+    test_http_responses_rejects_oversized_max_completion_tokens()
+    print("ok")
