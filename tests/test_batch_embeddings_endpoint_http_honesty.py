@@ -80,7 +80,7 @@ def test_http_batch_embeddings_accepts_non_empty_endpoint_alias() -> None:
         thread.join(timeout=5)
 
 
-def test_http_batch_embeddings_rejects_empty_endpoint() -> None:
+def test_http_batch_embeddings_accepts_empty_endpoint_as_omit() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -91,15 +91,13 @@ def test_http_batch_embeddings_rejects_empty_endpoint() -> None:
                 "endpoint": "   ",
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_endpoint" in blob or "endpoint" in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_batch_embeddings_rejects_null_endpoint() -> None:
+def test_http_batch_embeddings_accepts_null_endpoint_as_omit() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -110,8 +108,7 @@ def test_http_batch_embeddings_rejects_null_endpoint() -> None:
                 "endpoint": None,
             },
         )
-        assert status == 400, body
-        assert "endpoint" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -156,8 +153,8 @@ def test_http_batch_embeddings_rejects_overlong_endpoint() -> None:
 if __name__ == "__main__":
     test_http_batch_embeddings_accepts_omitted_endpoint()
     test_http_batch_embeddings_accepts_non_empty_endpoint_alias()
-    test_http_batch_embeddings_rejects_empty_endpoint()
-    test_http_batch_embeddings_rejects_null_endpoint()
+    test_http_batch_embeddings_accepts_empty_endpoint_as_omit()
+    test_http_batch_embeddings_accepts_null_endpoint_as_omit()
     test_http_batch_embeddings_rejects_non_string_endpoint()
     test_http_batch_embeddings_rejects_overlong_endpoint()
     print("ok")

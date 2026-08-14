@@ -2004,8 +2004,13 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
     if "response_format" not in body:
         return None
     fmt = body.get("response_format")
-    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
-    if fmt is None or (isinstance(fmt, dict) and not fmt):
+    # Explicit JSON null, empty object, or empty string is treat-as-omit
+    # (SDK optional default / stringified empty control).
+    if (
+        fmt is None
+        or (isinstance(fmt, dict) and not fmt)
+        or (isinstance(fmt, str) and not fmt.strip())
+    ):
         return None
     if not isinstance(fmt, dict):
         raise RequestError(
@@ -2192,8 +2197,13 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
     if "tool_choice" not in body:
         return None
     choice = body.get("tool_choice")
-    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
-    if choice is None or (isinstance(choice, dict) and not choice):
+    # Explicit JSON null, empty object, or empty/whitespace string is
+    # treat-as-omit (SDK optional default / stringified empty control).
+    if (
+        choice is None
+        or (isinstance(choice, dict) and not choice)
+        or (isinstance(choice, str) and not choice.strip())
+    ):
         return None
     if isinstance(choice, str):
         if choice not in ("none", "auto", "required"):
@@ -2343,13 +2353,17 @@ def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
     """Batch embeddings ``endpoint`` — optional non-empty string alias ≤256 chars.
 
     naruon and OpenAI-compatible clients may tag the upstream embeddings route
-    (e.g. ``/v1/embeddings``). Empty/null/non-string values fail closed so the
+    (e.g. ``/v1/embeddings``). Explicit JSON null or empty/whitespace string is
+    treat-as-omit (SDK optional default). Non-string values fail closed so the
     gateway never records a blank endpoint alias as if a route was selected.
     """
     if "endpoint" not in body:
         return None
     value = body.get("endpoint")
-    if not isinstance(value, str) or not value.strip():
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
         raise RequestError(
             400,
             "invalid_endpoint",
@@ -2377,16 +2391,17 @@ def _validate_embeddings_model(body: dict[str, Any]) -> str:
 
 
 def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
-    """OpenAI ``encoding_format`` — omit/null or ``float`` only; base64 fail-closed.
+    """OpenAI ``encoding_format`` — omit/null/empty or ``float`` only; base64 fail-closed.
 
     This gateway returns float vectors on the OpenAI list shape. ``base64`` is
     not produced, so requesting it fails closed rather than silently returning
-    floats. Explicit JSON ``null`` is treated as omit (SDK optional default).
+    floats. Explicit JSON ``null`` or empty/whitespace string is treated as omit
+    (SDK optional default / stringified empty control).
     """
     if "encoding_format" not in body:
         return None
     value = body.get("encoding_format")
-    if value is None:
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if not isinstance(value, str):
         raise RequestError(400, "invalid_encoding_format", "encoding_format must be a string")
@@ -3035,11 +3050,13 @@ def build_server(
                         and functions_raw is not None
                         and not (isinstance(functions_raw, list) and not functions_raw)
                     )
-                    # function_call none/auto without functions are omit-equivalent no-ops
-                    # (legacy SDK defaults); any other function_call or non-empty functions fail closed.
+                    # function_call none/auto/empty-string without functions are omit-equivalent
+                    # no-ops (legacy SDK defaults); any other function_call or non-empty functions
+                    # fail closed.
                     function_call_present = (
                         "function_call" in body
                         and function_call_raw is not None
+                        and not (isinstance(function_call_raw, str) and not function_call_raw.strip())
                         and function_call_raw not in ("none", "auto")
                     )
                     if functions_present or function_call_present:
@@ -3060,8 +3077,12 @@ def build_server(
                         and not tools_list
                     ):
                         tc = body.get("tool_choice")
-                        # none/auto/empty-object without tools are omit-equivalent no-ops.
-                        if tc not in ("none", "auto") and not (isinstance(tc, dict) and not tc):
+                        # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
+                        if (
+                            tc not in ("none", "auto")
+                            and not (isinstance(tc, dict) and not tc)
+                            and not (isinstance(tc, str) and not tc.strip())
+                        ):
                             raise RequestError(
                                 400,
                                 "invalid_tool_choice",
@@ -3581,10 +3602,11 @@ def build_server(
                         and functions_raw is not None
                         and not (isinstance(functions_raw, list) and not functions_raw)
                     )
-                    # function_call none/auto without functions are omit-equivalent no-ops.
+                    # function_call none/auto/empty-string without functions are omit-equivalent no-ops.
                     function_call_present = (
                         "function_call" in body
                         and function_call_raw is not None
+                        and not (isinstance(function_call_raw, str) and not function_call_raw.strip())
                         and function_call_raw not in ("none", "auto")
                     )
                     if functions_present or function_call_present:
@@ -3602,8 +3624,12 @@ def build_server(
                         and not tools_list
                     ):
                         tc = body.get("tool_choice")
-                        # none/auto/empty-object without tools are omit-equivalent no-ops.
-                        if tc not in ("none", "auto") and not (isinstance(tc, dict) and not tc):
+                        # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
+                        if (
+                            tc not in ("none", "auto")
+                            and not (isinstance(tc, dict) and not tc)
+                            and not (isinstance(tc, str) and not tc.strip())
+                        ):
                             raise RequestError(
                                 400,
                                 "invalid_tool_choice",
