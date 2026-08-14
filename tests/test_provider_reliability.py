@@ -7,6 +7,7 @@ the capability a model-orchestration gateway is bought for.
 from __future__ import annotations
 
 import socket
+import ssl
 import sys
 import threading
 import urllib.error
@@ -36,6 +37,9 @@ def test_transient_classification_matches_status_and_network_errors() -> None:
     assert is_transient_error(urllib.error.URLError("dns"))
     assert is_transient_error(TimeoutError("read timeout"))
     assert is_transient_error(socket.timeout("slow"))
+    assert is_transient_error(ssl.SSLEOFError("peer closed TLS stream"))
+    assert is_transient_error(ssl.SSLSyscallError("SSL_ERROR_SYSCALL"))
+    assert not is_transient_error(ssl.SSLCertVerificationError("certificate verify failed"))
     assert not is_transient_error(ValueError("bad json"))
 
 

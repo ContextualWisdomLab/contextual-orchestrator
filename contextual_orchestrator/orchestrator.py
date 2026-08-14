@@ -554,6 +554,11 @@ def is_transient_error(exc: BaseException) -> bool:
     # Network-level failures (DNS, connection reset, read timeout) are transient.
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
         return True
+    # A VPN/socket path can surface as an SSL EOF or SSL_ERROR_SYSCALL. Keep
+    # certificate verification failures non-transient so a bad trust boundary
+    # is never retried as if it were a network fault.
+    if isinstance(exc, ssl.SSLError):
+        return not isinstance(exc, ssl.SSLCertVerificationError)
     return False
 
 
