@@ -86,7 +86,7 @@ def test_http_chat_still_accepts_valid_message_name() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_empty_message_name() -> None:
+def test_http_chat_accepts_empty_message_name_as_omit() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -99,8 +99,7 @@ def test_http_chat_still_rejects_empty_message_name() -> None:
                 ],
             },
         )
-        assert status == 400, body
-        assert "invalid_message_name" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)

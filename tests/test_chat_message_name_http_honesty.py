@@ -88,7 +88,7 @@ def test_http_chat_accepts_system_and_assistant_names() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_empty_message_name() -> None:
+def test_http_chat_accepts_empty_message_name_as_omit() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -98,10 +98,7 @@ def test_http_chat_rejects_empty_message_name() -> None:
                 "messages": [{"role": "user", "content": "hi", "name": "   "}],
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_message_name" in blob
-        assert "non-empty" in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -192,7 +189,7 @@ def test_http_chat_accepts_name_with_underscore_hyphen() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_user_message_name()
     test_http_chat_accepts_system_and_assistant_names()
-    test_http_chat_rejects_empty_message_name()
+    test_http_chat_accepts_empty_message_name_as_omit()
     test_http_chat_rejects_message_name_too_long()
     test_http_chat_rejects_message_name_bad_charset()
     test_http_chat_rejects_name_on_tool_message()

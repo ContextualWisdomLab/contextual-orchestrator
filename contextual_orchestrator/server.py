@@ -900,13 +900,14 @@ def _validate_completions_suffix(body: dict[str, Any]) -> str | None:
         raise RequestError(400, "invalid_suffix", "suffix must be a string")
     if len(suffix) > 8_000:
         raise RequestError(400, "invalid_suffix", "suffix must be at most 8000 characters")
-    if suffix:
-        raise RequestError(
-            400,
-            "invalid_suffix",
-            "non-empty suffix is not supported on /v1/completions",
-        )
-    return suffix
+    # Empty or whitespace-only is omit-equivalent (no suffix content).
+    if not suffix.strip():
+        return None
+    raise RequestError(
+        400,
+        "invalid_suffix",
+        "non-empty suffix is not supported on /v1/completions",
+    )
 
 
 def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
@@ -1239,8 +1240,9 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
         if "name" in message:
             # OpenAI optional participant name on system/user/assistant (not tool).
             msg_name = message.get("name")
-            # Explicit JSON null is treat-as-omit (SDK optional default).
-            if msg_name is None:
+            # Explicit JSON null or empty/whitespace string is treat-as-omit
+            # (SDK optional default / blank participant label).
+            if msg_name is None or (isinstance(msg_name, str) and not msg_name.strip()):
                 pass
             else:
                 if role == "tool":
@@ -1249,7 +1251,7 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
                         "invalid_message_name",
                         "name is not valid on tool role messages",
                     )
-                if not isinstance(msg_name, str) or not msg_name.strip():
+                if not isinstance(msg_name, str):
                     raise RequestError(
                         400,
                         "invalid_message_name",
@@ -1576,9 +1578,10 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
     Honest no-ops (omit-equivalent SDK defaults):
     - empty ``tools: []``
     - empty ``functions: []``
+    - empty ``tool_choice: {}`` / ``function_call: {}``
     - ``parallel_tool_calls=false``
 
-    Non-empty tools/functions, any tool_choice/function_call, or
+    Non-empty tools/functions, non-empty tool_choice/function_call, or
     ``parallel_tool_calls=true`` fail closed with a chat migration path.
     """
     tools = body.get("tools") if "tools" in body else None
@@ -1610,8 +1613,20 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
     else:
         parallel_present = False
 
+    def _legacy_control_present(key: str) -> bool:
+        if key not in body:
+            return False
+        value = body.get(key)
+        if value is None:
+            return False
+        # Empty object is omit-equivalent (SDK optional default).
+        # Completions still rejects string tool_choice/function_call including none/auto.
+        if isinstance(value, dict) and not value:
+            return False
+        return True
+
     if tools_present or functions_present or parallel_present or any(
-        key in body and body.get(key) is not None for key in ("tool_choice", "function_call")
+        _legacy_control_present(key) for key in ("tool_choice", "function_call")
     ):
         raise RequestError(
             400,
@@ -3041,6 +3056,7 @@ def build_server(
                         "function_call" in body
                         and function_call_raw is not None
                         and function_call_raw not in ("none", "auto")
+                        and not (isinstance(function_call_raw, dict) and not function_call_raw)
                     )
                     if functions_present or function_call_present:
                         # OpenAI deprecated functions/function_call in favor of tools/tool_choice.
@@ -3094,12 +3110,37 @@ def build_server(
                                     "invalid_parallel_tool_calls",
                                     "parallel_tool_calls=true requires tools on /v1/chat/completions",
                                 )
-                    # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
-                    # defaults) — do not force single-agent passthrough for null-only keys.
-                    if any(
-                        key in body and body.get(key) is not None
-                        for key in PASSTHROUGH_TRIGGER_KEYS
-                    ):
+                    # Explicit JSON null / empty containers / none|auto defaults are
+                    # omit-equivalent — do not force single-agent passthrough for no-ops.
+                    def _passthrough_trigger_active(key: str) -> bool:
+                        if key not in body:
+                            return False
+                        value = body.get(key)
+                        if value is None:
+                            return False
+                        if key in {"tools", "functions"} and isinstance(value, list) and not value:
+                            return False
+                        if key == "response_format" and isinstance(value, dict) and not value:
+                            return False
+                        if key == "tool_choice":
+                            if isinstance(value, dict) and not value:
+                                return False
+                            if value in ("none", "auto"):
+                                tools = body.get("tools")
+                                if tools is None or (isinstance(tools, list) and not tools):
+                                    return False
+                        if key == "function_call":
+                            if isinstance(value, dict) and not value:
+                                return False
+                            if value in ("none", "auto"):
+                                functions = body.get("functions")
+                                if functions is None or (
+                                    isinstance(functions, list) and not functions
+                                ):
+                                    return False
+                        return True
+
+                    if any(_passthrough_trigger_active(key) for key in PASSTHROUGH_TRIGGER_KEYS):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
                         started_at = time.perf_counter()
@@ -3586,6 +3627,7 @@ def build_server(
                         "function_call" in body
                         and function_call_raw is not None
                         and function_call_raw not in ("none", "auto")
+                        and not (isinstance(function_call_raw, dict) and not function_call_raw)
                     )
                     if functions_present or function_call_present:
                         raise RequestError(
