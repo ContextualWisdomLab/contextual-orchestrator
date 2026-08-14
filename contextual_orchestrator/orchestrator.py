@@ -14,6 +14,7 @@ import os
 from pathlib import Path
 import random
 import re
+import secrets
 import socket
 import ssl
 import sqlite3
@@ -284,7 +285,10 @@ class ModelClient:
     def _backoff_delay(self, attempt: int) -> float:
         """Full-jitter exponential backoff, capped, so retries do not thundering-herd a provider."""
         ceiling = min(self.retry_backoff_cap, self.retry_backoff * (2 ** attempt))
-        return random.uniform(0.0, ceiling)
+        # secrets, not random: this delay has no reproducibility requirement (unlike
+        # evolve_orchestration's seeded search below), so there is no reason not to use
+        # a non-predictable source.
+        return secrets.SystemRandom().uniform(0.0, ceiling)
 
     def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
@@ -8402,7 +8406,11 @@ def evolve_orchestration(
     exceeds ``cost_budget_usd`` rank below all affordable ones. Quality comes from the
     caller's ``quality_fn(task, answer) -> [0,1]`` — never fabricated.
     """
-    rng = random.Random(seed)
+    # random, not secrets: `seed` exists precisely so two calls with the same
+    # seed reproduce the same search trajectory (a benchmark/regression-test
+    # requirement) -- this selects which orchestration config to try next,
+    # never a secret, token, or anything an attacker gains from predicting.
+    rng = random.Random(seed)  # nosec B311 - reproducible search, not a security context.
     params = sorted(search_space)
 
     def random_config() -> dict[str, Any]:
