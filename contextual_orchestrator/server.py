@@ -379,6 +379,8 @@ def _validate_service_tier(body: dict[str, Any], *, endpoint_path: str) -> str |
         return None
     if not isinstance(service_tier, str):
         raise RequestError(400, "invalid_service_tier", "service_tier must be a string")
+    # Strip incidental whitespace so " auto " matches auto (honest no-op).
+    service_tier = service_tier.strip()
     if service_tier not in ("auto", "default"):
         raise RequestError(
             400,
@@ -2458,6 +2460,8 @@ def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
         return None
     if not isinstance(value, str):
         raise RequestError(400, "invalid_encoding_format", "encoding_format must be a string")
+    # Strip incidental whitespace so " float " matches float.
+    value = value.strip()
     if value != "float":
         raise RequestError(
             400,
