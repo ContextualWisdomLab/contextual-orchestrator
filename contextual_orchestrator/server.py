@@ -1107,8 +1107,12 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
         )
     if "include" in body:
         include = body.get("include")
-        # Explicit JSON null or empty array is treat-as-omit (SDK optional default).
-        if include is None or (isinstance(include, list) and not include):
+        # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
+        if (
+            include is None
+            or (isinstance(include, list) and not include)
+            or (isinstance(include, str) and not include.strip())
+        ):
             pass
         else:
             raise RequestError(
@@ -1118,8 +1122,12 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
             )
     if "text" in body:
         text = body.get("text")
-        # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
-        if text is None or (isinstance(text, dict) and not text):
+        # Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+        if (
+            text is None
+            or (isinstance(text, dict) and not text)
+            or (isinstance(text, str) and not text.strip())
+        ):
             pass
         else:
             raise RequestError(
@@ -1811,13 +1819,18 @@ def _validate_chat_reasoning_object(body: dict[str, Any]) -> None:
     OpenAI Responses accepts a ``reasoning`` object; chat Completions uses
     ``reasoning_effort`` (already fail-closed). Clients that send ``reasoning``
     on chat must get a named error, not opaque unknown_fields.
-    Explicit JSON null is treat-as-omit (SDK optional default).
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit
+    (SDK optional default / stringified empty control).
     """
     if "reasoning" not in body:
         return
     value = body.get("reasoning")
-    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
-    if value is None or (isinstance(value, dict) and not value):
+    # Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
         return
     raise RequestError(
         400,
@@ -1857,13 +1870,17 @@ def _validate_chat_include_field(body: dict[str, Any], *, endpoint_path: str = "
 
     Some SDKs send ``include`` on chat/Completions. Named error beats opaque
     unknown_fields so clients know the surface is unsupported here.
-    Explicit JSON null is treat-as-omit (SDK optional default).
+    Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
     """
     if "include" not in body:
         return
     include = body.get("include")
-    # Explicit JSON null or empty array is treat-as-omit (SDK optional default).
-    if include is None or (isinstance(include, list) and not include):
+    # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
+    if (
+        include is None
+        or (isinstance(include, list) and not include)
+        or (isinstance(include, str) and not include.strip())
+    ):
         return
     raise RequestError(
         400,
@@ -1873,8 +1890,19 @@ def _validate_chat_include_field(body: dict[str, Any], *, endpoint_path: str = "
 
 
 def _validate_completions_reasoning_object(body: dict[str, Any]) -> None:
-    """Reject Responses-style ``reasoning`` object on legacy Completions."""
+    """Reject Responses-style ``reasoning`` object on legacy Completions.
+
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit
+    (SDK optional default / stringified empty control).
+    """
     if "reasoning" not in body:
+        return
+    value = body.get("reasoning")
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
         return
     raise RequestError(
         400,
@@ -2334,12 +2362,16 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
     This gateway proxies Responses but does not interpret or enforce reasoning
     controls, so any non-empty present value fails closed rather than silently
     ignoring a buyer-visible o-series control surface.
-    Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
     """
     if "reasoning" not in body:
         return
     value = body.get("reasoning")
-    if value is None or (isinstance(value, dict) and not value):
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
         return
     raise RequestError(
         400,
