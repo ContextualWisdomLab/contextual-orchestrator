@@ -483,6 +483,7 @@ class ModelClient:
                 or ip_address.is_link_local
                 or ip_address.is_multicast
                 or ip_address.is_reserved
+                or ip_address.is_unspecified
             ):
                 raise RuntimeError(f"{agent.id} provider resolves to non-public address")
 
