@@ -472,3 +472,23 @@ tokens (`1,780` prompt and `101` completion). The result was
 the required multi-item polytomous IRT row `[2,2]`. This proves current
 transport, adapter, strict parsing, and response-shape integration only; it is
 not a semantic-quality, bias, human/gold, or production-IRT promotion result.
+
+## Current exact-head Judge smoke after batch-integrity remediation — 2026-08-14T12:26:08Z
+
+The current source pair (`contextual-orchestrator` `cdca9d8e55f54b8b6ed67e146d73f7f32df93542`,
+`fast-mlsirm` `c9f2c280c4113e49486cb01e69daa40583f38127`) was rerun through
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm` after the batch-result integrity fix. The dedicated
+Gemma 4 e4b worker used temperature `0`, disabled thinking,
+`max_output_tokens=128`, local concurrency `4`, two anchored criteria, and
+category count `3`.
+
+All four binary boundary calls completed in `3.637 s` with `1,824` provider
+tokens (`1,728` prompt and `96` completion). The result was `accepted=true`,
+score `1.0`, categories `{evidence_quality: 2, release_safety: 2}`, four
+trace steps, and the required two-item polytomous IRT row `[2,2]`. This is
+current-head transport, adapter, strict-parse, and shape evidence only; it is
+not semantic-quality, bias, human/gold, or production-IRT promotion evidence.
+The batch-integrity change is orthogonal to this single route smoke; future
+batch evaluations must retain incomplete-result failures rather than treating
+them as successful observations.
