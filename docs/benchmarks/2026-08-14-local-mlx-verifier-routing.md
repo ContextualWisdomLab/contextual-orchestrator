@@ -112,3 +112,35 @@ Only one case group had a complete baseline/control comparison, with score delta
 supports nor rejects a positive option-count bias, and it is not sufficient for
 IRT interpretation or verifier promotion. No keyword matching, retry, positional
 inference, category repair, or silent drop was used.
+
+## Dedicated-port non-ceiling follow-up — 2026-08-14
+
+The first rerun correctly failed closed before model evaluation because the
+temporary script used `http://127.0.0.1` instead of the explicit local-provider
+scheme `mlx://127.0.0.1`. A subsequent readiness probe also showed the original
+8080 endpoint was unsafe for this machine: an unrelated wildcard listener and
+the MLX server shared the port, so `/health` could return 200 while a chat
+completion returned zero bytes and timed out. Port 18080 was already occupied
+by a Colima SSH forward. The MLX server was therefore restarted on dedicated
+loopback port 18083 with prompt/decode concurrency 4; `ModelClient.probe()`
+returned `ready` in `2.54 s` with 15 reported tokens.
+
+Using contextual-orchestrator `63451a0` and fast-mlsirm `3c2fecf`, the exact
+route `ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm` evaluated four held-out groups: partial and unsupported
+answers at K=`3` and K=`7`, with correct options at the first/last positions and
+baseline, option-only, shuffled, and distractor-replacement variants. The
+Gemma 4 e4b run used two anchored criteria, category_count=`3`, implicit
+`binary_threshold`, gateway/server concurrency 4, and completed 16 outcomes
+(128 boundary calls) in `202.781 s`: 15 passed and one strict non-monotone
+`JudgeFormatError`.
+
+The 15 valid rows had conditional gold exact agreement `5/15` (`33.3%`).
+Evidence-quality occupancy was `{0: 5, 1: 5, 2: 5}`; risk-awareness occupancy
+was `{0: 7, 1: 0, 2: 8}`. Partial baseline rows were repeatedly over-scored as
+`[2,2]`; option-only controls reduced evidence quality to `1` and raised
+unsupported-answer evidence quality from `0` to `1` in both K strata. These
+are semantic/control-sensitivity observations, not causal evidence of a
+positive K law or IRT readiness. The non-monotone failure and every control
+outcome remain in the denominator; no keyword matching, retry, repair,
+positional inference, or silent drop was used.
