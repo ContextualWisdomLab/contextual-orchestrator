@@ -9308,7 +9308,7 @@ def chat_completion_response(
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
     return {
-        "id": f"chatcmpl-{int(time.time() * 1000)}",
+        "id": _new_chat_completion_id(),
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
@@ -9339,7 +9339,7 @@ def chat_completion_chunks(
     token-by-token streaming — real token streaming requires a streaming ModelClient.
     """
     answer = result.get("answer", "")
-    completion_id = f"chatcmpl-{int(time.time() * 1000)}"
+    completion_id = _new_chat_completion_id()
     created = int(time.time())
     base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
 
@@ -9361,6 +9361,11 @@ def chat_completion_chunks(
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)
     return chunks
+
+
+def _new_chat_completion_id() -> str:
+    """Create a collision-resistant OpenAI-compatible completion identifier."""
+    return f"chatcmpl-{uuid.uuid4().hex}"
 
 
 def sse_stream_body(chunks: list[dict[str, Any]]) -> str:

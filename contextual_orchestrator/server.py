@@ -21,6 +21,7 @@ from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
+    _new_chat_completion_id,
     chat_completion_chunks,
     chat_completion_response,
     redact_value,
@@ -1165,7 +1166,7 @@ def build_server(
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
-            completion_id = f"chatcmpl-{int(time.time() * 1000)}"
+            completion_id = _new_chat_completion_id()
             created = int(time.time())
 
             def frame(delta: dict[str, Any], finish: str | None = None) -> str:

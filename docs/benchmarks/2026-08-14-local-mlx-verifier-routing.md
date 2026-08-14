@@ -219,3 +219,25 @@ to balance option position/order and retain non-ceiling human/gold anchors
 before verifier promotion or polytomous IRT interpretation. No keyword
 matching, retry, positional inference, category repair, or silent drop was
 used.
+
+## HTTP gateway smoke and overload boundary — 2026-08-14
+
+The dedicated worker was exposed through a live contextual-orchestrator HTTP
+gateway on `127.0.0.1:18084`, authenticated with an explicit local test token,
+and configured with `max_concurrent_runs=4`. The gateway agent targeted
+`mlx://127.0.0.1:18083/v1` and the Gemma 4 e4b model. A single OpenAI-compatible
+`/v1/chat/completions` request returned `200`, answer `OK`, and provider usage
+`10/2/12` prompt/completion/total tokens.
+
+At the configured concurrency, four simultaneous HTTP requests completed
+successfully with four distinct completion IDs; latency was p50 `1449.28 ms`
+and maximum `1459.57 ms`. A fifth simultaneous request was rejected immediately
+with structured `503 concurrency_limit_exceeded`. This is the intended bounded
+overload behavior: it preserves an explicit failure rather than creating an
+unbounded queue or silently dropping a judge item.
+
+The first smoke exposed a response-ID collision because completion IDs used the
+current millisecond. The response, buffered-stream, and direct-stream paths now
+share a UUID-based ID generator; the focused streaming suite passed `7` tests.
+No keyword matching, retry, positional inference, category repair, or silent
+drop was introduced.

@@ -13,11 +13,12 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import chat_completion_chunks, sse_stream_body  # noqa: E402
+from contextual_orchestrator.orchestrator import chat_completion_chunks, chat_completion_response, sse_stream_body  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
@@ -52,6 +53,16 @@ def test_empty_answer_produces_role_and_stop_only() -> None:
     assert len(chunks) == 2  # role delta + stop delta, no content frames
     assert chunks[0]["choices"][0]["delta"] == {"role": "assistant"}
     assert chunks[1]["choices"][0]["finish_reason"] == "stop"
+
+
+def test_completion_ids_remain_unique_when_created_in_one_millisecond() -> None:
+    result = {"answer": "OK", "mode": "route"}
+    with patch("contextual_orchestrator.orchestrator.time.time", return_value=1_786_698_100.0):
+        response_ids = {chat_completion_response(result)["id"] for _ in range(128)}
+        chunk_ids = {chat_completion_chunks(result)[0]["id"] for _ in range(128)}
+
+    assert len(response_ids) == 128
+    assert len(chunk_ids) == 128
 
 
 def test_sse_body_frames_and_done_terminator() -> None:
