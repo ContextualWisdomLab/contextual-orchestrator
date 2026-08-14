@@ -3,15 +3,16 @@
 A live run against a corporate OpenAI-compatible gateway failed because urllib could
 not verify its certificate chain (custom CA not in Python's trust store), and there
 was no way to supply a CA bundle short of disabling verification globally. This adds
-a per-client CA bundle / verify toggle. Default stays verified against the system store.
+a per-client CA bundle and a development-only verify toggle. Production stays
+verified against the system store.
 """
 
 from __future__ import annotations
 
-from pathlib import Path
 import ssl
 import sys
 import tempfile
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -24,10 +25,21 @@ def test_default_verifies_against_system_store() -> None:
     assert context.check_hostname is True
 
 
-def test_insecure_skip_verify_disables_checks() -> None:
+def test_insecure_skip_verify_disables_checks_only_in_development(monkeypatch) -> None:
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_ENV", "development")
     context = ModelClient(verify_tls=False)._ssl_context
     assert context.verify_mode == ssl.CERT_NONE
     assert context.check_hostname is False
+
+
+def test_insecure_skip_verify_is_rejected_in_production(monkeypatch) -> None:
+    monkeypatch.setenv("CONTEXTUAL_ORCHESTRATOR_ENV", "production")
+    try:
+        ModelClient(verify_tls=False)
+    except ValueError as exc:
+        assert "development" in str(exc)
+    else:
+        raise AssertionError("unverified provider TLS must be development-only")
 
 
 def test_ca_bundle_is_loaded() -> None:

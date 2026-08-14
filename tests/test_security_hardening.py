@@ -2,17 +2,28 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import threading
 import urllib.error
 import urllib.request
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
-import sys
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient, chat_completion_response, redact_text, redact_value  # noqa: E402
+from contextual_orchestrator.credentials import (  # noqa: E402
+    InMemoryCredentialBackend,
+    set_backend,
+)
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    chat_completion_response,
+    redact_text,
+    redact_value,
+)
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 
@@ -391,6 +402,38 @@ def test_provider_transport_rejects_protocol_relative_batch_paths() -> None:
         assert "absolute URL path" in str(exc)
     else:
         raise AssertionError("protocol-relative provider path should fail before urllib opens it")
+
+
+def test_provider_transport_rejects_redirects_before_private_follow() -> None:
+    """Provider egress must not follow a redirect into a second unvalidated host."""
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:
+            if self.path == "/redirect":
+                self.send_response(302)
+                self.send_header("Location", "/private")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"private response")
+
+        def log_message(self, *_args: object) -> None:
+            pass
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/redirect",
+            method="GET",
+        )
+        with pytest.raises(urllib.error.HTTPError, match="redirect"):
+            ModelClient()._open_provider(request)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 def test_redact_value_preserves_non_string_scalars() -> None:

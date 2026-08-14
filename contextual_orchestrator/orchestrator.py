@@ -33,6 +33,33 @@ from .credentials import NotConfigured, get_credential
 # OpenAI-style parts list instead -- see server._validate_message_content.
 ChatMessage = dict[str, Any]
 
+
+class _RejectProviderRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject provider redirects so every egress target remains validated."""
+
+    handler_order = 499
+
+    def redirect_request(
+        self,
+        req: urllib.request.Request,
+        fp: Any,
+        code: int,
+        msg: str,
+        headers: Any,
+        newurl: str,
+    ) -> urllib.request.Request:
+        """Fail closed instead of following an unvalidated ``Location`` target."""
+        if fp is not None:
+            fp.close()
+        raise urllib.error.HTTPError(
+            req.full_url,
+            code,
+            "provider redirects are disabled",
+            headers,
+            None,
+        )
+
+
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
 
@@ -228,10 +255,22 @@ class ModelClient:
         # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
         # explicit dev-only opt-out (insecure) for self-signed endpoints.
         self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+        self._provider_opener = urllib.request.build_opener(
+            _RejectProviderRedirectHandler(),
+            urllib.request.HTTPSHandler(context=self._ssl_context),
+        )
 
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
+            runtime_environment = os.environ.get(
+                "CONTEXTUAL_ORCHESTRATOR_ENV", "production"
+            ).strip().lower()
+            if runtime_environment not in {"development", "dev", "test", "local"}:
+                raise ValueError(
+                    "unverified provider TLS is permitted only in a "
+                    "development environment"
+                )
             # nosemgrep: python.lang.security.unverified-ssl-context.unverified-ssl-context
             return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
         if ca_bundle:
@@ -310,12 +349,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
-            request,
-            timeout=self.timeout,
-            context=self._ssl_context,
-        )
+        return self._provider_opener.open(request, timeout=self.timeout)
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.

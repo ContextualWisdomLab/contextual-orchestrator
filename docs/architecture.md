@@ -38,6 +38,15 @@ This repository implements the interface and control plane, not the trained coor
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
+Provider egress is a fail-closed trust boundary. `ModelClient` uses a dedicated
+HTTP opener that rejects redirects, so a validated provider URL cannot redirect
+the request to a second unvalidated or private target. TLS certificate
+verification is enabled by default and a custom CA bundle remains supported;
+the unverified TLS option is rejected unless the runtime environment is
+explicitly `development`, `dev`, `test`, or `local`. This keeps local
+self-signed gateway testing available without making a production flag silently
+disable certificate verification.
+
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
