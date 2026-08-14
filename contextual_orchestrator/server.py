@@ -277,8 +277,8 @@ def _validate_completions_stream(body: dict[str, Any]) -> bool | None:
     if "stream" not in body:
         return None
     stream = body.get("stream")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if stream is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if stream is None or (isinstance(stream, str) and not stream.strip()):
         return None
     if not isinstance(stream, bool):
         raise RequestError(400, "invalid_stream", "stream must be a boolean")
@@ -1566,8 +1566,8 @@ def _validate_chat_store(body: dict[str, Any]) -> bool | None:
     if "store" not in body:
         return None
     store = body.get("store")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if store is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if store is None or (isinstance(store, str) and not store.strip()):
         return None
     if not isinstance(store, bool):
         raise RequestError(400, "invalid_store", "store must be a boolean")
@@ -1706,6 +1706,9 @@ def _validate_completions_chat_era_fields_surface(body: dict[str, Any]) -> None:
             ]
             if stripped_items == ["text"]:
                 continue
+        # reasoning_effort "none" disables extra reasoning — omit-equivalent no-op.
+        if key == "reasoning_effort" and isinstance(value, str) and value.strip() == "none":
+            continue
         raise RequestError(
             400,
             "invalid_chat_era_field",
@@ -1724,8 +1727,8 @@ def _validate_completions_store(body: dict[str, Any]) -> bool | None:
     if "store" not in body:
         return None
     store = body.get("store")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if store is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if store is None or (isinstance(store, str) and not store.strip()):
         return None
     if not isinstance(store, bool):
         raise RequestError(400, "invalid_store", "store must be a boolean")
@@ -1749,8 +1752,8 @@ def _validate_responses_store(body: dict[str, Any]) -> bool | None:
     if "store" not in body:
         return None
     store = body.get("store")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if store is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if store is None or (isinstance(store, str) and not store.strip()):
         return None
     if not isinstance(store, bool):
         raise RequestError(400, "invalid_store", "store must be a boolean")
@@ -1770,15 +1773,22 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
 
     OpenAI o-series models accept ``reasoning_effort`` (e.g. none/low/medium/high).
     This gateway never threads the knob into ``ModelClient`` on the orchestration
-    path, so any present value fails closed rather than silently ignoring a
-    buyer-visible reasoning control.
+    path, so non-default present values fail closed rather than silently ignoring
+    a buyer-visible reasoning control.
+
+    Explicit JSON null, empty/whitespace string, or ``none`` (whitespace-padded)
+    is treat-as-omit — ``none`` disables extra reasoning and is an honest no-op
+    here.
     """
     if "reasoning_effort" not in body:
         return
-    # Explicit JSON null or empty string is treat-as-omit (SDK optional default).
     effort = body.get("reasoning_effort")
-    if effort is None or (isinstance(effort, str) and not effort.strip()):
+    if effort is None:
         return
+    if isinstance(effort, str):
+        stripped = effort.strip()
+        if not stripped or stripped == "none":
+            return
     raise RequestError(
         400,
         "invalid_reasoning_effort",
@@ -1901,8 +1911,8 @@ def _validate_openai_background(body: dict[str, Any], *, endpoint_path: str) -> 
     if "background" not in body:
         return None
     value = body.get("background")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if value is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if not isinstance(value, bool):
         raise RequestError(400, "invalid_background", "background must be a boolean")
@@ -3266,8 +3276,9 @@ def build_server(
                     else:
                         include_trace = bool(security.expose_trace_by_default)
                     stream = body.get("stream", False)
-                    # Explicit JSON null is treat-as-omit (SDK optional default → non-stream).
-                    if stream is None:
+                    # Explicit JSON null or empty/whitespace string is treat-as-omit
+                    # (SDK optional default → non-stream).
+                    if stream is None or (isinstance(stream, str) and not stream.strip()):
                         stream = False
                     if not isinstance(stream, bool):
                         raise RequestError(400, "invalid_request", "stream must be a boolean")

@@ -87,7 +87,8 @@ def test_http_chat_rejects_reasoning_effort_low() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_reasoning_effort_none() -> None:
+def test_http_chat_accepts_reasoning_effort_none_as_omit() -> None:
+    """OpenAI none disables extra reasoning — honest omit no-op on this gateway."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -98,8 +99,8 @@ def test_http_chat_rejects_reasoning_effort_none() -> None:
                 "reasoning_effort": "none",
             },
         )
-        assert status == 400, body
-        assert "invalid_reasoning_effort" in json.dumps(body)
+        assert status == 200, body
+        assert "choices" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -143,7 +144,7 @@ def test_http_chat_accepts_reasoning_effort_omitted() -> None:
 if __name__ == "__main__":
     test_http_chat_rejects_reasoning_effort_high()
     test_http_chat_rejects_reasoning_effort_low()
-    test_http_chat_rejects_reasoning_effort_none()
+    test_http_chat_accepts_reasoning_effort_none_as_omit()
     test_http_chat_rejects_reasoning_effort_bool()
     test_http_chat_accepts_reasoning_effort_omitted()
     print("ok")
