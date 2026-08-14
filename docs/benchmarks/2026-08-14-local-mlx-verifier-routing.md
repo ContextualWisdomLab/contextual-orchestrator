@@ -9,13 +9,16 @@ Every judge call used the existing path:
 
 `fast-mlsirm.ContextualOrchestratorJudge -> contextual-orchestrator._FastMLSIJudgeAdapter -> TaskOrchestrator -> ModelClient -> mlx-lm`
 
-The live probe used `mlx://127.0.0.1:8080/v1`, temperature `0`, disabled MLX
-thinking, `max_output_tokens=128`, zero local retries, two criteria, three
-ordered categories, and the implicit `binary_threshold` method. Each result
-therefore produced a two-column polytomous row when all four Boolean boundary
-calls were valid. The safe and unsafe cases were judged separately; no retry,
-keyword matching, positional inference, category synthesis, or silent repair
-was used. A parse or monotonicity failure remains a failed comparison.
+The initial live probe used `mlx://127.0.0.1:8080/v1`, temperature `0`,
+disabled MLX thinking, `max_output_tokens=128`, zero local retries, two
+criteria, three ordered categories, and the implicit `binary_threshold` method.
+The later dedicated-port follow-ups in this document use
+`mlx://127.0.0.1:18083/v1`; the port change is intentional because the 8080
+listener was not an exclusive MLX owner. Each result therefore produced a
+two-column polytomous row when all four Boolean boundary calls were valid. The
+safe and unsafe cases were judged separately; no retry, keyword matching,
+positional inference, category synthesis, or silent repair was used. A parse or
+monotonicity failure remains a failed comparison.
 
 The exact interpreter used for these runs also passed
 `python -m contextual_orchestrator check-fast-mlsirm`, which verified the
