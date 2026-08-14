@@ -725,6 +725,25 @@ count/order as a live calibration factor and to block semantic/IRT promotion
 until replicated held-out human/gold recall, non-ceiling category occupancy,
 and perturbation stability are available.
 
+### Direct versus cumulative polytomous follow-up — 2026-08-15
+
+The general strict-evidence prompt and cumulative-threshold contract were then
+extended in fast-mlsirm `112b1956d9f19cdab20bbada6b596d65e8f5c827`. Using the
+same contextual-orchestrator route, two criteria, K=`3,5,7`, four paired
+variants, no reference answer, and the same manual gold row `[1,1]`:
+
+| method | passed | gold exact agreement among scored | observed result |
+| --- | ---: | ---: | --- |
+| explicit `direct` | `11/12` | `11/11` | all scored rows `[1,1]`, score `0.5`; one K=`7` replacement failed closed |
+| explicit `cumulative_threshold` | `5/12` | `4/5` | K=`3`/`5` passed rows were `[1,1]`; one K=`7` shuffled row was `[2,2]`/`1.0`; seven outcomes were `JudgeFormatError` |
+
+The direct result is a useful candidate calibration improvement, not proof of
+universal unbiasedness. Cumulative threshold remains calibration-only because
+format/semantic failures are still common; every failure stayed in the
+denominator and no array repair or category inference was applied. The
+implicit production polytomous path remains binary-threshold, while direct and
+cumulative methods require explicit opt-in and replicated held-out evidence.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
