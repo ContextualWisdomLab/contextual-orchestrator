@@ -40,6 +40,24 @@ ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
 MAX_PROVIDER_PROBE_TIMEOUT = 30.0
+_SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
+    "ConnectionError",
+    "HTTPError",
+    "OSError",
+    "RuntimeError",
+    "SSLError",
+    "TimeoutError",
+    "TypeError",
+    "UnknownError",
+    "URLError",
+    "ValueError",
+})
+
+
+def _safe_provider_probe_error_type(exc: Exception) -> str:
+    """Keep provider diagnostics package-owned instead of echoing exception classes."""
+    name = type(exc).__name__
+    return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
 
 
 def _validate_provider_probe_timeout(timeout: float) -> float:
@@ -682,6 +700,7 @@ class ModelClient:
         probe_timeout = _validate_provider_probe_timeout(timeout)
         started = time.monotonic()
         self._local.usage = None
+        failure_code = "provider_probe_failed"
         try:
             if agent.base_url.startswith("mock://"):
                 content = self._mock(agent, [{"role": "user", "content": "Reply with exactly OK."}])
@@ -705,6 +724,7 @@ class ModelClient:
                         if isinstance(item, dict) and type(item.get("id")) is str
                     }
                     if agent.model not in model_ids:
+                        failure_code = "provider_model_not_registered"
                         raise RuntimeError(
                             f"provider {agent.id} model registry does not contain {agent.model!r}"
                         )
@@ -721,6 +741,7 @@ class ModelClient:
                     content = self._send(agent, payload, destination, timeout=probe_timeout)
                 usage = self.take_usage()
             if not content.strip():
+                failure_code = "provider_empty_probe_response"
                 raise RuntimeError(f"provider {agent.id} returned empty probe content")
             return {
                 "agent_id": agent.id,
@@ -735,8 +756,8 @@ class ModelClient:
                 "model": agent.model,
                 "status": "not_ready",
                 "latency_ms": round((time.monotonic() - started) * 1000, 2),
-                "error_type": type(exc).__name__,
-                "error": redact_text(str(exc))[:256],
+                "error_type": _safe_provider_probe_error_type(exc),
+                "failure_code": failure_code,
             }
 
     def _send_with_retry(

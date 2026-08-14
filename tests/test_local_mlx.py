@@ -2,10 +2,11 @@
 
 from __future__ import annotations
 
-from pathlib import Path
+import json
 import socket
 import sys
 import urllib.request
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -140,7 +141,8 @@ def test_provider_probe_rejects_a_local_model_registry_mismatch() -> None:
 
     assert report["status"] == "not_ready"
     assert report["error_type"] == "RuntimeError"
-    assert "model registry does not contain" in report["error"]
+    assert report["failure_code"] == "provider_model_not_registered"
+    assert "error" not in report
     assert open_provider.call_count == 1
 
 
@@ -152,7 +154,21 @@ def test_provider_probe_reports_timeout_without_retry() -> None:
 
     assert report["status"] == "not_ready"
     assert report["error_type"] == "TimeoutError"
+    assert report["failure_code"] == "provider_probe_failed"
+    assert "error" not in report
     assert open_provider.call_count == 1
+
+
+def test_provider_probe_does_not_serialize_provider_exception_text() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_retries=0)
+    with patch.object(client, "_open_provider", side_effect=RuntimeError("provider-output-secret")):
+        report = client.probe(agent, timeout=0.5)
+
+    serialized = json.dumps(report)
+    assert "provider-output-secret" not in serialized
+    assert report["error_type"] == "RuntimeError"
+    assert report["failure_code"] == "provider_probe_failed"
 
 
 def test_provider_readiness_report_keeps_liveness_unprobed_until_refresh() -> None:
