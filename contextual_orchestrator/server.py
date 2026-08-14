@@ -834,11 +834,12 @@ def _validate_responses_max_tool_calls(body: dict[str, Any]) -> None:
 
 
 def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
-    """Legacy Completions ``logprobs`` — only ``false``/omit; token logprobs unsupported.
+    """Legacy Completions ``logprobs`` — only ``false``/0/omit; token logprobs unsupported.
 
     OpenAI accepts ``false`` or an integer 0–5 for top logprob counts. This gateway
-    always returns ``logprobs: null`` on text completions, so integer logprobs
-    (including 0–5) and boolean ``true`` fail closed. ``false`` and omit remain valid.
+    always returns ``logprobs: null`` on text completions, so non-zero integer
+    logprobs and boolean ``true`` fail closed. ``false``, ``0``, null, and omit
+    are honest no-ops (request no token logprobs).
     """
     if "logprobs" not in body:
         return None
@@ -855,6 +856,9 @@ def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
             "logprobs must be false; token logprobs are not supported on /v1/completions",
         )
     if isinstance(logprobs, int) and not isinstance(logprobs, bool):
+        # Integer 0 means "return no logprobs" — equivalent to false/omit.
+        if logprobs == 0:
+            return None
         raise RequestError(
             400,
             "invalid_logprobs",
@@ -1106,11 +1110,17 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
             "conversation is not supported on /v1/responses",
         )
     if "truncation" in body and _present_nonempty(body.get("truncation")):
-        raise RequestError(
-            400,
-            "invalid_truncation",
-            "truncation is not supported on /v1/responses",
-        )
+        truncation = body.get("truncation")
+        # OpenAI default truncation is "disabled" (no context truncation plane).
+        # This gateway never truncates, so disabled (after strip) is an honest no-op.
+        if isinstance(truncation, str) and truncation.strip() == "disabled":
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_truncation",
+                "truncation is not supported on /v1/responses",
+            )
     if "include" in body:
         include = body.get("include")
         # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
