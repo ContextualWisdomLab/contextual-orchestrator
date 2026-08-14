@@ -731,6 +731,7 @@ def _validate_completions_model(body: dict[str, Any]) -> str:
     model = body.get("model")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
     return model
@@ -1966,8 +1967,8 @@ def _validate_responses_modalities(body: dict[str, Any]) -> list[str] | None:
     if "modalities" not in body:
         return None
     modalities = body.get("modalities")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if modalities is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if modalities is None or (isinstance(modalities, str) and not modalities.strip()):
         return None
     if not isinstance(modalities, list):
         raise RequestError(
@@ -1984,6 +1985,8 @@ def _validate_responses_modalities(body: dict[str, Any]) -> list[str] | None:
             "invalid_modalities",
             "modalities must be a non-empty array of strings",
         )
+    # Strip incidental whitespace on items so [" text "] matches text-only.
+    modalities = [item.strip() for item in modalities]
     if modalities != ["text"]:
         raise RequestError(
             400,
@@ -1996,12 +1999,16 @@ def _validate_responses_modalities(body: dict[str, Any]) -> list[str] | None:
 def _validate_responses_prediction(body: dict[str, Any]) -> None:
     """Responses ``prediction`` (Predicted Outputs) — not supported on this gateway.
 
-    Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
     """
     if "prediction" not in body:
         return
     value = body.get("prediction")
-    if value is None or (isinstance(value, dict) and not value):
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
         return
     raise RequestError(
         400,
@@ -2020,8 +2027,8 @@ def _validate_chat_modalities(body: dict[str, Any]) -> list[str] | None:
     if "modalities" not in body:
         return None
     modalities = body.get("modalities")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if modalities is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if modalities is None or (isinstance(modalities, str) and not modalities.strip()):
         return None
     if not isinstance(modalities, list):
         raise RequestError(
@@ -2038,6 +2045,8 @@ def _validate_chat_modalities(body: dict[str, Any]) -> list[str] | None:
             "invalid_modalities",
             "modalities must be a non-empty array of strings",
         )
+    # Strip incidental whitespace on items so [" text "] matches text-only.
+    modalities = [item.strip() for item in modalities]
     if modalities != ["text"]:
         raise RequestError(
             400,
@@ -2054,12 +2063,16 @@ def _validate_chat_prediction(body: dict[str, Any]) -> None:
     latency wins. This gateway does not apply ``prediction`` on the multi-agent
     route path, so any non-empty present value fails closed rather than silently
     ignoring a buyer-visible optimization hint.
-    Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
     """
     if "prediction" not in body:
         return
     value = body.get("prediction")
-    if value is None or (isinstance(value, dict) and not value):
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
         return
     raise RequestError(
         400,
@@ -2372,6 +2385,7 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
         raise RequestError(400, "invalid_model", "model is required on /v1/responses")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
     return model
@@ -2469,6 +2483,7 @@ def _validate_embeddings_model(body: dict[str, Any]) -> str:
         raise RequestError(400, "invalid_model", "model is required")
     if not isinstance(model, str) or not model.strip():
         raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
     return model
