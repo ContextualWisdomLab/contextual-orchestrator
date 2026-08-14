@@ -429,3 +429,28 @@ cross-repository transport and IRT shape after the benchmark/ADR documentation
 push; it is not semantic quality, bias, or production IRT promotion evidence.
 Balanced non-ceiling gold, perturbation stability, category occupancy, and all
 failure denominators remain required.
+
+## Warm direct MLX versus authenticated gateway recheck — 2026-08-14T11:56:58Z
+
+The dedicated Gemma 4 e4b worker and authenticated gateway were re-measured
+after one warm-up request per endpoint with the identical short prompt
+(`Reply with exactly OK.`), temperature `0`, and `max_tokens=32`. Each width
+sent `4 * width` requests; the gateway remained configured with
+`max_concurrent_runs=4`.
+
+| path | width | requests/statuses | wave | successful p50 | successful p95 |
+| --- | ---: | --- | ---: | ---: | ---: |
+| direct MLX | 1 | `4/4 x 200` | 0.837 s | 0.212 s | 0.220 s |
+| direct MLX | 2 | `8/8 x 200` | 1.333 s | 0.334 s | 0.348 s |
+| direct MLX | 4 | `16/16 x 200` | 2.599 s | 0.672 s | 0.694 s |
+| direct MLX | 5 | `20/20 x 200` | 3.535 s | 0.919 s | 0.943 s |
+| gateway | 1 | `4/4 x 200` | 0.921 s | 0.233 s | 0.236 s |
+| gateway | 2 | `8/8 x 200` | 1.530 s | 0.386 s | 0.392 s |
+| gateway | 4 | `16/16 x 200` | 2.560 s | 0.616 s | 0.737 s |
+| gateway | 5 | `4/20 x 200`, `16/20 x 503` | 0.806 s | 0.802 s | 0.805 s |
+
+The gateway stays close to direct MLX through width `4` and explicitly rejects
+excess admission at width `5`; it does not silently queue, drop, or repair
+requests. This is warm transport/admission evidence only. It does not change
+the multi-item Judge, semantic calibration, category-occupancy, or IRT
+promotion gates, and the rejected requests remain in the overload denominator.
