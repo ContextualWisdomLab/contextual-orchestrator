@@ -454,3 +454,21 @@ excess admission at width `5`; it does not silently queue, drop, or repair
 requests. This is warm transport/admission evidence only. It does not change
 the multi-item Judge, semantic calibration, category-occupancy, or IRT
 promotion gates, and the rejected requests remain in the overload denominator.
+
+## Current exact-head cross-repository Judge smoke — 2026-08-14T11:59:55Z
+
+The current source pair (`contextual-orchestrator` `f15ccb0ff53a0a2782438974f543bfc041cb1a69`,
+`fast-mlsirm` `c9f2c280c4113e49486cb01e69daa40583f38127`) was run through the
+same injected path:
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm`. The dedicated Gemma 4 e4b worker used temperature `0`,
+disabled thinking, `max_output_tokens=128`, local concurrency `4`, two anchored
+criteria, and category count `3`.
+
+All four binary boundary calls completed in `4.221 s` with `1,881` provider
+tokens (`1,780` prompt and `101` completion). The result was
+`accepted=true`, score `1.0`, categories
+`{evidence_quality: 2, release_safety: 2}`, route mode, four trace steps, and
+the required multi-item polytomous IRT row `[2,2]`. This proves current
+transport, adapter, strict parsing, and response-shape integration only; it is
+not a semantic-quality, bias, human/gold, or production-IRT promotion result.
