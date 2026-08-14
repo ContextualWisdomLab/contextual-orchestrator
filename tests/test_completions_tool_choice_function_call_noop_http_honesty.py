@@ -1,4 +1,4 @@
-"""Completions empty tools array no-op honesty over HTTP."""
+"""Completions tool_choice/function_call none/auto/empty omit no-ops over HTTP."""
 
 from __future__ import annotations
 
@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
-_TEST_AUTH_TOKEN = "completions_empty_tools_noop_http_honesty_token"  # noqa: S105
+_TEST_AUTH_TOKEN = "completions_tool_choice_function_call_noop_token"  # noqa: S105
 
 
 def build() -> TaskOrchestrator:
@@ -42,66 +42,79 @@ def _post(port: int, payload: dict) -> tuple[int, dict]:
 
 
 def _server():
-    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN, rate_limit_requests=10_000),
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, server.server_address[1]
 
 
-def test_http_completions_accepts_empty_tools_array() -> None:
+def test_http_completions_accepts_tool_choice_none_auto_empty() -> None:
     server, thread, port = _server()
     try:
-        status, body = _post(
-            port,
-            {"model": "mock-planner", "prompt": "empty tools", "tools": []},
-        )
-        assert status == 200, body
-        assert "choices" in body
+        for tc in ("none", "auto", "", "  ", {}):
+            status, body = _post(
+                port,
+                {"model": "mock-planner", "prompt": f"tc {tc!r}", "tool_choice": tc},
+            )
+            assert status == 200, (tc, body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_completions_still_rejects_nonempty_tools() -> None:
+def test_http_completions_accepts_function_call_none_auto_empty() -> None:
+    server, thread, port = _server()
+    try:
+        for fc in ("none", "auto", "", "  "):
+            status, body = _post(
+                port,
+                {"model": "mock-planner", "prompt": f"fc {fc!r}", "function_call": fc},
+            )
+            assert status == 200, (fc, body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_completions_still_rejects_tool_choice_required() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {"model": "mock-planner", "prompt": "required", "tool_choice": "required"},
+        )
+        assert status == 400, body
+        assert "invalid_tools" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_completions_still_rejects_named_function_call() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "prompt": "nonempty tools",
-                "tools": [
-                    {
-                        "type": "function",
-                        "function": {"name": "lookup_item", "parameters": {}},
-                    }
-                ],
+                "prompt": "named",
+                "function_call": {"name": "lookup_item"},
             },
         )
         assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_tools" in blob
-        assert "chat/completions" in blob
+        assert "invalid_tools" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_completions_accepts_tool_choice_none_with_empty_tools() -> None:
-    """none/auto/empty tool_choice with tools=[] are omit-equivalent SDK defaults."""
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            {
-                "model": "mock-planner",
-                "prompt": "tool choice none empty tools",
-                "tools": [],
-                "tool_choice": "none",
-            },
-        )
-        assert status == 200, body
-        assert "choices" in body
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
+if __name__ == "__main__":
+    test_http_completions_accepts_tool_choice_none_auto_empty()
+    test_http_completions_accepts_function_call_none_auto_empty()
+    test_http_completions_still_rejects_tool_choice_required()
+    test_http_completions_still_rejects_named_function_call()
+    print("ok")

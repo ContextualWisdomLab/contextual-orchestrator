@@ -1584,9 +1584,11 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
     Honest no-ops (omit-equivalent SDK defaults):
     - empty ``tools: []``
     - empty ``functions: []``
-    - ``parallel_tool_calls=false``
+    - ``parallel_tool_calls=false`` / null
+    - ``tool_choice`` none/auto/empty-string/empty-object/null
+    - ``function_call`` none/auto/empty-string/null
 
-    Non-empty tools/functions, any tool_choice/function_call, or
+    Non-empty tools/functions, non-default tool_choice/function_call, or
     ``parallel_tool_calls=true`` fail closed with a chat migration path.
     """
     tools = body.get("tools") if "tools" in body else None
@@ -1618,8 +1620,25 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
     else:
         parallel_present = False
 
-    if tools_present or functions_present or parallel_present or any(
-        key in body and body.get(key) is not None for key in ("tool_choice", "function_call")
+    def _tool_control_present(key: str) -> bool:
+        if key not in body:
+            return False
+        value = body.get(key)
+        # null, empty string, empty object, none/auto are omit-equivalent SDK defaults.
+        if value is None:
+            return False
+        if isinstance(value, str) and (not value.strip() or value in ("none", "auto")):
+            return False
+        if isinstance(value, dict) and not value:
+            return False
+        return True
+
+    if (
+        tools_present
+        or functions_present
+        or parallel_present
+        or _tool_control_present("tool_choice")
+        or _tool_control_present("function_call")
     ):
         raise RequestError(
             400,

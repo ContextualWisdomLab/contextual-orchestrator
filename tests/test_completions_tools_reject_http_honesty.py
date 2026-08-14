@@ -86,15 +86,32 @@ def test_http_completions_rejects_tools() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_rejects_tool_choice() -> None:
+def test_http_completions_accepts_tool_choice_auto_as_omit() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "prompt": "hello tool_choice",
+                "prompt": "hello tool_choice auto",
                 "tool_choice": "auto",
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_completions_rejects_tool_choice_required() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "prompt": "hello tool_choice required",
+                "tool_choice": "required",
             },
         )
         assert status == 400, body
@@ -144,7 +161,8 @@ def test_http_completions_rejects_parallel_tool_calls() -> None:
 if __name__ == "__main__":
     test_http_completions_accepts_baseline_without_tools()
     test_http_completions_rejects_tools()
-    test_http_completions_rejects_tool_choice()
+    test_http_completions_accepts_tool_choice_auto_as_omit()
+    test_http_completions_rejects_tool_choice_required()
     test_http_completions_rejects_functions_and_function_call()
     test_http_completions_rejects_parallel_tool_calls()
     print("ok")
