@@ -303,3 +303,51 @@ that the latest redaction-only fast-mlsirm change does not break the real
 contextual route. No keyword matching, positional inference, category repair,
 retry, scalar synthesis, or silent drop was used; balanced held-out gold and
 perturbation calibration remain required.
+
+## Current exact-head K-stratified direct and threshold calibration — 2026-08-14
+
+The current local pair (`contextual-orchestrator` `bc882c0e937bef1312b2e499bfb1fdd1b9076df5`,
+`fast-mlsirm` `a536292cc05bd16287dab16431bc0c3fef74ba81`) was exercised against
+the dedicated Gemma 4 e4b listener at `mlx://127.0.0.1:18083/v1`. Every call
+used `ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator
+-> ModelClient -> mlx-lm`, two criteria, explicit anchored categories, and no
+keyword, positional, retry, category-repair, or silent-drop fallback.
+
+The explicit `direct` calibration sweep completed all 12 outcomes:
+
+| case | K | status | score | accepted | row | latency | total tokens |
+| --- | ---: | --- | ---: | --- | --- | ---: | ---: |
+| safe | 2 | complete | 1.0 | yes | `[1,1]` | 3.827 s | 701 |
+| safe | 3 | complete | 1.0 | yes | `[2,2]` | 3.191 s | 729 |
+| safe | 5 | complete | 1.0 | yes | `[4,4]` | 3.632 s | 772 |
+| safe | 7 | complete | 1.0 | yes | `[6,6]` | 3.453 s | 801 |
+| unsafe | 2/3/5/7 | complete | 0.0 | no | `[0,0]` | 2.377–2.896 s | 670–769 |
+| partial | 2 | complete | 0.0 | no | `[0,0]` | 3.717 s | 714 |
+| partial | 3 | complete | 0.5 | no | `[1,1]` | 3.361 s | 727 |
+| partial | 5 | complete | 0.5 | no | `[2,2]` | 2.862 s | 739 |
+| partial | 7 | complete | 0.5 | no | `[3,3]` | 2.967 s | 781 |
+
+This sample does not show monotone positive drift as K grows: safe and unsafe
+were invariant, while partial changed once from K=2 to K=3 and then remained
+stable. It is category-count sensitivity, not proof of neutrality or of the
+user's positive-bias hypothesis.
+
+The production-default `binary_threshold` comparison completed K=`3` for all
+three cases and K=`5` for unsafe; safe K=`5` and partial K=`5` failed closed
+after all 8 boundary calls parsed but produced non-monotone vectors:
+
+| case | K | status | score/row | calls | latency | total tokens |
+| --- | ---: | --- | --- | ---: | ---: | ---: |
+| safe | 3 | complete | 1.0 / `[2,2]` | 4 | 5.395 s | 2,142 |
+| safe | 5 | failed closed, `non_monotone` | no IRT row | 8 | 8.263 s | 4,384 |
+| unsafe | 3 | complete | 0.0 / `[0,0]` | 4 | 4.237 s | 2,049 |
+| unsafe | 5 | complete | 0.0 / `[0,0]` | 8 | 7.081 s | 4,163 |
+| partial | 3 | complete | 0.0 / `[0,0]` | 4 | 4.145 s | 2,018 |
+| partial | 5 | failed closed, `non_monotone` | no IRT row | 8 | 9.140 s | 4,167 |
+
+The two K=`5` failures had `parse_status=passed`, `completed_call_count=8`,
+and `failed_call_count=0`; they are semantic ordinal failures, not transport
+failures. Keep them in the denominator and do not repair them into an IRT row.
+The binary path therefore remains the safer contract boundary but is not yet a
+quality or unbiased-IRT claim; larger balanced gold, category occupancy, and
+perturbation calibration remain required.
