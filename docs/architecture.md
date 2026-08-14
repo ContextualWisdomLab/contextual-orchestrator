@@ -38,6 +38,15 @@ This repository implements the interface and control plane, not the trained coor
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
+HTTP generation controls are request-scoped. The server binds an immutable
+`GenerationOptions` value in a `ContextVar` while `/v1/completions` or
+`/v1/chat/completions` runs, and `ModelClient` resolves it at the provider
+boundary. It never mutates the shared client's defaults, so an overlapping
+request cannot inherit another request's temperature, nucleus sampling,
+penalties, or output-token limit; the context is reset even when orchestration
+raises. This is required for the threaded HTTP server and is covered by a
+barrier-controlled concurrent regression test.
+
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.

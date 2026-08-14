@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
+from contextlib import contextmanager
 from contextvars import ContextVar
 import copy
 from dataclasses import dataclass, replace
@@ -30,6 +31,18 @@ from .credentials import NotConfigured, get_credential
 
 
 ChatMessage = dict[str, str]
+
+
+@dataclass(frozen=True)
+class GenerationOptions:
+    """Immutable generation overrides bound to one request context."""
+
+    max_output_tokens: int | None = None
+    temperature: float | None = None
+    top_p: float | None = None
+    presence_penalty: float | None = None
+    frequency_penalty: float | None = None
+
 
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
@@ -226,6 +239,11 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
+        # Request overrides live in the caller's context, never in shared client fields.
+        self._request_options: ContextVar[GenerationOptions | None] = ContextVar(
+            "model_client_request_options",
+            default=None,
+        )
         # TLS trust for provider egress. Default verifies against the system trust store;
         # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
         # explicit dev-only opt-out (insecure) for self-signed endpoints.
@@ -250,6 +268,54 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    @contextmanager
+    def request_options(self, options: GenerationOptions | None):
+        """Bind immutable generation options and restore the caller context on exit."""
+        token = self._request_options.set(options)
+        try:
+            yield
+        finally:
+            self._request_options.reset(token)
+
+    def _effective_generation_options(
+        self,
+        temperature: float | None = None,
+        top_p: float | None = None,
+    ) -> GenerationOptions:
+        """Resolve direct arguments, request options, and client defaults in that order."""
+        scoped = self._request_options.get()
+        return GenerationOptions(
+            max_output_tokens=(
+                scoped.max_output_tokens
+                if scoped is not None and scoped.max_output_tokens is not None
+                else self.max_output_tokens
+            ),
+            temperature=(
+                temperature
+                if temperature is not None
+                else scoped.temperature
+                if scoped is not None and scoped.temperature is not None
+                else self.default_temperature
+            ),
+            top_p=(
+                top_p
+                if top_p is not None
+                else scoped.top_p
+                if scoped is not None and scoped.top_p is not None
+                else self.default_top_p
+            ),
+            presence_penalty=(
+                scoped.presence_penalty
+                if scoped is not None and scoped.presence_penalty is not None
+                else self.default_presence_penalty
+            ),
+            frequency_penalty=(
+                scoped.frequency_penalty
+                if scoped is not None and scoped.frequency_penalty is not None
+                else self.default_frequency_penalty
+            ),
+        )
+
     def chat(
         self,
         agent: ModelAgent,
@@ -259,20 +325,16 @@ class ModelClient:
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
-        When ``temperature``/``top_p`` are omitted, ``default_temperature`` and
-        ``default_top_p`` are used so request-scoped Completions sampling can be
-        applied without threading kwargs through every orchestrator hop.
+        Omitted values use immutable request options when present, then client defaults.
         """
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
-        effective_temperature = self.default_temperature if temperature is None else temperature
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
-        self._local.last_temperature = effective_temperature
-        self._local.last_top_p = effective_top_p
-        self._local.last_presence_penalty = effective_presence
-        self._local.last_frequency_penalty = effective_frequency
+        effective = self._effective_generation_options(temperature, top_p)
+        self._local.last_temperature = effective.temperature
+        self._local.last_top_p = effective.top_p
+        self._local.last_presence_penalty = effective.presence_penalty
+        self._local.last_frequency_penalty = effective.frequency_penalty
+        self._local.last_max_output_tokens = effective.max_output_tokens
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
@@ -286,16 +348,16 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": effective_temperature,
+            "temperature": effective.temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": effective.max_output_tokens,
         }
-        if effective_top_p is not None:  # pragma: no cover
-            payload["top_p"] = effective_top_p
-        if effective_presence is not None:  # pragma: no cover
-            payload["presence_penalty"] = effective_presence
-        if effective_frequency is not None:  # pragma: no cover
-            payload["frequency_penalty"] = effective_frequency
+        if effective.top_p is not None:  # pragma: no cover
+            payload["top_p"] = effective.top_p
+        if effective.presence_penalty is not None:  # pragma: no cover
+            payload["presence_penalty"] = effective.presence_penalty
+        if effective.frequency_penalty is not None:  # pragma: no cover
+            payload["frequency_penalty"] = effective.frequency_penalty
         return self._send_with_retry(agent, payload)
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
@@ -343,13 +405,26 @@ class ModelClient:
             context=self._ssl_context,
         )
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+    def stream_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        top_p: float | None = None,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        effective = self._effective_generation_options(temperature, top_p)
+        self._local.usage = None
+        self._local.last_temperature = effective.temperature
+        self._local.last_top_p = effective.top_p
+        self._local.last_presence_penalty = effective.presence_penalty
+        self._local.last_frequency_penalty = effective.frequency_penalty
+        self._local.last_max_output_tokens = effective.max_output_tokens
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -360,10 +435,16 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": effective.temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": effective.max_output_tokens,
         }
+        if effective.top_p is not None:  # pragma: no cover
+            payload["top_p"] = effective.top_p
+        if effective.presence_penalty is not None:  # pragma: no cover
+            payload["presence_penalty"] = effective.presence_penalty
+        if effective.frequency_penalty is not None:  # pragma: no cover
+            payload["frequency_penalty"] = effective.frequency_penalty
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
