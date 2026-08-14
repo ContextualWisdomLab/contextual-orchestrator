@@ -186,6 +186,56 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
     assert counters["max_active"] == 1
 
 
+def test_local_provider_serializes_model_switches_and_bounds_waiters() -> None:
+    import threading
+
+    first_agent = ModelAgent("first_agent", "model-a", base_url="mlx://127.0.0.1:8080/v1")
+    second_agent = ModelAgent("second_agent", "model-b", base_url="mlx://127.0.0.1:8080/v1")
+    first_client = ModelClient(max_retries=0, timeout=1.0)
+    second_client = ModelClient(max_retries=0, timeout=0.05)
+    entered = threading.Event()
+    release = threading.Event()
+    errors: list[BaseException] = []
+    active = 0
+    max_active = 0
+    counter_lock = threading.Lock()
+
+    def slow_open(_request, _destination=None):
+        nonlocal active, max_active
+        with counter_lock:
+            active += 1
+            max_active = max(max_active, active)
+        entered.set()
+        release.wait(timeout=2)
+        with counter_lock:
+            active -= 1
+        return _Response({"choices": [{"message": {"content": "OK"}}]})
+
+    def call(client, agent):
+        try:
+            client.chat(agent, [{"role": "user", "content": "ping"}])
+        except BaseException as exc:  # noqa: BLE001 - thread result is asserted below
+            errors.append(exc)
+
+    with patch.object(first_client, "_open_provider", side_effect=slow_open), patch.object(
+        second_client, "_open_provider", side_effect=slow_open
+    ):
+        first = threading.Thread(target=call, args=(first_client, first_agent))
+        second = threading.Thread(target=call, args=(second_client, second_agent))
+        first.start()
+        assert entered.wait(timeout=1)
+        second.start()
+        second.join(timeout=1)
+        release.set()
+        first.join(timeout=1)
+
+    assert not first.is_alive()
+    assert not second.is_alive()
+    assert max_active == 1
+    assert len(errors) == 1
+    assert isinstance(errors[0], TimeoutError)
+
+
 def test_reasoning_only_response_explains_local_template_fix() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=0)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar
 from concurrent.futures import ThreadPoolExecutor
 import copy
@@ -325,6 +326,69 @@ def _is_local_provider_url(base_url: str) -> bool:
     return parsed.scheme in LOCAL_PROVIDER_SCHEMES and parsed.hostname in LOCAL_PROVIDER_HOSTS
 
 
+class _LocalProviderState:
+    """Coordinate model switching and bounded concurrency for one local endpoint."""
+
+    def __init__(self) -> None:
+        self.condition = threading.Condition()
+        self.active_model: str | None = None
+        self.active = 0
+        self.capacity = 1
+
+
+_LOCAL_PROVIDER_STATES: dict[str, _LocalProviderState] = {}
+_LOCAL_PROVIDER_STATES_GUARD = threading.Lock()
+
+
+def _local_provider_state(base_url: str) -> _LocalProviderState:
+    """Return the shared in-process coordinator for one loopback provider endpoint."""
+    parsed = urlparse(base_url)
+    key = urlunsplit(("http", (parsed.netloc or base_url).lower(), parsed.path.rstrip("/"), "", ""))
+    with _LOCAL_PROVIDER_STATES_GUARD:
+        return _LOCAL_PROVIDER_STATES.setdefault(key, _LocalProviderState())
+
+
+@contextmanager
+def _local_provider_slot(
+    agent: ModelAgent,
+    capacity: int,
+    timeout: float,
+):
+    """Bound local requests and serialize model switches on a shared endpoint."""
+    if not _is_local_provider_url(agent.base_url):
+        yield
+        return
+
+    state = _local_provider_state(agent.base_url)
+    deadline = time.monotonic() + max(float(timeout), 0.0)
+    with state.condition:
+        while True:
+            if state.active == 0:
+                state.active_model = agent.model
+                state.capacity = capacity
+            elif state.active_model == agent.model:
+                state.capacity = min(state.capacity, capacity)
+
+            if state.active_model == agent.model and state.active < state.capacity:
+                state.active += 1
+                break
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("local provider endpoint is busy past its request deadline")
+            state.condition.wait(remaining)
+
+    try:
+        yield
+    finally:
+        with state.condition:
+            state.active -= 1
+            if state.active == 0:
+                state.active_model = None
+                state.capacity = 1
+            state.condition.notify_all()
+
+
 def _responses_text(value: Any) -> str:
     if isinstance(value, str):
         return value
@@ -599,7 +663,8 @@ class ModelClient:
         }
         if _is_local_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
-        return self._send_with_retry(agent, payload, destination)
+        with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+            return self._send_with_retry(agent, payload, destination)
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Run one bounded completion probe without changing workflow state.
@@ -626,7 +691,8 @@ class ModelClient:
                 }
                 if _is_local_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
-                content = self._send(agent, payload, destination, timeout=probe_timeout)
+                with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
+                    content = self._send(agent, payload, destination, timeout=probe_timeout)
                 usage = self.take_usage()
             if not content.strip():
                 raise RuntimeError(f"provider {agent.id} returned empty probe content")
@@ -847,7 +913,8 @@ class ModelClient:
         }
         if _is_local_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
-        yield from self._stream_send(agent, payload, destination)  # pragma: no cover
+        with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+            yield from self._stream_send(agent, payload, destination)  # pragma: no cover
 
     def _stream_send(
         self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
@@ -897,11 +964,13 @@ class ModelClient:
             chat_payload.setdefault("max_tokens", self.max_output_tokens)
             if self.chat_template_args:
                 chat_payload["chat_template_kwargs"] = self.chat_template_args
-            chat_response = self._send_raw_with_retry(
-                agent, "chat/completions", chat_payload, destination
-            )
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                chat_response = self._send_raw_with_retry(
+                    agent, "chat/completions", chat_payload, destination
+                )
             return _chat_to_responses_payload(chat_response, payload)
-        return self._send_raw_with_retry(agent, endpoint, payload, destination)  # pragma: no cover
+        with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+            return self._send_raw_with_retry(agent, endpoint, payload, destination)
 
     def _send_raw_with_retry(
         self,

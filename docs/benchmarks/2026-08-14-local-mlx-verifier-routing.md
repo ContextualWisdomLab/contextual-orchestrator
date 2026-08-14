@@ -47,3 +47,31 @@ category occupancy, option-count/order perturbations, and non-ceiling rows.
 This evidence expands the active Goal and ADR acceptance boundary: model
 selection must be rechecked after prompt, server, model, timeout, or output
 budget changes, and a fast model cannot be promoted solely for throughput.
+
+## Runtime reliability follow-up
+
+The MLX process reported healthy `/health` and `/v1/models` responses while
+real completion requests were timing out. Before the graceful restart, the
+server had accumulated hundreds of request threads and macOS swap usage was
+near capacity; this is a completion-path exhaustion signal, not proof that the
+model or TLS stack is broken. After restart, direct e4b and Llama 3B
+completions returned `OK`.
+
+The first full e4b judge run after a model switch still failed closed on the
+safe case (`2/4` boundary calls completed within a 30-second request budget),
+while the following unsafe case completed with polytomous row `[0,1]`. With
+e4b warm and a 60-second request budget, the same safe case completed through
+the full `fast-mlsirm -> contextual-orchestrator -> mlx-lm` path in `35.86 s`,
+returned categories `{evidence_quality: 2, risk_signal: 2}`, and produced row
+`[2,2]`. This separates cold-load/request-budget reliability from semantic
+judgment evidence; it does not justify retries, keyword matching, or silent
+repair.
+
+The gateway now bounds local requests per normalized loopback endpoint,
+serializes requests that would switch the loaded model, preserves configured
+same-model concurrency, and fails waiters when the request deadline expires.
+Regression coverage includes a competing two-model endpoint and the full
+contextual suite remains green (`384 passed`). Promotion still requires
+separate cold/warm latency distributions, bounded completion success rates,
+category occupancy, and balanced semantic calibration before changing the
+verifier role.
