@@ -10,6 +10,7 @@ from dataclasses import replace
 
 from .credentials import get_credential, register_credential
 from .orchestrator import (
+    CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
     MAX_LOCAL_CONCURRENCY,
     ModelClient,
     TaskOrchestrator,
@@ -64,6 +65,66 @@ def _resolve_auth_token(explicit: str, credential_name: str) -> str:
     return token
 
 
+def _fast_mlsirm_runtime_status() -> tuple[dict[str, object], bool]:
+    """Report whether this interpreter can load the required judge contract."""
+    status: dict[str, object] = {
+        "python": sys.executable,
+        "package": "fast-mlsirm",
+    }
+    try:
+        import fast_mlsirm
+        from fast_mlsirm import (
+            CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1 as fast_contract,
+            ContextualOrchestratorJudge,
+            JudgeCriterion,
+            JudgeFormatError,
+        )
+    except ModuleNotFoundError as exc:
+        status.update(
+            {
+                "available": False,
+                "reason": "missing_dependency",
+                "missing_module": exc.name or "unknown",
+            }
+        )
+        return status, False
+    except Exception as exc:  # noqa: BLE001 - diagnostic command must fail closed
+        status.update(
+            {
+                "available": False,
+                "reason": "import_error",
+                "error_type": type(exc).__name__,
+            }
+        )
+        return status, False
+
+    checks = {
+        "judge_symbols": all(
+            callable(symbol)
+            for symbol in (ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError)
+        ),
+        "contextual_contract": fast_contract == CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
+    }
+    available = all(checks.values())
+    status.update(
+        {
+            "available": available,
+            "version": getattr(fast_mlsirm, "__version__", "unknown"),
+            "contract": fast_contract,
+            "checks": checks,
+        }
+    )
+    return status, available
+
+
+def _check_fast_mlsirm_command() -> None:
+    """Validate the same-interpreter fast-mlsirm integration boundary."""
+    status, available = _fast_mlsirm_runtime_status()
+    print(json.dumps(status, ensure_ascii=False, sort_keys=True))
+    if not available:
+        raise SystemExit(1)
+
+
 def _register_credential_command(argv: list[str]) -> None:
     """Bootstrap: read a deploy-time secret and store it in the KV credential registry.
 
@@ -111,6 +172,9 @@ def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
         _register_credential_command(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "check-fast-mlsirm":
+        _check_fast_mlsirm_command()
         return
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")

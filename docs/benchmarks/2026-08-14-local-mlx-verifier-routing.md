@@ -17,6 +17,21 @@ calls were valid. The safe and unsafe cases were judged separately; no retry,
 keyword matching, positional inference, category synthesis, or silent repair
 was used. A parse or monotonicity failure remains a failed comparison.
 
+The exact interpreter used for these runs also passed
+`python -m contextual_orchestrator check-fast-mlsirm`, which verified the
+fast-mlsirm import, required judge symbols, and
+`contextual-orchestrator-contract-v1`. The contextual-orchestrator-only
+environment intentionally fails this preflight with `missing_module: numpy`;
+that is an integration-environment failure, not a judge result.
+
+A post-preflight warm smoke on the same e4b endpoint completed the four
+Boolean boundary calls in `55.31 s`, returned categories
+`{evidence_quality: 2, risk_signal: 2}`, score `1.0`, and row `[2,2]` with
+`1,921` provider tokens. This is a successful gateway/contract run, but its
+latency is high enough that it remains reliability evidence rather than a
+promotion or quality claim; cold/warm distributions and held-out calibration
+are still required.
+
 ## Same-route model comparison
 
 | model | safe result | unsafe result | latency | provider tokens |

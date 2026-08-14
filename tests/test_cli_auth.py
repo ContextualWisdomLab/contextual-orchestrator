@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import types
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -151,6 +152,47 @@ def test_sampling_temperature_uses_descriptive_name_and_legacy_alias() -> None:
         ):
             main()
         assert model_client.call_args.kwargs["temperature"] == 0.7
+
+
+def test_fast_mlsirm_preflight_reports_missing_transitive_dependency() -> None:
+    stderr = StringIO()
+    real_import = __import__
+
+    def import_without_fast(name: str, *args, **kwargs):
+        if name == "fast_mlsirm":
+            raise ModuleNotFoundError("No module named 'numpy'", name="numpy")
+        return real_import(name, *args, **kwargs)
+
+    with (
+        patch.object(sys, "argv", ["contextual-orchestrator", "check-fast-mlsirm"]),
+        patch.object(sys, "stdout", stderr),
+        patch("builtins.__import__", side_effect=import_without_fast),
+    ):
+        try:
+            main()
+        except SystemExit as exc:
+            assert exc.code == 1
+        else:  # pragma: no cover
+            raise AssertionError("missing judge dependency must fail closed")
+    assert '"missing_module": "numpy"' in stderr.getvalue()
+
+
+def test_fast_mlsirm_preflight_accepts_the_versioned_contract() -> None:
+    fake_package = types.ModuleType("fast_mlsirm")
+    fake_package.__version__ = "test"
+    fake_package.CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1 = "contextual-orchestrator-contract-v1"
+    fake_package.ContextualOrchestratorJudge = type("ContextualOrchestratorJudge", (), {})
+    fake_package.JudgeCriterion = type("JudgeCriterion", (), {})
+    fake_package.JudgeFormatError = type("JudgeFormatError", (Exception,), {})
+    stdout = StringIO()
+    with (
+        patch.dict(sys.modules, {"fast_mlsirm": fake_package}),
+        patch.object(sys, "argv", ["contextual-orchestrator", "check-fast-mlsirm"]),
+        patch.object(sys, "stdout", stdout),
+    ):
+        main()
+    assert '"available": true' in stdout.getvalue()
+    assert '"contextual_contract": true' in stdout.getvalue()
 
 
 if __name__ == "__main__":

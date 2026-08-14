@@ -18,6 +18,18 @@ Python 3.12 environment (`fast-mlsirm 0.7.0`, NumPy 2.5.1); the contextual
 source checkout was placed on `PYTHONPATH`. No keyword, lexical, positional,
 silent-drop, or malformed-output repair was used.
 
+Before a live run, the selected interpreter must pass:
+
+```bash
+PYTHONPATH=/path/to/fast-mlsirm/python:/path/to/contextual-orchestrator \
+  /path/to/fast-mlsirm/.venv/bin/python -m contextual_orchestrator check-fast-mlsirm
+```
+
+The command is a fail-closed preflight for the exact judge boundary. It reports
+the Python executable, fast-mlsirm version, import status, and
+`contextual-orchestrator-contract-v1` marker; it does not call a provider or
+replace a failed judge with keyword matching.
+
 The contextual-orchestrator project environment alone does not install
 fast-mlsirm's NumPy dependency. Running the same command with that environment
 therefore failed closed with `fast-mlsirm judge could not be loaded`; this is a
