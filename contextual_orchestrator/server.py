@@ -1817,8 +1817,13 @@ def _validate_chat_include_field(body: dict[str, Any], *, endpoint_path: str = "
 
 
 def _validate_completions_reasoning_object(body: dict[str, Any]) -> None:
-    """Reject Responses-style ``reasoning`` object on legacy Completions."""
+    """Reject Responses-style ``reasoning`` object on legacy Completions.
+
+    Explicit JSON null is treat-as-omit (SDK optional default).
+    """
     if "reasoning" not in body:
+        return
+    if body.get("reasoning") is None:
         return
     raise RequestError(
         400,
@@ -2256,10 +2261,14 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
 
     OpenAI Responses accepts a ``reasoning`` object (effort/summary controls).
     This gateway proxies Responses but does not interpret or enforce reasoning
-    controls, so any present value fails closed rather than silently ignoring a
+    controls, so any non-null value fails closed rather than silently ignoring a
     buyer-visible o-series control surface.
+
+    Explicit JSON null is treat-as-omit (SDK optional default).
     """
     if "reasoning" not in body:
+        return
+    if body.get("reasoning") is None:
         return
     raise RequestError(
         400,
