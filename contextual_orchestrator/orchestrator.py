@@ -668,6 +668,19 @@ def _message_content_text(content: Any) -> str:
     return ""
 
 
+def _message_image_parts(content: Any) -> list[dict[str, Any]]:
+    """Non-text content parts (``image_url``, etc.) from a chat message's ``content``.
+
+    ``_message_content_text`` deliberately drops these for routing/complexity
+    heuristics; callers that forward a message to a provider must reattach them
+    separately, or a vision request silently loses its image once it enters a
+    text-only path (e.g. ``conduct``'s generated step prompts).
+    """
+    if not isinstance(content, list):
+        return []
+    return [part for part in content if isinstance(part, dict) and part.get("type") != "text"]
+
+
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
     """Load model agent definitions from an agents JSON file."""
     with open(path, encoding="utf-8") as handle:
@@ -1391,6 +1404,14 @@ class TaskOrchestrator:
     def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
+        # The original user message's image_url (etc.) parts -- `task` above is
+        # text-only (routing/complexity heuristics only), so a vision request that
+        # falls into this workflow path would otherwise never reach a provider
+        # with its image attached. Reattached to every step's synthesized prompt.
+        latest_user_content = next(
+            (m.get("content") for m in reversed(messages) if m.get("role") == "user"), None
+        )
+        image_parts = _message_image_parts(latest_user_content)
         plan_source = "template"
         if self.policy.workflow_planning == "generated":
             try:
@@ -1407,6 +1428,10 @@ class TaskOrchestrator:
         for step in steps:
             agent = self._agent(step.agent_id)
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
+            user_text = f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
+            user_content: Any = (
+                [{"type": "text", "text": user_text}, *image_parts] if image_parts else user_text
+            )
             step_messages = [
                 {
                     "role": "system",
@@ -1418,7 +1443,7 @@ class TaskOrchestrator:
                 },
                 {
                     "role": "user",
-                    "content": f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}",
+                    "content": user_content,
                 },
             ]
             start = time.perf_counter()

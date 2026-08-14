@@ -47,6 +47,33 @@ def test_trinity_contract_has_explicit_thinker_worker_verifier_roles() -> None:
     assert ["thinker", "worker", "verifier"] == [step["role"] for step in result["trace"][:3]]
 
 
+def test_conduct_forwards_original_image_parts_to_every_step() -> None:
+    """A vision request that falls into the multi-step conduct() workflow path
+    (e.g. via an "analyze" hint) must not silently lose its image -- only its
+    text feeds routing/complexity heuristics; the image_url part must still
+    reach every step's provider call.
+    """
+    client = RecordingClient()
+    image_part = {"type": "image_url", "image_url": {"url": "data:image/png;base64,iVBORw0KGgo="}}
+    build(client).conduct(
+        [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "Analyze this diagram and implement a safe parser."},
+                    image_part,
+                ],
+            }
+        ]
+    )
+
+    assert client.calls  # the workflow actually dispatched steps
+    for _agent_id, messages in client.calls:
+        user_content = messages[1]["content"]
+        assert isinstance(user_content, list), "image request must not collapse to a plain-text prompt"
+        assert image_part in user_content
+
+
 def test_conductor_contract_uses_access_lists_to_control_context() -> None:
     client = RecordingClient()
     build(client).conduct([{"role": "user", "content": "Analyze, implement, verify, and synthesize."}])
