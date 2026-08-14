@@ -155,3 +155,34 @@ focused local transport suite passed `41` tests; the complete contextual suite
 passed `387` tests. Against the dedicated MLX listener on port `18083`, the
 registry-plus-completion probe returned `ready` in `5.48 s` with 15 provider
 tokens.
+
+## Dedicated-port 3B non-ceiling follow-up — 2026-08-14
+
+The same held-out control design was rerun with
+`mlx-community/llama-3.2-3b-instruct-4bit` on the dedicated loopback listener
+`mlx://127.0.0.1:18083/v1`. The exact route remained
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm`; contextual-orchestrator was at `62100d3` and
+fast-mlsirm at `57795b1`. Temperature was `0`, thinking was disabled,
+`max_output_tokens=128`, local/server concurrency was `4`, and the implicit
+`binary_threshold` method produced two anchored criterion items with three
+ordered categories.
+
+Two held-out groups were evaluated: a partial K=`3` answer with the correct
+option first and an unsupported K=`7` answer with the correct option last. Each
+group included baseline, option-only, shuffled-option, and
+distractor-replacement variants. The run produced 8 outcomes (64 Boolean
+boundary calls) in `67.454 s`: 5 passed and 3 strict `JudgeFormatError`
+failures caused by non-monotone thresholds. Every valid row was saturated at
+`[2,2]`; category occupancy was `{evidence_quality: {0:0, 1:0, 2:5},
+risk_awareness: {0:0, 1:0, 2:5}}`, and conditional gold exact agreement was
+`0/5`. The four partial K=`3` variants over-scored the gold `[1,1]`, while the
+unsupported K=`7` option-only variant over-scored the gold `[0,0]`; the other
+three K=`7` variants failed closed.
+
+This is model-stratified saturation and reliability evidence, not a causal
+positive-option-count estimate. Preserve all five valid rows and all three
+failures in the denominator; keep 3B out of the verifier role until it passes
+non-ceiling held-out gold calibration with bounded failure rates. No keyword
+matching, retry, positional inference, category repair, or silent drop was
+used.
