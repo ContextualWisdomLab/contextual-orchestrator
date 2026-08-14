@@ -492,3 +492,35 @@ not semantic-quality, bias, human/gold, or production-IRT promotion evidence.
 The batch-integrity change is orthogonal to this single route smoke; future
 batch evaluations must retain incomplete-result failures rather than treating
 them as successful observations.
+
+## Model-id and request-count correction — 2026-08-14T18:28:58Z
+
+An initial raw HTTP sweep was discarded because it sent the gateway's internal
+model alias `mlx_e4b` to the direct MLX endpoint. The direct endpoint returned
+`404` and attempted an invalid Hugging Face model lookup; this was a harness
+configuration error, not a model or transport result. The same sweep also sent
+only four requests at width `8`, so it did not test width-8 admission.
+
+The corrected sweep used the worker-advertised model id
+`mlx-community/gemma-4-e4b-it-4bit` for both endpoints. Widths `1`, `2`, and
+`4` sent four requests; width `8` sent eight requests. The authenticated
+gateway retained `max_concurrent_runs=4`, and all completion IDs were unique
+for successful responses.
+
+| path | width | requests/statuses | wave | attempt req/s | successful req/s |
+| --- | ---: | --- | ---: | ---: | ---: |
+| direct MLX | 1 | `4/4 x 200` | 0.959 s | 4.172 | 4.172 |
+| direct MLX | 2 | `4/4 x 200` | 0.644 s | 6.215 | 6.215 |
+| direct MLX | 4 | `4/4 x 200` | 0.604 s | 6.623 | 6.623 |
+| direct MLX | 8 | `8/8 x 200` | 1.132 s | 7.066 | 7.066 |
+| gateway | 1 | `4/4 x 200` | 0.819 s | 4.881 | 4.881 |
+| gateway | 2 | `4/4 x 200` | 0.651 s | 6.141 | 6.141 |
+| gateway | 4 | `4/4 x 200` | 0.564 s | 7.088 | 7.088 |
+| gateway | 8 | `4/8 x 200`, `4/8 x 503` | 0.638 s | 12.539 | 6.269 |
+
+The gateway's width-4 result is the highest all-success candidate in this
+small workload. Width 8 increases attempted request rate only by admitting
+four explicit overload failures; it does not improve successful throughput.
+This is transport/admission evidence, not semantic Judge or IRT evidence, and
+does not justify raising the concurrency bound or changing fail-closed
+overload behavior.
