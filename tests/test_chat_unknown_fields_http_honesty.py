@@ -101,13 +101,35 @@ def test_http_completions_rejects_unknown_request_field() -> None:
             {
                 "model": "mock-planner",
                 "prompt": "legacy unknown",
-                "audio": {"voice": "alloy"},
+                "not_a_real_completions_field": True,
             },
         )
         assert status == 400, body
         blob = json.dumps(body)
         assert "unknown_fields" in blob
-        assert "audio" in blob
+        assert "not_a_real_completions_field" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_completions_rejects_audio_with_named_error() -> None:
+    """audio is allowed as a named unsupported field (not opaque unknown_fields)."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/completions",
+            {
+                "model": "mock-planner",
+                "prompt": "legacy audio",
+                "audio": {"voice": "alloy"},
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_audio" in blob
+        assert "unknown_fields" not in blob
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -176,6 +198,7 @@ if __name__ == "__main__":
     test_http_chat_rejects_unknown_request_field()
     test_http_chat_rejects_multiple_unknown_fields()
     test_http_completions_rejects_unknown_request_field()
+    test_http_completions_rejects_audio_with_named_error()
     test_http_chat_rejects_stream_non_boolean()
     test_http_chat_rejects_invalid_mode()
     test_http_chat_accepts_known_fields_only()

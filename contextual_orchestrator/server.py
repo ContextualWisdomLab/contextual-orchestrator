@@ -78,6 +78,8 @@ ALLOWED_COMPLETIONS_KEYS = {
     "response_format",
     # Chat-era structured/output controls — accepted only for explicit migration errors.
     "modalities", "prediction", "reasoning_effort",
+    # Chat-era multimodal/search — accepted only for named unsupported errors.
+    "audio", "web_search_options",
     # Modern OpenAI SDK control fields — named unsupported errors.
     "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
     "reasoning", "background", "include",
@@ -1660,8 +1662,12 @@ def _validate_completions_response_format_surface(body: dict[str, Any]) -> None:
     """
     if "response_format" in body:
         fmt = body.get("response_format")
-        # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
-        if fmt is None or (isinstance(fmt, dict) and not fmt):
+        # Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+        if (
+            fmt is None
+            or (isinstance(fmt, dict) and not fmt)
+            or (isinstance(fmt, str) and not fmt.strip())
+        ):
             return
         raise RequestError(
             400,
@@ -1676,16 +1682,18 @@ def _validate_completions_chat_era_fields_surface(body: dict[str, Any]) -> None:
     Legacy Completions has no multi-modal output, Predicted Outputs, or o-series
     reasoning_effort plane. Named unsupported errors beat opaque unknown_fields
     so clients migrate to /v1/chat/completions.
-    Explicit JSON null for any of these fields is treat-as-omit (SDK optional default).
+    Explicit JSON null, empty list/object, or empty/whitespace string is treat-as-omit.
     """
     for key in ("modalities", "prediction", "reasoning_effort"):
         if key not in body:
             continue
         value = body.get(key)
-        # Explicit JSON null, empty list, or empty object is treat-as-omit.
+        # Explicit JSON null, empty list/object, or empty string is treat-as-omit.
         if value is None:
             continue
         if isinstance(value, (list, dict)) and not value:
+            continue
+        if isinstance(value, str) and not value.strip():
             continue
         raise RequestError(
             400,
@@ -1770,26 +1778,35 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
 
 
 
-def _validate_chat_audio_web_search_surface(body: dict[str, Any]) -> None:
-    """Reject chat ``audio`` / ``web_search_options`` with named migration errors.
+def _validate_chat_audio_web_search_surface(
+    body: dict[str, Any],
+    *,
+    endpoint_path: str = "/v1/chat/completions",
+) -> None:
+    """Reject ``audio`` / ``web_search_options`` with named migration errors.
 
     This text gateway has no speech synthesis plane and no web-search tool
-    harness on /v1/chat/completions. Named unsupported errors beat opaque
+    harness on chat or Completions. Named unsupported errors beat opaque
     ``unknown_fields`` so SDK clients can migrate deliberately.
-    Explicit JSON null for either field is treat-as-omit (SDK optional default).
+    Explicit JSON null or empty object for either field is treat-as-omit
+    (SDK optional default).
     """
-    if "audio" in body and body.get("audio") is not None:
-        raise RequestError(
-            400,
-            "invalid_audio",
-            "audio is not supported on /v1/chat/completions",
-        )
-    if "web_search_options" in body and body.get("web_search_options") is not None:
-        raise RequestError(
-            400,
-            "invalid_web_search_options",
-            "web_search_options is not supported on /v1/chat/completions",
-        )
+    if "audio" in body:
+        audio = body.get("audio")
+        if audio is not None and not (isinstance(audio, dict) and not audio):
+            raise RequestError(
+                400,
+                "invalid_audio",
+                f"audio is not supported on {endpoint_path}",
+            )
+    if "web_search_options" in body:
+        web = body.get("web_search_options")
+        if web is not None and not (isinstance(web, dict) and not web):
+            raise RequestError(
+                400,
+                "invalid_web_search_options",
+                f"web_search_options is not supported on {endpoint_path}",
+            )
 
 
 
@@ -2979,6 +2996,9 @@ def build_server(
                     _validate_completions_tools_surface(body)
                     _validate_completions_response_format_surface(body)
                     _validate_completions_chat_era_fields_surface(body)
+                    _validate_chat_audio_web_search_surface(
+                        body, endpoint_path="/v1/completions"
+                    )
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/completions")
                     _validate_completions_reasoning_object(body)
                     _validate_openai_background(body, endpoint_path="/v1/completions")
