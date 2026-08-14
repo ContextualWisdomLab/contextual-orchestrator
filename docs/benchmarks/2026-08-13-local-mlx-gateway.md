@@ -679,8 +679,8 @@ the protected exact-head review and Merge gates.
 
 ### Current authenticated gateway route sweep — 2026-08-15
 
-The running local stack was healthy at `/health` and authenticated
-`/v1/models`. The worker was Gemma 4 e4b with MLX `prompt-concurrency=4` and
+The gateway's `/healthz` and authenticated `/v1/models` returned HTTP 200; the
+worker's `/v1/models` also returned HTTP 200. The worker was Gemma 4 e4b with MLX `prompt-concurrency=4` and
 `decode-concurrency=4`; the gateway used `local_concurrency=4` and
 `max_concurrent_runs=4`. Four identical short route requests were issued for
 each client parallelism level through the authenticated HTTP gateway.
@@ -743,6 +743,54 @@ format/semantic failures are still common; every failure stayed in the
 denominator and no array repair or category inference was applied. The
 implicit production polytomous path remains binary-threshold, while direct and
 cumulative methods require explicit opt-in and replicated held-out evidence.
+
+### Fresh warm transport and routed Judge recheck — 2026-08-15
+
+The current checkouts (`contextual-orchestrator` `719d9cc83393c616f0a552adad0b41ae55d5b346`,
+`fast-mlsirm` `e55a6c3e742e2688efe618267870e2007902857b`) were rechecked against
+the long-running Gemma 4 e4b listener on `127.0.0.1:18083`. Transport requests
+used temperature `0`, `max_tokens=32`, and the same short prompt; the gateway
+used its authenticated `max_concurrent_runs=4` admission bound.
+
+| path | parallel width | statuses | wave | successful p50 |
+| --- | ---: | --- | ---: | ---: |
+| direct MLX | `1` | `1/1` HTTP 200 | `248 ms` | `248 ms` |
+| direct MLX | `2` | `2/2` HTTP 200 | `325 ms` | `325 ms` |
+| direct MLX | `4` | `4/4` HTTP 200 | `664 ms` | `660 ms` |
+| direct MLX | `5` | `5/5` HTTP 200 | `830 ms` | `773 ms` |
+| authenticated gateway | `1` | `1/1` HTTP 200 | `198 ms` | `198 ms` |
+| authenticated gateway | `2` | `2/2` HTTP 200 | `354 ms` | `353 ms` |
+| authenticated gateway | `4` | `4/4` HTTP 200 | `624 ms` | `621 ms` |
+| authenticated gateway | `5` | `4/5` HTTP 200, `1/5` HTTP 503 | `582 ms` | `579 ms` |
+
+The direct worker queued its fifth request, while the gateway rejected the
+fifth request explicitly with `concurrency_limit_exceeded`; both paths returned
+non-empty content for every successful response. This supports the gateway's
+bounded admission behavior and does not justify raising the limit or treating
+the direct queue as a performance improvement.
+
+The same current-source pair then ran three hand-authored, two-criterion
+polytomous Judge probes through the required route
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm`. The probes used K=`3`, two category anchors per
+criterion, temperature `0`, disabled thinking, `max_output_tokens=128`, and
+`local_concurrency=4`; no reference answer, keyword matching, option-position
+inference, retry, category repair, or silent drop was used.
+
+| method | safe probe | partial probe | unsafe probe |
+| --- | --- | --- | --- |
+| implicit `binary_threshold` | `[2,2]`, `1.0`, `6.908 s` | `[0,1]`, `0.25`, `2.993 s` | `[0,0]`, `0.0`, `2.824 s` |
+| explicit `direct` | `[2,2]`, `1.0`, `3.427 s` | `[0,0]`, `0.0`, `2.690 s` | `[0,0]`, `0.0`, `2.585 s` |
+| explicit `cumulative_threshold` | fail-closed non-monotone, `4.191 s` | `[0,0]`, `0.0`, `3.246 s` | `[0,0]`, `0.0`, `3.209 s` |
+
+All completed rows were valid multi-item polytomous rows; the cumulative safe
+case remained a semantic non-monotonicity failure rather than being repaired.
+The direct path was cheaper in this three-case sample, but its stricter
+partial result and the small sample do not establish superior recall or absence
+of bias. Keep `binary_threshold` as the implicit production method and retain
+direct/cumulative methods as explicit calibration-only choices until balanced
+held-out human/gold evidence, category occupancy, perturbation stability, and
+failure-rate targets are met.
 
 ## IRT boundary
 
