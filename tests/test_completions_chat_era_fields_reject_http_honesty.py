@@ -61,15 +61,34 @@ def test_http_completions_accepts_baseline_without_chat_era_fields() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_rejects_modalities() -> None:
+def test_http_completions_accepts_modalities_text_as_noop() -> None:
+    """Text-only modalities is an honest no-op on this text Completions path."""
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "prompt": "hello modalities",
+                "prompt": "hello modalities text",
                 "modalities": ["text"],
+            },
+        )
+        assert status == 200, body
+        assert "choices" in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_completions_rejects_non_text_modalities() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "prompt": "hello modalities audio",
+                "modalities": ["audio"],
             },
         )
         assert status == 400, body

@@ -153,8 +153,8 @@ def test_http_completions_still_rejects_nonnull_chat_era_field() -> None:
             "/v1/completions",
             {
                 "model": "mock-planner",
-                "prompt": "modalities text",
-                "modalities": ["text"],
+                "prompt": "modalities audio",
+                "modalities": ["audio"],
             },
         )
         assert status == 400, body

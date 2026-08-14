@@ -1630,11 +1630,13 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
         if key not in body:
             return False
         value = body.get(key)
-        # null, empty string, empty object, none/auto are omit-equivalent SDK defaults.
+        # null, empty string, empty object, none/auto (whitespace-padded) are omit-equivalent.
         if value is None:
             return False
-        if isinstance(value, str) and (not value.strip() or value in ("none", "auto")):
-            return False
+        if isinstance(value, str):
+            stripped = value.strip()
+            if not stripped or stripped in ("none", "auto"):
+                return False
         if isinstance(value, dict) and not value:
             return False
         return True
@@ -1695,6 +1697,14 @@ def _validate_completions_chat_era_fields_surface(body: dict[str, Any]) -> None:
             continue
         if isinstance(value, str) and not value.strip():
             continue
+        # Text-only modalities ["text"] is an honest no-op on this text gateway
+        # (parity with chat Completions allowing modalities ["text"]).
+        if key == "modalities" and isinstance(value, list):
+            stripped_items = [
+                item.strip() if isinstance(item, str) else item for item in value
+            ]
+            if stripped_items == ["text"]:
+                continue
         raise RequestError(
             400,
             "invalid_chat_era_field",
@@ -2274,6 +2284,8 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
     ):
         return None
     if isinstance(choice, str):
+        # Strip incidental whitespace so " none " / " auto " match honest no-ops.
+        choice = choice.strip()
         if choice not in ("none", "auto", "required"):
             raise RequestError(
                 400,
@@ -3127,14 +3139,19 @@ def build_server(
                         and functions_raw is not None
                         and not (isinstance(functions_raw, list) and not functions_raw)
                     )
-                    # function_call none/auto/empty-string without functions are omit-equivalent
-                    # no-ops (legacy SDK defaults); any other function_call or non-empty functions
+                    # function_call none/auto/empty-string (whitespace-padded) without functions
+                    # are omit-equivalent no-ops; any other function_call or non-empty functions
                     # fail closed.
                     function_call_present = (
                         "function_call" in body
                         and function_call_raw is not None
-                        and not (isinstance(function_call_raw, str) and not function_call_raw.strip())
-                        and function_call_raw not in ("none", "auto")
+                        and not (
+                            isinstance(function_call_raw, str)
+                            and (
+                                not function_call_raw.strip()
+                                or function_call_raw.strip() in ("none", "auto")
+                            )
+                        )
                     )
                     if functions_present or function_call_present:
                         # OpenAI deprecated functions/function_call in favor of tools/tool_choice.
@@ -3154,9 +3171,10 @@ def build_server(
                         and not tools_list
                     ):
                         tc = body.get("tool_choice")
+                        tc_norm = tc.strip() if isinstance(tc, str) else tc
                         # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
                         if (
-                            tc not in ("none", "auto")
+                            tc_norm not in ("none", "auto")
                             and not (isinstance(tc, dict) and not tc)
                             and not (isinstance(tc, str) and not tc.strip())
                         ):
@@ -3682,12 +3700,18 @@ def build_server(
                         and functions_raw is not None
                         and not (isinstance(functions_raw, list) and not functions_raw)
                     )
-                    # function_call none/auto/empty-string without functions are omit-equivalent no-ops.
+                    # function_call none/auto/empty-string (whitespace-padded) without functions
+                    # are omit-equivalent no-ops.
                     function_call_present = (
                         "function_call" in body
                         and function_call_raw is not None
-                        and not (isinstance(function_call_raw, str) and not function_call_raw.strip())
-                        and function_call_raw not in ("none", "auto")
+                        and not (
+                            isinstance(function_call_raw, str)
+                            and (
+                                not function_call_raw.strip()
+                                or function_call_raw.strip() in ("none", "auto")
+                            )
+                        )
                     )
                     if functions_present or function_call_present:
                         raise RequestError(
@@ -3704,9 +3728,10 @@ def build_server(
                         and not tools_list
                     ):
                         tc = body.get("tool_choice")
+                        tc_norm = tc.strip() if isinstance(tc, str) else tc
                         # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
                         if (
-                            tc not in ("none", "auto")
+                            tc_norm not in ("none", "auto")
                             and not (isinstance(tc, dict) and not tc)
                             and not (isinstance(tc, str) and not tc.strip())
                         ):
