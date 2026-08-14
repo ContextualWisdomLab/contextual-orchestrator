@@ -303,6 +303,12 @@ Run the local transport and passthrough tests, the real mlx route/conduct/judge 
 
 ## Rollback / Exit Strategy
 
+The linked fast-mlsirm security finding is fixed in exact head
+`8195434de6eb166a44dbda1f8bd4f2ca5086240a`; its focused IO/security suite
+passed `305` tests and its full suite passed `3726` tests with 2 warnings.
+Keep this as a non-clean dependency until fresh exact-head Strix evidence is
+structured and independently reviewed.
+
 Remove the explicit local adapter and use the mock path if the local server is unavailable; retain remote HTTPS validation unchanged. Revert concurrency to one and keep the output-content guard. Do not broaden local URL matching as a convenience fix.
 
 ## Affected Components
