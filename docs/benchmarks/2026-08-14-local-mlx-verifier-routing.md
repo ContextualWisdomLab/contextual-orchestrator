@@ -244,9 +244,11 @@ drop was introduced.
 
 ## Cross-repository judge-contract regression — 2026-08-14
 
-At contextual-orchestrator `a07c11f` with fast-mlsirm `a536292`, the exact
-interpreter preflight returned `available=true`, fast version `0.7.0`, and
-matching `contextual-orchestrator-contract-v1` package-root exports. Before the
+The live smoke below was executed at contextual-orchestrator `a07c11f` with
+fast-mlsirm `3d42c0b`. The redaction-only fast follow-up `a536292`, checked
+through the current contextual working tree `a9278d1`, also passed the exact
+interpreter preflight with `available=true`, fast version `0.7.0`, and matching
+`contextual-orchestrator-contract-v1` package-root exports. Before the
 fast export fix, `ContextualOrchestratorJudge` itself could be imported and
 called, but the same preflight returned `ImportError` because the package root
 did not expose the versioned contract constant. That was an integration defect,
