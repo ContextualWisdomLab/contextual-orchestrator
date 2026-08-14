@@ -90,3 +90,25 @@ contextual suite remains green (`384 passed`). Promotion still requires
 separate cold/warm latency distributions, bounded completion success rates,
 category occupancy, and balanced semantic calibration before changing the
 verifier role.
+
+## Balanced K=3/K=7 edge-position follow-up — 2026-08-14
+
+To test option-count and correct-position effects beyond the earlier K=`3`/K=`5`
+smoke, the exact route
+`fast-mlsirm.ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator -> ModelClient -> mlx-lm`
+was run with contextual-orchestrator `d3480cc` and fast-mlsirm `dbbd41d`. The
+Gemma 4 e4b worker used temperature `0`, disabled thinking, `max_output_tokens=128`,
+zero retries, `local_concurrency=1`, two criteria, three ordered categories, and
+implicit `binary_threshold`. Four held-out case groups crossed K=`3` and K=`7`
+with the correct option at the first and last position; each group included
+baseline, option-only, shuffled-option, and distractor-replacement variants.
+
+The run produced 16 paired outcomes (64 Boolean boundary calls) in `1,044.7 s`:
+11 passed and 5 strict `JudgeFormatError` failures. The 11 valid rows all matched
+the supplied gold `[2,2]` (`11/11`) and all observed categories were the maximum
+category `2` for both criteria; the five failures remained in the denominator.
+Only one case group had a complete baseline/control comparison, with score deltas
+`0.0`. This is ceiling-saturated, incomplete calibration evidence: it neither
+supports nor rejects a positive option-count bias, and it is not sufficient for
+IRT interpretation or verifier promotion. No keyword matching, retry, positional
+inference, category repair, or silent drop was used.
