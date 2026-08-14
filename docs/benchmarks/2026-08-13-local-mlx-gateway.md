@@ -659,6 +659,24 @@ The linked fast-mlsirm literature/calibration documentation is at exact head
 `e6c457d36f483b7580e56e5825528c70506dd780`. Its evidence remains a bounded
 calibration input, not an unbiasedness or IRT-readiness claim.
 
+### Current exact-head integrated smoke — 2026-08-14
+
+Using contextual-orchestrator `ccfa292aafadc37b6a008ffa1fb3b1d4bc2e346e`
+and fast-mlsirm `d1114e5e20c9aeb4c1cd7c8c8b46053db314ae4a`, the local
+`mlx-community/gemma-4-e4b-it-4bit` server completed the fast-mlsirm
+`ContextualOrchestratorJudge` route through `mlx://127.0.0.1:18083/v1`.
+Two criteria produced four bounded K=`3` binary-threshold calls and a valid
+polytomous row `[2,2]` in `12.569 s` with `1,956` total tokens. The run was
+accepted with `criterion_categories={release_monitoring: 2,
+rollback_safety: 2}` and `score=1.0`.
+
+This is current transport, parsing, trace, and multi-item shape evidence only.
+It is not semantic gold agreement, evidence that the category boundaries are
+unbiased, proof of the positive-option-count hypothesis, or sufficient data for
+IRT estimation. The result remains in the calibration denominator and does
+not override failed/non-monotone cases, category-occupancy requirements, or
+the protected exact-head review and Merge gates.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
