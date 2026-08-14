@@ -98,11 +98,11 @@ streaming contract. The compatibility boundary belongs in
 contextual-orchestrator, which is the authenticated public control-plane and
 provider-egress boundary.
 
-> ModelClient accepts an explicit mlx:// or local:// loopback URL and maps it to HTTP only after validation.
+> ModelClient accepts an explicit mlx:// or local:// loopback URL and maps it to HTTP only after validation. Direct mlx:// is keyless; authenticated local:// uses only an explicitly named local KV credential.
 >
-> Local requests can forward chat_template_kwargs, including {"enable_thinking": false}, and report an actionable error when content is absent.
+> Direct mlx:// requests can forward chat_template_kwargs, including {"enable_thinking": false}; the local:// gateway owns worker template settings and rejects unsupported template fields. Both report an actionable error when content is absent.
 >
-> ContextualOrchestratorJudge calls an injected .complete(messages, mode=...) object and parses bounded rubric JSON without provider credentials.
+> ContextualOrchestratorJudge calls an injected contextual-orchestrator adapter and, when supported, sends a strict JSON Schema request through the gateway; it parses bounded rubric JSON without provider credentials.
 
 ## Decision Drivers
 
@@ -131,11 +131,11 @@ Chosen option: "Explicit loopback local transport plus provider-neutral adapter"
 | Judge composition | not enforced | couples packages | contextual-orchestrator boundary is testable |
 | Performance controls | implicit | provider-specific | temperature/cap/template/concurrency knobs |
 
-The core accepts only mlx:// or local:// with loopback hosts and a valid port for keyless local traffic. Local batch requests use a bounded thread pool; interactive paths remain sequential by default. fast-mlsirm receives an injected contextual-orchestrator adapter, strict criteria, bounded JSON parsing, and usage/trace metadata.
+The core accepts only mlx:// or local:// with loopback hosts and a valid port. Direct mlx:// traffic is keyless; authenticated local:// gateway traffic may use only an explicitly named local KV credential, never the remote provider credential. Local batch requests use a bounded thread pool; interactive paths remain sequential by default. fast-mlsirm receives an injected contextual-orchestrator adapter, strict criteria, bounded JSON parsing, and usage/trace metadata.
 
 For Codex, the public control plane accepts the Responses request, converts supported
 message and function-tool items to the local Chat Completions shape, forwards
-the configured mlx-lm chat-template arguments, converts the result back to a
+the configured direct mlx-lm chat-template arguments, converts the result back to a
 Responses object, and emits a valid Responses SSE sequence for streaming. The
 control plane exposes `contextual-orchestrator` followed by every configured
 worker candidate at /v1/models, including explicit governance status. Discovery
@@ -167,13 +167,14 @@ a Codex profile; its credential is never sent to the loopback mlx-lm endpoint.
 
 ## Implementation Plan
 
-* `contextual_orchestrator/orchestrator.py`: keep the Responses-to-Chat and Chat-to-Responses conversion at `ModelClient.proxy_send`; validate local `mlx://` endpoints before sending and preserve `chat_template_kwargs`.
+* `contextual_orchestrator/orchestrator.py`: keep the Responses-to-Chat and Chat-to-Responses conversion at `ModelClient.proxy_send`; validate loopback endpoints before sending, resolve only the explicit local gateway credential for `local://`, and preserve `chat_template_kwargs` only for direct `mlx://` workers.
 * `contextual_orchestrator/batch_routing.py` and `contextual_orchestrator/cost_router.py`: reuse the bounded `ModelClient.local_concurrency` value for the default in-process batch backend; keep the standalone default at one, preserve request ordering, and propagate runner errors without fallback.
 * `contextual_orchestrator/__main__.py`: keep the secure HTTP run-slot default at eight, but expose a separate bounded `--max-concurrent-runs` option so an operator can align the gateway admission limit with a measured local batch setting without changing the library default.
 * `contextual_orchestrator/server.py`: authenticate `/v1/models` and `/v1/responses`, proxy Responses requests, and frame streamed responses with `response.completed` and `data: [DONE]`.
 * `examples/agents.mlx.json`: keep the minimal selected MLX worker example visible in data, not code.
 * `examples/agents.local.json`: keep the explicit candidate registry: public contextual-orchestrator and every discovered MLX, llama.cpp, and LM Studio candidate. Do not pre-disable entries as a discovery side effect.
-* `tests/test_local_mlx.py`: verify the local Responses request is adapted to the Chat transport and template arguments.
+* `tests/test_local_mlx.py`: verify direct MLX template arguments, authenticated local gateway credential separation, and fail-closed missing credentials.
+* `tests/test_model_judge.py`: verify structured fast-mlsirm completion requests remain on the contextual gateway adapter.
 * `tests/test_openai_passthrough.py`: verify the Responses SSE completion contract and model discovery endpoint.
 * Local machine configuration: keep the ChatGPT login in Codex's normal auth cache, select the built-in `openai` provider through a profile when needed, and keep the local gateway bearer token in the OS credential store.
 
@@ -281,6 +282,10 @@ Run the local transport and passthrough tests, the real mlx route/conduct/judge 
 | The latest source pair `070d929`/`8f5d85a` completed a real two-criterion, three-category binary-threshold Judge through the contextual adapter in `3.731 s` with `2,015` provider tokens and IRT row `[2,2]`. | Retain the same-interpreter contract and multi-item IRT projection, but treat this as route/shape evidence only; require balanced non-ceiling gold, perturbation stability, category occupancy, and preserved provider/parse/semantic failure denominators before any verifier or IRT promotion. | Verified 2026-08-14; semantic calibration and protected PR gates remain open |
 
 | A fresh warm comparison at current source heads `e9935d763d267bf20abb0bec069070c94a838369`/`b4121d2e2071a02b1f497b7228b0ecde061fbb45` used direct MLX and the authenticated gateway at widths `1,2,4,5`; direct returned `5/5` HTTP 200 by queueing width 5, while the gateway returned `4/5` HTTP 200 plus an explicit `concurrency_limit_exceeded` HTTP 503. Three two-criterion K=`3` Judge probes through the required contextual route preserved binary/direct/cumulative boundaries; cumulative safe output failed closed on non-monotonicity. | Keep `max_concurrent_runs=4` and explicit overload failure for this worker; do not convert direct queueing into hidden gateway work or raise the bound from this sample. Preserve every semantic/format failure, keep binary as the implicit production method and direct/cumulative calibration-only, and require balanced human/gold, occupancy, perturbation, and failure-rate evidence. | Verified 2026-08-15; no code change justified, semantic calibration and protected exact-head gates remain open |
+
+| An authenticated `local://` gateway request initially returned `401` because the client treated every loopback URL as keyless and discarded the gateway bearer credential; the direct `mlx://` worker must remain keyless. | Add `ModelAgent.local_credential_key` as a separate KV name used only by `local://`, fail closed when it is missing, and never reuse `credential_key`/`OPENAI_API_KEY` for either local transport. | Fixed in current local head; focused local/KV tests and live authenticated Judge route passed, exact-head CI/review follow-up required |
+| The same gateway rejected `chat_template_kwargs` with HTTP `400 unknown_fields`, although direct mlx-lm accepts the provider-specific template option. | Forward template kwargs only to direct `mlx://` workers; configure template behavior at the mlx-lm worker behind `local://`, and cover the distinction in transport tests. | Fixed in current local head; focused tests and live gateway smoke passed, exact-head CI/review follow-up required |
+| Free-form Gemma Judge calls completed but emitted prose/Markdown for the strict rubric, so all four binary boundary parses failed closed despite healthy transport. | Let fast-mlsirm request the exact JSON Schema through the existing contextual adapter's gateway proxy when available, keep the old injected `.complete()` fallback for generic test transports, and preserve all parse failures in calibration denominators. | Implemented in current local heads; focused contextual `73 passed` and fast Judge `48 passed`, live structured route passed, semantic calibration remains open |
 
 ## Risks and Mitigations
 

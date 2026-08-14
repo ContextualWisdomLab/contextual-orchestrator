@@ -276,6 +276,46 @@ def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
     assert completion["mode"] == "conduct"
 
 
+def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> None:
+    orchestrator, _ = _orch("unused")
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator,
+        "task",
+        "general_agent",
+        mode="route",
+    )
+    response_format = {
+        "type": "json_schema",
+        "json_schema": {"name": "judge", "strict": True, "schema": {"type": "object"}},
+    }
+    with patch.object(
+        orchestrator,
+        "proxy_completion",
+        return_value={
+            "choices": [{"message": {"content": '{"meets_threshold":true,"rationale":"ok"}'}}],
+            "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
+        },
+    ) as proxy:
+        completion = adapter.complete_structured(
+            [{"role": "user", "content": "judge"}],
+            mode="conduct",
+            response_format=response_format,
+        )
+
+    proxy.assert_called_once_with(
+        {
+            "model": "model-x",
+            "messages": [{"role": "user", "content": "judge"}],
+            "temperature": orchestrator.client.temperature,
+            "max_tokens": orchestrator.client.max_output_tokens,
+            "response_format": response_format,
+        }
+    )
+    assert completion["answer"] == '{"meets_threshold":true,"rationale":"ok"}'
+    assert completion["mode"] == "conduct"
+    assert completion["trace"][0]["usage"]["total_tokens"] == 5
+
+
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:
     class _Judge:
         def __init__(self, _orchestrator, *, mode: str, accept_threshold: float) -> None:

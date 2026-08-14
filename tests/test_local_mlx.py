@@ -14,6 +14,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator, load_agents  # noqa: E402
+from contextual_orchestrator.credentials import NotConfigured  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
     _chat_to_responses_payload,
@@ -95,6 +96,60 @@ def test_mlx_loopback_uses_http_without_a_credential() -> None:
 
     assert json.loads(seen[0].data)["chat_template_kwargs"] == {"enable_thinking": False}
     assert client.take_usage()["total_tokens"] == 3
+
+
+def test_authenticated_local_gateway_uses_only_its_explicit_kv_credential() -> None:
+    agent = ModelAgent(
+        "gateway_agent",
+        "local-model",
+        base_url="local://127.0.0.1:8080/v1",
+        credential_key="OPENAI_API_KEY",
+        local_credential_key="LOCAL_GATEWAY_TOKEN",
+    )
+    client = ModelClient(
+        max_retries=0,
+        temperature=0.0,
+        chat_template_args={"enable_thinking": False},
+    )
+    seen = []
+
+    def open_provider(request, _destination=None):
+        seen.append(request)
+        return _Response({"choices": [{"message": {"content": "gateway-ok"}}]})
+
+    def credential(name: str) -> str | None:
+        return {"LOCAL_GATEWAY_TOKEN": "gateway-secret"}.get(name)
+
+    with patch("contextual_orchestrator.orchestrator.get_credential", side_effect=credential), patch.object(
+        client, "_open_provider", side_effect=open_provider
+    ):
+        assert client.chat(agent, [{"role": "user", "content": "ping"}]) == "gateway-ok"
+
+    assert seen[0].full_url == "http://127.0.0.1:8080/v1/chat/completions"
+    assert seen[0].get_header("Authorization") == "Bearer gateway-secret"
+    assert "chat_template_kwargs" not in json.loads(seen[0].data)
+
+
+def test_authenticated_local_gateway_requires_its_kv_credential() -> None:
+    agent = ModelAgent(
+        "gateway_agent",
+        "local-model",
+        base_url="local://127.0.0.1:8080/v1",
+        local_credential_key="LOCAL_GATEWAY_TOKEN",
+    )
+    with patch("contextual_orchestrator.orchestrator.get_credential", return_value=None):
+        with pytest.raises(NotConfigured, match="LOCAL_GATEWAY_TOKEN"):
+            ModelClient(max_retries=0).chat(agent, [{"role": "user", "content": "ping"}])
+
+
+def test_local_gateway_credential_cannot_be_attached_to_mlx_worker() -> None:
+    with pytest.raises(ValueError, match="local:// gateway"):
+        ModelAgent(
+            "local_agent",
+            "local-model",
+            base_url="mlx://127.0.0.1:8080/v1",
+            local_credential_key="LOCAL_GATEWAY_TOKEN",
+        )
 
 
 def test_provider_probe_verifies_registry_then_uses_one_bounded_completion_without_retry() -> None:

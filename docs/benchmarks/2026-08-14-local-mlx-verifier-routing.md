@@ -524,3 +524,37 @@ four explicit overload failures; it does not improve successful throughput.
 This is transport/admission evidence, not semantic Judge or IRT evidence, and
 does not justify raising the concurrency bound or changing fail-closed
 overload behavior.
+
+## Authenticated structured Judge smoke — 2026-08-15
+
+The free-form Judge path was first rechecked through the authenticated gateway:
+all four binary boundary calls completed, but Gemma emitted prose/Markdown and
+all four strict parses failed closed. This was a format/transport capability
+finding, not a reason to add keyword matching, positional inference, retries,
+or output repair.
+
+The corrected path used
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter.complete_structured ->
+TaskOrchestrator.proxy_completion -> ModelClient.proxy_send -> authenticated
+local:// gateway -> mlx-lm`, with `local_credential_key=LOCAL_GATEWAY_TOKEN`.
+The request carried a strict JSON Schema response format; the gateway bearer
+credential was resolved from KV, and `chat_template_kwargs` was not forwarded
+to the gateway.
+
+The live two-criterion, three-category run completed all four boundary calls and
+returned:
+
+```json
+{"ok":true,"score":1.0,"accepted":true,
+ "criterion_scores":{"evidence_completeness":1.0,"release_safety":1.0},
+ "irt_row":[2,2],"category_method":"binary_threshold",
+ "trace_step_count":4,
+ "usage":{"prompt_tokens":2961,"completion_tokens":148,"total_tokens":3109},
+ "served_agent_id":"mlx_judge"}
+```
+
+This validates authenticated local transport, structured response-format
+delivery, strict parsing, trace/usage propagation, and the required
+multi-criterion polytomous shape. It does not establish semantic accuracy,
+option-count/order neutrality, absence of positive response-category bias,
+human/gold agreement, IRT readiness, or production promotion.

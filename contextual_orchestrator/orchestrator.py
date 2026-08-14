@@ -149,6 +149,40 @@ class _FastMLSIJudgeAdapter:
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
         output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="verifier")
+        return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
+
+    def complete_structured(
+        self,
+        messages: list[ChatMessage],
+        mode: str | None = None,
+        *,
+        response_format: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Route a Judge JSON-schema request through the existing gateway proxy."""
+        if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
+            raise ValueError("mode must be auto, route, or conduct")
+        if not isinstance(response_format, dict):
+            raise TypeError("response_format must be a mapping")
+        agent = self._agent()
+        response = self.orchestrator.proxy_completion({
+            "model": agent.model,
+            "messages": messages,
+            "temperature": self.orchestrator.client.temperature,
+            "max_tokens": self.orchestrator.client.max_output_tokens,
+            "response_format": response_format,
+        })
+        output = ModelClient._response_content(agent, response)
+        usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
+        return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
+
+    def _completion_payload(
+        self,
+        output: str,
+        served_id: str,
+        usage: dict[str, Any] | None,
+        mode: str,
+    ) -> dict[str, Any]:
+        """Build the bounded adapter response shared by normal and structured calls."""
         self.served_agent_id = served_id
         trace = [
             {
@@ -163,7 +197,7 @@ class _FastMLSIJudgeAdapter:
             trace[0]["usage"] = usage
         return {
             "answer": output,
-            "mode": self.mode if mode is None else mode,
+            "mode": mode,
             "trace": trace,
         }
 
@@ -216,9 +250,16 @@ class ModelAgent:
     disabled: bool = False
     provider_name: str = ""
     provider_exclusions: tuple[str, ...] = ()
+    # Explicit KV credential for an authenticated loopback gateway. Keep this
+    # separate from ``credential_key`` so mlx:// workers remain keyless.
+    local_credential_key: str = ""
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+        if type(self.local_credential_key) is not str:
+            raise TypeError("local_credential_key must be a string")
+        if self.local_credential_key and urlparse(self.base_url).scheme != "local":
+            raise ValueError("local_credential_key requires a local:// gateway URL")
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -233,6 +274,7 @@ class ModelAgent:
             "disabled": self.disabled,
             "provider_name": self.provider_name,
             "provider_exclusions": list(self.provider_exclusions),
+            "local_credential_key": self.local_credential_key,
         }
 
     @property
@@ -260,6 +302,7 @@ class ModelAgent:
             disabled=bool(value.get("disabled", False)),
             provider_name=value.get("provider_name", ""),
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
+            local_credential_key=value.get("local_credential_key", ""),
         )
 
 
@@ -365,6 +408,28 @@ def _is_local_provider_url(base_url: str) -> bool:
     except ValueError:
         return False
     return parsed.scheme in LOCAL_PROVIDER_SCHEMES and parsed.hostname in LOCAL_PROVIDER_HOSTS
+
+
+def _is_direct_mlx_provider_url(base_url: str) -> bool:
+    """Return whether a loopback provider is the direct mlx-lm transport."""
+    return _is_local_provider_url(base_url) and urlparse(base_url).scheme == "mlx"
+
+
+def _provider_credential_name(agent: ModelAgent) -> str | None:
+    """Return the credential name allowed for this provider transport."""
+    if not _is_local_provider_url(agent.base_url):
+        return agent.credential_name
+    # mlx-lm is intentionally keyless; only the explicit local:// gateway
+    # transport may opt into a separately named loopback bearer credential.
+    if urlparse(agent.base_url).scheme != "local":
+        return None
+    return agent.local_credential_key or None
+
+
+def _provider_credential(agent: ModelAgent) -> str | None:
+    """Resolve the transport-specific credential from the KV registry."""
+    name = _provider_credential_name(agent)
+    return get_credential(name) if name else None
 
 
 class _LocalProviderState:
@@ -694,10 +759,11 @@ class ModelClient:
             return self._mock(agent, messages)
 
         destination = self._validate_provider(agent)  # pragma: no cover
-        api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)  # pragma: no cover
-        if not _is_local_provider_url(agent.base_url) and not api_key:  # pragma: no cover
+        api_key = _provider_credential(agent)  # pragma: no cover
+        credential_name = _provider_credential_name(agent)  # pragma: no cover
+        if credential_name and not api_key:  # pragma: no cover
             raise NotConfigured(
-                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV"
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
             )
 
         payload = {  # pragma: no cover
@@ -707,7 +773,7 @@ class ModelClient:
             "stream": False,
             "max_tokens": self.max_output_tokens,
         }
-        if _is_local_provider_url(agent.base_url) and self.chat_template_args:
+        if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_with_retry(agent, payload, destination)
@@ -758,7 +824,7 @@ class ModelClient:
                     "stream": False,
                     "max_tokens": 1,
                 }
-                if _is_local_provider_url(agent.base_url) and self.chat_template_args:
+                if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
                     content = self._send(agent, payload, destination, timeout=probe_timeout)
@@ -827,7 +893,7 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
-        api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
+        api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"Bearer {api_key}"
@@ -981,7 +1047,7 @@ class ModelClient:
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
-        if _is_local_provider_url(agent.base_url) and self.chat_template_args:
+        if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             yield from self._stream_send(agent, payload, destination)  # pragma: no cover
@@ -990,7 +1056,7 @@ class ModelClient:
         self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
-        api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
+        api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
             headers["authorization"] = f"Bearer {api_key}"
@@ -1032,7 +1098,7 @@ class ModelClient:
         if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault("max_tokens", self.max_output_tokens)
-            if self.chat_template_args:
+            if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                 chat_payload["chat_template_kwargs"] = self.chat_template_args
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                 chat_response = self._send_raw_with_retry(
@@ -1070,7 +1136,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
-        api_key = None if _is_local_provider_url(agent.base_url) else get_credential(agent.credential_name)
+        api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"Bearer {api_key}"
@@ -1134,9 +1200,10 @@ class ModelClient:
             if any(not ipaddress.ip_address(sockaddr[0]).is_loopback for _family, sockaddr in addresses):
                 raise RuntimeError(f"{agent.id} local provider resolves to a non-loopback address")
             return addresses[0]
-        if get_credential(agent.credential_name) is None:
+        credential_name = _provider_credential_name(agent)
+        if credential_name and get_credential(credential_name) is None:
             raise NotConfigured(
-                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV "
                 "(this replaces the legacy api_key_env environment pattern)"
             )
         parsed = urlparse(agent.base_url)

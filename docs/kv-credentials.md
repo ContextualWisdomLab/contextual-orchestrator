@@ -20,11 +20,17 @@ register_credential("OPENAI_API_KEY", value)   # writes into the KV
 
 The orchestrator resolves an agent's provider key through this seam only:
 
-- `ModelClient.chat()` calls `get_credential(agent.credential_name)`.
-- `ModelClient._send()` reads the key the same way for the outgoing request.
+- Remote `ModelAgent` records use `get_credential(agent.credential_name)`.
+- Direct `mlx://` workers are intentionally keyless and never receive a
+  provider credential.
+- Authenticated loopback `local://` gateways may use the separate,
+  explicitly named `ModelAgent.local_credential_key`.
+- `ModelClient._send()` resolves the transport-specific key before building
+  the outgoing request.
 - `ModelClient._validate_provider()` requires the credential to be **resolvable**
-  before any egress. A non-mock agent whose credential is missing raises
-  `NotConfigured` — it never silently falls back to `os.getenv`.
+  before any egress when that transport names a key. A non-mock agent whose
+  credential is missing raises `NotConfigured` — it never silently falls back
+  to `os.getenv`.
 
 Mock agents (`base_url` starting with `mock://`) early-return before any
 credential logic and stay keyless.
@@ -43,6 +49,31 @@ names the credential to resolve from the KV:
 string is treated as the **credential name** in the KV — it is *not* read as an
 environment variable. `ModelAgent.credential_name` returns `api_key_env` when
 present, otherwise `credential_key`.
+
+### Direct MLX versus an authenticated local gateway
+
+These schemes have different credential contracts:
+
+```json
+{ "id": "mlx_worker", "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "base_url": "mlx://127.0.0.1:18083/v1" }
+```
+
+The direct `mlx://` transport is a loopback-only, keyless mlx-lm server. A
+`credential_key` or remote `OPENAI_API_KEY` is never forwarded to it. A
+`local://` URL instead denotes the contextual-orchestrator loopback gateway;
+when that gateway requires bearer authentication, configure only its explicit
+local token name:
+
+```json
+{ "id": "mlx_gateway", "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "base_url": "local://127.0.0.1:18084/v1",
+  "local_credential_key": "LOCAL_GATEWAY_TOKEN" }
+```
+
+The gateway owns worker template settings, so `chat_template_kwargs` is sent
+only to direct `mlx://` workers. Missing local gateway credentials fail closed;
+they do not fall back to an OpenAI credential or an unauthenticated request.
 
 ## Backends
 
