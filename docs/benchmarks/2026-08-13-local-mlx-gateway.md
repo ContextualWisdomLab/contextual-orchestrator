@@ -699,6 +699,32 @@ throughput without overload responses. This is route/latency/response-integrity
 evidence only; it does not establish semantic quality, judge accuracy, bias
 absence, or IRT readiness.
 
+### Strict ordinal option-count calibration — 2026-08-15
+
+After fast-mlsirm `ed62e1d1723d1274c1c0483dca4f46bb4eb81665` strengthened the
+binary-threshold prompt, the exact local route
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm` evaluated 12 paired cases at K=`3,5,7`. Each case had
+two criteria and four binary boundaries, for 48 bounded calls. The reference
+answer was omitted in this run to avoid crediting requirements that appeared
+only in the reference; no keyword, option-position, category repair, retry, or
+silent drop was used.
+
+| option count | baseline / option-only / replacement | shuffled-options | status |
+| ---: | --- | --- | --- |
+| `3` | `[1,0]` / `0.25` for all three | `[1,0]` / `0.25` | `4/4` passed |
+| `5` | `[1,0]` / `0.25` for all three | `[1,0]` / `0.25` | `4/4` passed |
+| `7` | baseline and option-only `[1,0]` / `0.25`; replacement `[1,0]` / `0.25` | `[1,2]` / `0.75` | `4/4` passed |
+
+All 12 cases parsed and passed the ordinal gate, but the manually specified
+gold row `[1,1]` had exact agreement `0/12`. The K=`7` shuffled control changed
+only option order and produced a paired score delta of `+0.5`; this is a
+descriptive sensitivity observation, not proof that score increases
+monotonically with the number of options. It is sufficient to keep option
+count/order as a live calibration factor and to block semantic/IRT promotion
+until replicated held-out human/gold recall, non-ceiling category occupancy,
+and perturbation stability are available.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
