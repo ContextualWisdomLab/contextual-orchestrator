@@ -301,6 +301,10 @@ Run the local transport and passthrough tests, the real mlx route/conduct/judge 
 | A discovered candidate is installed but not a usable chat worker. | medium | high | Keep it in the registry without silently changing governance state; provider capability checks and failover determine whether a request can use it, while an operator may explicitly quarantine it. | local-runtime owner |
 | Recursive self-selection can loop or re-enter the same authenticated server indefinitely. | medium | high | Keep the contextual-orchestrator self-worker candidate out of internal roles with provider exclusions until recursion depth, internal auth, and termination behavior have focused tests. | control-plane owner |
 
+## Security evidence follow-up
+
+The subsequent exact-head Strix runs were terminal success but still lacked trusted provenance. Fast head 1d05d785a3e5c4e0eecc96b807e3a88786cb8b1d produced run 31839153059, job 94892122092, artifact 9233769170, report SHA-256 05e3e48c1ebc475bdd62759970375268067872748947b3db35e6d4c2c2bfb2fc, and run.json SHA-256 10f4e33bc9dbe752444ba05063bbd9a02c9a58b07838e699d7ee5dcfad5aa768, but no evidence-binding.json. Contextual head 64b6d56a31f17721019d47d0f82945c722e1eb10 produced run 31839154460, job 94892129029, artifact 9234044840, report SHA-256 4f036e7f21c14920ce7fd95575e9e9228d35f88291cd5fdddac62bce3ab01a29, and run.json SHA-256 97b7d9218f86016ceb8b57d8c484cd50c21aad4314ac4f3560c7a2063df2bb43, also without evidence-binding.json. Keep both results as non-clean provider/content evidence until a trusted binding is published.
+
 ## Rollback / Exit Strategy
 
 The linked fast-mlsirm security finding is fixed in exact head
