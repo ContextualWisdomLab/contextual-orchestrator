@@ -2,10 +2,11 @@
 # tree on a slim Python base. Runs the OpenAI-compatible server.
 #
 # Build:  docker build -t contextual-orchestrator .
-# Run  :  docker run --rm -p 8000:8000 \
-#           -e CONTEXTUAL_ORCHESTRATOR_TOKEN=change-me \
-#           -e OPENAI_API_KEY=sk-... \
-#           contextual-orchestrator
+# Run  :  seed CONTEXTUAL_ORCHESTRATOR_TOKEN and provider credentials into the KV
+#        registry first, then use:
+#        docker run --rm -p 8000:8000 contextual-orchestrator
+# Runtime secrets are never passed through the container environment or argv;
+# see docs/kv-credentials.md for the bootstrap flow.
 # Agents: defaults to the bundled mock pool; mount your own and set AGENTS_FILE:
 #           -v ./agents.json:/app/agents.json -e AGENTS_FILE=/app/agents.json
 # python:3.12-slim
