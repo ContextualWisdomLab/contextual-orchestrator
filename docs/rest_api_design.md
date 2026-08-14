@@ -52,6 +52,7 @@
 | `GET` | `/api/v1/workflow_runs/{workflow_run_id}` | Inspect one run and trace |
 | `GET` | `/api/v1/access_reports/{workflow_run_id}` | Inspect access-list evidence |
 | `PATCH` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Update status/priority/tags/provider exclusions |
+| `DELETE` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Remove one worker only when it belongs to the addressed pool; mismatches return `404` |
 | `POST` | `/api/v1/evaluation_runs` | Replay prompts and return a reproducible evaluation run |
 | `GET` | `/api/v1/evaluation_runs/{evaluation_run_id}` | Review replay output |
 | `GET` | `/api/v1/locale_bundles/{locale_code}` | Read i18n bundle |
@@ -72,6 +73,7 @@ These product surfaces are now implemented in this prototype:
 | `POST` | `/api/v1/evaluation_runs` | Replay a prompt or dataset against policy variants before changing production routing. | Fugu and TRINITY optimize coordination against measured outcomes. |
 | `GET` | `/api/v1/access_reports/{workflow_run_id}` | Produce compliance evidence for which worker saw which prior outputs. | Conductor access-list visibility control. |
 | `PATCH` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Update status, priority, capability tags, or provider exclusion. | Fugu configurable worker pool and provider/compliance constraints. |
+| `DELETE` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Remove the worker from the addressed pool after the same pool-scoped lookup. | Fugu configurable worker-pool membership and provider/compliance constraints. |
 | `GET` | `/api/v1/analytics_snapshots/latest` | Produce source-backed local KPI and guardrail evidence without claiming production telemetry. | Fugu evaluation discipline; TRINITY verification evidence; Conductor access-list guardrails. |
 | `GET` | `/api/v1/sales_readiness/latest` | Produce a sellable-pilot readiness gate from current runtime, admin, security, analytics, locale, and provider evidence. | Fugu API adoption; TRINITY verification; Conductor trace and access-list evidence. |
 | `GET` | `/api/v1/commercial_readiness/latest` | Produce a high-value buyer due-diligence readiness gate for the KRW 2,000,000,000 target without presenting it as a valuation guarantee. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; enterprise procurement review. |
