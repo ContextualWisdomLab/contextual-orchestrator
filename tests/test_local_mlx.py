@@ -96,13 +96,15 @@ def test_mlx_loopback_uses_http_without_a_credential() -> None:
     assert client.take_usage()["total_tokens"] == 3
 
 
-def test_provider_probe_uses_one_bounded_completion_without_retry() -> None:
+def test_provider_probe_verifies_registry_then_uses_one_bounded_completion_without_retry() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=2, local_max_retries=2, chat_template_args={"enable_thinking": False})
     seen: list[tuple[object, float | None]] = []
 
     def open_provider(request, _destination=None, *, timeout=None):
         seen.append((request, timeout))
+        if request.get_method() == "GET":
+            return _Response({"object": "list", "data": [{"id": "local-model"}]})
         return _Response({
             "choices": [{"message": {"content": "OK"}}],
             "usage": {"prompt_tokens": 6, "completion_tokens": 1, "total_tokens": 7},
@@ -113,14 +115,33 @@ def test_provider_probe_uses_one_bounded_completion_without_retry() -> None:
 
     assert report["status"] == "ready"
     assert report["usage"]["total_tokens"] == 7
-    assert len(seen) == 1
-    assert seen[0][1] == 1.25
+    assert len(seen) == 2
+    assert seen[0][0].get_method() == "GET"
+    assert seen[0][0].full_url == "http://127.0.0.1:8080/v1/models"
+    assert seen[1][0].get_method() == "POST"
+    assert seen[1][1] == 1.25
     import json
 
-    payload = json.loads(seen[0][0].data)
+    payload = json.loads(seen[1][0].data)
     assert payload["max_tokens"] == 1
     assert payload["temperature"] == 0.0
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+
+
+def test_provider_probe_rejects_a_local_model_registry_mismatch() -> None:
+    agent = ModelAgent("local_agent", "requested-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_retries=0)
+    with patch.object(
+        client,
+        "_open_provider",
+        return_value=_Response({"object": "list", "data": [{"id": "other-model"}]}),
+    ) as open_provider:
+        report = client.probe(agent, timeout=0.5)
+
+    assert report["status"] == "not_ready"
+    assert report["error_type"] == "RuntimeError"
+    assert "model registry does not contain" in report["error"]
+    assert open_provider.call_count == 1
 
 
 def test_provider_probe_reports_timeout_without_retry() -> None:

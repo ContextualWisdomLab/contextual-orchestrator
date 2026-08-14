@@ -667,11 +667,12 @@ class ModelClient:
             return self._send_with_retry(agent, payload, destination)
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
-        """Run one bounded completion probe without changing workflow state.
+        """Verify a local model registry, then run one bounded completion probe.
 
         ``/health`` and ``/v1/models`` only prove process/model-registry liveness;
-        this deliberately exercises the chat path with one output token. It never
-        retries, so a stuck local queue cannot be multiplied by the readiness check.
+        this verifies the configured local model and deliberately exercises the
+        chat path with one output token. It never retries, so a stuck local queue
+        cannot be multiplied by the readiness check.
         """
         probe_timeout = _validate_provider_probe_timeout(timeout)
         started = time.monotonic()
@@ -682,6 +683,26 @@ class ModelClient:
                 usage = None
             else:
                 destination = self._validate_provider(agent)
+                if _is_local_provider_url(agent.base_url):
+                    registry_request = urllib.request.Request(
+                        self._provider_url(agent, "/models"),
+                        method="GET",
+                    )
+                    with self._open_provider(
+                        registry_request, destination, timeout=probe_timeout
+                    ) as registry_response:
+                        registry = json.loads(
+                            registry_response.read().decode("utf-8")
+                        )
+                    model_ids = {
+                        item.get("id")
+                        for item in registry.get("data", [])
+                        if isinstance(item, dict) and type(item.get("id")) is str
+                    }
+                    if agent.model not in model_ids:
+                        raise RuntimeError(
+                            f"provider {agent.id} model registry does not contain {agent.model!r}"
+                        )
                 payload: dict[str, Any] = {
                     "model": agent.model,
                     "messages": [{"role": "user", "content": "Reply with exactly OK."}],

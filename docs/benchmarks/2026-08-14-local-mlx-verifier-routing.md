@@ -144,3 +144,14 @@ are semantic/control-sensitivity observations, not causal evidence of a
 positive K law or IRT readiness. The non-monotone failure and every control
 outcome remain in the denominator; no keyword matching, retry, repair,
 positional inference, or silent drop was used.
+
+## Local readiness registry guard — 2026-08-14
+
+The gateway readiness path now verifies the local `/v1/models` registry contains
+the configured model before sending its bounded one-token completion probe. This
+keeps a port-owner/configuration mismatch fail-closed before an expensive judge
+run while preserving the existing no-retry and bounded-timeout contract. The
+focused local transport suite passed `41` tests; the complete contextual suite
+passed `387` tests. Against the dedicated MLX listener on port `18083`, the
+registry-plus-completion probe returned `ready` in `5.48 s` with 15 provider
+tokens.
