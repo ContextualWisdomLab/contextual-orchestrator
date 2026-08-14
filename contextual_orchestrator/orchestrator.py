@@ -263,6 +263,29 @@ class ModelAgent:
         )
 
 
+def _validate_batch_results(
+    requests: Mapping[str, list[ChatMessage]],
+    results: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Reject incomplete batch output before it can become an accepted run."""
+    if not isinstance(results, Mapping):
+        raise TypeError("batch provider returned an invalid result map")
+    if set(requests) != set(results):
+        raise RuntimeError(
+            "batch provider returned an incomplete or unexpected result set "
+            f"(requested={len(requests)}, received={len(results)})"
+        )
+    invalid_count = sum(
+        not isinstance(result, Mapping) or not isinstance(result.get("content"), str)
+        for result in results.values()
+    )
+    if invalid_count:
+        raise RuntimeError(
+            f"batch provider returned {invalid_count} result(s) without assistant content"
+        )
+    return {custom_id: dict(result) for custom_id, result in results.items()}
+
+
 @dataclass(frozen=True)
 class WorkflowStep:
     """One visible step in a conducted orchestration workflow."""
@@ -1178,14 +1201,18 @@ class ModelClient:
         using ``chat``. The mock path answers synchronously so tests and local runs work.
         """
         if agent.base_url.startswith("mock://"):
-            return {
+            results = {
                 custom_id: {"content": self._mock(agent, messages), "usage": None}
                 for custom_id, messages in requests.items()
             }
-        if _is_local_provider_url(agent.base_url):
-            return self._local_batch_chat(agent, requests, temperature)
-        destination = self._validate_provider(agent)  # pragma: no cover
-        return self._batch_run(agent, requests, temperature, poll_interval, poll_timeout, destination)  # pragma: no cover
+        elif _is_local_provider_url(agent.base_url):
+            results = self._local_batch_chat(agent, requests, temperature)
+        else:
+            destination = self._validate_provider(agent)  # pragma: no cover
+            results = self._batch_run(  # pragma: no cover
+                agent, requests, temperature, poll_interval, poll_timeout, destination
+            )
+        return _validate_batch_results(requests, results)
 
     def _local_batch_chat(
         self,
@@ -1805,12 +1832,25 @@ class TaskOrchestrator:
 
         answers: dict[int, dict[str, Any]] = {}
         for agent_id, requests in requests_by_agent.items():
-            for custom_id, result in self.client.batch_chat(agents_by_id[agent_id], requests).items():
-                answers[int(custom_id.rsplit("_", 1)[1])] = result
+            results = _validate_batch_results(
+                requests,
+                self.client.batch_chat(agents_by_id[agent_id], requests),
+            )
+            for custom_id, result in results.items():
+                try:
+                    prefix, suffix = custom_id.rsplit("_", 1)
+                    index = int(suffix)
+                except (AttributeError, ValueError) as exc:
+                    raise RuntimeError("batch provider returned an invalid request identifier") from exc
+                if prefix != "task" or custom_id != f"task_{index}" or not 0 <= index < len(selected):
+                    raise RuntimeError("batch provider returned an invalid request identifier")
+                if index in answers:
+                    raise RuntimeError("batch provider returned a duplicate request identifier")
+                answers[index] = result
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
-            result = answers.get(index, {"content": None, "usage": None})
+            result = answers[index]
             row: dict[str, Any] = {
                 "id": 0, "role": "worker", "agent_id": agent.id,
                 "subtask": "Direct route (batched)", "access": [], "output": result["content"],

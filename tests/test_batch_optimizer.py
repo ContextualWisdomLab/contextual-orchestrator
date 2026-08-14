@@ -7,15 +7,17 @@ gain use_batch: route configs evaluate via one batch, conduct stays serial.
 
 from __future__ import annotations
 
-from pathlib import Path
 import sys
+from pathlib import Path
 from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient, optimize_orchestration  # noqa: E402
+import contextual_orchestrator.orchestrator as orchestrator_module
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.orchestrator import ModelClient, optimize_orchestration
 
 
 class _CountingClient(ModelClient):
@@ -38,6 +40,23 @@ class _CountingClient(ModelClient):
                         "usage": {"prompt_tokens": 4, "completion_tokens": 6, "total_tokens": 10}}
             for custom_id, messages in requests.items()
         }
+
+
+class _InvalidBatchClient(_CountingClient):
+    """Produces one malformed batch result to verify fail-closed persistence."""
+
+    def __init__(self, kind: str) -> None:
+        super().__init__()
+        self.kind = kind
+
+    def batch_chat(self, agent: ModelAgent, requests: dict, temperature: float = 0.2,  # type: ignore[override]
+                   poll_interval: float = 5.0, poll_timeout: float = 3600.0) -> dict:
+        results = super().batch_chat(agent, requests, temperature, poll_interval, poll_timeout)
+        if self.kind == "missing":
+            results.pop("task_1")
+        else:
+            results["task_1"]["content"] = None
+        return results
 
 
 def _orch(client: ModelClient | None = None) -> TaskOrchestrator:
@@ -97,6 +116,28 @@ def test_mock_default_batch_route_works_without_usage() -> None:
     records = orchestrator.batch_route(["hello there"])
     assert records[0]["answer"].startswith("[general_agent:")
     assert orchestrator.spend_analytics()["by_model"][0]["usage_source"] == "estimated"
+
+
+@pytest.mark.parametrize("kind", ["missing", "content"])
+def test_batch_route_rejects_incomplete_or_empty_provider_results(kind: str) -> None:
+    orchestrator = _orch(_InvalidBatchClient(kind))
+
+    with pytest.raises(RuntimeError, match="batch provider"):
+        orchestrator.batch_route([t["prompt"] for t in TASKS])
+    assert orchestrator._workflow_runs == {}
+
+
+def test_batch_chat_rejects_incomplete_local_result_set() -> None:
+    client = ModelClient()
+    agent = ModelAgent("local_agent", "model-x", base_url="local://127.0.0.1:1")
+    requests = {
+        "task_0": [{"role": "user", "content": "one"}],
+        "task_1": [{"role": "user", "content": "two"}],
+    }
+    with patch.object(client, "_local_batch_chat", return_value={
+        "task_0": {"content": "ok", "usage": None},
+    }), pytest.raises(RuntimeError, match="incomplete or unexpected"):
+        client.batch_chat(agent, requests)
 
 
 if __name__ == "__main__":
