@@ -125,6 +125,20 @@ def test_single_and_split_token_modes_cannot_be_combined() -> None:
         raise AssertionError("mixed single and split token modes must be rejected")
 
 
+def test_scope_token_precedes_mutated_shared_token() -> None:
+    security = SecurityConfig(admin_token="admin_secret", inference_token="inference_secret")
+    security.auth_token = "mutated_shared_secret"
+
+    try:
+        security.authorize({"authorization": "Bearer mutated_shared_secret"}, "admin", "127.0.0.1")
+    except Exception as exc:
+        assert "invalid" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("scope token must remain authoritative after field mutation")
+
+    security.authorize({"authorization": "Bearer admin_secret"}, "admin", "127.0.0.1")
+
+
 def test_loopback_without_configured_token_is_rejected() -> None:
     server = build_server(build(), port=0, security=SecurityConfig())
     thread = threading.Thread(target=server.serve_forever, daemon=True)

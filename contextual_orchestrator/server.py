@@ -132,10 +132,12 @@ class SecurityConfig:
             except Exception:  # noqa: BLE001 - an auth adapter failure is an auth denial
                 valid = False
         else:
-            if self.auth_token:
-                expected = self.auth_token
+            if scope == "admin":
+                expected = self.admin_token or self.auth_token
+            elif scope == "inference":
+                expected = self.inference_token or self.auth_token
             else:
-                expected = {"admin": self.admin_token, "inference": self.inference_token}.get(scope, "")
+                expected = ""
             valid = bool(expected) and secrets.compare_digest(token, expected)
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
