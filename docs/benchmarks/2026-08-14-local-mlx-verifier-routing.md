@@ -242,6 +242,26 @@ share a UUID-based ID generator; the focused streaming suite passed `7` tests.
 No keyword matching, retry, positional inference, category repair, or silent
 drop was introduced.
 
+## Warm gateway throughput recheck — 2026-08-14T09:52Z
+
+The existing dedicated worker (`mlx://127.0.0.1:18083/v1`, Gemma 4 e4b) and
+authenticated gateway (`127.0.0.1:18084`, `max_concurrent_runs=4`) were
+re-measured with the same short `Reply with exactly OK.` request. Every `200`
+response returned a unique completion ID and usage `10/2/12`.
+
+| simultaneous requests | result | wave time | successful p50 | max successful |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | `1/1` HTTP 200 | `307.89 ms` | `306.94 ms` | `306.94 ms` |
+| 2 | `2/2` HTTP 200 | `327.23 ms` | `326.96 ms` | `326.99 ms` |
+| 4 | `4/4` HTTP 200 | `579.67 ms` | `576.15 ms` | `579.27 ms` |
+| 5 | `4/5` HTTP 200, `1` HTTP 503 `concurrency_limit_exceeded` | `590.70 ms` | `587.53 ms` | `590.12 ms` |
+
+This warm sample supports the existing admission bound of four for this
+server/model configuration: the fifth request is rejected explicitly and does
+not create queue growth or silent loss. It is throughput evidence only, not a
+judge-quality or general hardware-optimality claim; no concurrency default was
+changed from this one workload recheck.
+
 ## Cross-repository judge-contract regression — 2026-08-14
 
 The live smoke below was executed at contextual-orchestrator `a07c11f` with
