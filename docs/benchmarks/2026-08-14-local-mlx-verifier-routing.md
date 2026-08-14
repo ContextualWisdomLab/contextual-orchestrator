@@ -241,3 +241,24 @@ current millisecond. The response, buffered-stream, and direct-stream paths now
 share a UUID-based ID generator; the focused streaming suite passed `7` tests.
 No keyword matching, retry, positional inference, category repair, or silent
 drop was introduced.
+
+## Cross-repository judge-contract regression — 2026-08-14
+
+At contextual-orchestrator `a07c11f` with fast-mlsirm `3d42c0b`, the exact
+interpreter preflight returned `available=true`, fast version `0.7.0`, and
+matching `contextual-orchestrator-contract-v1` package-root exports. Before the
+fast export fix, `ContextualOrchestratorJudge` itself could be imported and
+called, but the same preflight returned `ImportError` because the package root
+did not expose the versioned contract constant. That was an integration defect,
+not evidence that the judge was unavailable; the constant is now public and a
+fast-mlsirm regression test covers the export.
+
+The repaired route was smoke-tested against the dedicated Gemma 4 e4b listener
+with temperature `0`, thinking disabled, `max_output_tokens=128`, two criteria,
+three ordered categories, and `cumulative_threshold`. A partial answer returned
+valid categories `{evidence_quality: 0, risk_awareness: 0}`, row `[0,0]`, score
+`0`, and `accepted=false` in `21.205 s` with `641` provider tokens; an
+unsupported answer returned the same row and score in `2.940 s` with `607`
+provider tokens. These are descriptive integration observations only: the
+semantic cases were not gold-calibrated, and no keyword matching, retry,
+positional inference, category repair, or silent drop was used.
