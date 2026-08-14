@@ -79,15 +79,14 @@ def test_http_responses_rejects_empty_user() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_null_user() -> None:
+def test_http_responses_accepts_null_user_as_omit() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {"model": "mock-planner", "input": "hello", "user": None},
         )
-        assert status == 400, body
-        assert "user" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)

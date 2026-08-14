@@ -389,10 +389,18 @@ def _validate_service_tier(body: dict[str, Any], *, endpoint_path: str) -> str |
 
 
 def _validate_completions_user(body: dict[str, Any]) -> str | None:
-    """Legacy Completions ``user`` — optional string end-user id, max 64 characters."""
+    """OpenAI ``user`` end-user id — optional string, max 64 characters.
+
+    Explicit JSON null is treat-as-omit (SDK optional default). Empty or
+    whitespace-only strings still fail closed so clients cannot attribute spend
+    to a blank identity.
+    """
     if "user" not in body:
         return None
     user = body.get("user")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if user is None:
+        return None
     if not isinstance(user, str):
         raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
     if not user.strip():

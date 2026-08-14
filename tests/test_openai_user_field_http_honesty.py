@@ -1,4 +1,4 @@
-"""OpenAI user field honesty on Completions and chat: empty/null fail-closed."""
+"""OpenAI user field honesty on Completions and chat: empty fail-closed; null omit."""
 
 from __future__ import annotations
 
@@ -77,7 +77,7 @@ def test_http_completions_rejects_empty_user() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_rejects_null_user() -> None:
+def test_http_completions_accepts_null_user_as_omit() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -85,8 +85,7 @@ def test_http_completions_rejects_null_user() -> None:
             "/v1/completions",
             {"model": "mock-planner", "prompt": "hi", "user": None},
         )
-        assert status == 400, body
-        assert "invalid_user" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -166,7 +165,7 @@ def test_http_embeddings_rejects_empty_user() -> None:
 if __name__ == "__main__":
     test_http_completions_accepts_user()
     test_http_completions_rejects_empty_user()
-    test_http_completions_rejects_null_user()
+    test_http_completions_accepts_null_user_as_omit()
     test_http_chat_accepts_user()
     test_http_chat_rejects_empty_user()
     test_http_embeddings_accepts_user()
