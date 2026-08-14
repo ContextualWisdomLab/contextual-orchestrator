@@ -410,3 +410,22 @@ rejected the fifth request. Keep the bound at four for this model/server pair;
 increasing it would hide queue latency rather than improve throughput. This is
 transport evidence only and does not alter the semantic calibration or IRT
 acceptance boundary.
+
+## Current exact-head integrated Judge recheck — 2026-08-14T10:53:08Z
+
+The current source pair (`contextual-orchestrator` `070d9297675ebc45e821808b532fb6af809cbbf2`,
+`fast-mlsirm` `8f5d85ae58d462a552831c238fc3967476589934`) was run through the
+same dedicated Gemma 4 e4b worker and authenticated gateway. The route remained
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm`, with two anchored criteria, three categories, and the
+implicit `binary_threshold` method.
+
+All four boundary calls completed in `3.731 s` with `2,015` provider tokens
+(`1,860` prompt and `155` completion). The result was score `1.0`,
+`accepted=true`, criterion categories
+`{evidence_completeness: 2, release_safety: 2}`, trace step count `4`, and
+the required multi-item IRT row `[2,2]`. This confirms the current
+cross-repository transport and IRT shape after the benchmark/ADR documentation
+push; it is not semantic quality, bias, or production IRT promotion evidence.
+Balanced non-ceiling gold, perturbation stability, category occupancy, and all
+failure denominators remain required.
