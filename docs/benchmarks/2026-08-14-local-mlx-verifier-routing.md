@@ -284,3 +284,22 @@ unsupported answer returned the same row and score in `2.940 s` with `607`
 provider tokens. These are descriptive integration observations only: the
 semantic cases were not gold-calibrated, and no keyword matching, retry,
 positional inference, category repair, or silent drop was used.
+
+## Current exact-head polytomous judge smoke — 2026-08-14
+
+The current linked heads (`contextual-orchestrator` `474b667b576f8a019db51d892db41a605e3a0a85`,
+`fast-mlsirm` `a536292cc05bd16287dab16431bc0c3fef74ba81`) were exercised against
+the dedicated Gemma 4 e4b listener at `mlx://127.0.0.1:18083/v1`. The exact
+route was `ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter ->
+TaskOrchestrator -> ModelClient -> mlx-lm`; two criteria, three anchored
+categories, and four independent `binary_threshold` calls completed in
+`19.354 s` with `2,163` provider tokens. The result was score `1.0`,
+`accepted=true`, criterion categories `{evidence_quality: 2, risk_awareness: 2}`,
+and the required two-column polytomous IRT row `[2,2]`.
+
+This is current-head integration and contract evidence, not semantic quality
+promotion evidence. It confirms that the IRT output remains multi-item and
+that the latest redaction-only fast-mlsirm change does not break the real
+contextual route. No keyword matching, positional inference, category repair,
+retry, scalar synthesis, or silent drop was used; balanced held-out gold and
+perturbation calibration remain required.
