@@ -677,6 +677,28 @@ IRT estimation. The result remains in the calibration denominator and does
 not override failed/non-monotone cases, category-occupancy requirements, or
 the protected exact-head review and Merge gates.
 
+### Current authenticated gateway route sweep — 2026-08-15
+
+The running local stack was healthy at `/health` and authenticated
+`/v1/models`. The worker was Gemma 4 e4b with MLX `prompt-concurrency=4` and
+`decode-concurrency=4`; the gateway used `local_concurrency=4` and
+`max_concurrent_runs=4`. Four identical short route requests were issued for
+each client parallelism level through the authenticated HTTP gateway.
+
+| client parallelism | successes | elapsed | requests/s | p50 / max latency | unique IDs | non-empty | tokens |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | ---: |
+| `1` | `4/4` | `16.199 s` | `0.247` | `330.60 / 15,220.21 ms` | `4` | `4` | `88` |
+| `2` | `4/4` | `0.920 s` | `4.346` | `459.94 / 472.30 ms` | `4` | `4` | `88` |
+| `4` | `4/4` | `0.731 s` | `5.471` | `727.79 / 730.76 ms` | `4` | `4` | `88` |
+
+A warm serial repeat took `2.573 s` total with per-request latencies
+`1,430.67`, `401.78`, `368.39`, and `372.00 ms`; the first serial sweep's
+`15.220 s` outlier is retained as warm-up/operational evidence rather than
+discarded. Under this exact short prompt, parallelism `4` maximized measured
+throughput without overload responses. This is route/latency/response-integrity
+evidence only; it does not establish semantic quality, judge accuracy, bias
+absence, or IRT readiness.
+
 ## IRT boundary
 
 The judge received two criteria, so its result can produce multiple
