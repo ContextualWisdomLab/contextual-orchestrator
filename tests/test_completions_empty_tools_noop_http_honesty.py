@@ -87,8 +87,8 @@ def test_http_completions_still_rejects_nonempty_tools() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_rejects_tool_choice_even_with_empty_tools() -> None:
-    """tool_choice is never a Completions surface, even with tools=[]."""
+def test_http_completions_accepts_tool_choice_none_with_empty_tools() -> None:
+    """tool_choice "none" with empty tools is omit-equivalent on Completions."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -100,8 +100,7 @@ def test_http_completions_rejects_tool_choice_even_with_empty_tools() -> None:
                 "tool_choice": "none",
             },
         )
-        assert status == 400, body
-        assert "invalid_tools" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
