@@ -38,6 +38,13 @@ This repository implements the interface and control plane, not the trained coor
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
+Agent-pool administration is fail-closed at the resource boundary. The
+`agent_pool_id` and `worker_agent_id` path parameters are resolved together by
+`TaskOrchestrator._agent_in_pool` for GET, PATCH, and DELETE operations. The
+current persistence model has one `default` pool, so any other pool identifier
+returns a not-found result instead of exposing or mutating a real worker under
+a caller-selected path.
+
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.

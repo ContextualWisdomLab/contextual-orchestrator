@@ -9,12 +9,12 @@ from __future__ import annotations
 
 import json
 import os
-from pathlib import Path
 import sys
 import tempfile
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -157,6 +157,16 @@ def test_http_create_and_delete_worker_agents() -> None:
 
         status, dup = _call(base, "POST", token, NEW_AGENT)
         assert status == 400  # duplicate rejected
+
+        status, listed = _call(f"{base}/general_agent", "GET", token)
+        assert status == 200 and listed["id"] == "general_agent"
+
+        status, wrong_pool = _call(
+            f"http://127.0.0.1:{server.server_address[1]}/api/v1/agent_pools/other_pool/worker_agents/general_agent",
+            "GET",
+            token,
+        )
+        assert status == 404 and wrong_pool["error"]["code"] == "agent_not_found"
 
         status, unknown = _call(base, "POST", token, {**NEW_AGENT, "id": "extra_agent", "surprise": 1})
         assert status == 400 and unknown["error"]["code"] == "unknown_fields"

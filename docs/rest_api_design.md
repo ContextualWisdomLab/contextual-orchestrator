@@ -18,6 +18,7 @@
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |
+| `GET` | `/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}` | Read one worker only when the worker belongs to the requested pool |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |
 | `GET` | `/api/v1/analytics_snapshots/latest` | Read local runtime KPI and guardrail snapshot |
 | `GET` | `/api/v1/sales_readiness/latest` | Read local enterprise-pilot readiness criteria and evidence |
@@ -57,6 +58,11 @@
 | `GET` | `/admin` | Management console |
 
 ## Product Planning Additions (Implemented)
+
+Agent-pool resource paths resolve the pool and worker together. A worker ID
+cannot be read, patched, or removed through a different pool identifier; an
+unknown pool/worker combination returns `404` without revealing the worker's
+admin payload.
 
 These product surfaces are now implemented in this prototype:
 
