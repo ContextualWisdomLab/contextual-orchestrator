@@ -381,3 +381,32 @@ provider tokens, score `1.0`, accepted `true`, categories
 This is route/contract and throughput evidence, not semantic quality or bias
 promotion evidence; the K-stratified failures and balanced gold requirements
 remain unchanged.
+
+## Direct MLX versus gateway warm comparison — 2026-08-14T10:49:55Z
+
+The dedicated worker and gateway were re-measured with the same short request
+(`Reply with exactly OK.`), after one warm-up request per endpoint. The direct
+worker used `http://127.0.0.1:18083/v1/chat/completions`; the gateway used the
+authenticated `http://127.0.0.1:18084/v1/chat/completions`. Both returned unique
+completion IDs for successful responses.
+
+| path | width | statuses | wave | successful p50 | max successful |
+| --- | ---: | --- | ---: | ---: | ---: |
+| direct MLX | 1 | `1x200` | 202.69 ms | 202.52 ms | 202.52 ms |
+| gateway | 1 | `1x200` | 204.12 ms | 203.96 ms | 203.96 ms |
+| direct MLX | 2 | `2x200` | 323.97 ms | 323.74 ms | 323.74 ms |
+| gateway | 2 | `2x200` | 321.26 ms | 321.01 ms | 321.13 ms |
+| direct MLX | 4 | `4x200` | 596.54 ms | 593.77 ms | 596.12 ms |
+| gateway | 4 | `4x200` | 562.70 ms | 559.07 ms | 562.18 ms |
+| direct MLX | 5 | `5x200` | 899.16 ms | 837.65 ms | 898.60 ms |
+| gateway | 5 | `4x200, 1x503` | 564.28 ms | 560.04 ms | 563.75 ms |
+
+At widths one through four, gateway latency was within this small warm-sample
+measurement variation of direct MLX; there is no evidence that the gateway
+should be bypassed for performance. Direct width five completed by queueing
+against the worker's four-request configuration and took substantially longer,
+while the gateway preserved the explicit four-request admission bound and
+rejected the fifth request. Keep the bound at four for this model/server pair;
+increasing it would hide queue latency rather than improve throughput. This is
+transport evidence only and does not alter the semantic calibration or IRT
+acceptance boundary.
