@@ -244,7 +244,7 @@ drop was introduced.
 
 ## Cross-repository judge-contract regression — 2026-08-14
 
-At contextual-orchestrator `a07c11f` with fast-mlsirm `3d42c0b`, the exact
+At contextual-orchestrator `a07c11f` with fast-mlsirm `a536292`, the exact
 interpreter preflight returned `available=true`, fast version `0.7.0`, and
 matching `contextual-orchestrator-contract-v1` package-root exports. Before the
 fast export fix, `ContextualOrchestratorJudge` itself could be imported and
