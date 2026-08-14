@@ -183,17 +183,50 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
-def _validate_messages(messages: Any) -> list[dict[str, str]]:
+def _validate_message_content(content: Any) -> str | list[dict[str, Any]]:
+    """A message's ``content`` is either plain text, or an OpenAI-style
+    multimodal parts array (vision requests: ``[{"type": "text", ...},
+    {"type": "image_url", "image_url": {"url": "data:...;base64,..."}}]``)
+    -- omni-modal callers (e.g. LineageWeave's image OCR/captioning) send
+    the latter, and rejecting it here was the same "channel silently
+    degrades to unavailable" failure this codebase's own pluggable-client
+    discipline is built to avoid everywhere else.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list) and content:
+        parts: list[dict[str, Any]] = []
+        for part in content:
+            if not isinstance(part, dict):
+                raise RequestError(400, "invalid_message", "message content part must be an object")
+            part_type = part.get("type")
+            if part_type == "text":
+                if not isinstance(part.get("text"), str):
+                    raise RequestError(400, "invalid_message", "text content part requires a string 'text'")
+            elif part_type == "image_url":
+                image_url = part.get("image_url")
+                if not isinstance(image_url, dict) or not isinstance(image_url.get("url"), str):
+                    raise RequestError(
+                        400, "invalid_message", "image_url content part requires image_url.url as a string"
+                    )
+            else:
+                raise RequestError(400, "invalid_message", "content part 'type' must be text or image_url")
+            parts.append(part)
+        return parts
+    raise RequestError(400, "invalid_message", "message role or content is invalid")
+
+
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
-    validated: list[dict[str, str]] = []
+    validated: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
-        content = message.get("content")
-        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
+        content = _validate_message_content(message.get("content"))
         validated.append({"role": role, "content": content})
     return validated
 

@@ -29,7 +29,9 @@ from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 
 
-ChatMessage = dict[str, str]
+# `content` is usually str; a multimodal (vision) message's content is an
+# OpenAI-style parts list instead -- see server._validate_message_content.
+ChatMessage = dict[str, Any]
 
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
@@ -492,9 +494,11 @@ class ModelClient:
         return f"{agent.base_url.rstrip('/')}{path}"
 
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
-        last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+        last = next(
+            (_message_content_text(m["content"]) for m in reversed(messages) if m.get("role") == "user"), ""
+        )
         role = "worker"
-        system = messages[0]["content"] if messages and messages[0].get("role") == "system" else ""
+        system = _message_content_text(messages[0]["content"]) if messages and messages[0].get("role") == "system" else ""
         match = re.search(r"Role: ([a-z]+)", system)
         if match:
             role = match.group(1)
@@ -642,6 +646,23 @@ def _coerce_input_text(value: Any) -> str:
                         if isinstance(chunk, dict) and isinstance(chunk.get("text"), str):
                             parts.append(chunk["text"])
     return " ".join(parts)
+
+
+def _message_content_text(content: Any) -> str:
+    """Best-effort text from a chat message's ``content`` for routing/
+    complexity heuristics -- a multimodal (vision) message's content is a
+    parts list (``{"type": "text", ...}`` / ``{"type": "image_url", ...}``);
+    only the text parts feed routing, the image data is opaque to it.
+    """
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return " ".join(
+            part["text"]
+            for part in content
+            if isinstance(part, dict) and part.get("type") == "text" and isinstance(part.get("text"), str)
+        )
+    return ""
 
 
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
@@ -1600,7 +1621,10 @@ class TaskOrchestrator:
         return hits >= self.policy.conduct_hint_threshold or len(text) > 700
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
-        return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
+        return next(
+            (_message_content_text(m.get("content", "")) for m in reversed(messages) if m.get("role") == "user"),
+            "",
+        )  # pragma: no cover
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Ask a model to judge the verifier report (fixes term-matching false negatives).

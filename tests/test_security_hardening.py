@@ -132,6 +132,66 @@ def test_http_api_validates_mode_and_request_shape() -> None:
     assert body["error"]["code"] in {"invalid_message", "invalid_mode"}
 
 
+def test_http_api_accepts_multimodal_vision_content() -> None:
+    """An OpenAI-style content-parts array (text + image_url) -- what a
+    vision/omni-modal caller like LineageWeave's image OCR sends -- must be
+    accepted, not rejected as an invalid message; this was a real bug:
+    _validate_messages required content to be a plain string.
+    """
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    payload = {
+        "messages": [
+            {
+                "role": "user",
+                "content": [
+                    {"type": "text", "text": "describe this receipt"},
+                    {
+                        "type": "image_url",
+                        "image_url": {"url": "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNk+A8AAQUBAScY42YAAAAASUVORK5CYII="},
+                    },
+                ],
+            }
+        ]
+    }
+
+    try:
+        status, body = post_json(
+            f"http://127.0.0.1:{port}/v1/chat/completions", payload, token="secret_token"
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert "describe this receipt" in body["choices"][0]["message"]["content"]
+
+
+def test_http_api_rejects_malformed_multimodal_content_part() -> None:
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    payload = {
+        "messages": [
+            {"role": "user", "content": [{"type": "image_url", "image_url": {"missing_url_key": True}}]}
+        ]
+    }
+
+    try:
+        status, body = post_json(
+            f"http://127.0.0.1:{port}/v1/chat/completions", payload, token="secret_token"
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 400
+    assert body["error"]["code"] == "invalid_message"
+
+
 def test_http_api_rejects_unknown_request_fields() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
