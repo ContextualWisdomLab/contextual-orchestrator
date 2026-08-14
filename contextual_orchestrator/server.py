@@ -864,17 +864,19 @@ def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
 
 
 def _validate_completions_top_logprobs(body: dict[str, Any]) -> None:
-    """Reject ``top_logprobs`` on legacy Completions with a named unsupported error.
+    """Reject non-zero ``top_logprobs`` on legacy Completions.
 
     OpenAI Completions historically used integer ``logprobs`` (0–5); modern
     chat uses boolean ``logprobs`` + ``top_logprobs``. This gateway never returns
-    token logprobs on /v1/completions, so ``top_logprobs`` fails closed with
-    ``invalid_top_logprobs`` rather than opaque ``unknown_fields``.
+    token logprobs on /v1/completions, so non-zero ``top_logprobs`` fails closed
+    with ``invalid_top_logprobs`` rather than opaque ``unknown_fields``.
+    Explicit JSON null or ``0`` is treat-as-omit (SDK optional default / no top alts).
     """
     if "top_logprobs" not in body:
         return
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if body.get("top_logprobs") is None:
+    value = body.get("top_logprobs")
+    # Explicit JSON null or zero is treat-as-omit (SDK optional default).
+    if value is None or value == 0:
         return
     raise RequestError(
         400,
@@ -3330,12 +3332,15 @@ def build_server(
                                         "invalid_logprobs",
                                         "logprobs=true is not supported on /v1/chat/completions",
                                     )
-                        if "top_logprobs" in body and body.get("top_logprobs") is not None:
-                            raise RequestError(
-                                400,
-                                "invalid_top_logprobs",
-                                "top_logprobs is not supported on /v1/chat/completions",
-                            )
+                        if "top_logprobs" in body:
+                            # Explicit JSON null or 0 is treat-as-omit (SDK optional default).
+                            tlp = body.get("top_logprobs")
+                            if tlp is not None and tlp != 0:
+                                raise RequestError(
+                                    400,
+                                    "invalid_top_logprobs",
+                                    "top_logprobs is not supported on /v1/chat/completions",
+                                )
                     if "store" in body:
                         _validate_chat_store(body)
                     if "modalities" in body:

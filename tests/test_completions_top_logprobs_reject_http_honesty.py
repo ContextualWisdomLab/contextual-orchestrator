@@ -81,8 +81,8 @@ def test_http_completions_rejects_top_logprobs() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_rejects_top_logprobs_zero() -> None:
-    """Even top_logprobs=0 is unsupported — no token logprobs plane on Completions."""
+def test_http_completions_accepts_top_logprobs_zero_as_omit() -> None:
+    """top_logprobs=0 requests no top alternatives — honest omit no-op."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -93,8 +93,8 @@ def test_http_completions_rejects_top_logprobs_zero() -> None:
                 "top_logprobs": 0,
             },
         )
-        assert status == 400, body
-        assert "invalid_top_logprobs" in json.dumps(body)
+        assert status == 200, body
+        assert "choices" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
