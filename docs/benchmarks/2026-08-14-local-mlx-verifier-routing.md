@@ -351,3 +351,33 @@ failures. Keep them in the denominator and do not repair them into an IRT row.
 The binary path therefore remains the safer contract boundary but is not yet a
 quality or unbiased-IRT claim; larger balanced gold, category occupancy, and
 perturbation calibration remain required.
+
+## Current exact-head gateway and integrated Judge recheck — 2026-08-14
+
+The current source pair (`contextual-orchestrator`
+`8f922d806336fd41d8fd73585a7c225784249332`, `fast-mlsirm`
+`47c5fbdde98b3550fe319d1de238a32cbaec8a1f`) was rechecked against the live
+Gemma 4 e4b listener (`mlx://127.0.0.1:18083/v1`, prompt/decode concurrency
+4) and authenticated gateway (`127.0.0.1:18084`, maximum concurrent runs 4).
+
+| concurrent width | statuses | wave | p50 successful | unique IDs |
+| ---: | --- | ---: | ---: | ---: |
+| 1 | `1x200` | 2,170.42 ms | 2,170.42 ms | 1 |
+| 2 | `2x200` | 341.35 ms | 341.31 ms | 2 |
+| 4 | `4x200` | 591.34 ms | 588.64 ms | 4 |
+| 5 | `4x200, 1x503` | 595.39 ms | 592.41 ms | 4 |
+
+The first width-1 request is a cold/warm-up observation; subsequent widths are
+not averaged with it. Successful short responses reported 10 prompt, 2
+completion, and 12 total tokens. The fifth request remained an explicit
+`concurrency_limit_exceeded` overload rather than queue growth or silent loss.
+
+The same exact-head pair then ran one real two-criterion anchored
+`binary_threshold` Judge through
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm`. Four boundary calls completed in 4.949 s with 1,923
+provider tokens, score `1.0`, accepted `true`, categories
+`{evidence_completeness: 2, release_safety: 2}`, and IRT row `[2,2]`.
+This is route/contract and throughput evidence, not semantic quality or bias
+promotion evidence; the K-stratified failures and balanced gold requirements
+remain unchanged.
