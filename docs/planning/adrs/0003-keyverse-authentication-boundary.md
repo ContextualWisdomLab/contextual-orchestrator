@@ -124,6 +124,7 @@ Run the external-verifier security test and inspect readiness_profile()["auth_mo
 | Partial or mixed CLI token modes could trigger an unrelated KV lookup before reporting the configuration error. | Treat explicit `--admin-token-key`/`--inference-token-key` as split-mode selectors and reject mixing/incompleteness before resolving any KV entry. | Implemented |
 | Container startup passed `CONTEXTUAL_ORCHESTRATOR_TOKEN` as secret argv/env material, bypassing the KV boundary. | Pass `--auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN`; let the Keyverse/KV deployment adapter resolve the value at runtime. | Implemented |
 | Public API may be reachable without the identity edge. | Keep auth mandatory; deny when no static token or external verifier is configured. | Implemented |
+| Strix run `31819952638` found a critical authorization bypass: `SecurityConfig.authorize` selected `auth_token` before the requested scope, and direct `SecurityConfig` construction allowed single and split token modes to be combined. | Reject mixed single/split configurations at the shared security boundary; select the single token only in single-token mode and select the exact `admin`/`inference` token in split mode, with a regression test. | Implemented locally; exact-head Strix rerun, independent review, and protected Merge remain required |
 
 ## Risks and Mitigations
 

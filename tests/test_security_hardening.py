@@ -116,6 +116,15 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert "trace" not in inference_body["orchestration"]
 
 
+def test_single_and_split_token_modes_cannot_be_combined() -> None:
+    try:
+        SecurityConfig(auth_token="shared_secret", admin_token="admin_secret", inference_token="inference_secret")
+    except ValueError as exc:
+        assert str(exc) == "single auth_token cannot be combined with split tokens"
+    else:  # pragma: no cover
+        raise AssertionError("mixed single and split token modes must be rejected")
+
+
 def test_loopback_without_configured_token_is_rejected() -> None:
     server = build_server(build(), port=0, security=SecurityConfig())
     thread = threading.Thread(target=server.serve_forever, daemon=True)

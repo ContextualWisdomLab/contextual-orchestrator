@@ -103,6 +103,8 @@ class SecurityConfig:
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.auth_token and (self.admin_token or self.inference_token):
+            raise ValueError("single auth_token cannot be combined with split tokens")
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
         if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
@@ -130,7 +132,10 @@ class SecurityConfig:
             except Exception:  # noqa: BLE001 - an auth adapter failure is an auth denial
                 valid = False
         else:
-            expected = self.auth_token or (self.admin_token if scope == "admin" else self.inference_token)
+            if self.auth_token:
+                expected = self.auth_token
+            else:
+                expected = {"admin": self.admin_token, "inference": self.inference_token}.get(scope, "")
             valid = bool(expected) and secrets.compare_digest(token, expected)
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")

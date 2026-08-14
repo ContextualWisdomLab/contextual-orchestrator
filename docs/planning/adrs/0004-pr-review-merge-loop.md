@@ -323,6 +323,8 @@ For each repository, record branch, commit, PR URL, review result, check result,
 
 | A 2026-08-15 re-poll before the next documentation push verified contextual-orchestrator `efc4b5f11e77bd3c5061da4c3faa29b83f55110e` and fast-mlsirm `26e5404d7da00f4c652957a5e41ba586d0b5925e`; contextual had `7` skipped plus `15` queued check-runs and fast had `7` skipped plus `17` queued. Both remained Draft, `REVIEW_REQUIRED`, `BLOCKED`, and without an independent formal approval. | Treat the count change as hosted check materialization, not a pass or code-quality signal. Re-fetch after every push and require all exact-head checks to terminate successfully, structured same-head Strix evidence, an independent current-head approval, zero unresolved threads, and final rules/auto-merge/refetch before normal Merge. | Observed 2026-08-15; recorded as historical queue/review evidence |
 
+| Contextual PR #109 exact head `1003cea38df0ba789ae6ecf94329ae9998573ab0` produced Strix run `31819952638`/job `94830607001` with a CRITICAL authentication-bypass finding in `SecurityConfig.authorize`: the common `auth_token` was selected before scope-specific tokens, while direct `SecurityConfig` construction permitted mixed single/split modes. | Fix the shared security boundary, add a regression test, preserve the Strix report/digest as the triggering evidence, and rerun Strix against the new exact head. Do not classify the old failure as stale or bypass it; keep normal Merge closed until the new terminal security result, independent approval, resolved threads, and final refetch are present. | Remediated locally; new exact-head hosted checks and protected Merge remain required |
+
 ## Risks and Mitigations
 
 | risk | likelihood | impact | mitigation | owner |
