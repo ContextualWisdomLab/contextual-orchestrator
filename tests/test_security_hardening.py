@@ -254,6 +254,28 @@ def test_external_provider_requires_resolvable_credential_and_public_https() -> 
         set_backend(None)
 
 
+def test_external_provider_rejects_unspecified_addresses() -> None:
+    """0.0.0.0 and [::] are unrouteable "any interface" addresses, not public --
+    Strix-flagged SSRF gap: they cleared every prior is_private/is_loopback/
+    is_link_local/is_multicast/is_reserved check.
+    """
+    client = ModelClient()
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-unspecified-check")
+    set_backend(backend)
+    try:
+        for host in ("0.0.0.0", "[::]"):
+            agent = ModelAgent("unspecified_agent", "gpt-example", f"https://{host}/v1", "MODEL_KEY")
+            try:
+                client._validate_provider(agent)
+            except RuntimeError as exc:
+                assert "non-public address" in str(exc)
+            else:
+                raise AssertionError(f"unspecified-address provider {host} should fail")
+    finally:
+        set_backend(None)
+
+
 def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
     client = ModelClient()
     insecure_agent = ModelAgent("insecure_agent", "gpt-example", "http://api.openai.com/v1", "MODEL_KEY")
