@@ -86,6 +86,32 @@ def test_add_agent_validations() -> None:
         assert raised, why
 
 
+def test_patch_and_remove_reject_a_pool_the_agent_does_not_belong_to() -> None:
+    """A real worker agent ID must not be reachable through a wrong pool ID.
+
+    Regression test for a Strix-flagged IDOR: patch_agent/remove_agent must
+    validate agent_pool_id and resolve worker_agent_id together, not as two
+    independently-checked arguments.
+    """
+    orchestrator = TaskOrchestrator(_seed())
+    for pool_id in ("other_pool", "default_", "", "DEFAULT"):
+        raised = False
+        try:
+            orchestrator.patch_agent(pool_id, "general_agent", {"priority": 5})
+        except KeyError:
+            raised = True
+        assert raised, f"patch_agent must reject pool_id={pool_id!r}"
+
+        raised = False
+        try:
+            orchestrator.remove_agent(pool_id, "general_agent")
+        except KeyError:
+            raised = True
+        assert raised, f"remove_agent must reject pool_id={pool_id!r}"
+    # The agent must be untouched by every rejected attempt above.
+    assert orchestrator._agent("general_agent").priority == 0
+
+
 def test_remove_last_enabled_agent_refused() -> None:
     orchestrator = TaskOrchestrator(_seed())
     raised = False

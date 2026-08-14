@@ -1235,9 +1235,7 @@ class TaskOrchestrator:
         """Apply governance updates to an agent and emit an audit event."""
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
-        if agent_pool_id != "default":  # pragma: no cover
-            raise KeyError(agent_pool_id)
-        current = self._agent(worker_agent_id)
+        current = self._agent_in_pool(agent_pool_id, worker_agent_id)
         patched = current
         if "status" in patch:
             status = str(patch["status"]).lower()
@@ -1315,9 +1313,7 @@ class TaskOrchestrator:
 
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
         """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
-        if agent_pool_id != "default":  # pragma: no cover
-            raise KeyError(agent_pool_id)
-        target = self._agent(worker_agent_id)
+        target = self._agent_in_pool(agent_pool_id, worker_agent_id)
         remaining_enabled = [agent for agent in self.agents if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
             raise ValueError("cannot remove the last enabled agent")
@@ -1593,6 +1589,19 @@ class TaskOrchestrator:
             if agent.id == agent_id:
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
+
+    def _agent_in_pool(self, agent_pool_id: str, worker_agent_id: str) -> ModelAgent:
+        """Resolve a worker agent, rejecting any pool but the one it can belong to.
+
+        Every agent belongs to the single "default" pool -- there is no
+        multi-pool partitioning in this store (``_AgentPoolStore`` keys
+        purely by ``agent_id``). Ownership is checked here, at the same
+        point the agent is looked up, so a caller can never dereference
+        ``worker_agent_id`` under a ``agent_pool_id`` it does not belong to.
+        """
+        if agent_pool_id != "default":
+            raise KeyError(agent_pool_id)
+        return self._agent(worker_agent_id)
 
     def _needs_workflow(self, text: str) -> bool:
         lowered = text.lower()
