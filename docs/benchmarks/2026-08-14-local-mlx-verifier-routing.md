@@ -186,3 +186,33 @@ failures in the denominator; keep 3B out of the verifier role until it passes
 non-ceiling held-out gold calibration with bounded failure rates. No keyword
 matching, retry, positional inference, category repair, or silent drop was
 used.
+
+## K-stratified report follow-up — 2026-08-14
+
+The updated fast-mlsirm calibration report was exercised against the same
+dedicated Gemma 4 e4b listener at `mlx://127.0.0.1:18083/v1`, using contextual
+head `b30697d06d1160b6a892fbdd26112316fb53a202` and fast head
+`22596ab714e20e9b4d1aa7f50f621deec010f622`. The route remained
+`ContextualOrchestratorJudge -> _FastMLSIJudgeAdapter -> TaskOrchestrator ->
+ModelClient -> mlx-lm`; temperature was `0`, thinking was disabled,
+`max_output_tokens=128`, local/server concurrency was `4`, and the implicit
+`binary_threshold` method produced two criterion columns.
+
+Four held-out groups crossed K=`3` and K=`5` for partial `[1,1]` and
+unsupported `[0,0]` gold anchors. Baseline, option-only, shuffled-option, and
+distractor-replacement variants produced 16 valid outcomes and 64 boundary
+calls in `221.505 s`; no provider, parse, IRT, or monotonicity failure occurred.
+Conditional gold exact agreement was `7/16` (`43.75%`). Aggregate category
+occupancy was evidence-quality `{0:8,1:0,2:8}` and risk-awareness
+`{0:7,1:1,2:8}`. All partial rows were over-scored `[2,2]`; unsupported rows
+were correctly `[0,0]` except the K=`5` shuffled control, which became
+`[0,1]` (`score_delta=+0.25`).
+
+The new report exposed these strata directly: K=`3` and K=`5`, each variant's
+status count, mean score, category occupancy, gold agreement, and an explicit
+zero unstratified denominator. This is descriptive control evidence, not a
+causal positive-K estimate; the K=`5` shuffled shift strengthens the requirement
+to balance option position/order and retain non-ceiling human/gold anchors
+before verifier promotion or polytomous IRT interpretation. No keyword
+matching, retry, positional inference, category repair, or silent drop was
+used.
