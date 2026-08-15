@@ -59,7 +59,7 @@ A non-idempotent timeout or transport error is reported as `ambiguous_outcome` a
 
 ## Retry bound
 
-`TaskOrchestrator(..., tool_retry_attempts=1)` permits one same-agent retry when the classifier marks the operation `retry_safe`. Set the value to `0` to disable same-agent retries while retaining safe cross-agent fallback. Boolean, negative, non-integer, and fractional values are rejected.
+`TaskOrchestrator(..., tool_retry_attempts=1, tool_retry_backoff_seconds=0.25)` permits one same-agent retry when the classifier marks the operation `retry_safe`. Retries wait with bounded exponential backoff, capped at 30 seconds. Set `tool_retry_attempts=0` to disable same-agent retries; tests may set the backoff to `0`. Invalid retry counts and negative, non-finite, boolean, or non-numeric backoff values are rejected.
 
 When the retry budget is exhausted, an idempotent transient failure moves to the next eligible agent. Missing/unavailable tools and unknown legacy failures also move directly to the next eligible agent. Circuit-breaker state is updated only after the local retry budget is exhausted.
 
@@ -83,6 +83,8 @@ Each fallback decision records:
   }
 }
 ```
+
+When a timeout or transport failure is normalized to `ambiguous_outcome`, the event additionally records `observed_failure_kind` so operators can distinguish the original cause without retaining raw exception text.
 
 No prompt, tool argument, output, credential, provider response, or exception text is recorded.
 

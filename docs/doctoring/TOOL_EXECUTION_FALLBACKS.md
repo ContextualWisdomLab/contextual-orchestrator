@@ -13,7 +13,7 @@ NIST AI 600-1 frames generative-AI risk management around governance, measuremen
 | Product decision | Source basis | Implementation |
 |---|---|---|
 | Retry only when replay is known safe | RFC 9110 §9.2.2 | `idempotent` metadata gates `retry_same_agent`. |
-| Stop when a non-idempotent result might already have occurred | RFC 9110 §9.2.2 | Timeout/transport uncertainty maps to `ambiguous_outcome`. |
+| Stop when a non-idempotent result might already have occurred | RFC 9110 §9.2.2 | Non-idempotent timeout/transport uncertainty and `outcome_unknown` map to `ambiguous_outcome` + `fail_closed`; non-idempotent execution failure also fails closed. |
 | Test and measure failure behavior | NIST AI 600-1 | Exact Strix regression plus statement/branch coverage. |
 | Preserve accountability without disclosing sensitive content | NIST AI 600-1 | Stable reason codes and secret-free audit events. |
 | Do not bypass policy through fallback | NIST AI 600-1 | Permission and policy failures always `fail_closed`. |

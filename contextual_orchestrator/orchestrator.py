@@ -10,6 +10,7 @@ from functools import wraps
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -32,6 +33,7 @@ from .tool_fallback import (
     ToolFallbackStoppedError,
     ToolFailureDecision,
     classify_tool_failure,
+    downgrade_to_failover,
 )
 
 
@@ -830,6 +832,7 @@ class TaskOrchestrator:
         cache_ttl: float = 0.0,
         cache_max_entries: int = 256,
         tool_retry_attempts: int = 1,
+        tool_retry_backoff_seconds: float = 0.25,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -848,6 +851,16 @@ class TaskOrchestrator:
         ):
             raise ValueError("tool_retry_attempts must be a nonnegative integer")
         self.tool_retry_attempts = tool_retry_attempts
+        if (
+            isinstance(tool_retry_backoff_seconds, bool)
+            or not isinstance(tool_retry_backoff_seconds, (int, float))
+            or not math.isfinite(float(tool_retry_backoff_seconds))
+            or tool_retry_backoff_seconds < 0
+        ):
+            raise ValueError(
+                "tool_retry_backoff_seconds must be a finite nonnegative number"
+            )
+        self.tool_retry_backoff_seconds = float(tool_retry_backoff_seconds)
         self.policy = OrchestrationPolicy()
         # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
         self.price_per_million = dict(price_per_million or {})
@@ -1578,17 +1591,17 @@ class TaskOrchestrator:
                     ):
                         retry_attempt += 1
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
+                        if self.tool_retry_backoff_seconds:
+                            retry_delay = min(
+                                self.tool_retry_backoff_seconds
+                                * (2.0 ** min(retry_attempt - 1, 16)),
+                                30.0,
+                            )
+                            time.sleep(retry_delay)
                         continue
                     if action is ToolFallbackAction.RETRY_SAME_AGENT:
-                        action = ToolFallbackAction.FAILOVER_AGENT
-                        decision = replace(
-                            decision,
-                            action=action,
-                            reason_code=(
-                                f"tool_failure.{decision.kind.value}.{action.value}"
-                            ),
-                            retry_safe=False,
-                        )
+                        decision = downgrade_to_failover(decision)
+                        action = decision.action
                     self._record_tool_fallback(agent.id, decision, retry_attempt)
                     if decision.circuit_failure:
                         self._record_failure(agent.id)
@@ -1607,16 +1620,17 @@ class TaskOrchestrator:
         retry_attempt: int,
     ) -> None:
         """Record a secret-free audit event for one tool fallback decision."""
-        self._append_audit_event(
-            "tool_fallback_decision",
-            {
-                "agent_id": agent_id,
-                "action": decision.action.value,
-                "failure_kind": decision.kind.value,
-                "reason_code": decision.reason_code,
-                "retry_attempt": retry_attempt,
-            },
-        )
+        event_detail = {
+            "agent_id": agent_id,
+            "action": decision.action.value,
+            "failure_kind": decision.kind.value,
+            "reason_code": decision.reason_code,
+            "retry_attempt": retry_attempt,
+        }
+        observed_kind = decision.observed_kind or decision.kind
+        if observed_kind is not decision.kind:
+            event_detail["observed_failure_kind"] = observed_kind.value
+        self._append_audit_event("tool_fallback_decision", event_detail)
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)

@@ -26,13 +26,13 @@ The default matrix is:
 |---|---|---|
 | `tool_not_found` | `failover_agent` | No tool side effect started; another eligible agent may have the capability. |
 | `tool_unavailable` | `failover_agent` | Runtime capability is unavailable before execution. |
-| `rate_limited` | retry if idempotent, otherwise fail over | A rejected request can use another endpoint; explicit idempotency permits one bounded local retry. |
-| `timeout` / `transport_error` | retry only if explicitly idempotent | A non-idempotent request can have an ambiguous outcome. |
+| `rate_limited` | bounded retry then fail over if idempotent; otherwise fail over | A rejected request can use another endpoint; explicit idempotency permits bounded local retry. |
+| `timeout` / `transport_error` | bounded retry then fail over if explicitly idempotent; otherwise `fail_closed` as `ambiguous_outcome` | A non-idempotent request may already have produced a side effect. |
 | `invalid_arguments` | `fail_closed` | Repeating the same malformed contract cannot repair it safely. |
 | `permission_denied` | `fail_closed` | Agent substitution must not bypass authorization. |
 | `policy_blocked` | `fail_closed` | Agent substitution must not bypass policy or approval. |
-| `execution_failed` | fail over only if explicitly idempotent | A state-changing command must not be duplicated. |
-| `ambiguous_outcome` | `fail_closed` | The system cannot prove whether a side effect occurred. |
+| `execution_failed` | fail over if explicitly idempotent; otherwise `fail_closed` | A state-changing command must not be duplicated. |
+| `ambiguous_outcome` / `outcome_unknown` | always `fail_closed` | The system cannot prove whether a side effect occurred. |
 | `unknown` | `failover_agent` | Preserve the existing sequential failover behavior. |
 
 Structured adapters should raise `ToolExecutionError` with a stable failure kind, tool name, idempotency declaration, and outcome certainty. Legacy wrappers are classified from a bounded exception cause chain only when that chain identifies a tool runtime, including the exact Strix missing-tool message. Generic provider transport failures keep the previous agent-failover behavior.
