@@ -53,10 +53,11 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        # Atheris ships wheels/builds cleanly for 3.11 (Clang + libFuzzer).
+        # Atheris 3.1.0 dropped the cp311 wheel; use the same cp312-compatible
+        # pin that the central CPython 3.14 coverage-evidence image preflights.
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install Atheris
         # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Sources:
