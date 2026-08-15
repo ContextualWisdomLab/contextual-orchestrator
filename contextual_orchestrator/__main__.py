@@ -8,7 +8,11 @@ import os
 import sys
 
 from .credentials import register_credential
-from .kv_config import get_config_store, set_runtime_config_store
+from .kv_config import (
+    allowed_provider_hosts,
+    get_config_store,
+    set_runtime_config_store,
+)
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
@@ -128,6 +132,7 @@ def main() -> None:
                 ),
             )
         )
+        allowed_provider_hosts()
         serve(
             orchestrator,
             host=args.host,
