@@ -104,16 +104,59 @@ def _decision(
     )
 
 
-def _exception_text(error: BaseException) -> str:
-    """Collect a bounded lowercase message chain without exposing it to callers."""
-    messages: list[str] = []
+_HTTP_FAILURE_KIND = {
+    400: ToolFailureKind.INVALID_ARGUMENTS,
+    401: ToolFailureKind.PERMISSION_DENIED,
+    403: ToolFailureKind.PERMISSION_DENIED,
+    404: ToolFailureKind.TOOL_NOT_FOUND,
+    405: ToolFailureKind.TOOL_UNAVAILABLE,
+    406: ToolFailureKind.INVALID_ARGUMENTS,
+    407: ToolFailureKind.PERMISSION_DENIED,
+    408: ToolFailureKind.TIMEOUT,
+    409: ToolFailureKind.EXECUTION_FAILED,
+    410: ToolFailureKind.TOOL_UNAVAILABLE,
+    411: ToolFailureKind.INVALID_ARGUMENTS,
+    412: ToolFailureKind.INVALID_ARGUMENTS,
+    413: ToolFailureKind.INVALID_ARGUMENTS,
+    414: ToolFailureKind.INVALID_ARGUMENTS,
+    415: ToolFailureKind.INVALID_ARGUMENTS,
+    416: ToolFailureKind.INVALID_ARGUMENTS,
+    417: ToolFailureKind.INVALID_ARGUMENTS,
+    422: ToolFailureKind.INVALID_ARGUMENTS,
+    423: ToolFailureKind.POLICY_BLOCKED,
+    424: ToolFailureKind.EXECUTION_FAILED,
+    425: ToolFailureKind.TRANSPORT_ERROR,
+    426: ToolFailureKind.TOOL_UNAVAILABLE,
+    428: ToolFailureKind.INVALID_ARGUMENTS,
+    429: ToolFailureKind.RATE_LIMITED,
+    431: ToolFailureKind.INVALID_ARGUMENTS,
+    451: ToolFailureKind.POLICY_BLOCKED,
+    500: ToolFailureKind.EXECUTION_FAILED,
+    501: ToolFailureKind.TOOL_UNAVAILABLE,
+    502: ToolFailureKind.TRANSPORT_ERROR,
+    503: ToolFailureKind.TRANSPORT_ERROR,
+    504: ToolFailureKind.TIMEOUT,
+    507: ToolFailureKind.TRANSPORT_ERROR,
+    508: ToolFailureKind.EXECUTION_FAILED,
+    511: ToolFailureKind.PERMISSION_DENIED,
+}
+
+
+def _exception_chain(error: BaseException) -> tuple[BaseException, ...]:
+    """Return at most eight distinct exceptions from a cause/context chain."""
+    chain: list[BaseException] = []
     seen: set[int] = set()
     current: BaseException | None = error
-    while current is not None and id(current) not in seen and len(messages) < 8:
+    while current is not None and id(current) not in seen and len(chain) < 8:
         seen.add(id(current))
-        messages.append(str(current).lower())
+        chain.append(current)
         current = current.__cause__ or current.__context__
-    return " | ".join(messages)
+    return tuple(chain)
+
+
+def _exception_text(error: BaseException) -> str:
+    """Collect a bounded lowercase message chain without exposing it to callers."""
+    return " | ".join(str(item).lower() for item in _exception_chain(error))
 
 
 def _contains_any(text: str, markers: tuple[str, ...]) -> bool:
@@ -125,8 +168,19 @@ def _looks_tool_related(error: BaseException, text: str) -> bool:
     """Return whether legacy exception evidence identifies a tool runtime."""
     if _contains_any(text, ("tool", "command", "mcp", "function call", "sandbox")):
         return True
-    url = getattr(error, "url", "")
-    return isinstance(url, str) and "tool" in url.lower()
+    for item in _exception_chain(error):
+        url = getattr(item, "url", "")
+        if isinstance(url, str) and "tool" in url.lower():
+            return True
+    return False
+
+
+def _http_status(error: BaseException) -> int | None:
+    """Return the first HTTP status in a bounded exception chain."""
+    for item in _exception_chain(error):
+        if isinstance(item, urllib.error.HTTPError):
+            return int(item.code)
+    return None
 
 
 def _classify_unstructured(error: BaseException) -> ToolFailureKind:
@@ -184,14 +238,9 @@ def _classify_unstructured(error: BaseException) -> ToolFailureKind:
         return ToolFailureKind.INVALID_ARGUMENTS
     if not _looks_tool_related(error, text):
         return ToolFailureKind.UNKNOWN
-    if isinstance(error, urllib.error.HTTPError):
-        if error.code == 429:
-            return ToolFailureKind.RATE_LIMITED
-        if error.code in {408, 504}:
-            return ToolFailureKind.TIMEOUT
-        if error.code in {502, 503}:
-            return ToolFailureKind.TRANSPORT_ERROR
-        return ToolFailureKind.UNKNOWN
+    status = _http_status(error)
+    if status is not None:
+        return _HTTP_FAILURE_KIND.get(status, ToolFailureKind.UNKNOWN)
     if _contains_any(text, ("rate limit", "too many requests", "throttl")):
         return ToolFailureKind.RATE_LIMITED
     if isinstance(error, (TimeoutError, socket.timeout)) or _contains_any(

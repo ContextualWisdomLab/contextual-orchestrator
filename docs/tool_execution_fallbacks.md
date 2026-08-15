@@ -38,6 +38,25 @@ action       = failover_agent
 
 The classifier follows at most eight exception cause/context links. The collected text is used only in memory for classification and is not returned or audited.
 
+### HTTP adapter compatibility
+
+Structured `ToolExecutionError` remains the preferred contract. For legacy tool adapters that expose an `HTTPError`, the classifier inspects the bounded cause chain and applies a conservative status policy:
+
+| HTTP status | Failure kind | Default action |
+|---|---|---|
+| 400, 406, 411–417, 422, 428, 431 | invalid arguments | fail closed |
+| 401, 403, 407, 511 | permission denied | fail closed |
+| 404 | tool not found | fail over |
+| 405, 410, 426, 501 | tool unavailable | fail over |
+| 408, 504 | timeout | retry only when explicitly idempotent |
+| 409, 424, 500, 508 | execution failed | fail over only when explicitly idempotent |
+| 423, 451 | policy blocked | fail closed |
+| 425, 502, 503, 507 | transport error | retry only when explicitly idempotent |
+| 429 | rate limited | bounded retry when explicitly idempotent; otherwise fail over |
+| unrecognized status | unknown | preserve legacy sequential failover |
+
+A non-idempotent timeout or transport error is reported as `ambiguous_outcome` and fails closed. HTTP status inference is compatibility behavior only; adapters should provide structured operation semantics whenever possible.
+
 ## Retry bound
 
 `TaskOrchestrator(..., tool_retry_attempts=1)` permits one same-agent retry when the classifier marks the operation `retry_safe`. Set the value to `0` to disable same-agent retries while retaining safe cross-agent fallback. Boolean, negative, non-integer, and fractional values are rejected.
