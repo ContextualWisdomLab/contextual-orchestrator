@@ -14,6 +14,7 @@ from contextual_orchestrator.kv_config import (
     ALLOWED_PROVIDER_HOSTS_ENV,
     InMemoryConfigStore,
     allowed_provider_hosts,
+    get_runtime_config_store,
     set_config_value,
     set_runtime_config_store,
 )
@@ -96,12 +97,10 @@ def test_validate_provider_uses_kv_allowlist() -> None:
 
 
 def test_serve_installs_runtime_config_store_from_bootstrap() -> None:
-    """Install the configured runtime KV before accepting server requests."""
+    """Install and eagerly seed the runtime KV before accepting requests."""
     import contextual_orchestrator.__main__ as cli
 
-    configured_store = InMemoryConfigStore(
-        {"provider": {"allowed_hosts": "api.example.com"}}
-    )
+    configured_store = InMemoryConfigStore()
     argv = [
         "contextual_orchestrator",
         "--serve",
@@ -111,28 +110,32 @@ def test_serve_installs_runtime_config_store_from_bootstrap() -> None:
     bootstrap_env = {
         "CONTEXTUAL_ORCHESTRATOR_KV_DSN": "postgresql://config.example/db",
         "CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE": "bootstrap-passphrase",
+        ALLOWED_PROVIDER_HOSTS_ENV: "",
     }
-    with patch.object(cli.sys, "argv", argv), patch.dict(
-        cli.os.environ, bootstrap_env, clear=False
-    ), patch.object(
-        cli, "get_config_store", return_value=configured_store
-    ) as get_store, patch.object(
-        cli, "set_runtime_config_store"
-    ) as install_store, patch.object(
-        cli, "load_agents", return_value=[]
-    ), patch.object(
-        cli, "ModelClient", return_value=object()
-    ), patch.object(
-        cli, "TaskOrchestrator", return_value=object()
-    ), patch.object(cli, "serve") as serve_server:
-        cli.main()
+    try:
+        with patch.object(cli.sys, "argv", argv), patch.dict(
+            cli.os.environ, bootstrap_env, clear=False
+        ), patch.object(
+            cli, "get_config_store", return_value=configured_store
+        ) as get_store, patch.object(
+            cli, "load_agents", return_value=[]
+        ), patch.object(
+            cli, "ModelClient", return_value=object()
+        ), patch.object(
+            cli, "TaskOrchestrator", return_value=object()
+        ), patch.object(cli, "serve") as serve_server:
+            cli.main()
+            cli.os.environ[ALLOWED_PROVIDER_HOSTS_ENV] = "evil.example"
+            assert allowed_provider_hosts() == set()
 
-    get_store.assert_called_once_with(
-        "postgresql://config.example/db",
-        fernet_key="bootstrap-passphrase",
-    )
-    install_store.assert_called_once_with(configured_store)
-    serve_server.assert_called_once()
+        get_store.assert_called_once_with(
+            "postgresql://config.example/db",
+            fernet_key="bootstrap-passphrase",
+        )
+        assert get_runtime_config_store() is configured_store
+        serve_server.assert_called_once()
+    finally:
+        set_runtime_config_store(None)
 
 
 if __name__ == "__main__":
