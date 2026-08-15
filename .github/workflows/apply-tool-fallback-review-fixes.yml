@@ -1,0 +1,83 @@
+name: Apply tool fallback review fixes
+
+on:
+  push:
+    branches:
+      - fix/tool-execution-fallbacks-567
+    paths:
+      - .github/workflows/apply-tool-fallback-review-fixes.yml
+      - .github/bootstrap/tool-fallback-review-fixes/**
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-tool-fallback-review-fixes
+  cancel-in-progress: true
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 30
+    steps:
+      - name: Check out exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: fix/tool-execution-fallbacks-567
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify immutable starting tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_base=954335c7c7f09cf273abd202dbcc3376752e7730
+          git merge-base --is-ancestor "$expected_base" HEAD
+          unexpected="$({ git diff --name-only "$expected_base"...HEAD || true; } | grep -Ev '^\.github/(bootstrap/tool-fallback-review-fixes/|workflows/apply-tool-fallback-review-fixes\.yml$)' || true)"
+          if [ -n "$unexpected" ]; then
+            printf 'Unexpected files changed after the reviewed base:\n%s\n' "$unexpected" >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: '3.13'
+          check-latest: false
+
+      - name: Apply deterministic review fixes
+        run: python .github/bootstrap/tool-fallback-review-fixes/transform.py
+
+      - name: Install locked test dependencies
+        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Run focused fallback and HTTP regressions
+        run: python -m pytest tests/test_tool_execution_fallback.py tests/test_security_hardening.py -q
+
+      - name: Run full repository suite
+        run: python -m pytest -q
+
+      - name: Verify compilation and formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q contextual_orchestrator
+          git diff --check
+
+      - name: Publish verified product commit and remove bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/bootstrap/tool-fallback-review-fixes
+          rm -f .github/workflows/apply-tool-fallback-review-fixes.yml
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No verified change was produced.' >&2
+            exit 1
+          fi
+          git config user.name 'contextual-orchestrator-maintainer[bot]'
+          git config user.email 'contextual-orchestrator-maintainer[bot]@users.noreply.github.com'
+          git commit -m 'fix: address tool fallback review findings'
+          git push origin HEAD:fix/tool-execution-fallbacks-567
