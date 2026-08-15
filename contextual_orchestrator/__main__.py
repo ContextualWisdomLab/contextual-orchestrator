@@ -8,6 +8,7 @@ import os
 import sys
 
 from .credentials import register_credential
+from .kv_config import get_config_store, set_runtime_config_store
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
@@ -119,6 +120,14 @@ def main() -> None:
             args.admin_token and args.inference_token
         ):
             parser.error("split token mode requires both --admin-token and --inference-token")
+        set_runtime_config_store(
+            get_config_store(
+                os.environ.get("CONTEXTUAL_ORCHESTRATOR_KV_DSN") or None,
+                fernet_key=(
+                    os.environ.get("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE") or None
+                ),
+            )
+        )
         serve(
             orchestrator,
             host=args.host,
