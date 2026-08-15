@@ -67,6 +67,12 @@ When the retry budget is exhausted, an idempotent transient failure moves to the
 
 `ToolFallbackStoppedError` is raised for ambiguous outcomes and authorization, policy, or argument failures. Its public message contains a stable reason code and agent id only. The original exception remains available as the Python cause for trusted internal diagnostics, but its text is not copied into audit events.
 
+### HTTP and streaming contract
+
+A non-streaming fail-closed decision returns HTTP `409` with OpenAI-shaped error code `tool_execution_stopped`. The error detail contains only the stable action, effective failure kind, reason code, and—when normalization produced `ambiguous_outcome`—the observed timeout or transport kind.
+
+Once streaming response headers have been sent, the server cannot change the HTTP status. It therefore emits the same structured `tool_execution_stopped` error payload as an SSE `data:` frame, follows it with a terminal chunk whose `finish_reason` is `error`, and then emits `[DONE]`. Clients must treat either form as a stopped operation that requires operator reconciliation rather than automatic replay.
+
 ## Audit event
 
 Each fallback decision records:
