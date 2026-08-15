@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import json
 import socket
+import threading
 import urllib.error
+import urllib.request
 
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.tool_fallback import (
     ToolExecutionError,
     ToolFallbackAction,
@@ -42,7 +46,7 @@ from contextual_orchestrator.tool_fallback import (
             ToolFallbackAction.FAIL_CLOSED,
         ),
         (
-            PermissionError("permission denied"),
+            PermissionError("tool permission denied"),
             ToolFailureKind.PERMISSION_DENIED,
             ToolFallbackAction.FAIL_CLOSED,
         ),
@@ -106,6 +110,7 @@ def test_transient_idempotent_tool_failures_retry_same_agent(error: BaseExceptio
 def test_non_idempotent_timeout_fails_closed_for_ambiguous_outcome() -> None:
     decision = classify_tool_failure(TimeoutError("tool timed out"), idempotent=False)
     assert decision.kind is ToolFailureKind.AMBIGUOUS_OUTCOME
+    assert decision.observed_kind is ToolFailureKind.TIMEOUT
     assert decision.action is ToolFallbackAction.FAIL_CLOSED
     assert decision.retry_safe is False
     assert decision.circuit_failure is False
@@ -121,6 +126,7 @@ def test_explicit_unknown_outcome_overrides_other_structured_failure_metadata() 
     )
     decision = classify_tool_failure(error)
     assert decision.kind is ToolFailureKind.AMBIGUOUS_OUTCOME
+    assert decision.observed_kind is ToolFailureKind.TRANSPORT_ERROR
     assert decision.action is ToolFallbackAction.FAIL_CLOSED
 
 
@@ -190,6 +196,7 @@ def _orchestrator(
     client: ModelClient,
     *,
     tool_retry_attempts: int = 1,
+    tool_retry_backoff_seconds: float = 0.0,
 ) -> TaskOrchestrator:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
@@ -199,6 +206,7 @@ def _orchestrator(
         agents,
         client=client,
         tool_retry_attempts=tool_retry_attempts,
+        tool_retry_backoff_seconds=tool_retry_backoff_seconds,
     )
 
 
@@ -271,6 +279,9 @@ def test_exhausted_safe_retry_then_fails_over_once() -> None:
         "retry_same_agent",
         "failover_agent",
     ]
+    assert events[-1]["event_detail"]["reason_code"] == (
+        "tool_failure.timeout.failover_agent"
+    )
 
 
 def test_non_idempotent_ambiguous_failure_stops_without_backup_or_secret_leak() -> None:
@@ -294,6 +305,9 @@ def test_non_idempotent_ambiguous_failure_stops_without_backup_or_secret_leak() 
     assert raised.value.agent_id == "primary_worker"
     assert "super-secret-value" not in str(raised.value)
     assert client.calls == ["primary_worker"]
+    event_detail = orchestrator.list_recent_audit_events()[0]["event_detail"]
+    assert event_detail["failure_kind"] == "ambiguous_outcome"
+    assert event_detail["observed_failure_kind"] == "transport_error"
 
 
 def test_invalid_arguments_stop_without_poisoning_agent_circuit() -> None:
@@ -488,3 +502,195 @@ def test_tool_marker_beyond_eight_exception_links_is_ignored() -> None:
     decision = classify_tool_failure(root)
     assert decision.kind is ToolFailureKind.UNKNOWN
     assert decision.action is ToolFallbackAction.FAILOVER_AGENT
+
+
+def test_provider_auth_failure_without_tool_evidence_keeps_provider_failover() -> None:
+    cause = urllib.error.HTTPError(
+        "https://provider.example/v1/chat/completions",
+        401,
+        "Unauthorized",
+        {},
+        None,
+    )
+    wrapper = RuntimeError("provider request failed")
+    wrapper.__cause__ = cause
+    decision = classify_tool_failure(wrapper)
+    assert decision.kind is ToolFailureKind.UNKNOWN
+    assert decision.action is ToolFallbackAction.FAILOVER_AGENT
+
+
+def test_idempotent_retries_wait_with_exponential_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+    delays: list[float] = []
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.time.sleep",
+        delays.append,
+    )
+    first = ToolExecutionError(
+        "read timed out",
+        tool_name="inspect_repository",
+        kind=ToolFailureKind.TIMEOUT,
+        idempotent=True,
+    )
+    second = ToolExecutionError(
+        "read timed out again",
+        tool_name="inspect_repository",
+        kind=ToolFailureKind.TIMEOUT,
+        idempotent=True,
+    )
+    client = _ScriptedToolClient(
+        {
+            "primary_worker": [first, second, "recovered"],
+            "backup_worker": ["unused"],
+        }
+    )
+    orchestrator = _orchestrator(
+        client,
+        tool_retry_attempts=2,
+        tool_retry_backoff_seconds=0.25,
+    )
+    result = orchestrator.route_once(
+        [{"role": "user", "content": "inspect repository"}]
+    )
+    assert result["answer"] == "recovered"
+    assert delays == [0.25, 0.5]
+
+
+@pytest.mark.parametrize(
+    "value",
+    [-0.1, True, float("inf"), float("-inf"), float("nan"), "0.1"],
+)
+def test_tool_retry_backoff_requires_finite_nonnegative_number(value: object) -> None:
+    client = _ScriptedToolClient(
+        {"primary_worker": ["unused"], "backup_worker": ["unused"]}
+    )
+    with pytest.raises(ValueError, match="tool_retry_backoff_seconds"):
+        _orchestrator(
+            client,
+            tool_retry_backoff_seconds=value,  # type: ignore[arg-type]
+        )
+
+
+def _post_fallback_json(
+    port: int,
+    payload: dict[str, object],
+) -> tuple[int, dict[str, object]]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "authorization": "Bearer secret_token",
+            "content-type": "application/json",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as error:
+        return error.code, json.loads(error.read().decode("utf-8"))
+
+
+def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
+    error = ToolExecutionError(
+        "request may have completed token=must-not-leak",
+        tool_name="send_message",
+        kind=ToolFailureKind.TRANSPORT_ERROR,
+        outcome_unknown=True,
+    )
+    client = _ScriptedToolClient(
+        {
+            "primary_worker": [error],
+            "backup_worker": ["must not run"],
+        }
+    )
+    orchestrator = _orchestrator(client)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="secret_token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post_fallback_json(
+            server.server_address[1],
+            {
+                "model": "mock",
+                "mode": "route",
+                "messages": [{"role": "user", "content": "send this message"}],
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 409
+    error_body = body["error"]
+    assert error_body["code"] == "tool_execution_stopped"
+    assert error_body["detail"]["failure_kind"] == "ambiguous_outcome"
+    assert error_body["detail"]["observed_failure_kind"] == "transport_error"
+    assert "must-not-leak" not in json.dumps(body)
+
+
+class _StoppedStreamingClient(ModelClient):
+    """Raise a structured fail-closed decision from the live stream path."""
+
+    def stream_chat(self, agent: ModelAgent, messages: list, **kwargs: object):  # type: ignore[override]
+        del messages, kwargs
+        decision = classify_tool_failure(
+            ToolExecutionError(
+                "request may have completed token=must-not-leak",
+                tool_name="send_message",
+                kind=ToolFailureKind.TRANSPORT_ERROR,
+                outcome_unknown=True,
+            )
+        )
+        raise ToolFallbackStoppedError(agent.id, decision)
+        yield ""  # pragma: no cover
+
+
+def test_stream_fail_closed_tool_error_emits_structured_sse() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"))],
+        client=_StoppedStreamingClient(max_retries=0),
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="secret_token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+        data=json.dumps(
+            {
+                "model": "mock",
+                "mode": "route",
+                "stream": True,
+                "messages": [{"role": "user", "content": "send this message"}],
+            }
+        ).encode("utf-8"),
+        headers={
+            "authorization": "Bearer secret_token",
+            "content-type": "application/json",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status = response.status
+            body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert '"code": "tool_execution_stopped"' in body
+    assert '"failure_kind": "ambiguous_outcome"' in body
+    assert '"observed_failure_kind": "transport_error"' in body
+    assert '"finish_reason": "error"' in body
+    assert "data: [DONE]" in body
+    assert "must-not-leak" not in body

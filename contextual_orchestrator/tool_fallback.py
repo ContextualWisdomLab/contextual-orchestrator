@@ -41,6 +41,7 @@ class ToolFailureDecision:
     reason_code: str
     retry_safe: bool
     circuit_failure: bool
+    observed_kind: ToolFailureKind | None = None
 
 
 class ToolExecutionError(RuntimeError):
@@ -93,6 +94,7 @@ def _decision(
     *,
     retry_safe: bool = False,
     circuit_failure: bool = False,
+    observed_kind: ToolFailureKind | None = None,
 ) -> ToolFailureDecision:
     """Build a decision with a stable machine-readable reason code."""
     return ToolFailureDecision(
@@ -101,6 +103,17 @@ def _decision(
         reason_code=f"tool_failure.{kind.value}.{action.value}",
         retry_safe=retry_safe,
         circuit_failure=circuit_failure,
+        observed_kind=observed_kind or kind,
+    )
+
+
+def downgrade_to_failover(decision: ToolFailureDecision) -> ToolFailureDecision:
+    """Convert an exhausted safe retry to canonical sequential failover."""
+    return _decision(
+        decision.kind,
+        ToolFallbackAction.FAILOVER_AGENT,
+        circuit_failure=decision.circuit_failure,
+        observed_kind=decision.observed_kind or decision.kind,
     )
 
 
@@ -209,6 +222,8 @@ def _classify_unstructured(error: BaseException) -> ToolFailureKind:
         ),
     ):
         return ToolFailureKind.TOOL_NOT_FOUND
+    if not _looks_tool_related(error, text):
+        return ToolFailureKind.UNKNOWN
     if isinstance(error, PermissionError) or _contains_any(
         text,
         ("permission denied", "access denied", "unauthorized", "forbidden"),
@@ -236,8 +251,6 @@ def _classify_unstructured(error: BaseException) -> ToolFailureKind:
         ),
     ):
         return ToolFailureKind.INVALID_ARGUMENTS
-    if not _looks_tool_related(error, text):
-        return ToolFailureKind.UNKNOWN
     status = _http_status(error)
     if status is not None:
         return _HTTP_FAILURE_KIND.get(status, ToolFailureKind.UNKNOWN)
@@ -301,6 +314,7 @@ def classify_tool_failure(
     if not isinstance(idempotent, bool):
         raise TypeError("idempotent must be a boolean")
     if isinstance(error, ToolExecutionError):
+        observed_kind = error.kind
         if error.outcome_unknown:
             kind = ToolFailureKind.AMBIGUOUS_OUTCOME
         else:
@@ -308,10 +322,15 @@ def classify_tool_failure(
         effective_idempotent = error.idempotent
     else:
         kind = _classify_unstructured(error)
+        observed_kind = kind
         effective_idempotent = idempotent
 
     if kind is ToolFailureKind.AMBIGUOUS_OUTCOME:
-        return _decision(kind, ToolFallbackAction.FAIL_CLOSED)
+        return _decision(
+            kind,
+            ToolFallbackAction.FAIL_CLOSED,
+            observed_kind=observed_kind,
+        )
     if kind in {ToolFailureKind.TOOL_NOT_FOUND, ToolFailureKind.TOOL_UNAVAILABLE}:
         return _decision(
             kind,
@@ -335,6 +354,7 @@ def classify_tool_failure(
         return _decision(
             ToolFailureKind.AMBIGUOUS_OUTCOME,
             ToolFallbackAction.FAIL_CLOSED,
+            observed_kind=kind,
         )
     if kind is ToolFailureKind.RATE_LIMITED:
         if effective_idempotent:
