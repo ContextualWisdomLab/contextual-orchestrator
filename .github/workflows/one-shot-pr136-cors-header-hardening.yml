@@ -1,0 +1,237 @@
+name: One-shot PR 136 CORS header hardening
+
+on:
+  push:
+    branches:
+      - feat/cors-allowlist
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-pr-136-cors-header-hardening
+  cancel-in-progress: false
+
+jobs:
+  harden:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout exact contributor branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: feat/cors-allowlist
+          fetch-depth: 0
+
+      - name: Add hostile-origin regressions and prove RED
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("tests/test_cors_allowlist.py")
+          text = path.read_text(encoding="utf-8")
+          text = text.replace("import urllib.request\n", "import urllib.request\n\nimport pytest\n", 1)
+          marker = "\n\nif __name__ == \"__main__\":\n"
+          tests = '''
+
+          def test_cors_config_rejects_header_controls_and_non_origins() -> None:
+              """Only serialized HTTP(S) origins may become response headers."""
+              invalid_values = (
+                  "https://app.example.com\\r\\nX-Injected: yes",
+                  "https://app.example.com/path",
+                  "https://user@app.example.com",
+                  "file://local/path",
+              )
+              for value in invalid_values:
+                  with pytest.raises(ValueError, match="CORS origin"):
+                      SecurityConfig(
+                          auth_token=_TEST_AUTH_TOKEN,
+                          cors_allow_origins=(value,),
+                      )
+
+
+          def test_cors_match_returns_prevalidated_configured_header_value() -> None:
+              """A request key selects, but never becomes, the emitted header value."""
+              configured_origin = "".join(("https://", "app.example.com"))
+              request_origin = configured_origin.encode("utf-8").decode("utf-8")
+              assert request_origin == configured_origin
+              assert request_origin is not configured_origin
+              security = SecurityConfig(
+                  auth_token=_TEST_AUTH_TOKEN,
+                  cors_allow_origins=(configured_origin,),
+              )
+
+              allowed = security.cors_origin_allowed(request_origin)
+
+              assert allowed == configured_origin
+              assert allowed is security.cors_allow_origins[0]
+              assert allowed is not request_origin
+          '''
+          if marker not in text:
+              raise SystemExit("CORS test insertion marker was not found")
+          text = text.replace(marker, tests + marker, 1)
+          text = text.replace(
+              "    test_cors_disabled_by_default_omits_allow_origin_header()\n",
+              "    test_cors_disabled_by_default_omits_allow_origin_header()\n"
+              "    test_cors_config_rejects_header_controls_and_non_origins()\n"
+              "    test_cors_match_returns_prevalidated_configured_header_value()\n",
+              1,
+          )
+          path.write_text(text, encoding="utf-8")
+          PY
+
+          set +e
+          python3 -m pytest -q tests/test_cors_allowlist.py > /tmp/cors-red.log 2>&1
+          red_status=$?
+          set -e
+          cat /tmp/cors-red.log
+          if [ "$red_status" -eq 0 ]; then
+            echo "::error::Hostile-origin regressions unexpectedly passed before hardening."
+            exit 1
+          fi
+          grep -Eq "test_cors_config_rejects_header_controls|test_cors_match_returns_prevalidated" /tmp/cors-red.log
+
+      - name: Implement canonical prevalidated CORS response values
+        run: |
+          set -euo pipefail
+          python3 <<'PY'
+          from pathlib import Path
+
+          path = Path("contextual_orchestrator/server.py")
+          text = path.read_text(encoding="utf-8")
+
+          old_fields = '''    # Explicit browser origins allowed to call the API (exact match; empty = CORS off).
+              cors_allow_origins: tuple[str, ...] = ()
+              _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
+          '''.replace("              ", "")
+          new_fields = '''    # Explicit browser origins allowed to call the API (exact match; empty = CORS off).
+              cors_allow_origins: tuple[str, ...] = ()
+              _cors_origin_headers: dict[str, str] = field(default_factory=dict, init=False, repr=False)
+              _cors_allow_any_origin: bool = field(default=False, init=False, repr=False)
+              _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
+          '''.replace("              ", "")
+          if old_fields not in text:
+              raise SystemExit("SecurityConfig field marker was not found")
+          text = text.replace(old_fields, new_fields, 1)
+
+          old_init = '''        cleaned: list[str] = []
+              for origin in self.cors_allow_origins:
+                  value = str(origin).strip()
+                  if value:
+                      cleaned.append(value)
+              self.cors_allow_origins = tuple(cleaned)
+              self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
+          '''.replace("              ", "")
+          new_init = '''        cleaned: list[str] = []
+              canonical_headers: dict[str, str] = {}
+              allow_any_origin = False
+              for origin in self.cors_allow_origins:
+                  value = str(origin).strip()
+                  if not value:
+                      continue
+                  if value == "*":
+                      allow_any_origin = True
+                      cleaned.append(value)
+                      continue
+                  if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
+                      raise ValueError("CORS origin contains forbidden header control characters")
+                  parsed = urllib.parse.urlsplit(value)
+                  if (
+                      parsed.scheme not in {"http", "https"}
+                      or not parsed.netloc
+                      or parsed.username is not None
+                      or parsed.password is not None
+                      or parsed.path
+                      or parsed.query
+                      or parsed.fragment
+                  ):
+                      raise ValueError("CORS origin must be a serialized HTTP(S) origin")
+                  canonical_headers[value] = value
+                  cleaned.append(value)
+              self.cors_allow_origins = tuple(dict.fromkeys(cleaned))
+              self._cors_origin_headers = canonical_headers
+              self._cors_allow_any_origin = allow_any_origin
+              self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
+          '''.replace("              ", "")
+          if old_init not in text:
+              raise SystemExit("SecurityConfig initialization marker was not found")
+          text = text.replace(old_init, new_init, 1)
+
+          old_method = '''    def cors_origin_allowed(self, origin: str) -> str | None:
+                  """Return the origin echo value when it is on the allowlist, else None.
+          
+                  Only exact string matches are accepted (including a single ``*`` entry when
+                  operators deliberately open browser cross-origin access). Empty allowlist
+                  disables CORS headers entirely.
+                  """
+                  if not self.cors_allow_origins or not origin:
+                      return None
+                  if "*" in self.cors_allow_origins:
+                      return "*"
+                  if origin in self.cors_allow_origins:
+                      return origin
+                  return None
+          '''.replace("                  ", "")
+          new_method = '''    def cors_origin_allowed(self, origin: str) -> str | None:
+                  """Return a prevalidated configured header value for an allowed origin.
+          
+                  Request data is used only as a dictionary lookup key. The returned value
+                  was parsed and control-character checked during configuration bootstrap,
+                  so untrusted request bytes never become an HTTP response header value.
+                  """
+                  if not origin or any(
+                      ord(character) < 0x20 or ord(character) == 0x7F
+                      for character in origin
+                  ):
+                      return None
+                  if self._cors_allow_any_origin:
+                      return "*"
+                  return self._cors_origin_headers.get(origin)
+          '''.replace("                  ", "")
+          if old_method not in text:
+              raise SystemExit("cors_origin_allowed marker was not found")
+          text = text.replace(old_method, new_method, 1)
+          path.write_text(text, encoding="utf-8")
+
+          docs = Path("docs/architecture.md")
+          docs_text = docs.read_text(encoding="utf-8")
+          docs_text = docs_text.replace(
+              "origins receive `Access-Control-Allow-Origin` (+ credentials for non-`*`) and\n"
+              "`OPTIONS` preflight replies.",
+              "origins are parsed into control-character-free canonical response values; "
+              "request origins are lookup keys only. Allowed origins receive "
+              "`Access-Control-Allow-Origin` (+ credentials for non-`*`) and `OPTIONS` "
+              "preflight replies.",
+              1,
+          )
+          docs.write_text(docs_text, encoding="utf-8")
+          PY
+
+      - name: Verify focused, hostile-input, and HTTP behavior
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+        run: |
+          set -euo pipefail
+          python3 -m pytest -q \
+            tests/test_cors_allowlist.py \
+            tests/test_security_hardening.py
+          python3 -m compileall -q \
+            contextual_orchestrator/server.py \
+            tests/test_cors_allowlist.py
+          git diff --check
+
+      - name: Commit verified hardening and remove this one-shot workflow
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-shot-pr136-cors-header-hardening.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add \
+            contextual_orchestrator/server.py \
+            tests/test_cors_allowlist.py \
+            docs/architecture.md \
+            .github/workflows/one-shot-pr136-cors-header-hardening.yml
+          git diff --cached --check
+          git commit -m "fix(cors): emit only prevalidated origin headers"
+          git push origin HEAD:feat/cors-allowlist
