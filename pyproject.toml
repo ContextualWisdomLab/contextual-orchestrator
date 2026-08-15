@@ -44,3 +44,9 @@ ignore-nested-functions = true
 ignore-private = true
 ignore-property-decorators = true
 ignore-semiprivate = true
+
+[tool.ruff.lint.per-file-ignores]
+# The ledger interpolates only fixed column catalogs and DB-API placeholder
+# tokens; all request values remain bound parameters. Keep the suppression
+# scoped to the single audited module and the single false-positive rule.
+"contextual_orchestrator/cost_ledger.py" = ["S608"]
