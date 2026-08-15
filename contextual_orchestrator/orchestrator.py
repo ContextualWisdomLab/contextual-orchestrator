@@ -10,6 +10,7 @@ from functools import wraps
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -60,6 +61,8 @@ SECRET_PATTERNS = (
 )
 
 DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
+AUTO_ROUTING_OBJECTIVE = "maximize_performance_then_minimize_cost"
+AUTO_COST_POLICY = "lowest_known_price_within_highest_capability_tier"
 
 
 @dataclass(frozen=True)
@@ -176,6 +179,8 @@ class OrchestrationPolicy:
             "route_p95_seconds": self.route_p95_seconds,
             "conduct_hint_threshold": self.conduct_hint_threshold,
             "verifier_required": self.verifier_required,
+            "auto_routing_objective": AUTO_ROUTING_OBJECTIVE,
+            "auto_cost_policy": AUTO_COST_POLICY,
             "workflow_planning": self.workflow_planning,
             "verifier_judge": self.verifier_judge,
             "max_workflow_steps": self.max_workflow_steps,
@@ -840,6 +845,22 @@ class TaskOrchestrator:
         "검증",
         "논문",
     )
+    VERIFICATION_HINTS = (
+        "verify",
+        "validate",
+        "judge",
+        "adjudicate",
+        "review",
+        "check",
+        "evaluate",
+        "assess",
+        "confirm",
+        "검증",
+        "검토",
+        "평가",
+        "확인",
+        "심사",
+    )
 
     def __init__(
         self,
@@ -956,16 +977,79 @@ class TaskOrchestrator:
         self, messages: list[ChatMessage], mode: str, *, reasoning_effort: str | None = None
     ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
+        if mode == "route":
+            return self.route_once(messages, reasoning_effort=reasoning_effort)
         if mode == "verify":
             return self.route_and_verify(messages, reasoning_effort=reasoning_effort)
-        if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
-            return self.route_once(messages, reasoning_effort=reasoning_effort)
-        return self.conduct(messages, reasoning_effort=reasoning_effort)
+        if mode == "conduct":
+            return self.conduct(messages, reasoning_effort=reasoning_effort)
+
+        decision = self._auto_routing_decision(text)
+        if decision["selected_mode"] == "route":
+            result = self.route_once(messages, reasoning_effort=reasoning_effort)
+        elif decision["selected_mode"] == "verify":
+            result = self.route_and_verify(messages, reasoning_effort=reasoning_effort)
+        else:
+            result = self.conduct(messages, reasoning_effort=reasoning_effort)
+        trace = result.get("trace", [])
+        selected_agent_ids = [
+            str(step.get("served_agent_id", step.get("agent_id", "")))
+            for step in trace
+            if isinstance(step, dict)
+        ]
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        selected_models = [
+            model_by_agent[agent_id]
+            for agent_id in selected_agent_ids
+            if agent_id in model_by_agent
+        ]
+        decision["selected_agent_ids"] = selected_agent_ids
+        decision["selected_models"] = selected_models
+        decision["unpriced_selected_models"] = [
+            model for model in selected_models if self._model_price(model) is None
+        ]
+        result["routing_decision"] = decision
+        return result
+
+    def _auto_routing_decision(self, text: str) -> dict[str, Any]:
+        """Choose route, verify, or conduct before cost-aware role assignment."""
+        if self._needs_workflow(text):
+            selected_mode = "conduct"
+            quality_requirement = "verified_multi_agent_workflow"
+            reason = "task_requires_verified_multi_agent_workflow"
+        elif self._needs_verification(text):
+            selected_mode = "verify"
+            quality_requirement = "independent_verification_required"
+            reason = "task_requires_bounded_independent_verification"
+        else:
+            selected_mode = "route"
+            quality_requirement = "single_worker_sufficient"
+            reason = "single_worker_meets_detected_quality_requirement"
+        priced_agent_count = sum(
+            1 for agent in self.agents if self._agent_price(agent) is not None
+        )
+        return {
+            "objective": AUTO_ROUTING_OBJECTIVE,
+            "requested_mode": "auto",
+            "selected_mode": selected_mode,
+            "quality_requirement": quality_requirement,
+            "reason": reason,
+            "cost_policy": AUTO_COST_POLICY,
+            "priced_agent_count": priced_agent_count,
+            "candidate_agent_count": len(self.agents),
+            "selected_agent_ids": [],
+            "selected_models": [],
+            "unpriced_selected_models": [],
+        }
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
-        """True when this request takes the single-worker route path (vs the conduct workflow)."""
+        """Return whether the request will use exactly one worker call."""
+        if mode == "route":
+            return True
+        if mode != "auto":
+            return False
         text = self._latest_user_text(messages)
-        return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
+        return self._auto_routing_decision(text)["selected_mode"] == "route"
 
     def stream_route(
         self,
@@ -1045,6 +1129,7 @@ class TaskOrchestrator:
             "trace": result["trace"],
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
+            "routing_decision": result.get("routing_decision"),
         }
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
@@ -1659,17 +1744,40 @@ class TaskOrchestrator:
             WorkflowStep(3, "synthesizer", synthesizer, "Produce the final answer, incorporating only verified work.", (0, 1, 2)),
         ]
 
-    def _score_agent(self, agent: ModelAgent, role: str, lowered: str) -> tuple[int, int, str]:
+    def _model_price(self, model: str) -> float | None:
+        """Return one valid configured model price, otherwise unknown."""
+        value = self.price_per_million.get(model)
+        if type(value) not in (int, float):
+            return None
+        normalized = float(value)
+        if not math.isfinite(normalized) or normalized < 0:
+            return None
+        return normalized
+
+    def _agent_price(self, agent: ModelAgent) -> float | None:
+        """Return the valid configured output-token price for one agent."""
+        return self._model_price(agent.model)
+
+    def _score_agent(
+        self, agent: ModelAgent, role: str, lowered: str
+    ) -> tuple[int, int, float, int, str]:
         if agent.disabled:
-            return (-20_000, len(agent.tags), agent.id)
+            return (-20_000, 0, float("-inf"), len(agent.tags), agent.id)
         if role in agent.provider_exclusions:
-            return (-10_000, len(agent.tags), agent.id)
+            return (-10_000, 0, float("-inf"), len(agent.tags), agent.id)
         role_score = sum(3 for tag in agent.tags if tag in self.ROLE_TAGS.get(role, ()))
         domain_score = 0
         for tag, hints in self.DOMAIN_HINTS.items():
             if tag in agent.tags and any(hint in lowered for hint in hints):
                 domain_score += 2
-        return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
+        price = self._agent_price(agent)
+        return (
+            role_score + domain_score + agent.priority,
+            1 if price is not None else 0,
+            -price if price is not None else float("-inf"),
+            len(agent.tags),
+            agent.id,
+        )
 
     def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
         """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
@@ -1765,6 +1873,11 @@ class TaskOrchestrator:
         lowered = text.lower()
         hits = sum(1 for hint in self.COMPLEX_HINTS if hint in lowered)
         return hits >= self.policy.conduct_hint_threshold or len(text) > 700
+
+    def _needs_verification(self, text: str) -> bool:
+        """Return whether a bounded independent check is the minimum quality tier."""
+        lowered = text.lower()
+        return any(hint in lowered for hint in self.VERIFICATION_HINTS)
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
