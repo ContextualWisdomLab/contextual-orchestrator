@@ -74,19 +74,25 @@ CREATE TABLE IF NOT EXISTS provider_credentials (
 Secrets are encrypted at rest with `pgp_sym_encrypt(value, passphrase)` and read
 back with `pgp_sym_decrypt(encrypted_value, passphrase)`.
 
-## The single allowed env use: bootstrap transport
+## Allowed environment use: bootstrap transport and one-shot config seeding
 
-Environment variables are permitted in **exactly one place** — as bootstrap
-transport to *connect to and unlock the KV itself*, never as the runtime source
-of a provider key:
+Environment variables are permitted only during process bootstrap. They may
+select, connect to, and unlock the KV, or seed the non-secret provider host
+allowlist exactly once. They are never the request-time source of a provider
+key or mutable request-time policy:
 
-| Variable                                   | Role                                   |
-| ------------------------------------------ | -------------------------------------- |
-| `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`       | backend selector (`memory`/`postgres`) |
-| `CONTEXTUAL_ORCHESTRATOR_KV_DSN`           | Postgres DSN to reach the registry     |
-| `CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE`    | pgcrypto passphrase to unlock secrets  |
+| Variable | Bootstrap role |
+| -------- | -------------- |
+| `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND` | Select the `memory` or `postgres` credential backend. |
+| `CONTEXTUAL_ORCHESTRATOR_KV_DSN` | Connect to the Postgres registry. |
+| `CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE` | Unlock encrypted provider credentials. |
+| `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` | Seed `provider/allowed_hosts` once when that KV key is initially absent. |
 
-These open the KV. They are not provider API keys.
+The first three values select or open the KV. The provider-host value is a
+one-shot bootstrap input copied into the runtime config store. After store
+installation and first seeding, the KV value is authoritative and later
+environment mutations have no effect. None of these values is a provider API
+key.
 
 ## Bootstrapping a credential
 
@@ -167,11 +173,16 @@ request time.
 | `provider` | `allowed_hosts` | Comma-separated or list of HTTPS provider hostnames allowed for egress. Empty = no extra filter (public-IP checks still apply). |
 
 Bootstrap: if `provider/allowed_hosts` is unset, the first read may seed the store
-from `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` (env is transport into the
-KV only). After seeding, only the store is authoritative — live env mutations
-do not change request-time policy.
+from `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`. After seeding, only the
+store is authoritative; live environment mutations do not change request-time
+policy.
 
 ```python
 from contextual_orchestrator.kv_config import set_config_value
-set_config_value("provider", "allowed_hosts", "api.openai.com,integrate.api.nvidia.com")
+
+set_config_value(
+    "provider",
+    "allowed_hosts",
+    "api.openai.com,integrate.api.nvidia.com",
+)
 ```
