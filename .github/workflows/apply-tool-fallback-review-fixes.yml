@@ -32,7 +32,7 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
-          expected_base=954335c7c7f09cf273abd202dbcc3376752e7730
+          expected_base=5d99079c3fb37c01319dcc193b8d271d7d80c385
           git merge-base --is-ancestor "$expected_base" HEAD
           unexpected="$({ git diff --name-only "$expected_base"...HEAD || true; } | grep -Ev '^\.github/(bootstrap/tool-fallback-review-fixes/|workflows/apply-tool-fallback-review-fixes\.yml$)' || true)"
           if [ -n "$unexpected" ]; then
