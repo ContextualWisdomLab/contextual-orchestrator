@@ -1,0 +1,61 @@
+name: Apply adaptive orchestration default
+
+on:
+  push:
+    branches:
+      - feat/reasoning-effort-and-verify-mode
+    paths:
+      - scripts/apply_adaptive_default.py
+      - .github/workflows/apply-adaptive-default.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-adaptive-default-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  apply-and-verify:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-pinned test dependencies
+        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Apply bounded source transformation
+        run: python scripts/apply_adaptive_default.py
+
+      - name: Run focused adaptive-routing tests
+        run: python -m pytest -q tests/test_adaptive_default_routing.py
+
+      - name: Run full repository test suite
+        run: python -m pytest -q
+
+      - name: Compile and inspect patch
+        run: |
+          python -m compileall -q contextual_orchestrator
+          git diff --check
+
+      - name: Publish verified implementation commit
+        env:
+          TARGET_BRANCH: feat/reasoning-effort-and-verify-mode
+        run: |
+          rm scripts/apply_adaptive_default.py
+          rm .github/workflows/apply-adaptive-default.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git diff --cached --check
+          git commit -m "feat(routing): default to adaptive performance-cost orchestration"
+          git push origin "HEAD:${TARGET_BRANCH}"
