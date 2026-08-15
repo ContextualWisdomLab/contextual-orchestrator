@@ -233,10 +233,12 @@ jobs:
           text = path.read_text(encoding="utf-8")
 
           field_anchor = "    cors_allow_origins: tuple[str, ...] = ()\n"
-          field_extension = (
-              field_anchor
-              + "    _cors_origin_headers: dict[str, str] = field(default_factory=dict, init=False, repr=False)\n"
-              + "    _cors_allow_any_origin: bool = field(default=False, init=False, repr=False)\n"
+          field_extension = "".join(
+              (
+                  field_anchor,
+                  "    _cors_origin_headers: dict[str, str] = field(default_factory=dict, init=False, repr=False)\n",
+                  "    _cors_allow_any_origin: bool = field(default=False, init=False, repr=False)\n",
+              )
           )
           if "_cors_origin_headers:" not in text:
               if field_anchor not in text:
@@ -246,70 +248,78 @@ jobs:
           init_start = text.index("        cleaned: list[str] = []\n", text.index("def __post_init__"))
           init_end_marker = "        self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)\n"
           init_end = text.index(init_end_marker, init_start)
-          strong_init = '''        cleaned: list[str] = []
-          canonical_headers: dict[str, str] = {}
-          allow_any_origin = False
-          for origin in self.cors_allow_origins:
-              value = str(origin)
-              if not value:
-                  continue
-              if value == "*":
-                  if not allow_any_origin:
-                      cleaned.append(value)
-                  allow_any_origin = True
-                  continue
-              if not value.isascii() or any(
-                  ord(character) <= 0x20 or ord(character) == 0x7F
-                  for character in value
-              ):
-                  raise ValueError("CORS origin contains forbidden header characters")
-              if "\\" in value:
-                  raise ValueError("CORS origin must be a serialized HTTP(S) origin")
-              parsed = urllib.parse.urlsplit(value)
-              try:
-                  parsed_port = parsed.port
-              except ValueError as exc:
-                  raise ValueError("CORS origin contains an invalid port") from exc
-              if (
-                  parsed.scheme not in {"http", "https"}
-                  or parsed.hostname is None
-                  or parsed.username is not None
-                  or parsed.password is not None
-                  or parsed.path
-                  or parsed.query
-                  or parsed.fragment
-              ):
-                  raise ValueError("CORS origin must be a serialized HTTP(S) origin")
-              if parsed_port is not None and not 1 <= parsed_port <= 65535:
-                  raise ValueError("CORS origin contains an invalid port")
-              if value not in canonical_headers:
-                  canonical_headers[value] = value
-                  cleaned.append(value)
-          self.cors_allow_origins = tuple(cleaned)
-          self._cors_origin_headers = canonical_headers
-          self._cors_allow_any_origin = allow_any_origin
-          '''.replace("          ", "", 1)
+          strong_init = "\n".join(
+              (
+                  "        cleaned: list[str] = []",
+                  "        canonical_headers: dict[str, str] = {}",
+                  "        allow_any_origin = False",
+                  "        for origin in self.cors_allow_origins:",
+                  "            value = str(origin)",
+                  "            if not value:",
+                  "                continue",
+                  "            if value == \"*\":",
+                  "                if not allow_any_origin:",
+                  "                    cleaned.append(value)",
+                  "                allow_any_origin = True",
+                  "                continue",
+                  "            if not value.isascii() or any(",
+                  "                ord(character) <= 0x20 or ord(character) == 0x7F",
+                  "                for character in value",
+                  "            ):",
+                  "                raise ValueError(\"CORS origin contains forbidden header characters\")",
+                  "            if \"\\\\\" in value:",
+                  "                raise ValueError(\"CORS origin must be a serialized HTTP(S) origin\")",
+                  "            parsed = urllib.parse.urlsplit(value)",
+                  "            try:",
+                  "                parsed_port = parsed.port",
+                  "            except ValueError as exc:",
+                  "                raise ValueError(\"CORS origin contains an invalid port\") from exc",
+                  "            if (",
+                  "                parsed.scheme not in {\"http\", \"https\"}",
+                  "                or parsed.hostname is None",
+                  "                or parsed.username is not None",
+                  "                or parsed.password is not None",
+                  "                or parsed.path",
+                  "                or parsed.query",
+                  "                or parsed.fragment",
+                  "            ):",
+                  "                raise ValueError(\"CORS origin must be a serialized HTTP(S) origin\")",
+                  "            if parsed_port is not None and not 1 <= parsed_port <= 65535:",
+                  "                raise ValueError(\"CORS origin contains an invalid port\")",
+                  "            if value not in canonical_headers:",
+                  "                canonical_headers[value] = value",
+                  "                cleaned.append(value)",
+                  "        self.cors_allow_origins = tuple(cleaned)",
+                  "        self._cors_origin_headers = canonical_headers",
+                  "        self._cors_allow_any_origin = allow_any_origin",
+                  "",
+              )
+          )
           text = text[:init_start] + strong_init + text[init_end:]
 
           method_start = text.index("    def cors_origin_allowed(self, origin: str) -> str | None:\n")
           method_end = text.index("    def check_bind(self, host: str) -> None:\n", method_start)
-          strong_method = '''    def cors_origin_allowed(self, origin: str) -> str | None:
-              """Return a prevalidated configured header value for an allowed origin.
-
-              Request data is used only as a dictionary lookup key. The returned value
-              was parsed and checked for HTTP-header control characters during process
-              bootstrap, so request bytes are never echoed into response headers.
-              """
-              if not origin or not origin.isascii() or any(
-                  ord(character) <= 0x20 or ord(character) == 0x7F
-                  for character in origin
-              ):
-                  return None
-              if self._cors_allow_any_origin:
-                  return "*"
-              return self._cors_origin_headers.get(origin)
-
-          '''
+          strong_method = "\n".join(
+              (
+                  "    def cors_origin_allowed(self, origin: str) -> str | None:",
+                  "        \"\"\"Return a prevalidated configured header value for an allowed origin.",
+                  "",
+                  "        Request data is used only as a dictionary lookup key. The returned value",
+                  "        was parsed and checked for HTTP-header control characters during process",
+                  "        bootstrap, so request bytes are never echoed into response headers.",
+                  "        \"\"\"",
+                  "        if not origin or not origin.isascii() or any(",
+                  "            ord(character) <= 0x20 or ord(character) == 0x7F",
+                  "            for character in origin",
+                  "        ):",
+                  "            return None",
+                  "        if self._cors_allow_any_origin:",
+                  "            return \"*\"",
+                  "        return self._cors_origin_headers.get(origin)",
+                  "",
+                  "",
+              )
+          )
           text = text[:method_start] + strong_method + text[method_end:]
 
           text = text.replace(
@@ -332,17 +342,21 @@ jobs:
           docs_text = docs.read_text(encoding="utf-8")
           section_start = docs_text.index("## CORS for browser clients\n")
           section_end = docs_text.index("\nThe deliberate simplification", section_start)
-          cors_section = '''## CORS for browser clients
-
-          Cross-origin browser access is **off by default**. Operators opt in with exact
-          `cors_allow_origins` entries (CLI `--cors-allow-origin`, repeatable). Configured
-          values must be serialized ASCII HTTP(S) origins and are validated before the
-          server accepts traffic. Request `Origin` data is a lookup key only; response
-          headers use the prevalidated configured value, preventing response splitting.
-          Allowed origins receive `Access-Control-Allow-Origin` (+ credentials for
-          non-`*`) and `OPTIONS` preflight replies. See Fetch CORS (WHATWG) and browser
-          same-origin policy; wildcards are never implied.
-          '''.replace("          ", "", 1)
+          cors_section = "\n".join(
+              (
+                  "## CORS for browser clients",
+                  "",
+                  "Cross-origin browser access is **off by default**. Operators opt in with exact",
+                  "`cors_allow_origins` entries (CLI `--cors-allow-origin`, repeatable). Configured",
+                  "values must be serialized ASCII HTTP(S) origins and are validated before the",
+                  "server accepts traffic. Request `Origin` data is a lookup key only; response",
+                  "headers use the prevalidated configured value, preventing response splitting.",
+                  "Allowed origins receive `Access-Control-Allow-Origin` (+ credentials for",
+                  "non-`*`) and `OPTIONS` preflight replies. See Fetch CORS (WHATWG) and browser",
+                  "same-origin policy; wildcards are never implied.",
+                  "",
+              )
+          )
           docs_text = docs_text[:section_start] + cors_section + docs_text[section_end:]
           docs.write_text(docs_text, encoding="utf-8")
           PY
