@@ -17,44 +17,186 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
-      - name: Checkout exact contributor branch
+      - name: Checkout exact contributor branch without persisted credentials
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
         with:
           ref: feat/cors-allowlist
           fetch-depth: 0
+          persist-credentials: false
 
-      - name: Add hostile-origin regressions and prove RED
+      - name: Write hostile-origin regressions and prove RED
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
         run: |
           set -euo pipefail
-          python3 <<'PY'
+          cat > tests/test_cors_allowlist.py <<'PY'
+          """CORS allowlist for browser OpenAI-compatible clients."""
+
+          from __future__ import annotations
+
+          import json
           from pathlib import Path
+          import sys
+          import threading
+          import urllib.error
+          import urllib.request
 
-          path = Path("tests/test_cors_allowlist.py")
-          text = path.read_text(encoding="utf-8")
-          text = text.replace("import urllib.request\n", "import urllib.request\n\nimport pytest\n", 1)
-          marker = "\n\nif __name__ == \"__main__\":\n"
-          tests = '''
+          import pytest
 
-          def test_cors_config_rejects_header_controls_and_non_origins() -> None:
-              """Only serialized HTTP(S) origins may become response headers."""
-              invalid_values = (
-                  "https://app.example.com\\r\\nX-Injected: yes",
-                  "https://app.example.com/path",
-                  "https://user@app.example.com",
-                  "file://local/path",
+          sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+          from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+          from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+
+          _TEST_AUTH_TOKEN = "secret_token"  # noqa: S105
+          _ALLOWED_ORIGIN = "https://app.example.com"
+
+
+          def build() -> TaskOrchestrator:
+              """Build the deterministic mock orchestrator used by HTTP tests."""
+              return TaskOrchestrator(
+                  [ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))]
               )
-              for value in invalid_values:
-                  with pytest.raises(ValueError, match="CORS origin"):
-                      SecurityConfig(
-                          auth_token=_TEST_AUTH_TOKEN,
-                          cors_allow_origins=(value,),
+
+
+          def test_cors_origin_allowed_matches_exact_and_star() -> None:
+              """Match configured origins exactly and preserve explicit wildcard semantics."""
+              security = SecurityConfig(
+                  auth_token=_TEST_AUTH_TOKEN,
+                  cors_allow_origins=(_ALLOWED_ORIGIN,),
+              )
+              assert security.cors_origin_allowed(_ALLOWED_ORIGIN) == _ALLOWED_ORIGIN
+              assert security.cors_origin_allowed("https://evil.example") is None
+              assert security.cors_origin_allowed("") is None
+              star = SecurityConfig(auth_token=_TEST_AUTH_TOKEN, cors_allow_origins=("*",))
+              assert star.cors_origin_allowed("https://any.example") == "*"
+              off = SecurityConfig(auth_token=_TEST_AUTH_TOKEN)
+              assert off.cors_origin_allowed(_ALLOWED_ORIGIN) is None
+
+
+          def test_preflight_and_authenticated_response_echo_allowlisted_origin() -> None:
+              """Return CORS headers only for the configured browser origin."""
+              server = build_server(
+                  build(),
+                  port=0,
+                  security=SecurityConfig(
+                      auth_token=_TEST_AUTH_TOKEN,
+                      cors_allow_origins=(_ALLOWED_ORIGIN,),
+                  ),
+              )
+              thread = threading.Thread(target=server.serve_forever, daemon=True)
+              thread.start()
+              port = server.server_address[1]
+              try:
+                  preflight = urllib.request.Request(
+                      f"http://127.0.0.1:{port}/v1/chat/completions",
+                      method="OPTIONS",
+                      headers={
+                          "origin": _ALLOWED_ORIGIN,
+                          "access-control-request-method": "POST",
+                          "connection": "close",
+                      },
+                  )
+                  with urllib.request.urlopen(preflight, timeout=5) as response:
+                      assert response.status == 204
+                      assert response.headers.get("Access-Control-Allow-Origin") == _ALLOWED_ORIGIN
+                      assert "POST" in (
+                          response.headers.get("Access-Control-Allow-Methods") or ""
                       )
+                      assert response.headers.get("Access-Control-Allow-Credentials") == "true"
+
+                  denied = urllib.request.Request(
+                      f"http://127.0.0.1:{port}/v1/chat/completions",
+                      method="OPTIONS",
+                      headers={"origin": "https://evil.example", "connection": "close"},
+                  )
+                  try:
+                      urllib.request.urlopen(denied, timeout=5)
+                      raise AssertionError("expected 403 for non-allowlisted origin")
+                  except urllib.error.HTTPError as exc:
+                      assert exc.code == 403
+
+                  chat = urllib.request.Request(
+                      f"http://127.0.0.1:{port}/v1/chat/completions",
+                      data=json.dumps(
+                          {"messages": [{"role": "user", "content": "hi"}]}
+                      ).encode("utf-8"),
+                      headers={
+                          "content-type": "application/json",
+                          "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+                          "origin": _ALLOWED_ORIGIN,
+                          "connection": "close",
+                      },
+                      method="POST",
+                  )
+                  with urllib.request.urlopen(chat, timeout=5) as response:
+                      assert response.status == 200
+                      assert response.headers.get("Access-Control-Allow-Origin") == _ALLOWED_ORIGIN
+              finally:
+                  server.shutdown()
+                  thread.join(timeout=5)
+
+
+          def test_cors_disabled_by_default_omits_allow_origin_header() -> None:
+              """Keep cross-origin access disabled unless an operator opts in."""
+              server = build_server(
+                  build(),
+                  port=0,
+                  security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+              )
+              thread = threading.Thread(target=server.serve_forever, daemon=True)
+              thread.start()
+              port = server.server_address[1]
+              try:
+                  chat = urllib.request.Request(
+                      f"http://127.0.0.1:{port}/v1/chat/completions",
+                      data=json.dumps(
+                          {"messages": [{"role": "user", "content": "hi"}]}
+                      ).encode("utf-8"),
+                      headers={
+                          "content-type": "application/json",
+                          "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+                          "origin": _ALLOWED_ORIGIN,
+                          "connection": "close",
+                      },
+                      method="POST",
+                  )
+                  with urllib.request.urlopen(chat, timeout=5) as response:
+                      assert response.status == 200
+                      assert not response.headers.get("Access-Control-Allow-Origin")
+              finally:
+                  server.shutdown()
+                  thread.join(timeout=5)
+
+
+          @pytest.mark.parametrize(
+              "origin",
+              (
+                  "https://app.example.com\r\nX-Injected: yes",
+                  "https://app.example.com/path",
+                  "https://app.example.com?query=yes",
+                  "https://app.example.com#fragment",
+                  "https://user@app.example.com",
+                  "https://app example.com",
+                  "https://app.example.com ",
+                  "https://app.example.com:invalid",
+                  "https://예시.example",
+                  "file://local/path",
+              ),
+          )
+          def test_cors_config_rejects_non_serialized_header_origins(origin: str) -> None:
+              """Reject values that cannot be emitted as safe serialized origins."""
+              with pytest.raises(ValueError, match="CORS origin"):
+                  SecurityConfig(
+                      auth_token=_TEST_AUTH_TOKEN,
+                      cors_allow_origins=(origin,),
+                  )
 
 
           def test_cors_match_returns_prevalidated_configured_header_value() -> None:
-              """A request key selects, but never becomes, the emitted header value."""
+              """Use request data only as a lookup key, never as the header value."""
               configured_origin = "".join(("https://", "app.example.com"))
-              request_origin = configured_origin.encode("utf-8").decode("utf-8")
+              request_origin = configured_origin.encode("ascii").decode("ascii")
               assert request_origin == configured_origin
               assert request_origin is not configured_origin
               security = SecurityConfig(
@@ -67,18 +209,7 @@ jobs:
               assert allowed == configured_origin
               assert allowed is security.cors_allow_origins[0]
               assert allowed is not request_origin
-          '''
-          if marker not in text:
-              raise SystemExit("CORS test insertion marker was not found")
-          text = text.replace(marker, tests + marker, 1)
-          text = text.replace(
-              "    test_cors_disabled_by_default_omits_allow_origin_header()\n",
-              "    test_cors_disabled_by_default_omits_allow_origin_header()\n"
-              "    test_cors_config_rejects_header_controls_and_non_origins()\n"
-              "    test_cors_match_returns_prevalidated_configured_header_value()\n",
-              1,
-          )
-          path.write_text(text, encoding="utf-8")
+              assert security.cors_origin_allowed(configured_origin + " ") is None
           PY
 
           set +e
@@ -90,7 +221,7 @@ jobs:
             echo "::error::Hostile-origin regressions unexpectedly passed before hardening."
             exit 1
           fi
-          grep -Eq "test_cors_config_rejects_header_controls|test_cors_match_returns_prevalidated" /tmp/cors-red.log
+          grep -Eq "test_cors_config_rejects_non_serialized|test_cors_match_returns_prevalidated" /tmp/cors-red.log
 
       - name: Implement canonical prevalidated CORS response values
         run: |
@@ -101,110 +232,118 @@ jobs:
           path = Path("contextual_orchestrator/server.py")
           text = path.read_text(encoding="utf-8")
 
-          old_fields = '''    # Explicit browser origins allowed to call the API (exact match; empty = CORS off).
-              cors_allow_origins: tuple[str, ...] = ()
-              _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
-          '''.replace("              ", "")
-          new_fields = '''    # Explicit browser origins allowed to call the API (exact match; empty = CORS off).
-              cors_allow_origins: tuple[str, ...] = ()
-              _cors_origin_headers: dict[str, str] = field(default_factory=dict, init=False, repr=False)
-              _cors_allow_any_origin: bool = field(default=False, init=False, repr=False)
-              _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
-          '''.replace("              ", "")
-          if old_fields not in text:
-              raise SystemExit("SecurityConfig field marker was not found")
-          text = text.replace(old_fields, new_fields, 1)
+          field_anchor = "    cors_allow_origins: tuple[str, ...] = ()\n"
+          field_extension = (
+              field_anchor
+              + "    _cors_origin_headers: dict[str, str] = field(default_factory=dict, init=False, repr=False)\n"
+              + "    _cors_allow_any_origin: bool = field(default=False, init=False, repr=False)\n"
+          )
+          if "_cors_origin_headers:" not in text:
+              if field_anchor not in text:
+                  raise SystemExit("CORS field anchor was not found")
+              text = text.replace(field_anchor, field_extension, 1)
 
-          old_init = '''        cleaned: list[str] = []
-              for origin in self.cors_allow_origins:
-                  value = str(origin).strip()
-                  if value:
+          init_start = text.index("        cleaned: list[str] = []\n", text.index("def __post_init__"))
+          init_end_marker = "        self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)\n"
+          init_end = text.index(init_end_marker, init_start)
+          strong_init = '''        cleaned: list[str] = []
+          canonical_headers: dict[str, str] = {}
+          allow_any_origin = False
+          for origin in self.cors_allow_origins:
+              value = str(origin)
+              if not value:
+                  continue
+              if value == "*":
+                  if not allow_any_origin:
                       cleaned.append(value)
-              self.cors_allow_origins = tuple(cleaned)
-              self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
-          '''.replace("              ", "")
-          new_init = '''        cleaned: list[str] = []
-              canonical_headers: dict[str, str] = {}
-              allow_any_origin = False
-              for origin in self.cors_allow_origins:
-                  value = str(origin).strip()
-                  if not value:
-                      continue
-                  if value == "*":
-                      allow_any_origin = True
-                      cleaned.append(value)
-                      continue
-                  if any(ord(character) < 0x20 or ord(character) == 0x7F for character in value):
-                      raise ValueError("CORS origin contains forbidden header control characters")
-                  parsed = urllib.parse.urlsplit(value)
-                  if (
-                      parsed.scheme not in {"http", "https"}
-                      or not parsed.netloc
-                      or parsed.username is not None
-                      or parsed.password is not None
-                      or parsed.path
-                      or parsed.query
-                      or parsed.fragment
-                  ):
-                      raise ValueError("CORS origin must be a serialized HTTP(S) origin")
+                  allow_any_origin = True
+                  continue
+              if not value.isascii() or any(
+                  ord(character) <= 0x20 or ord(character) == 0x7F
+                  for character in value
+              ):
+                  raise ValueError("CORS origin contains forbidden header characters")
+              if "\\" in value:
+                  raise ValueError("CORS origin must be a serialized HTTP(S) origin")
+              parsed = urllib.parse.urlsplit(value)
+              try:
+                  parsed_port = parsed.port
+              except ValueError as exc:
+                  raise ValueError("CORS origin contains an invalid port") from exc
+              if (
+                  parsed.scheme not in {"http", "https"}
+                  or parsed.hostname is None
+                  or parsed.username is not None
+                  or parsed.password is not None
+                  or parsed.path
+                  or parsed.query
+                  or parsed.fragment
+              ):
+                  raise ValueError("CORS origin must be a serialized HTTP(S) origin")
+              if parsed_port is not None and not 1 <= parsed_port <= 65535:
+                  raise ValueError("CORS origin contains an invalid port")
+              if value not in canonical_headers:
                   canonical_headers[value] = value
                   cleaned.append(value)
-              self.cors_allow_origins = tuple(dict.fromkeys(cleaned))
-              self._cors_origin_headers = canonical_headers
-              self._cors_allow_any_origin = allow_any_origin
-              self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
-          '''.replace("              ", "")
-          if old_init not in text:
-              raise SystemExit("SecurityConfig initialization marker was not found")
-          text = text.replace(old_init, new_init, 1)
+          self.cors_allow_origins = tuple(cleaned)
+          self._cors_origin_headers = canonical_headers
+          self._cors_allow_any_origin = allow_any_origin
+          '''.replace("          ", "", 1)
+          text = text[:init_start] + strong_init + text[init_end:]
 
-          old_method = '''    def cors_origin_allowed(self, origin: str) -> str | None:
-                  """Return the origin echo value when it is on the allowlist, else None.
-          
-                  Only exact string matches are accepted (including a single ``*`` entry when
-                  operators deliberately open browser cross-origin access). Empty allowlist
-                  disables CORS headers entirely.
-                  """
-                  if not self.cors_allow_origins or not origin:
-                      return None
-                  if "*" in self.cors_allow_origins:
-                      return "*"
-                  if origin in self.cors_allow_origins:
-                      return origin
+          method_start = text.index("    def cors_origin_allowed(self, origin: str) -> str | None:\n")
+          method_end = text.index("    def check_bind(self, host: str) -> None:\n", method_start)
+          strong_method = '''    def cors_origin_allowed(self, origin: str) -> str | None:
+              """Return a prevalidated configured header value for an allowed origin.
+
+              Request data is used only as a dictionary lookup key. The returned value
+              was parsed and checked for HTTP-header control characters during process
+              bootstrap, so request bytes are never echoed into response headers.
+              """
+              if not origin or not origin.isascii() or any(
+                  ord(character) <= 0x20 or ord(character) == 0x7F
+                  for character in origin
+              ):
                   return None
-          '''.replace("                  ", "")
-          new_method = '''    def cors_origin_allowed(self, origin: str) -> str | None:
-                  """Return a prevalidated configured header value for an allowed origin.
-          
-                  Request data is used only as a dictionary lookup key. The returned value
-                  was parsed and control-character checked during configuration bootstrap,
-                  so untrusted request bytes never become an HTTP response header value.
-                  """
-                  if not origin or any(
-                      ord(character) < 0x20 or ord(character) == 0x7F
-                      for character in origin
-                  ):
-                      return None
-                  if self._cors_allow_any_origin:
-                      return "*"
-                  return self._cors_origin_headers.get(origin)
-          '''.replace("                  ", "")
-          if old_method not in text:
-              raise SystemExit("cors_origin_allowed marker was not found")
-          text = text.replace(old_method, new_method, 1)
+              if self._cors_allow_any_origin:
+                  return "*"
+              return self._cors_origin_headers.get(origin)
+
+          '''
+          text = text[:method_start] + strong_method + text[method_end:]
+
+          text = text.replace(
+              '"cors_allow_any_origin": "*" in self.cors_allow_origins,',
+              '"cors_allow_any_origin": self._cors_allow_any_origin,',
+          )
+          stripped_origin = 'origin = (self.headers.get("origin") or "").strip()'
+          occurrence_count = text.count(stripped_origin)
+          if occurrence_count not in {0, 2}:
+              raise SystemExit(
+                  f"Expected zero or two request-origin strip sites, found {occurrence_count}"
+              )
+          text = text.replace(
+              stripped_origin,
+              'origin = self.headers.get("origin") or ""',
+          )
           path.write_text(text, encoding="utf-8")
 
           docs = Path("docs/architecture.md")
           docs_text = docs.read_text(encoding="utf-8")
-          docs_text = docs_text.replace(
-              "origins receive `Access-Control-Allow-Origin` (+ credentials for non-`*`) and\n"
-              "`OPTIONS` preflight replies.",
-              "origins are parsed into control-character-free canonical response values; "
-              "request origins are lookup keys only. Allowed origins receive "
-              "`Access-Control-Allow-Origin` (+ credentials for non-`*`) and `OPTIONS` "
-              "preflight replies.",
-              1,
-          )
+          section_start = docs_text.index("## CORS for browser clients\n")
+          section_end = docs_text.index("\nThe deliberate simplification", section_start)
+          cors_section = '''## CORS for browser clients
+
+          Cross-origin browser access is **off by default**. Operators opt in with exact
+          `cors_allow_origins` entries (CLI `--cors-allow-origin`, repeatable). Configured
+          values must be serialized ASCII HTTP(S) origins and are validated before the
+          server accepts traffic. Request `Origin` data is a lookup key only; response
+          headers use the prevalidated configured value, preventing response splitting.
+          Allowed origins receive `Access-Control-Allow-Origin` (+ credentials for
+          non-`*`) and `OPTIONS` preflight replies. See Fetch CORS (WHATWG) and browser
+          same-origin policy; wildcards are never implied.
+          '''.replace("          ", "", 1)
+          docs_text = docs_text[:section_start] + cors_section + docs_text[section_end:]
           docs.write_text(docs_text, encoding="utf-8")
           PY
 
@@ -222,6 +361,8 @@ jobs:
           git diff --check
 
       - name: Commit verified hardening and remove this one-shot workflow
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
           rm .github/workflows/one-shot-pr136-cors-header-hardening.yml
@@ -234,4 +375,7 @@ jobs:
             .github/workflows/one-shot-pr136-cors-header-hardening.yml
           git diff --cached --check
           git commit -m "fix(cors): emit only prevalidated origin headers"
-          git push origin HEAD:feat/cors-allowlist
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=${auth_header}" \
+            push https://github.com/ContextualWisdomLab/contextual-orchestrator.git \
+            HEAD:feat/cors-allowlist
