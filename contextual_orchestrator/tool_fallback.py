@@ -103,7 +103,7 @@ def _decision(
         reason_code=f"tool_failure.{kind.value}.{action.value}",
         retry_safe=retry_safe,
         circuit_failure=circuit_failure,
-        observed_kind=observed_kind or kind,
+        observed_kind=kind if observed_kind is None else observed_kind,
     )
 
 
@@ -113,7 +113,7 @@ def downgrade_to_failover(decision: ToolFailureDecision) -> ToolFailureDecision:
         decision.kind,
         ToolFallbackAction.FAILOVER_AGENT,
         circuit_failure=decision.circuit_failure,
-        observed_kind=decision.observed_kind or decision.kind,
+        observed_kind=decision.observed_kind,
     )
 
 

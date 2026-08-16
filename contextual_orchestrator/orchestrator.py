@@ -863,6 +863,10 @@ class TaskOrchestrator:
                 "tool_retry_backoff_seconds must be a finite nonnegative number"
             )
         self.tool_retry_backoff_seconds = float(tool_retry_backoff_seconds)
+        # Injectable seams keep retry timing deterministic in tests while
+        # production uses full jitter to avoid synchronized retry bursts.
+        self._tool_retry_sleep = time.sleep
+        self._tool_retry_jitter = random.uniform
         self.policy = OrchestrationPolicy()
         # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
         self.price_per_million = dict(price_per_million or {})
@@ -1594,12 +1598,13 @@ class TaskOrchestrator:
                         retry_attempt += 1
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
                         if self.tool_retry_backoff_seconds:
-                            retry_delay = min(
+                            retry_ceiling = min(
                                 self.tool_retry_backoff_seconds
                                 * (2.0 ** min(retry_attempt - 1, 16)),
                                 30.0,
                             )
-                            time.sleep(retry_delay)
+                            retry_delay = self._tool_retry_jitter(0.0, retry_ceiling)
+                            self._tool_retry_sleep(retry_delay)
                         continue
                     if action is ToolFallbackAction.RETRY_SAME_AGENT:
                         decision = downgrade_to_failover(decision)
@@ -1629,7 +1634,11 @@ class TaskOrchestrator:
             "reason_code": decision.reason_code,
             "retry_attempt": retry_attempt,
         }
-        observed_kind = decision.observed_kind or decision.kind
+        observed_kind = (
+            decision.kind
+            if decision.observed_kind is None
+            else decision.observed_kind
+        )
         if observed_kind is not decision.kind:
             event_detail["observed_failure_kind"] = observed_kind.value
         self._append_audit_event("tool_fallback_decision", event_detail)
