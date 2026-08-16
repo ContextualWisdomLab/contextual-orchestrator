@@ -35,6 +35,19 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## Streaming transport (tools passthrough)
+
+- Hickson, I. (Ed.). (2015). *Server-Sent Events*. World Wide Web Consortium.
+  https://www.w3.org/TR/eventsource/
+  Grounds the ``data:`` / ``[DONE]`` framing used by
+  ``proxy_completion_stream`` and ``/v1/chat/completions`` when ``stream=true``.
+  W3C Recommendation; freely redistributable. PDF is not vendored (HTML spec).
+- OpenAI. (n.d.). *Chat Completions API*.
+  https://platform.openai.com/docs/api-reference/chat/create
+  Grounds streamed ``chat.completion.chunk`` objects and ``tool_calls`` deltas
+  so the default OpenAI SDK tool-calling body is an SSE stream, not a 400.
+  Cite + link only (vendor documentation; redistribution not permitted).
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including

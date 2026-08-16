@@ -51,10 +51,11 @@ This repository implements the interface and control plane, not the trained coor
   are applied via `ModelClient.request_sampling` on the calling thread only
   so concurrent Completions/chat and route-stream requests cannot observe
   each other's knobs; `stream_chat` reads the same thread-local overrides.
-  Passthrough also fail-closes `stream=true`, omitted/unknown `model`,
-  `stream_options`, and out-of-range `temperature` / `top_p` before
-  `proxy_completion` — omit `stream` (or set `false`) on tool-calling
-  bodies and always send a pool `model`.
+  Passthrough fail-closes omitted/unknown `model`, unsupported
+  `stream_options` (`include_usage=true`), and out-of-range `temperature` /
+  `top_p` before proxy. `stream=true` with tools or `response_format` now
+  pipes OpenAI SSE (`chat.completion.chunk`, including `tool_calls` deltas)
+  instead of a 400 or a silent JSON completion. Always send a pool `model`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

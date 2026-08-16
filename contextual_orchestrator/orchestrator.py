@@ -50,6 +50,45 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
+def _first_tool_function_name(payload: dict[str, Any]) -> str | None:
+    """Return the first function tool name, or None when the body has no tools.
+
+    Used by the mock SSE passthrough so a realistic invoice-lookup body yields
+    a ``lookup_balance`` (or whatever the caller named) streamed tool call.
+    """
+    tools = payload.get("tools")
+    if not isinstance(tools, list):
+        return None
+    for tool in tools:
+        if not isinstance(tool, dict):
+            continue
+        function = tool.get("function")
+        if not isinstance(function, dict):
+            continue
+        name = function.get("name")
+        if isinstance(name, str) and name.strip():
+            return name.strip()
+    return None
+
+
+def _sse_completion_frame(
+    completion_id: str,
+    created: int,
+    model_name: str,
+    delta: dict[str, Any],
+    finish: str | None = None,
+) -> str:
+    """Serialize one OpenAI ``chat.completion.chunk`` SSE frame (Hickson, 2015)."""
+    payload = {
+        "id": completion_id,
+        "object": "chat.completion.chunk",
+        "created": created,
+        "model": model_name,
+        "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+    }
+    return f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
     "commercial_report_cache",
     default=None,
@@ -490,6 +529,99 @@ class ModelClient:
             return self._mock_raw(agent, endpoint, payload)
         self._validate_provider(agent)  # pragma: no cover
         return self._send_raw_with_retry(agent, endpoint, payload)  # pragma: no cover
+
+    def proxy_send_stream(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ):
+        """Yield OpenAI SSE frames for a streamed passthrough, including tool_calls.
+
+        Content-only ``stream_chat`` strips deltas to text. Tool-calling SDKs need
+        the raw ``chat.completion.chunk`` frames so ``tool_calls`` survive.
+        Hickson (2015) defines the ``data:`` / ``[DONE]`` framing; OpenAI (n.d.)
+        defines the chunk object and streamed function-call deltas.
+        """
+        if agent.base_url.startswith("mock://"):
+            yield from self._mock_raw_stream(agent, endpoint, payload)
+            return
+        self._validate_provider(agent)  # pragma: no cover
+        yield from self._stream_send_frames(agent, endpoint, payload)  # pragma: no cover
+
+    def _stream_send_frames(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ):
+        """Yield provider SSE ``data:`` frames verbatim until ``[DONE]``."""
+        api_key = get_credential(agent.credential_name) or ""
+        request = urllib.request.Request(
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+                "accept": "text/event-stream",
+            },
+            method="POST",
+        )
+        with self._open_provider(request) as response:
+            for raw in response:
+                line = raw.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                yield f"data: {data}\n\n"
+                if data == "[DONE]":
+                    break
+
+    def _mock_raw_stream(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ):
+        """Frame a mock passthrough as OpenAI SSE, emitting tool_calls when tools exist."""
+        completion_id = f"chatcmpl_mock_{agent.id}"
+        created = int(time.time())
+        model_name = agent.model
+        tool_name = _first_tool_function_name(payload)
+        if tool_name is not None:
+            call_id = f"call_mock_{agent.id}"
+            yield _sse_completion_frame(
+                completion_id,
+                created,
+                model_name,
+                {"role": "assistant", "content": None},
+            )
+            yield _sse_completion_frame(
+                completion_id,
+                created,
+                model_name,
+                {
+                    "tool_calls": [
+                        {
+                            "index": 0,
+                            "id": call_id,
+                            "type": "function",
+                            "function": {"name": tool_name, "arguments": ""},
+                        }
+                    ]
+                },
+            )
+            yield _sse_completion_frame(
+                completion_id,
+                created,
+                model_name,
+                {"tool_calls": [{"index": 0, "function": {"arguments": "{}"}}]},
+            )
+            yield _sse_completion_frame(
+                completion_id, created, model_name, {}, finish="tool_calls"
+            )
+            yield "data: [DONE]\n\n"
+            return
+        text = f"[{agent.id}] chat-mock"
+        yield _sse_completion_frame(
+            completion_id, created, model_name, {"role": "assistant"}
+        )
+        yield _sse_completion_frame(
+            completion_id, created, model_name, {"content": text}
+        )
+        yield _sse_completion_frame(completion_id, created, model_name, {}, finish="stop")
+        yield "data: [DONE]\n\n"
 
     def _send_raw_with_retry(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
@@ -1058,10 +1190,46 @@ class TaskOrchestrator:
             if key not in self._ORCHESTRATION_ONLY_KEYS
         }
         upstream["model"] = agent.model
-        # v1 passthrough returns the full JSON body; SSE stream passthrough is a
-        # follow-up, so force a non-streamed upstream response here.
+        # JSON passthrough must not ask the provider for SSE.
         upstream["stream"] = False
         return self.client.proxy_send(agent, endpoint, upstream)
+
+    def proxy_completion_stream(
+        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
+    ):
+        """Yield OpenAI SSE frames for a tools/response_format passthrough.
+
+        Same agent selection as ``proxy_completion``. The provider (or mock)
+        receives ``stream=true`` so tool-calling SDKs get ``tool_calls`` deltas
+        instead of a 400 or a silent JSON completion.
+        """
+        messages = body.get("messages")
+        if isinstance(messages, list):
+            text = self._latest_user_text(messages)
+        else:
+            text = _coerce_input_text(body.get("input"))
+        requested_model = body.get("model")
+        if isinstance(requested_model, str) and requested_model.strip():
+            matched = [
+                agent
+                for agent in self.agents
+                if not getattr(agent, "disabled", False) and agent.model == requested_model
+            ]
+            if not matched:
+                raise ValueError(
+                    f"model {requested_model!r} is not available in the agent pool"
+                )
+            agent = matched[0]
+        else:
+            agent = self._select_agent(text, "worker")
+        upstream = {
+            key: value
+            for key, value in body.items()
+            if key not in self._ORCHESTRATION_ONLY_KEYS
+        }
+        upstream["model"] = agent.model
+        upstream["stream"] = True
+        yield from self.client.proxy_send_stream(agent, endpoint, upstream)
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""

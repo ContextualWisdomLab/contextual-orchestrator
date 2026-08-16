@@ -1113,8 +1113,8 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
 def _normalize_chat_stream_flag(body: dict[str, Any]) -> bool:
     """Treat null/empty chat ``stream`` as omit; require a boolean otherwise.
 
-    The route path may stream. Tools/response_format passthrough cannot — that
-    branch must reject ``stream=true`` after this helper returns True.
+    The route path and tools/response_format passthrough both stream when this
+    helper returns True. ``include_usage=true`` still fail-closes separately.
     """
     stream = body.get("stream", False)
     if stream is None or (isinstance(stream, str) and not stream.strip()):
@@ -3635,16 +3635,10 @@ def build_server(
                     ):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
-                        # SSE passthrough is a follow-up — stream=true would otherwise
-                        # return a JSON completion while the SDK waits for SSE.
+                        # stream=true pipes OpenAI SSE (including tool_calls deltas)
+                        # so the default SDK tool-calling body is not a 400 or a
+                        # silent JSON completion.
                         stream = _normalize_chat_stream_flag(body)
-                        if stream:
-                            raise RequestError(
-                                400,
-                                "invalid_stream",
-                                "stream=true is not supported with tools or response_format "
-                                "on this gateway; omit stream or set stream=false",
-                            )
                         if "stream_options" in body:
                             _validate_chat_stream_options(body, stream)
                         model_name = _validate_completions_model(body)
@@ -3654,6 +3648,22 @@ def build_server(
                         if "top_p" in body:
                             _validate_completions_top_p(body)
                         started_at = time.perf_counter()
+                        if stream:
+                            self._stream_passthrough_completion(
+                                orchestrator, security, body
+                            )
+                            orchestrator.record_analytics_event(
+                                "chat_completion_passthrough_stream",
+                                {
+                                    "endpoint_path": "/v1/chat/completions",
+                                    "actor_scope": "inference",
+                                    "status_code": 200,
+                                    "duration_ms": round(
+                                        (time.perf_counter() - started_at) * 1000, 2
+                                    ),
+                                },
+                            )
+                            return
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
                         )
@@ -4399,6 +4409,34 @@ def build_server(
         def _write_sse(self, frame: str) -> None:
             self.wfile.write(frame.encode("utf-8"))
             self.wfile.flush()
+
+        def _stream_passthrough_completion(
+            self, orchestrator: Any, security: Any, body: dict[str, Any]
+        ) -> None:
+            """Pipe tools/response_format passthrough as OpenAI SSE frames.
+
+            Headers are sent before the first frame. A mid-stream failure is
+            surfaced as a terminal ``finish_reason=error`` chunk plus ``[DONE]``.
+            """
+            security.acquire_run_slot()
+            try:
+                self._begin_sse()
+                sent_done = False
+                try:
+                    for frame in orchestrator.proxy_completion_stream(
+                        body, endpoint="chat/completions"
+                    ):
+                        self._write_sse(frame)
+                        if frame.strip() == "data: [DONE]":
+                            sent_done = True
+                except Exception:  # noqa: BLE001 - headers already sent
+                    self._write_sse("data: {\"error\":{\"code\":\"upstream_stream_error\"}}\n\n")
+                    self._write_sse("data: [DONE]\n\n")
+                    sent_done = True
+                if not sent_done:
+                    self._write_sse("data: [DONE]\n\n")
+            finally:
+                security.release_run_slot()
 
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
