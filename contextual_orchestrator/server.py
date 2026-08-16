@@ -49,6 +49,8 @@ PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "function
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
     "include_orchestration_trace", "stream", "attribution", "routing",
+    # Tool-loop budget — accepted only for named unsupported error (no multi-step tool loop).
+    "max_tool_calls",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
@@ -834,23 +836,35 @@ def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
 
 
 
-def _validate_responses_max_tool_calls(body: dict[str, Any]) -> None:
-    """Reject Responses ``max_tool_calls`` — no multi-step tool loop on passthrough.
+def _validate_max_tool_calls(
+    body: dict[str, Any],
+    *,
+    endpoint_path: str,
+) -> None:
+    """Reject ``max_tool_calls`` — no multi-step tool loop on this gateway.
 
-    OpenAI Responses may cap tool-call rounds via ``max_tool_calls``. This gateway
-    proxies a single completion and does not run a tool loop, so any provided
-    value fails closed with a named error rather than opaque unknown_fields.
+    OpenAI may cap tool-call rounds via ``max_tool_calls`` (Responses-native;
+    some chat SDKs also send it). This gateway proxies a single completion and
+    does not run a tool loop, so any provided value fails closed with a named
+    error rather than opaque ``unknown_fields``. Explicit JSON null and empty
+    / whitespace strings are treat-as-omit (SDK optional defaults).
     """
     if "max_tool_calls" not in body:
         return
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if body.get("max_tool_calls") is None:
+    value = body.get("max_tool_calls")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return
     raise RequestError(
         400,
         "invalid_max_tool_calls",
-        "max_tool_calls is not supported on /v1/responses",
+        f"max_tool_calls is not supported on {endpoint_path}",
     )
+
+
+def _validate_responses_max_tool_calls(body: dict[str, Any]) -> None:
+    """Responses ``max_tool_calls`` — named reject; null/empty omit."""
+    _validate_max_tool_calls(body, endpoint_path="/v1/responses")
 
 
 def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
@@ -3443,6 +3457,7 @@ def build_server(
                     _validate_chat_reasoning_object(body)
                     _validate_openai_background(body, endpoint_path="/v1/chat/completions")
                     _validate_chat_include_field(body)
+                    _validate_max_tool_calls(body, endpoint_path="/v1/chat/completions")
                     # functions/function_call: null or empty functions[] are omit no-ops
                     # (SDK optional defaults); non-empty or any function_call fail closed.
                     functions_raw = body.get("functions") if "functions" in body else None
