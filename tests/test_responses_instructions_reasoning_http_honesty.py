@@ -65,8 +65,8 @@ def test_http_responses_accepts_nonempty_instructions() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_blank_instructions() -> None:
-    """Empty instructions must not look like a configured system prompt."""
+def test_http_responses_accepts_blank_instructions_as_omit() -> None:
+    """Empty/whitespace instructions are SDK omit-equivalent (parity with null)."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -77,10 +77,7 @@ def test_http_responses_rejects_blank_instructions() -> None:
                 "instructions": "   ",
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_instructions" in blob
-        assert "non-empty" in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -162,7 +159,7 @@ def test_http_responses_accepts_instructions_omitted() -> None:
 
 if __name__ == "__main__":
     test_http_responses_accepts_nonempty_instructions()
-    test_http_responses_rejects_blank_instructions()
+    test_http_responses_accepts_blank_instructions_as_omit()
     test_http_responses_rejects_instructions_non_string()
     test_http_responses_rejects_instructions_too_long()
     test_http_responses_rejects_reasoning_object()

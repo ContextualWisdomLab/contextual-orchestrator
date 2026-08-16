@@ -2758,26 +2758,20 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
 
 
 def _validate_responses_instructions(body: dict[str, Any]) -> str | None:
-    """Responses API ``instructions`` — optional non-empty string ≤32000 chars.
+    """Responses API ``instructions`` — optional string ≤32000 chars.
 
-    OpenAI system-style instructions for the Responses surface. Empty strings
-    and non-strings fail closed so clients cannot ship a silent no-op that
-    looks like a configured system prompt.
+    OpenAI system-style instructions for the Responses surface. Explicit JSON
+    null or empty/whitespace strings are treat-as-omit (SDK optional defaults).
+    Non-strings and oversized strings fail closed.
     """
     if "instructions" not in body:
         return None
     value = body.get("instructions")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if value is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if not isinstance(value, str):
         raise RequestError(400, "invalid_instructions", "instructions must be a string")
-    if not value.strip():
-        raise RequestError(
-            400,
-            "invalid_instructions",
-            "instructions must be a non-empty string on /v1/responses",
-        )
     if len(value) > 32_000:
         raise RequestError(
             400,
