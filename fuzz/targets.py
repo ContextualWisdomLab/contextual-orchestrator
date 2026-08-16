@@ -93,6 +93,12 @@ def exercise_request_body(raw: bytes) -> None:
             else:
                 assert mode in server.ALLOWED_MODES
 
+    # Message-name omit/validate must run before tools passthrough as well.
+    try:
+        server._validate_chat_message_name(body)
+    except RequestError:
+        pass
+
     # Message validation: returns a normalised list or raises RequestError.
     if "messages" in body:
         try:
@@ -102,9 +108,18 @@ def exercise_request_body(raw: bytes) -> None:
         else:
             assert isinstance(messages, list) and messages
             for message in messages:
-                assert set(message) == {"role", "content"}
+                assert {"role", "content"} <= set(message)
+                assert set(message) <= {"role", "content", "name", "tool_call_id"}
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
-                assert isinstance(message["content"], str)
+                assert isinstance(message["content"], (str, list))
+                if "name" in message:
+                    assert isinstance(message["name"], str) and message["name"].strip()
+                    assert len(message["name"]) <= 64
+                    assert all(ch.isalnum() or ch in "_-" for ch in message["name"])
+                if "tool_call_id" in message:
+                    assert message["role"] == "tool"
+                    assert isinstance(message["tool_call_id"], str)
+                    assert message["tool_call_id"].strip()
 
 
 def exercise_agent_config(value: Any) -> None:

@@ -43,6 +43,17 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## Chat Completions participant name (API contract)
+
+- **Create chat completion** — OpenAI. (n.d.). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
+  Grounds the optional message-level `name` field as a participant identifier on
+  system/user/assistant turns (not a tool-result label). This gateway treats
+  JSON `null` and empty/whitespace strings as omit-equivalent SDK blanks and
+  fail-closes non-string, over-long, and charset-invalid values with
+  `invalid_message_name` so buyers never believe a blank or illegal name was
+  applied. The vendor page is cited rather than vendored (copyright; no
+  redistribution license).
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

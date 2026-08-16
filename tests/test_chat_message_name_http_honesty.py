@@ -12,7 +12,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    _validate_messages,
+    build_server,
+)
 
 _TEST_AUTH_TOKEN = "chat_message_name_http_honesty_token"  # noqa: S105
 
@@ -100,6 +104,8 @@ def test_http_chat_accepts_empty_message_name_as_omit() -> None:
             },
         )
         assert status == 200, body
+        rebuilt = _validate_messages([{"role": "user", "content": "hi", "name": "   "}])
+        assert "name" not in rebuilt[0]
     finally:
         server.shutdown()
         thread.join(timeout=5)

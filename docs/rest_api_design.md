@@ -8,6 +8,7 @@
 - Error shape: `{"error_code": "...", "error_message": "...", "error_detail": {...}}` in production.
 - Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
 - OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
+- Chat message `name` is the optional OpenAI participant id (OpenAI, n.d.). JSON `null`, `""`, and whitespace-only strings are omit-equivalent: the gateway drops the field before orchestration and before tools passthrough. Non-string, over-long (>64), and charset-invalid names fail closed with `invalid_message_name`. A non-blank `name` on `role=tool` also fails closed. Next action: send a real `[a-zA-Z0-9_-]` participant id, or omit `name`.
 
 ## Current Endpoints
 

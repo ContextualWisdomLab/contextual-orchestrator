@@ -1387,6 +1387,75 @@ def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
         _reject_unknown_message_keys(message)
 
 
+def _omit_or_validate_message_name(message: dict[str, Any]) -> str | None:
+    """Return a valid participant name, or None when name is omit-equivalent.
+
+    OpenAI optional ``name`` on system/user/assistant identifies the speaker
+    (OpenAI, n.d.). JSON null and empty/whitespace strings are SDK optional
+    blanks: this function pops them in place so tools passthrough never
+    forwards a blank name. Non-string, over-long, and invalid-charset values
+    fail closed with ``invalid_message_name``. A non-blank name on role=tool
+    also fails closed.
+
+    Args:
+        message: One chat message object. Omit-equivalent ``name`` keys are
+            removed in place.
+
+    Returns:
+        The validated name string, or None when the field is absent or omitted.
+
+    Raises:
+        RequestError: When the name is present and not a valid participant id.
+    """
+    if "name" not in message:
+        return None
+    msg_name = message.get("name")
+    if msg_name is None or (isinstance(msg_name, str) and not msg_name.strip()):
+        message.pop("name", None)
+        return None
+    if message.get("role") == "tool":
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "name is not valid on tool role messages",
+        )
+    if not isinstance(msg_name, str):
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "message name must be a string",
+        )
+    if len(msg_name) > 64:
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "message name must be at most 64 characters",
+        )
+    if not all(ch.isalnum() or ch in "_-" for ch in msg_name):
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "message name must match [a-zA-Z0-9_-]",
+        )
+    return msg_name
+
+
+def _validate_chat_message_name(body: dict[str, Any]) -> None:
+    """Apply message-name omit/validate before tools passthrough.
+
+    Runs before ``proxy_completion`` so non-string, over-long, and invalid
+    charset names cannot smuggle through the tools path, and so blank SDK
+    defaults are popped from the proxied body.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        _omit_or_validate_message_name(message)
+
+
 def _validate_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
@@ -1450,40 +1519,9 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                     "tool_call_id must be at most 128 characters",
                 )
             entry["tool_call_id"] = tool_call_id
-        if "name" in message:
-            # OpenAI optional participant name on system/user/assistant (not tool).
-            msg_name = message.get("name")
-            # Explicit JSON null or empty/whitespace string is treat-as-omit
-            # (SDK optional default / blank participant).
-            if msg_name is None or (isinstance(msg_name, str) and not msg_name.strip()):
-                pass
-            else:
-                if role == "tool":
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "name is not valid on tool role messages",
-                    )
-                if not isinstance(msg_name, str):
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "message name must be a non-empty string",
-                    )
-                if len(msg_name) > 64:
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "message name must be at most 64 characters",
-                    )
-                # OpenAI participant names are alphanumeric plus underscore/hyphen.
-                if not all(ch.isalnum() or ch in "_-" for ch in msg_name):
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "message name must match [a-zA-Z0-9_-]",
-                    )
-                entry["name"] = msg_name
+        validated_name = _omit_or_validate_message_name(message)
+        if validated_name is not None:
+            entry["name"] = validated_name
         if "refusal" in message:
             # OpenAI assistant refusal plane — null/empty omit; non-empty fails closed
             # (this gateway does not surface or apply refusal content).
@@ -3568,6 +3606,7 @@ def build_server(
                     _validate_chat_tool_message_ids(body)
                     _validate_chat_assistant_tool_calls(body)
                     _validate_chat_message_audio_function_call(body)
+                    _validate_chat_message_name(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "tools" in body:
