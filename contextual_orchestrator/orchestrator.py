@@ -29,7 +29,8 @@ from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 
 
-ChatMessage = dict[str, str]
+# content is usually str; multimodal vision messages use OpenAI content-parts lists.
+ChatMessage = dict[str, Any]
 
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
@@ -215,6 +216,10 @@ class ModelClient:
     ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
+        self.default_temperature = 0.2
+        self.default_top_p: float | None = None
+        self.default_presence_penalty: float | None = None
+        self.default_frequency_penalty: float | None = None
         self.max_retries = max_retries
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
@@ -230,7 +235,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -246,9 +251,29 @@ class ModelClient:
         self._local.usage = None
         return usage
 
-    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
-        """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
+    def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        top_p: float | None = None,
+    ) -> str:
+        """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
+
+        When ``temperature``/``top_p`` are omitted, ``default_temperature`` and
+        ``default_top_p`` are used so request-scoped Completions sampling can be
+        applied without threading kwargs through every orchestrator hop.
+        """
         self._local.usage = None
+        # Expose the effective sampling knobs for request-path tests / diagnostics.
+        effective_temperature = self.default_temperature if temperature is None else temperature
+        effective_top_p = self.default_top_p if top_p is None else top_p
+        effective_presence = self.default_presence_penalty
+        effective_frequency = self.default_frequency_penalty
+        self._local.last_temperature = effective_temperature
+        self._local.last_top_p = effective_top_p
+        self._local.last_presence_penalty = effective_presence
+        self._local.last_frequency_penalty = effective_frequency
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
@@ -262,10 +287,16 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": effective_temperature,
             "stream": False,
             "max_tokens": self.max_output_tokens,
         }
+        if effective_top_p is not None:  # pragma: no cover
+            payload["top_p"] = effective_top_p
+        if effective_presence is not None:  # pragma: no cover
+            payload["presence_penalty"] = effective_presence
+        if effective_frequency is not None:  # pragma: no cover
+            payload["frequency_penalty"] = effective_frequency
         return self._send_with_retry(agent, payload)
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
@@ -307,7 +338,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use: URL is built by _provider_url after scheme/host validation; egress to loopback/private/reserved is blocked.
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -634,6 +665,9 @@ def _coerce_input_text(value: Any) -> str:
             if isinstance(item, str):
                 parts.append(item)
             elif isinstance(item, dict):
+                # OpenAI content-parts: {"type": "text", "text": "..."}
+                if isinstance(item.get("text"), str):
+                    parts.append(item["text"])
                 content = item.get("content")
                 if isinstance(content, str):
                     parts.append(content)
@@ -642,6 +676,15 @@ def _coerce_input_text(value: Any) -> str:
                         if isinstance(chunk, dict) and isinstance(chunk.get("text"), str):
                             parts.append(chunk["text"])
     return " ".join(parts)
+
+
+def _coerce_message_content_text(content: Any) -> str:
+    """Best-effort plain text from chat message content (string or content-parts)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return _coerce_input_text(content)
+    return ""
 
 
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
@@ -879,7 +922,14 @@ class TaskOrchestrator:
 
     # Orchestration-only body keys that must not be forwarded to the provider.
     _ORCHESTRATION_ONLY_KEYS = frozenset(
-        {"orchestration", "orchestration_mode", "mode", "include_orchestration_trace"}
+        {
+            "orchestration",
+            "orchestration_mode",
+            "mode",
+            "include_orchestration_trace",
+            "attribution",
+            "routing",
+        }
     )
 
     def proxy_completion(
@@ -897,7 +947,23 @@ class TaskOrchestrator:
             text = self._latest_user_text(messages)
         else:
             text = _coerce_input_text(body.get("input"))
-        agent = self._select_agent(text, "worker")
+        requested_model = body.get("model")
+        # When the client names a model, resolve a pool agent that actually serves
+        # that model id. Silent rewrite to an unrelated agent.model is a commercial
+        # honesty failure for OpenAI SDKs (passthrough tools/Responses paths).
+        if isinstance(requested_model, str) and requested_model.strip():
+            matched = [
+                agent
+                for agent in self.agents
+                if not getattr(agent, "disabled", False) and agent.model == requested_model
+            ]
+            if not matched:
+                raise ValueError(
+                    f"model {requested_model!r} is not available in the agent pool"
+                )
+            agent = matched[0]
+        else:
+            agent = self._select_agent(text, "worker")
         upstream = {
             key: value
             for key, value in body.items()
@@ -1600,7 +1666,13 @@ class TaskOrchestrator:
         return hits >= self.policy.conduct_hint_threshold or len(text) > 700
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
-        return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
+        for message in reversed(messages):
+            if message.get("role") != "user":
+                continue
+            text = _coerce_message_content_text(message.get("content", ""))
+            if text:
+                return text
+        return ""  # pragma: no cover
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Ask a model to judge the verifier report (fixes term-matching false negatives).
@@ -1694,6 +1766,52 @@ class TaskOrchestrator:
         start = (page_number - 1) * page_size
         end = start + page_size
         return [self._agent_to_admin_payload(agent) for agent in self.agents[start:end]]
+
+    def list_openai_models(self) -> dict[str, Any]:
+        """Return an OpenAI-compatible ``/v1/models`` list from the agent pool.
+
+        Buyers discover selectable model ids without admin-scope agent pool access.
+        Each enabled agent model appears once; gateway default
+        ``contextual-orchestrator`` is always first.
+        """
+        created = 1_700_000_000  # stable epoch so list responses are deterministic
+        data: list[dict[str, Any]] = [
+            {
+                "id": "contextual-orchestrator",
+                "object": "model",
+                "created": created,
+                "owned_by": "contextual-orchestrator",
+            }
+        ]
+        seen: set[str] = {"contextual-orchestrator"}
+        for agent in self.agents:
+            if agent.disabled:
+                continue
+            model_id = str(agent.model).strip()
+            if not model_id or model_id in seen:
+                continue
+            seen.add(model_id)
+            data.append(
+                {
+                    "id": model_id,
+                    "object": "model",
+                    "created": created,
+                    "owned_by": agent.provider_name
+                    or self._infer_provider_name(agent.base_url)
+                    or "agent_pool",
+                }
+            )
+        return {"object": "list", "data": data}
+
+    def get_openai_model(self, model_id: str) -> dict[str, Any]:
+        """Return one OpenAI model object or raise ``KeyError`` when unknown."""
+        wanted = (model_id or "").strip()
+        if not wanted:
+            raise KeyError(model_id)
+        for item in self.list_openai_models()["data"]:
+            if item["id"] == wanted:
+                return item
+        raise KeyError(model_id)
 
     def list_recent_runs(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
         """Return a paginated list of recent workflow run records."""
@@ -8514,6 +8632,29 @@ def chat_completion_response(
         ],
         "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
         "orchestration": {key: value for key, value in orchestration.items() if value is not None},
+    }
+
+
+def text_completion_response(
+    result: dict[str, Any],
+    model: str = "contextual-orchestrator",
+    usage: dict[str, int] | None = None,
+) -> dict[str, Any]:  # pragma: no cover
+    """Wrap orchestration output as OpenAI legacy ``text_completion`` (``/v1/completions``)."""
+    return {
+        "id": f"cmpl-{int(time.time() * 1000)}",
+        "object": "text_completion",
+        "created": int(time.time()),
+        "model": model,
+        "choices": [
+            {
+                "index": 0,
+                "text": result["answer"],
+                "logprobs": None,
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": usage or {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
     }
 
 
