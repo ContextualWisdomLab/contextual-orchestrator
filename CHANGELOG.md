@@ -15,6 +15,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   JSON-null `strict`; fail closed on unknown inner keys and non-string
   descriptions so structured-output passthrough cannot smuggle or forward
   null optionals.
+- Pop empty or whitespace-only `tool.function.description` before proxy
+  so SDK blank defaults match omit.
 
 ### Documentation
 

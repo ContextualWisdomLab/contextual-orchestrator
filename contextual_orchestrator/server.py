@@ -2579,7 +2579,8 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
     are configured. Non-empty entries must be objects with ``type`` == ``function``
     and a ``function`` object that has a non-empty ``name``. Explicit JSON
     ``null`` on optional ``description``, ``parameters``, and ``strict`` is
-    popped in place so passthrough matches omit. Shape-only validation
+    popped in place so passthrough matches omit. Empty or whitespace-only
+    ``description`` is also popped. Shape-only validation
     before passthrough; provider schema depth is not re-checked here.
     """
     if "tools" not in body:
@@ -2680,6 +2681,10 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
             error_message="each tool.function.description must be a string when provided",
         )
         description = function.get("description")
+        # Empty/whitespace is omit-equivalent (SDK optional default).
+        if isinstance(description, str) and not description.strip():
+            function.pop("description")
+            description = None
         if isinstance(description, str) and len(description) > 1024:
             raise RequestError(
                 400,

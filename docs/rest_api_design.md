@@ -97,7 +97,7 @@ These product surfaces are now implemented in this prototype:
 
 When an official OpenAI SDK serializes an omitted optional as JSON `null` or a blank string, do **not** send that key to a provider yourself and do **not** assume this gateway will forward it. On `/v1/chat/completions` and `/v1/responses`:
 
-- `tools[].function.description` / `parameters` / `strict` JSON `null` are popped before proxy so the upstream payload matches omit.
+- `tools[].function.description` / `parameters` / `strict` JSON `null` are popped before proxy so the upstream payload matches omit. Empty or whitespace-only `description` is also popped.
 - `response_format.json_schema` accepts only `name`, `description`, `schema`, and `strict`. JSON-null or blank `description` and JSON-null `strict` are popped in place. Unknown inner keys and non-string `description` return `invalid_response_format` — fix the client payload, then retry.
 
 If a provider still rejects the request, inspect `echo.response_format` / `echo.tools` on the mock path first; a remaining null key is a gateway bug, not a provider quirk.
