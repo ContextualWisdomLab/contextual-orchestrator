@@ -628,7 +628,7 @@ def _validate_responses_logprobs(body: dict[str, Any]) -> None:
                 body["logprobs"] = coerced
     if "top_logprobs" in body:
         tlp = body.get("top_logprobs")
-        if tlp is None:
+        if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
             return
         if body.get("logprobs") is not True:
             raise RequestError(
@@ -636,10 +636,17 @@ def _validate_responses_logprobs(body: dict[str, Any]) -> None:
                 "invalid_top_logprobs",
                 "top_logprobs requires logprobs=true on /v1/responses",
             )
-        if isinstance(tlp, bool) or not isinstance(tlp, int):
+        # Digit strings / whole floats coerce (JS JSON integer-as-string).
+        coerced_tlp = _coerce_optional_int(
+            tlp,
+            error_code="invalid_top_logprobs",
+            message="top_logprobs must be an integer in [0, 20]",
+        )
+        if coerced_tlp is None:
+            return
+        if coerced_tlp < 0 or coerced_tlp > 20:
             raise RequestError(400, "invalid_top_logprobs", "top_logprobs must be an integer in [0, 20]")
-        if tlp < 0 or tlp > 20:
-            raise RequestError(400, "invalid_top_logprobs", "top_logprobs must be an integer in [0, 20]")
+        body["top_logprobs"] = coerced_tlp
 
 
 
@@ -1168,6 +1175,19 @@ def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any]
     opts = {key: value for key, value in opts.items() if value is not None}
     if not opts:
         return None
+    # Coerce string/0-1 bool forms before all-false omit checks.
+    coerced_opts: dict[str, Any] = {}
+    for key, value in opts.items():
+        coerced = _coerce_optional_bool(
+            value,
+            error_code="invalid_stream_options",
+            message=f"stream_options.{key} must be a boolean",
+        )
+        if coerced is not None:
+            coerced_opts[key] = coerced
+    opts = coerced_opts
+    if not opts:
+        return None
     # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
     if set(opts) <= allowed and all(v is False for v in opts.values()):
         return None
@@ -1176,18 +1196,6 @@ def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any]
             400,
             "invalid_stream_options",
             "stream_options requires stream=true",
-        )
-    if "include_usage" in opts and not isinstance(opts["include_usage"], bool):
-        raise RequestError(
-            400,
-            "invalid_stream_options",
-            "stream_options.include_usage must be a boolean",
-        )
-    if "include_obfuscation" in opts and not isinstance(opts["include_obfuscation"], bool):
-        raise RequestError(
-            400,
-            "invalid_stream_options",
-            "stream_options.include_obfuscation must be a boolean",
         )
     return opts
 
@@ -1228,6 +1236,19 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
     opts = {key: value for key, value in opts.items() if value is not None}
     if not opts:
         return None
+    # Coerce string/0-1 bool forms before all-false omit and true reject.
+    coerced_opts: dict[str, Any] = {}
+    for key, value in opts.items():
+        coerced = _coerce_optional_bool(
+            value,
+            error_code="invalid_stream_options",
+            message=f"stream_options.{key} must be a boolean",
+        )
+        if coerced is not None:
+            coerced_opts[key] = coerced
+    opts = coerced_opts
+    if not opts:
+        return None
     # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
     if set(opts) <= allowed and all(v is False for v in opts.values()):
         return None
@@ -1237,33 +1258,19 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
             "invalid_stream_options",
             "stream_options requires stream=true on /v1/chat/completions",
         )
-    if "include_usage" in opts:
-        if not isinstance(opts["include_usage"], bool):
-            raise RequestError(
-                400,
-                "invalid_stream_options",
-                "stream_options.include_usage must be a boolean",
-            )
-        if opts["include_usage"] is True:
-            raise RequestError(
-                400,
-                "invalid_stream_options",
-                "stream_options.include_usage=true is not supported on /v1/chat/completions",
-            )
-    if "include_obfuscation" in opts:
-        if not isinstance(opts["include_obfuscation"], bool):
-            raise RequestError(
-                400,
-                "invalid_stream_options",
-                "stream_options.include_obfuscation must be a boolean",
-            )
-        if opts["include_obfuscation"] is True:
-            # SSE obfuscation is not applied by this gateway; fail closed.
-            raise RequestError(
-                400,
-                "invalid_stream_options",
-                "stream_options.include_obfuscation=true is not supported on /v1/chat/completions",
-            )
+    if opts.get("include_usage") is True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_usage=true is not supported on /v1/chat/completions",
+        )
+    if opts.get("include_obfuscation") is True:
+        # SSE obfuscation is not applied by this gateway; fail closed.
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_obfuscation=true is not supported on /v1/chat/completions",
+        )
     return opts
 
 
@@ -2216,15 +2223,15 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
         raise RequestError(400, "invalid_routing", "routing.channel must be sync or batch")
     else:
         channel = channel.strip().lower()
+    latency_tolerant: bool | None = None
     if "latency_tolerant" in routing:
-        latency_tolerant = routing.get("latency_tolerant")
-        # Explicit JSON null is treat-as-omit (SDK optional default).
-        if latency_tolerant is not None and not isinstance(latency_tolerant, bool):
-            raise RequestError(
-                400,
-                "invalid_routing",
-                "routing.latency_tolerant must be a boolean",
-            )
+        # Null/empty omit; bool, int 0/1, and "true"/"false" strings coerce
+        # (SDK form/query parity with stream/store).
+        latency_tolerant = _coerce_optional_bool(
+            routing.get("latency_tolerant"),
+            error_code="invalid_routing",
+            message="routing.latency_tolerant must be a boolean",
+        )
     if "priority" in routing:
         priority = routing.get("priority")
         if priority is None or (isinstance(priority, str) and not priority.strip()):
@@ -2243,8 +2250,8 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
     cleaned: dict[str, Any] = {}
     if channel is not None:
         cleaned["channel"] = channel
-    if "latency_tolerant" in routing and routing.get("latency_tolerant") is not None:
-        cleaned["latency_tolerant"] = routing["latency_tolerant"]
+    if latency_tolerant is not None:
+        cleaned["latency_tolerant"] = latency_tolerant
     if "priority" in routing:
         priority = routing.get("priority")
         if isinstance(priority, str) and priority.strip():
@@ -2904,6 +2911,17 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
             "response_format must be an object",
         )
     fmt_type = fmt.get("type")
+    # Explicit JSON null or blank type is treat-as-omit when no other payload
+    # remains (SDK optional default). Non-empty unknown types still fail closed.
+    if fmt_type is None or (isinstance(fmt_type, str) and not fmt_type.strip()):
+        remaining = {key: value for key, value in fmt.items() if key != "type"}
+        if not remaining:
+            return None
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.type must be one of text, json_object, json_schema",
+        )
     # Strip + casefold so " JSON_OBJECT " / "Text" match official types; write back.
     if isinstance(fmt_type, str):
         fmt_type = fmt_type.strip().lower()
