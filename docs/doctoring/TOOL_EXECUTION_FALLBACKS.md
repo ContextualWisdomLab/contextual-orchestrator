@@ -18,6 +18,10 @@ NIST AI 600-1 frames generative-AI risk management around governance, measuremen
 | Preserve accountability without disclosing sensitive content | NIST AI 600-1 | Stable reason codes and secret-free audit events. |
 | Do not bypass policy through fallback | NIST AI 600-1 | Permission and policy failures always `fail_closed`. |
 
+## Audited SAST boundaries
+
+The Semgrep suppressions in `cost_ledger.py` cover SQL assembled exclusively from package-owned constant table and column catalogs; user values remain positional bind parameters. The provider transport suppression covers a URL that has already passed the package's scheme, host allowlist, public-address, credential, and response-boundary checks. The unverified TLS context remains an explicit development-only operator opt-out, while verified TLS is the default. These annotations are deliberately attached to the exact audited call sites rather than weakening or excluding the repository-wide scanner rules.
+
 ## References — APA 7th
 
 Autio, C., Schwartz, R., Dunietz, J., Jain, S., Stanley, M., Tabassi, E., Hall, P., & Roberts, K. (2024). *Artificial intelligence risk management framework: Generative artificial intelligence profile* (NIST AI 600-1). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.AI.600-1
