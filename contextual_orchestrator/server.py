@@ -336,20 +336,21 @@ def _validate_completions_stream(body: dict[str, Any]) -> bool | None:
 
 
 def _validate_completions_echo(body: dict[str, Any]) -> bool | None:
-    """Legacy Completions ``echo`` — strict boolean; ``true`` is not supported.
+    """Legacy Completions ``echo`` — boolean / JS 0/1; ``true`` is not supported.
 
     OpenAI can prepend the prompt to the completion when ``echo`` is true. This
     gateway does not implement that behaviour, so ``echo=true`` fails closed with
-    a clear ``invalid_echo`` error. ``false`` and omit remain valid.
+    a clear ``invalid_echo`` error. ``false``/``0`` and omit remain valid.
     """
     if "echo" not in body:
         return None
-    echo = body.get("echo")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if echo is None or (isinstance(echo, str) and not echo.strip()):
+    echo = _coerce_optional_bool(
+        body.get("echo"),
+        error_code="invalid_echo",
+        message="echo must be a boolean",
+    )
+    if echo is None:
         return None
-    if not isinstance(echo, bool):
-        raise RequestError(400, "invalid_echo", "echo must be a boolean")
     if echo is True:
         raise RequestError(
             400,
@@ -463,6 +464,7 @@ def _validate_completions_n(body: dict[str, Any]) -> int | None:
     OpenAI can return multiple completions when ``n > 1``. This gateway always
     returns a single choice, so ``n > 1`` fails closed. ``n=1`` and omit remain
     valid. Cap 128 is retained for clear range errors before the support check.
+    Digit strings (JS JSON sometimes serializes integers as strings) coerce.
     """
     if "n" not in body:
         return None
@@ -470,6 +472,14 @@ def _validate_completions_n(body: dict[str, Any]) -> int | None:
     # Explicit JSON null or empty/whitespace string is treat-as-omit.
     if n is None or (isinstance(n, str) and not n.strip()):
         return None
+    # Digit strings (JS JSON sometimes serializes integers as strings).
+    if isinstance(n, str):
+        stripped = n.strip()
+        if stripped.isdigit():
+            n = int(stripped)
+            body["n"] = n
+        else:
+            raise RequestError(400, "invalid_n", "n must be a positive integer")
     if isinstance(n, bool) or not isinstance(n, int) or n < 1:
         raise RequestError(400, "invalid_n", "n must be a positive integer")
     if n > 128:
@@ -489,6 +499,7 @@ def _validate_responses_n(body: dict[str, Any]) -> int | None:
     OpenAI may request multiple samples via ``n``. This gateway's Responses
     passthrough returns a single completion shape, so ``n`` greater than 1
     fails closed. ``n=1`` and omit remain valid.
+    Digit strings (JS JSON sometimes serializes integers as strings) coerce.
     """
     if "n" not in body:
         return None
@@ -496,6 +507,14 @@ def _validate_responses_n(body: dict[str, Any]) -> int | None:
     # Explicit JSON null or empty/whitespace string is treat-as-omit.
     if n is None or (isinstance(n, str) and not n.strip()):
         return None
+    # Digit strings (JS JSON sometimes serializes integers as strings).
+    if isinstance(n, str):
+        stripped = n.strip()
+        if stripped.isdigit():
+            n = int(stripped)
+            body["n"] = n
+        else:
+            raise RequestError(400, "invalid_n", "n must be an integer")
     if isinstance(n, bool) or not isinstance(n, int):
         raise RequestError(400, "invalid_n", "n must be an integer")
     if n < 1:
@@ -549,8 +568,16 @@ def _validate_responses_logprobs(body: dict[str, Any]) -> None:
     """
     if "logprobs" in body:
         lp = body.get("logprobs")
-        if lp is not None and not isinstance(lp, bool):
-            raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
+        if lp is not None:
+            coerced = _coerce_optional_bool(
+                lp,
+                error_code="invalid_logprobs",
+                message="logprobs must be a boolean",
+            )
+            if coerced is None:
+                pass
+            else:
+                body["logprobs"] = coerced
     if "top_logprobs" in body:
         tlp = body.get("top_logprobs")
         if tlp is None:
@@ -961,6 +988,9 @@ def _validate_completions_top_logprobs(body: dict[str, Any]) -> None:
         return
     value = body.get("top_logprobs")
     # Explicit JSON null, empty/whitespace string, or zero is treat-as-omit.
+    # Digit string "0" is omit-equivalent (JS JSON integer-as-string).
+    if isinstance(value, str) and value.strip() == "0":
+        value = 0
     if value is None or value == 0 or (isinstance(value, str) and not value.strip()):
         return
     raise RequestError(
@@ -1011,6 +1041,14 @@ def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
     # Explicit JSON null or empty/whitespace string is treat-as-omit.
     if best_of is None or (isinstance(best_of, str) and not best_of.strip()):
         return None
+    # Digit strings (JS JSON sometimes serializes integers as strings).
+    if isinstance(best_of, str):
+        stripped = best_of.strip()
+        if stripped.isdigit():
+            best_of = int(stripped)
+            body["best_of"] = best_of
+        else:
+            raise RequestError(400, "invalid_best_of", "best_of must be a positive integer")
     if isinstance(best_of, bool) or not isinstance(best_of, int) or best_of < 1:
         raise RequestError(400, "invalid_best_of", "best_of must be a positive integer")
     if best_of > 128:
@@ -1022,6 +1060,9 @@ def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
             "best_of greater than 1 is not supported on /v1/completions",
         )
     n = body.get("n", 1)
+    if isinstance(n, str) and n.strip().isdigit():
+        n = int(n.strip())
+        body["n"] = n
     if isinstance(n, bool) or not isinstance(n, int) or n < 1:
         raise RequestError(400, "invalid_n", "n must be a positive integer")
     if best_of < n:
@@ -1877,16 +1918,26 @@ def _validate_chat_logprobs_surface(body: dict[str, Any]) -> None:
         if isinstance(lp, str) and not lp.strip():
             lp = None
         if lp is not None:
-            if not isinstance(lp, bool):
-                raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
-            if lp is True:
+            coerced = _coerce_optional_bool(
+                lp,
+                error_code="invalid_logprobs",
+                message="logprobs must be a boolean",
+            )
+            if coerced is None:
+                pass
+            elif coerced is True:
                 raise RequestError(
                     400,
                     "invalid_logprobs",
                     "logprobs=true is not supported on /v1/chat/completions",
                 )
+            else:
+                body["logprobs"] = False
     if "top_logprobs" in body:
         tlp = body.get("top_logprobs")
+        # Digit string "0" is omit-equivalent (JS JSON integer-as-string).
+        if isinstance(tlp, str) and tlp.strip() == "0":
+            tlp = 0
         if tlp is None or tlp == 0 or (isinstance(tlp, str) and not tlp.strip()):
             body.pop("top_logprobs", None)
             return
@@ -2557,12 +2608,13 @@ def _validate_openai_background(body: dict[str, Any], *, endpoint_path: str) -> 
     """
     if "background" not in body:
         return None
-    value = body.get("background")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if value is None or (isinstance(value, str) and not value.strip()):
+    value = _coerce_optional_bool(
+        body.get("background"),
+        error_code="invalid_background",
+        message="background must be a boolean",
+    )
+    if value is None:
         return None
-    if not isinstance(value, bool):
-        raise RequestError(400, "invalid_background", "background must be a boolean")
     if value is True:
         raise RequestError(
             400,
