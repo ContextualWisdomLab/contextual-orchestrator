@@ -2008,6 +2008,14 @@ def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
                 "invalid_metadata",
                 "metadata keys must be non-empty strings",
             )
+        # Leading/trailing whitespace changes key identity vs strip(); reject so
+        # clients cannot smuggle padded labels past exact-key attribution joins.
+        if key != key.strip():
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                "metadata keys must not include leading or trailing whitespace",
+            )
         if len(key) > 64:
             raise RequestError(400, "invalid_metadata", "metadata keys must be at most 64 characters")
         # Explicit JSON null value is treat-as-omit for that key (SDK optional).
