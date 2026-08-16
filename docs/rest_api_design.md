@@ -97,9 +97,11 @@ These product surfaces are now implemented in this prototype:
 
 `POST /v1/chat/completions` fail-closes before tools/`response_format` passthrough.
 Send a pool `model`, a non-empty `messages` array, and omit `stream` (or set
-`false`) on tool-calling bodies. Do not send `stream_options.include_usage=true`
-or non-object `attribution` / `routing`. `stream=true` with tools is
-`invalid_stream` until SSE passthrough ships. OpenAI. (n.d.). *Chat Completions API*.
+`false`) on tool-calling bodies. Do not send `stream_options.include_usage=true`,
+non-object `attribution` / `routing`, `routing.channel=batch`,
+`routing.latency_tolerant=true`, `seed`, `n>1`, or out-of-range penalties /
+`max_tokens`. `stream=true` with tools is `invalid_stream` until SSE
+passthrough ships. OpenAI. (n.d.). *Chat Completions API*.
 https://platform.openai.com/docs/api-reference/chat/create
 
 ## Production Library Target

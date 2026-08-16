@@ -1482,6 +1482,102 @@ def _validate_chat_passthrough_stream(body: dict[str, Any]) -> bool:
     return False
 
 
+def _validate_chat_seed(body: dict[str, Any]) -> None:
+    """Chat Completions ``seed`` — type-check then reject (not applied).
+
+    OpenAI uses seed for best-effort deterministic sampling. This gateway
+    does not apply seed on the chat route or tools passthrough, so a present
+    non-omit value fails closed with ``invalid_seed``. JSON null and empty
+    strings remain omit-equivalent no-ops.
+    """
+    if "seed" not in body:
+        return
+    seed_raw = body.get("seed")
+    if seed_raw is None or (isinstance(seed_raw, str) and not seed_raw.strip()):
+        return
+    try:
+        _validate_completions_seed(body)
+    except RequestError as exc:
+        if exc.code == "invalid_seed" and "not supported" in exc.message:
+            raise RequestError(
+                400,
+                "invalid_seed",
+                "seed is not supported on /v1/chat/completions",
+            ) from exc
+        raise
+    raise RequestError(
+        400,
+        "invalid_seed",
+        "seed is not supported on /v1/chat/completions",
+    )
+
+
+def _validate_chat_n(body: dict[str, Any]) -> int | None:
+    """Chat Completions ``n`` — only omit or ``1``; remap Completions wording.
+
+    ``_validate_completions_n`` fail-closes ``n > 1`` with a Completions path
+    message. Chat and tools passthrough must name ``/v1/chat/completions`` so
+    buyers are not told to use the wrong surface.
+    """
+    if "n" not in body:
+        return None
+    try:
+        return _validate_completions_n(body)
+    except RequestError as exc:
+        if exc.code == "invalid_n" and "not supported" in exc.message:
+            raise RequestError(
+                400,
+                "invalid_n",
+                "n greater than 1 is not supported on /v1/chat/completions",
+            ) from exc
+        raise
+
+
+def _validate_chat_passthrough_spend_knobs(body: dict[str, Any]) -> None:
+    """Hoist spend knobs before tools/response_format ``proxy_completion``.
+
+    The orchestration path already type-checks ``seed``, penalties,
+    ``max_tokens`` / ``max_completion_tokens``, and ``n``. Passthrough skipped
+    those, so an SDK tool-calling body could bill a seeded, over-range, or
+    multi-choice completion the gateway cannot honor.
+    """
+    if "max_completion_tokens" in body:
+        _validate_chat_max_completion_tokens(body)
+    elif "max_tokens" in body:
+        _validate_completions_max_tokens(body)
+    _validate_completions_presence_penalty(body)
+    _validate_completions_frequency_penalty(body)
+    _validate_chat_seed(body)
+    _validate_chat_n(body)
+
+
+def _reject_chat_passthrough_batch_routing(body: dict[str, Any]) -> None:
+    """Tools/response_format passthrough is sync-only.
+
+    ``_validate_routing`` accepts ``channel=batch`` and
+    ``latency_tolerant=true`` because the orchestration path can return a 202
+    batch job. Passthrough always bills ``proxy_completion`` synchronously, so
+    those hints would lie about the channel the buyer paid for.
+    """
+    routing = body.get("routing")
+    if not isinstance(routing, dict):
+        return
+    if routing.get("channel") == "batch":
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.channel=batch is not supported with tools or response_format; "
+            "omit routing.channel or send the request without tools",
+        )
+    if routing.get("latency_tolerant") is True:
+        raise RequestError(
+            400,
+            "invalid_routing",
+            "routing.latency_tolerant=true is not supported with tools or response_format; "
+            "omit latency_tolerant or send the request without tools",
+        )
+
+
 def _validate_chat_message_content_and_name(body: dict[str, Any]) -> None:
     """Content shape and participant name — must run before tools passthrough.
 
@@ -3665,6 +3761,8 @@ def build_server(
                         _validate_routing(body.get("routing"))
                         _validate_completions_temperature(body)
                         _validate_completions_top_p(body)
+                        _validate_chat_passthrough_spend_knobs(body)
+                        _reject_chat_passthrough_batch_routing(body)
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
@@ -3743,28 +3841,7 @@ def build_server(
                         presence_penalty = _validate_completions_presence_penalty(body)
                     if "frequency_penalty" in body:
                         frequency_penalty = _validate_completions_frequency_penalty(body)
-                    if "seed" in body:
-                        # Type-check then fail closed: chat route does not apply seed.
-                        # Explicit JSON null or empty/whitespace string is treat-as-omit.
-                        seed_raw = body.get("seed")
-                        if seed_raw is not None and not (
-                            isinstance(seed_raw, str) and not seed_raw.strip()
-                        ):
-                            try:
-                                _validate_completions_seed(body)
-                            except RequestError as exc:
-                                if exc.code == "invalid_seed" and "not supported" in exc.message:
-                                    raise RequestError(
-                                        400,
-                                        "invalid_seed",
-                                        "seed is not supported on /v1/chat/completions",
-                                    ) from exc
-                                raise
-                            raise RequestError(
-                                400,
-                                "invalid_seed",
-                                "seed is not supported on /v1/chat/completions",
-                            )
+                    _validate_chat_seed(body)
                     if "logit_bias" in body:
                         # Empty {} is an honest no-op (shared Completions helper).
                         # Non-empty maps fail closed with a chat-path message.
@@ -3807,17 +3884,7 @@ def build_server(
                                 "invalid_stop",
                                 "stop sequences are not supported on /v1/chat/completions",
                             )
-                    if "n" in body:
-                        try:
-                            _validate_completions_n(body)
-                        except RequestError as exc:
-                            if exc.code == "invalid_n" and "not supported" in exc.message:
-                                raise RequestError(
-                                    400,
-                                    "invalid_n",
-                                    "n greater than 1 is not supported on /v1/chat/completions",
-                                ) from exc
-                            raise
+                    _validate_chat_n(body)
                     if "logprobs" in body or "top_logprobs" in body:
                         # Chat route path does not return token logprobs; fail closed.
                         # Explicit JSON null is treat-as-omit (SDK optional default).
