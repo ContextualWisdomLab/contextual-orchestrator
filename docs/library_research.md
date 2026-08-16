@@ -78,6 +78,18 @@ Researched before adding the second-hop mock observation synthesizer:
 
 Custom code added: `_bound_tool_observations`, `_mock_observation_answer`. No new dependency.
 
+## Invoice identifier clerk aliases (2026-08-16)
+
+Researched before extending mock `lookup_balance` argument binding:
+
+| Option | Decision | Evidence |
+|---|---|---|
+| [invoice2data](https://github.com/invoice-x/invoice2data) | Skip. New runtime dependency and PDF/template extraction. | This gateway binds identifiers already present in the chat prompt, not scanned invoices. |
+| [spaCy NER](https://spacy.io/) | Skip. New runtime dependency and a trained model. | Ponytail: stdlib `re` already owns `_mock_function_arguments`. |
+| Clerk-alias regex on existing binder | Selected. Extend the `invoice` qualifier list with `no` / `nr` / `is` and add `inv#` / `inv 4419`. | EN 16931-1 BT-1 Invoice number (CEN, 2017); OpenAI function-calling arguments (OpenAI, 2024). |
+
+Custom code added: two `re.search` alternatives in `_mock_function_arguments`. No new dependency.
+
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation. https://platform.openai.com/docs/guides/streaming-responses
 
 WHATWG. (n.d.). *Server-sent events*. HTML Living Standard. https://html.spec.whatwg.org/multipage/server-sent-events.html

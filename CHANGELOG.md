@@ -26,8 +26,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   in the answer. Empty or whitespace `tool_choice` with `tools` is
   omit-equivalent `none` (the empty string is written back as `none`
   before the provider hop). Next action: after the first tool call,
-  POST the tool output with the same `tool_call_id` and read `content`;
-  send `none` or omit `tool_choice` when you want no tool call.
+  POST the tool output with the same `tool_call_id` and read `content`.
+  Send `none` when you want no first-hop tool call; omitted
+  `tool_choice` stays auto and still emits `lookup_balance`.
 - Fail closed on unknown assistant `tool_calls` entry and `function` keys
   (`unknown_tool_call_fields` / `unknown_tool_call_function_fields`) on both
   the orchestration path and the tools / `response_format` SSE proxy.
@@ -61,8 +62,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   tools; incidental padding is still omit-equivalent.
 - Bind bare invoice numbers in mock `lookup_balance` (`invoice 4419` →
   `INV-4419`) instead of defaulting to `INV-9` when the buyer omits the
-  `INV-` prefix. Next action: put the invoice number in the user text;
-  prefixed and bare forms both bind.
+  `INV-` prefix. Clerk aliases (`invoice no. 4419`, `invoice nr 4419`,
+  `invoice is 4419`, `inv#4419`) bind the same digits. Next action: put
+  the invoice number in the user text; prefixed, bare, and clerk-alias
+  forms all bind.
 
 ### References
 
@@ -86,6 +89,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Cao, Y. (2023). ReAct: Synergizing reasoning and acting in language
   models. *International Conference on Learning Representations*.
   https://arxiv.org/abs/2210.03629
+- CEN. (2017). *Electronic invoicing — Part 1: Semantic data model of
+  the core elements of an electronic invoice* (EN 16931-1:2017).
+  European Committee for Standardization.
+  https://standards.cencenelec.eu/ (BT-1 Invoice number; cite + link
+  only — CEN texts are not OA.)
 - Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The
   curious case of neural text degeneration. *International Conference on
   Learning Representations*. https://arxiv.org/abs/1904.09751

@@ -8,6 +8,7 @@
 - Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
 - OpenAI. (2024). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
+- CEN. (2017). *Electronic invoicing — Part 1: Semantic data model of the core elements of an electronic invoice* (EN 16931-1:2017). European Committee for Standardization. https://standards.cencenelec.eu/
 
 ## What The Architecture Is
 
@@ -38,7 +39,7 @@ This repository implements the interface and control plane, not the trained coor
 - `TaskOrchestrator.route_once`: the low-latency routing path.
 - `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
-- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks. `proxy_completion` returns JSON; `proxy_completion_stream` pipes SSE so tool-calling `stream=true` clients receive `chat.completion.chunk` frames (including `delta.tool_calls`) instead of a billed JSON body. Mock function tools emit the same `tool_calls` shape offline so SDK stream parsers can be exercised without a live provider. A second-hop `role=tool` message bound to a prior `tool_call_id` synthesizes a final `content` / `stop` answer from the observed values (ReAct thought/action/observation; Yao et al., 2023) instead of emitting another tool call.
+- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks. `proxy_completion` returns JSON; `proxy_completion_stream` pipes SSE so tool-calling `stream=true` clients receive `chat.completion.chunk` frames (including `delta.tool_calls`) instead of a billed JSON body. Mock function tools emit the same `tool_calls` shape offline so SDK stream parsers can be exercised without a live provider. First-hop `lookup_balance` binds `INV-` ids, bare `invoice 4419`, and clerk aliases (`invoice no.`, `nr`, `inv#`; CEN, 2017, BT-1). A second-hop `role=tool` message bound to a prior `tool_call_id` synthesizes a final `content` / `stop` answer from the observed values (ReAct thought/action/observation; Yao et al., 2023) instead of emitting another tool call.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server. Tools and `response_format` take the single-agent passthrough path; `stream=true` on that path is an SSE proxy, not a `400`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.

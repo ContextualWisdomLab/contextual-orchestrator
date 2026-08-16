@@ -162,10 +162,11 @@ Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when
 the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
 pool `model`; put the invoice number in the user text (`INV-4419` or
-`invoice 4419`); after the first `tool_calls` hop, POST the tool output as
-`role=tool` with the same `tool_call_id` and read `content` / `stop` (or
-streamed content deltas); omit empty `tool_choice` or send `none` when you
-want no tool call; omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
+`invoice 4419`, `invoice no. 4419`, or `inv#4419`); after the first
+`tool_calls` hop, POST the tool output as `role=tool` with the same
+`tool_call_id` and read `content` / `stop` (or streamed content deltas);
+send `none` when you want no first-hop tool call (omitted `tool_choice`
+stays auto); omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
 and `stream_options.include_usage` on tool-calling requests. When declaring
 tools, omit unused `description` / `parameters` / `strict` or leave the SDK
 default `null` — both become omit before the provider hop. On assistant

@@ -80,6 +80,13 @@ exposes tools as first-class actions rather than free text.
   Normative stream shape: `delta.tool_calls` then
   `finish_reason=tool_calls`. Redistribution of the vendor docs is not
   permitted; the citation is the contract source.
+- CEN. (2017). *Electronic invoicing — Part 1: Semantic data model of
+  the core elements of an electronic invoice* (EN 16931-1:2017).
+  European Committee for Standardization.
+  https://standards.cencenelec.eu/
+  Grounds treating the invoice identifier (BT-1) as the bind target
+  regardless of clerk phrasing (`invoice no.`, `nr`, `inv#`). CEN texts
+  are not OA; cite + link only.
 
 ## API contract honesty (tool schema omit)
 
