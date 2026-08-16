@@ -93,6 +93,13 @@ def exercise_request_body(raw: bytes) -> None:
             else:
                 assert mode in server.ALLOWED_MODES
 
+    # Responses official text.format: omit-real optionals or RequestError.
+    if "text" in body:
+        try:
+            server._validate_responses_text(body)
+        except RequestError:
+            pass
+
     # Message validation: returns a normalised list or raises RequestError.
     if "messages" in body:
         try:

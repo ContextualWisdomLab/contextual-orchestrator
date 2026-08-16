@@ -61,8 +61,9 @@ ALLOWED_RESPONSES_KEYS = {
     "max_tool_calls",
     # Gateway cost/routing control plane (stripped before provider passthrough).
     "attribution", "routing",
-    # OpenAI conversation-control surfaces — accepted only to fail closed with
-    # explicit unsupported errors (not opaque unknown_fields).
+    # OpenAI conversation-control surfaces — previous_response_id / conversation /
+    # truncation / include fail closed with named unsupported errors.
+    # Official text.format is validated (omit-real optionals), not rejected wholesale.
     "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
@@ -1131,14 +1132,158 @@ def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
 
 
 
+def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Official Responses ``text`` — ``format`` shapes, omit-real optionals.
+
+    Official SDKs send ``text: {format: {type: text}}`` as the default
+    structured-output plane. Rejecting that object breaks every official
+    caller. Accept ``text`` / ``json_object`` / ``json_schema`` formats,
+    pop JSON-null or blank ``description`` and JSON-null ``strict`` so
+    passthrough matches omit, and fail closed on unknown keys.
+    ``verbosity`` is not applied on this gateway: JSON null / blank is
+    popped; any other value is ``invalid_text``.
+    """
+    if "text" not in body:
+        return None
+    text = body.get("text")
+    # Explicit JSON null, empty object, or empty/whitespace string is omit.
+    if (
+        text is None
+        or (isinstance(text, dict) and not text)
+        or (isinstance(text, str) and not text.strip())
+    ):
+        return None
+    if not isinstance(text, dict):
+        raise RequestError(400, "invalid_text", "text must be an object")
+    unknown_text = sorted(set(text) - {"format", "verbosity"})
+    if unknown_text:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text accepts only format and verbosity",
+            {"fields": unknown_text},
+        )
+    if "verbosity" in text:
+        verbosity = text.get("verbosity")
+        if verbosity is None or (isinstance(verbosity, str) and not verbosity.strip()):
+            text.pop("verbosity")
+        else:
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.verbosity is not supported on /v1/responses",
+            )
+    response_format = body.get("response_format")
+    response_format_present = not (
+        response_format is None
+        or (isinstance(response_format, dict) and not response_format)
+        or (isinstance(response_format, str) and not response_format.strip())
+    )
+    if "format" not in text:
+        if not text:
+            return None
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format is required when text is provided",
+        )
+    fmt = text.get("format")
+    if (
+        fmt is None
+        or (isinstance(fmt, dict) and not fmt)
+        or (isinstance(fmt, str) and not fmt.strip())
+    ):
+        text.pop("format", None)
+        if not text:
+            return None
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format is required when text is provided",
+        )
+    if not isinstance(fmt, dict):
+        raise RequestError(400, "invalid_text", "text.format must be an object")
+    if response_format_present:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text and response_format cannot both be set on /v1/responses; "
+            "use official text.format only",
+        )
+    fmt_type = fmt.get("type")
+    if fmt_type not in ("text", "json_object", "json_schema"):
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.type must be one of text, json_object, json_schema",
+        )
+    if fmt_type in ("text", "json_object"):
+        unknown_fmt = sorted(set(fmt) - {"type"})
+        if unknown_fmt:
+            raise RequestError(
+                400,
+                "invalid_text",
+                f"text.format with type {fmt_type} accepts only the type field",
+                {"fields": unknown_fmt},
+            )
+        return text
+    unknown_fmt = sorted(set(fmt) - {"type", "name", "schema", "description", "strict"})
+    if unknown_fmt:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format json_schema accepts only type, name, schema, description, and strict",
+            {"fields": unknown_fmt},
+        )
+    name = fmt.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.name must be a non-empty string",
+        )
+    schema_body = fmt.get("schema")
+    if not isinstance(schema_body, dict):
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.schema must be an object",
+        )
+    if "description" in fmt:
+        description_value = fmt.get("description")
+        if description_value is None or (
+            isinstance(description_value, str) and not description_value.strip()
+        ):
+            fmt.pop("description")
+        elif not isinstance(description_value, str):
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.format.description must be a string when provided",
+            )
+    if "strict" in fmt:
+        strict_value = fmt.get("strict")
+        if strict_value is None:
+            fmt.pop("strict")
+        elif not isinstance(strict_value, bool):
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.format.strict must be a boolean when provided",
+            )
+    return text
+
+
 def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
     """Fail closed on OpenAI conversation-control fields this gateway does not apply.
 
-    ``previous_response_id``, ``conversation``, ``truncation``, ``include``, and
-    ``text`` are real OpenAI Responses controls. Accepting them as unknown fields
-    yields opaque 400s; named unsupported errors let buyers migrate cleanly.
-    Explicit JSON null or empty string for string fields is treat-as-omit
-    (SDK optional default). Empty include/text structures remain omit no-ops.
+    ``previous_response_id``, ``conversation``, ``truncation``, and
+    ``include`` are real OpenAI Responses controls this gateway does not
+    apply. Accepting them as unknown fields yields opaque 400s; named
+    unsupported errors let buyers migrate cleanly. Explicit JSON null or
+    empty string for string fields is treat-as-omit (SDK optional default).
+    Empty include structures remain omit no-ops. Official ``text.format``
+    is validated by ``_validate_responses_text`` (not rejected wholesale).
     """
     def _present_nonempty(value: Any) -> bool:
         if value is None:
@@ -1181,20 +1326,7 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
                 "include is not supported on /v1/responses",
             )
     if "text" in body:
-        text = body.get("text")
-        # Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
-        if (
-            text is None
-            or (isinstance(text, dict) and not text)
-            or (isinstance(text, str) and not text.strip())
-        ):
-            pass
-        else:
-            raise RequestError(
-                400,
-                "invalid_text",
-                "text is not supported on /v1/responses",
-            )
+        _validate_responses_text(body)
 
 
 def _validate_responses_stream_options(body: dict[str, Any]) -> None:

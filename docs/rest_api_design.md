@@ -99,8 +99,9 @@ When an official OpenAI SDK serializes an omitted optional as JSON `null` or a b
 
 - `tools[].function.description` / `parameters` / `strict` JSON `null` are popped before proxy so the upstream payload matches omit. Empty or whitespace-only `description` is also popped.
 - `response_format.json_schema` accepts only `name`, `description`, `schema`, and `strict`. JSON-null or blank `description` and JSON-null `strict` are popped in place. Unknown inner keys and non-string `description` return `invalid_response_format` — fix the client payload, then retry.
+- On `/v1/responses`, send official `text.format` (`type` = `text` / `json_object` / `json_schema`). Do **not** send `text.verbosity` (returns `invalid_text`) and do **not** send both `text` and `response_format`. JSON-null or blank `text.format.description` and JSON-null `strict` are popped before proxy.
 
-If a provider still rejects the request, inspect `echo.response_format` / `echo.tools` on the mock path first; a remaining null key is a gateway bug, not a provider quirk.
+If a provider still rejects the request, inspect `echo.response_format` / `echo.tools` / `echo.text` on the mock path first; a remaining null key is a gateway bug, not a provider quirk.
 
 ## Production Library Target
 

@@ -51,6 +51,12 @@ redistribution; each is cited below with its arXiv identifier.
   requirement that `schema` is a JSON Schema object when structured output
   is requested. Copyrighted vendor docs — cite + link only.
 
+- OpenAI. (2024). *Create a model response*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/responses/create
+  Grounds the official Responses `text.format` plane (flat `type`, `name`,
+  `schema`, `description`, `strict`) that SDKs send instead of chat
+  `response_format`. Copyrighted vendor docs — cite + link only.
+
 - Wright, A., Andrews, H., Hutton, B., & Dennis, G. (2022). *JSON Schema: A
   media type for describing JSON documents* (Internet-Draft
   draft-bhutton-json-schema-01). Internet Engineering Task Force.
