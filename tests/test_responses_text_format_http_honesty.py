@@ -1,8 +1,9 @@
 """Responses official ``text.format`` honesty over HTTP.
 
 OpenAI SDKs send ``text: {format: {type: "text"}}`` as the default output
-control. Rejecting that official default as ``invalid_text`` is a buyer-facing
-gap: the same gateway already accepts ``response_format: {type: "text"}``.
+control. After that default is accepted, the remaining buyer-visible holes
+are structured ``text.format`` types, omit-real optionals, ``verbosity``,
+and dual-plane ``text`` + ``response_format``.
 """
 
 from __future__ import annotations
@@ -20,12 +21,17 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import (  # noqa: E402
     SecurityConfig,
     _validate_responses_conversation_controls,
+    _validate_responses_text,
     build_server,
 )
 
 _TEST_AUTH_TOKEN = "responses_text_format_http_honesty_token"  # noqa: S105
 
 _OFFICIAL_TEXT_FORMAT = {"format": {"type": "text"}}
+_SCHEMA_BODY = {
+    "type": "object",
+    "properties": {"amount": {"type": "number"}},
+}
 
 
 def build() -> TaskOrchestrator:
@@ -57,6 +63,31 @@ def _server():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, server.server_address[1]
+
+
+def test_validate_responses_text_pops_null_json_schema_optionals() -> None:
+    """Null/blank json_schema optionals and verbosity must be omit-real in place."""
+    body = {
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "receipt_line",
+                "description": None,
+                "schema": _SCHEMA_BODY,
+                "strict": None,
+            },
+            "verbosity": None,
+        }
+    }
+    validated = _validate_responses_text(body)
+    assert validated is not None
+    fmt = validated["format"]
+    assert "description" not in fmt
+    assert "strict" not in fmt
+    assert "verbosity" not in validated
+    assert fmt.get("name") == "receipt_line"
+    assert "description" not in body["text"]["format"]
+    assert "strict" not in body["text"]["format"]
 
 
 def test_official_text_format_is_not_rejected_by_validator() -> None:
@@ -107,8 +138,124 @@ def test_http_responses_rejects_unknown_text_format_type() -> None:
         thread.join(timeout=5)
 
 
+def test_http_responses_accepts_text_format_json_object() -> None:
+    """Official text.format.type=json_object must forward, not 400 invalid_text."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "return a json object",
+                "text": {"format": {"type": "json_object"}},
+            },
+        )
+        assert status == 200, body
+        assert body.get("echo", {}).get("text") == {"format": {"type": "json_object"}}
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_omits_json_schema_null_optionals_on_text_format() -> None:
+    """Flat text.format json_schema must pop null/blank optionals before echo."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "text.format json_schema nulls",
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "receipt_line",
+                        "description": "  ",
+                        "schema": _SCHEMA_BODY,
+                        "strict": None,
+                    }
+                },
+            },
+        )
+        assert status == 200, body
+        fmt = (body.get("echo") or {}).get("text", {}).get("format")
+        assert isinstance(fmt, dict), body
+        assert "description" not in fmt
+        assert "strict" not in fmt
+        assert fmt.get("name") == "receipt_line"
+        assert fmt.get("schema") == _SCHEMA_BODY
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_text_verbosity() -> None:
+    """verbosity is not applied; named invalid_text is the next action."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "verbosity not applied",
+                "text": {"format": {"type": "text"}, "verbosity": "high"},
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_text" in blob
+        assert "unknown_fields" not in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_unknown_text_format_key() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "unknown format key",
+                "text": {"format": {"type": "text", "name": "smuggle"}},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_text" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_text_plus_response_format() -> None:
+    """Accepting official type=text must not open a dual-plane passthrough."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "two structured-output planes",
+                "text": {"format": {"type": "text"}},
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_text" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
+    test_validate_responses_text_pops_null_json_schema_optionals()
     test_official_text_format_is_not_rejected_by_validator()
     test_http_responses_accepts_official_text_format()
     test_http_responses_rejects_unknown_text_format_type()
+    test_http_responses_accepts_text_format_json_object()
+    test_http_responses_omits_json_schema_null_optionals_on_text_format()
+    test_http_responses_rejects_text_verbosity()
+    test_http_responses_rejects_unknown_text_format_key()
+    test_http_responses_rejects_text_plus_response_format()
     print("ok")

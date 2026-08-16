@@ -94,11 +94,10 @@ def exercise_request_body(raw: bytes) -> None:
             else:
                 assert mode in server.ALLOWED_MODES
 
-    # Official Responses text.format.type=text is a supported default; other
-    # non-empty text objects fail closed with invalid_text.
+    # Official Responses text.format: omit-real optionals or RequestError.
     if "text" in body:
         try:
-            server._validate_responses_conversation_controls(body)
+            server._validate_responses_text(body)
         except RequestError:
             pass
 

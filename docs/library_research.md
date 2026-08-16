@@ -53,6 +53,22 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Responses official text.format (2026-08-16)
+
+Researched before accepting official Responses `text` instead of wholesale
+`invalid_text`, and before closing the dual-plane hole opened by the
+type=text default:
+
+| Option | Decision | Why |
+|---|---|---|
+| OpenAI Responses `text.format` (flat `type`/`name`/`schema`) | Implement | Official Python/JS SDKs send `text: {format: {type: text}}` on every call and structured output on the same plane; rejecting those objects is a buyer-visible outage |
+| Reuse chat `response_format.json_schema` nesting | Skip | Responses format is flat under `text.format`; wrapping would invent a non-official shape |
+| Forward `text.verbosity` | Skip | This gateway does not apply verbosity; named `invalid_text` is the next action |
+| Allow `text` + `response_format` | Skip | Dual-plane passthrough lets buyers believe two output controls were honored |
+| jsonschema library | Skip | Stdlib `dict.pop` + `isinstance` covers omit-real + fail-closed keys |
+
+No new dependency. Implementation stays in `contextual_orchestrator/server.py`.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

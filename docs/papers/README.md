@@ -43,6 +43,21 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## Structured output / Responses text.format
+
+- OpenAI. (2024). *Create a model response*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/responses/create
+  Grounds the official Responses `text.format` plane (flat `type`, `name`,
+  `schema`, `description`, `strict`) that SDKs send instead of chat
+  `response_format`. Copyrighted vendor docs — cite + link only.
+
+- Wright, A., Andrews, H., Hutton, B., & Dennis, G. (2022). *JSON Schema: A
+  media type for describing JSON documents* (Internet-Draft
+  draft-bhutton-json-schema-01). Internet Engineering Task Force.
+  https://datatracker.ietf.org/doc/html/draft-bhutton-json-schema-01
+  Grounds the requirement that `schema` is a JSON Schema object when
+  structured output is requested. Copyrighted IETF draft — cite + link only.
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

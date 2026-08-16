@@ -512,10 +512,10 @@ OPENAPI_SPEC = {
                                     "text": {
                                         "type": ["object", "null"],
                                         "description": (
-                                            "Official SDK default {format: {type: text}} is "
-                                            "accepted and forwarded. Other non-empty text "
-                                            "objects return invalid_text; use response_format "
-                                            "for json_object / json_schema."
+                                            "Official text.format types text, json_object, and "
+                                            "flat json_schema are accepted and forwarded. "
+                                            "text.verbosity and sending both text and "
+                                            "response_format return invalid_text."
                                         ),
                                     },
                                 },

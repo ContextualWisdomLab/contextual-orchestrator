@@ -7,6 +7,8 @@
 - TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
 - Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
 - OpenAI. (2024). *Responses API*. https://platform.openai.com/docs/api-reference/responses
+- OpenAI. (2024). *Create a model response*. https://platform.openai.com/docs/api-reference/responses/create
+- Wright, A., Andrews, H., Hutton, B., & Dennis, G. (2022). *JSON Schema: A media type for describing JSON documents* (Internet-Draft draft-bhutton-json-schema-01). https://datatracker.ietf.org/doc/html/draft-bhutton-json-schema-01
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). https://doi.org/10.17487/RFC8259
 
 ## What The Architecture Is
@@ -38,7 +40,7 @@ This repository implements the interface and control plane, not the trained coor
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
-- `contextual_orchestrator.server`: stdlib HTTP adapter for `/v1/chat/completions` and `/v1/responses`. Empty or whitespace Responses `instructions` are removed from the forwarded body (omit-real) so SDK optional defaults do not become a blank upstream system prompt. Official Responses `text: {format: {type: "text"}}` is forwarded; other `text` objects fail closed (OpenAI, 2024; Bray, 2017).
+- `contextual_orchestrator.server`: stdlib HTTP adapter for `/v1/chat/completions` and `/v1/responses`. Empty or whitespace Responses `instructions` are removed from the forwarded body (omit-real) so SDK optional defaults do not become a blank upstream system prompt. Official Responses `text.format` (`text` / `json_object` / flat `json_schema`) is forwarded; `text.verbosity` and dual-plane `text` + `response_format` fail closed (OpenAI, 2024; Bray, 2017).
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

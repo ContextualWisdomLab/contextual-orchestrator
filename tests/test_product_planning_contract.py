@@ -58,6 +58,7 @@ def test_rest_api_design_marks_planned_product_surfaces():
         "/v1/responses",
         "omit-real",
         "text.format",
+        "text.verbosity",
     ]:
         assert expected_text in api_text
 

@@ -9,11 +9,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
-- `/v1/responses` now accepts the official OpenAI SDK default
-  `text: {format: {type: "text"}}` and forwards it. Other non-empty `text`
-  objects still return `invalid_text`. Send `json_object` / `json_schema` via
-  `response_format` until `text.format` structured types land. Do not retry an
-  unsupported `text` object.
+- `/v1/responses` now accepts official `text.format` types `text`,
+  `json_object`, and flat `json_schema`. JSON-null or blank `description`
+  and JSON-null `strict` are popped before proxy. `text.verbosity` (except
+  JSON null / blank, which are omitted) and sending both `text` and
+  `response_format` return `invalid_text`. If you see `invalid_text`, send
+  one official `text.format` object — do not retry a dual-plane or
+  verbosity payload.
 - `/v1/responses` now treats JSON `null`, empty, and whitespace `instructions` as
   **omit-real**: the key is removed before provider passthrough so OpenAI SDK
   optional defaults do not become a blank upstream system prompt. Non-string and
