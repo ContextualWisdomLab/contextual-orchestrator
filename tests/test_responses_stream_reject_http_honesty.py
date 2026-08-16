@@ -105,8 +105,10 @@ def test_http_responses_accepts_stream_true_as_sse() -> None:
             assert response.status == 200
             assert response.headers.get("content-type", "").startswith("text/event-stream")
             body = response.read().decode("utf-8")
-        assert "data: [DONE]" in body
+        assert "data: [DONE]" not in body
         assert "response.completed" in body
+        assert "response.in_progress" in body
+        assert '"sequence_number": 0' in body
     finally:
         server.shutdown()
         thread.join(timeout=5)

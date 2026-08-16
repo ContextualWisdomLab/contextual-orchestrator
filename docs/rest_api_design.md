@@ -123,12 +123,16 @@ unsupported `reasoning_effort`, and non-default `service_tier` use the same
 named errors on the tools path — do not send them on tool-calling requests.
 
 `/v1/responses` with `stream=true` SSE-proxies a single pool agent as
-named `response.*` events (OpenAI, 2024). Function tools reconstruct to
-the same `output[].type=function_call` as the non-stream JSON body
-(`lookup_balance` binds `INV-` identifiers, defaulting to `INV-9`);
-content-only streams still match `output_text`. Do not set
-`stream_options.include_usage=true` or `include_obfuscation=true` — those
-values fail closed with `invalid_stream_options`.
+named `response.*` events (OpenAI, 2024). Every event carries a
+contiguous `sequence_number` starting at 0. `response.created` is
+followed by `response.in_progress` before output items. Function tools
+reconstruct to the same `output[].type=function_call` as the non-stream
+JSON body (`lookup_balance` binds `INV-` identifiers, defaulting to
+`INV-9`); content-only streams still match `output_text`. The stream
+ends on `response.completed` — do not wait for Chat Completions
+`data: [DONE]`. Do not set `stream_options.include_usage=true` or
+`include_obfuscation=true` — those values fail closed with
+`invalid_stream_options`.
 
 `attribution` and `routing` use the same named errors on the tools /
 `response_format` path as on the orchestration path. Unknown spend
@@ -166,8 +170,10 @@ tools, omit unused `description` / `parameters` / `strict` or leave the SDK
 default `null` — both become omit before the provider hop. On assistant
 `tool_calls`, send only `id` / `type` / `function` / optional `index`. On
 `/v1/responses`, send a non-empty `input` and `stream=true` when the SDK
-reads events. Correlate `response.function_call_arguments.delta` chunks
-with `item_id` from `response.output_item.added`.
+reads events. Order events by `sequence_number`. Correlate
+`response.function_call_arguments.delta` chunks with `item_id` from
+`response.output_item.added`. Close the Responses stream on
+`response.completed`; Chat Completions still end with `data: [DONE]`.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create

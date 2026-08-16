@@ -4732,28 +4732,34 @@ def build_server(
         ) -> None:
             """Pipe a single-agent proxy as OpenAI SSE frames.
 
-            Chat tools/response_format emit ``chat.completion.chunk``. Responses
-            emit named ``response.*`` events. Validation has already run.
-            Headers are sent before the first frame, so a mid-stream provider
-            failure is surfaced as a terminal error event plus ``[DONE]``
-            rather than a JSON ``500``.
+            Chat tools/response_format emit ``chat.completion.chunk`` terminated
+            by ``data: [DONE]``. Responses emit named ``response.*`` events and
+            end on ``response.completed`` / ``response.failed`` — the Chat
+            Completions ``[DONE]`` trailer is dropped, including when a live
+            provider still sends it. Validation has already run. Headers are
+            sent before the first frame, so a mid-stream provider failure is
+            surfaced as a terminal error event rather than a JSON ``500``.
             """
             security.acquire_run_slot()
+            is_responses = endpoint.strip("/") == "responses"
             try:
                 self._begin_sse()
                 saw_done = False
                 try:
                     for frame in orchestrator.proxy_completion_stream(body, endpoint=endpoint):
                         if frame.strip() == "data: [DONE]":
+                            if is_responses:
+                                continue
                             saw_done = True
                         self.wfile.write(frame.encode("utf-8"))
                         self.wfile.flush()
-                    if not saw_done:
+                    if not saw_done and not is_responses:
                         self._write_sse("data: [DONE]\n\n")
                 except Exception:  # noqa: BLE001 - headers already sent
-                    if endpoint.strip("/") == "responses":
+                    if is_responses:
                         error_payload = {
                             "type": "response.failed",
+                            "sequence_number": 0,
                             "response": {
                                 "id": f"resp-{int(time.time() * 1000)}",
                                 "object": "response",
@@ -4777,7 +4783,7 @@ def build_server(
                             "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}],
                         }
                         self._write_sse(f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n")
-                    self._write_sse("data: [DONE]\n\n")
+                        self._write_sse("data: [DONE]\n\n")
             finally:
                 security.release_run_slot()
 

@@ -71,12 +71,14 @@ chunk.
   https://platform.openai.com/docs/api-reference/responses-streaming
   Grounds `item_id` on `response.function_call_arguments.delta` / `.done`
   and `name` on `.done` so an SDK can attach argument chunks to the
-  `output_item.added` function_call.
+  `output_item.added` function_call. Also grounds contiguous
+  `sequence_number` starting at 0 and the `response.in_progress`
+  lifecycle event after `response.created`.
 - OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
   https://platform.openai.com/docs/guides/streaming-responses
-  Grounds the named SSE `event:` field. The Chat Completions
-  `data: [DONE]` terminator is a compatibility trailer on this gateway,
-  not a Responses streaming event.
+  Grounds the named SSE `event:` field. Chat Completions still end with
+  `data: [DONE]`. Responses streams end on `response.completed` and do
+  not emit that Chat trailer.
 - WHATWG. (n.d.). *Server-sent events*. HTML Living Standard.
   https://html.spec.whatwg.org/multipage/server-sent-events.html
   Normative SSE framing. Cite+link; no PDF redistribution.

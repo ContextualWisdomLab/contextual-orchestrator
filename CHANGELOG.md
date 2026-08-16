@@ -23,7 +23,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `output_text`; live providers are piped verbatim. Next action: send
   `stream=true` on Responses SDK clients; include the invoice id in
   `input`; omit `stream_options.include_usage`. Correlate argument
-  chunks with `item_id` from `response.output_item.added`.
+  chunks with `item_id` from `response.output_item.added`. Order
+  events by `sequence_number` (starts at 0; `response.in_progress`
+  follows `response.created`). Close the Responses stream on
+  `response.completed` — do not wait for Chat `data: [DONE]`.
 
 ### Fixed
 

@@ -635,34 +635,50 @@ class ModelClient:
         yield "data: [DONE]\n\n"
 
     def _sse_named_event(self, event_type: str, payload: dict[str, Any]) -> str:
-        """Format one WHATWG SSE event with an OpenAI Responses ``event:`` name."""
+        """Format one WHATWG SSE event with an OpenAI Responses ``event:`` name.
+
+        Callers stamp official envelope keys (``type``, ``sequence_number``)
+        on ``payload`` before this helper serializes the ``data:`` line.
+        """
         return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
 
     def _mock_responses_sse(self, agent: ModelAgent, payload: dict[str, Any]):
         """Frame a mock Responses JSON body as official ``response.*`` SSE events.
 
-        Function-tool completions emit ``function_call`` output items and
-        ``response.function_call_arguments.delta`` keyed by ``item_id`` so a
-        streamed invoice lookup reconstructs to the same arguments as
+        Every event carries a contiguous ``sequence_number`` starting at 0.
+        ``response.created`` is followed by ``response.in_progress`` before
+        output items. Function-tool completions emit ``function_call`` items
+        and ``response.function_call_arguments.delta`` keyed by ``item_id``
+        so a streamed invoice lookup reconstructs to the same arguments as
         ``proxy_completion``. Content completions emit
-        ``response.output_text.delta``. Live providers are still piped
-        verbatim by ``_stream_raw``.
+        ``response.output_text.delta``. The stream ends on
+        ``response.completed`` — Chat Completions ``data: [DONE]`` is not
+        a Responses event. Live providers are still piped verbatim by
+        ``_stream_raw``.
         """
         snapshot = dict(payload)
         snapshot["stream"] = False
         raw = self._mock_raw(agent, "responses", snapshot)
         response_id = str(raw.get("id") or f"resp_mock_{agent.id}")
-        created = {
-            "type": "response.created",
-            "response": {
-                "id": response_id,
-                "object": "response",
-                "status": "in_progress",
-                "model": raw.get("model") or agent.model,
-                "output": [],
-            },
+        sequence_number = 0
+
+        def emit(event_type: str, event_payload: dict[str, Any]) -> str:
+            nonlocal sequence_number
+            stamped = dict(event_payload)
+            stamped["type"] = event_type
+            stamped["sequence_number"] = sequence_number
+            sequence_number += 1
+            return self._sse_named_event(event_type, stamped)
+
+        created_response = {
+            "id": response_id,
+            "object": "response",
+            "status": "in_progress",
+            "model": raw.get("model") or agent.model,
+            "output": [],
         }
-        yield self._sse_named_event("response.created", created)
+        yield emit("response.created", {"response": created_response})
+        yield emit("response.in_progress", {"response": dict(created_response)})
         output = raw.get("output") or []
         for index, item in enumerate(output):
             if not isinstance(item, dict):
@@ -678,30 +694,24 @@ class ModelClient:
                     "arguments": "",
                     "status": "in_progress",
                 }
-                yield self._sse_named_event(
+                yield emit(
                     "response.output_item.added",
-                    {
-                        "type": "response.output_item.added",
-                        "output_index": index,
-                        "item": added,
-                    },
+                    {"output_index": index, "item": added},
                 )
                 arguments = str(item.get("arguments") or "")
                 for start in range(0, len(arguments), 24):
                     delta = arguments[start : start + 24]
-                    yield self._sse_named_event(
+                    yield emit(
                         "response.function_call_arguments.delta",
                         {
-                            "type": "response.function_call_arguments.delta",
                             "item_id": item_id,
                             "output_index": index,
                             "delta": delta,
                         },
                     )
-                yield self._sse_named_event(
+                yield emit(
                     "response.function_call_arguments.done",
                     {
-                        "type": "response.function_call_arguments.done",
                         "item_id": item_id,
                         "output_index": index,
                         "name": function_name,
@@ -710,13 +720,9 @@ class ModelClient:
                 )
                 done_item = dict(item)
                 done_item["status"] = "completed"
-                yield self._sse_named_event(
+                yield emit(
                     "response.output_item.done",
-                    {
-                        "type": "response.output_item.done",
-                        "output_index": index,
-                        "item": done_item,
-                    },
+                    {"output_index": index, "item": done_item},
                 )
                 continue
             content_parts = item.get("content") if isinstance(item.get("content"), list) else []
@@ -725,10 +731,9 @@ class ModelClient:
                 if isinstance(part, dict) and part.get("type") == "output_text":
                     text += str(part.get("text") or "")
             item_id = str(item.get("id") or f"msg_mock_{index}")
-            yield self._sse_named_event(
+            yield emit(
                 "response.output_item.added",
                 {
-                    "type": "response.output_item.added",
                     "output_index": index,
                     "item": {
                         "id": item_id,
@@ -740,10 +745,9 @@ class ModelClient:
                 },
             )
             if text:
-                yield self._sse_named_event(
+                yield emit(
                     "response.content_part.added",
                     {
-                        "type": "response.content_part.added",
                         "item_id": item_id,
                         "output_index": index,
                         "content_index": 0,
@@ -751,20 +755,18 @@ class ModelClient:
                     },
                 )
                 for start in range(0, len(text), 24):
-                    yield self._sse_named_event(
+                    yield emit(
                         "response.output_text.delta",
                         {
-                            "type": "response.output_text.delta",
                             "item_id": item_id,
                             "output_index": index,
                             "content_index": 0,
                             "delta": text[start : start + 24],
                         },
                     )
-                yield self._sse_named_event(
+                yield emit(
                     "response.output_text.done",
                     {
-                        "type": "response.output_text.done",
                         "item_id": item_id,
                         "output_index": index,
                         "content_index": 0,
@@ -773,21 +775,13 @@ class ModelClient:
                 )
             done_item = dict(item)
             done_item["status"] = "completed"
-            yield self._sse_named_event(
+            yield emit(
                 "response.output_item.done",
-                {
-                    "type": "response.output_item.done",
-                    "output_index": index,
-                    "item": done_item,
-                },
+                {"output_index": index, "item": done_item},
             )
         completed = dict(raw)
         completed["status"] = "completed"
-        yield self._sse_named_event(
-            "response.completed",
-            {"type": "response.completed", "response": completed},
-        )
-        yield "data: [DONE]\n\n"
+        yield emit("response.completed", {"response": completed})
 
     def _send_raw_with_retry(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]

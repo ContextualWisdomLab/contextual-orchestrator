@@ -3,11 +3,14 @@
 OpenAI SDKs default ``client.responses.create(..., stream=True)``. Until this
 path existed, the gateway returned ``400 invalid_stream`` (honest, but a
 buyer-visible gap: every streaming Responses client failed). The transport
-must emit ``text/event-stream`` Responses events. Function tools reconstruct
-to the same ``output[].type=function_call`` as the non-stream JSON body
+must emit ``text/event-stream`` Responses events with contiguous
+``sequence_number`` values and ``response.in_progress`` after
+``response.created``. Function tools reconstruct to the same
+``output[].type=function_call`` as the non-stream JSON body
 (including ``lookup_balance`` / ``INV-9``); content-only streams still match
-``output_text``. ``stream_options.include_usage=true`` and non-boolean
-``stream`` still fail closed.
+``output_text``. The stream ends on ``response.completed`` without a Chat
+``data: [DONE]`` trailer. ``stream_options.include_usage=true`` and
+non-boolean ``stream`` still fail closed.
 
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
 https://platform.openai.com/docs/guides/streaming-responses
@@ -192,6 +195,45 @@ def test_proxy_completion_responses_tool_choice_none_keeps_content() -> None:
     assert item["content"][0]["text"] == "[general_agent] responses-mock"
 
 
+def test_http_responses_stream_uses_official_envelope() -> None:
+    """Official Responses SSE: sequence_number, in_progress, no Chat [DONE].
+
+    openai-python orders ``response.*`` events by ``sequence_number`` starting
+    at 0 and treats ``response.completed`` as the stream end. A Chat
+    Completions ``data: [DONE]`` trailer is not a Responses event (OpenAI,
+    2024) and must not appear after ``response.completed``.
+    """
+    server, thread, port = _server()
+    try:
+        payload = {
+            "model": "mock-planner",
+            "input": "look up invoice INV-20260816009",
+            "tools": _LOOKUP_TOOLS,
+            "stream": True,
+        }
+        status, content_type, body = _post_raw(port, payload)
+        assert status == 200, body
+        assert content_type.startswith("text/event-stream")
+        assert "data: [DONE]" not in body
+        events = _sse_events(body)
+        assert events, body
+        numbers = [event.get("sequence_number") for event in events]
+        assert numbers == list(range(len(events))), numbers
+        assert events[0]["type"] == "response.created"
+        assert events[0]["sequence_number"] == 0
+        assert events[1]["type"] == "response.in_progress"
+        assert events[1]["sequence_number"] == 1
+        assert events[-1]["type"] == "response.completed"
+        assert events[-1]["sequence_number"] == len(events) - 1
+        call = _reconstruct_function_call(body)
+        assert call["name"] == "lookup_balance"
+        assert json.loads(call["arguments"]) == {"invoice_id": "INV-20260816009"}
+        assert int(call["delta_chunks"]) >= 2
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_responses_stream_emits_function_call_events() -> None:
     """A streamed invoice lookup must reconstruct to the JSON twin, keyed by item_id."""
     server, thread, port = _server()
@@ -207,7 +249,7 @@ def test_http_responses_stream_emits_function_call_events() -> None:
         status, content_type, body = _post_raw(port, {**payload, "stream": True})
         assert status == 200, body
         assert content_type.startswith("text/event-stream")
-        assert "data: [DONE]" in body
+        assert "data: [DONE]" not in body
         call = _reconstruct_function_call(body)
         assert call["id"] == json_item["id"] == "fc_mock_lookup_balance"
         assert call["call_id"] == json_item["call_id"]
@@ -310,6 +352,7 @@ if __name__ == "__main__":
     test_proxy_completion_responses_function_tools_bind_invoice()
     test_proxy_completion_responses_native_tools_bind_invoice()
     test_proxy_completion_responses_tool_choice_none_keeps_content()
+    test_http_responses_stream_uses_official_envelope()
     test_http_responses_stream_emits_function_call_events()
     test_http_responses_stream_content_matches_json()
     test_http_responses_stream_tool_choice_none_keeps_content()
