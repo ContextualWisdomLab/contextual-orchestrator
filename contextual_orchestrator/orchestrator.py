@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
+from contextlib import contextmanager
 from contextvars import ContextVar
 import copy
 from dataclasses import dataclass, replace
@@ -251,6 +252,45 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    @contextmanager
+    def request_sampling(
+        self,
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        max_output_tokens: int | None = None,
+    ):
+        """Apply sampling knobs for the calling thread only.
+
+        ``ThreadingHTTPServer`` handles concurrent Completions/chat requests on
+        the same ``ModelClient``. Mutating ``default_temperature`` (and siblings)
+        on the instance lets one request observe another request's knobs.
+        Overrides are stacked on ``threading.local`` and restored on exit.
+        """
+        previous = getattr(self._local, "sampling_overrides", None)
+        overrides = dict(previous or {})
+        if temperature is not None:
+            overrides["temperature"] = temperature
+        if top_p is not None:
+            overrides["top_p"] = top_p
+        if presence_penalty is not None:
+            overrides["presence_penalty"] = presence_penalty
+        if frequency_penalty is not None:
+            overrides["frequency_penalty"] = frequency_penalty
+        if max_output_tokens is not None:
+            overrides["max_output_tokens"] = max_output_tokens
+        self._local.sampling_overrides = overrides
+        try:
+            yield
+        finally:
+            self._local.sampling_overrides = previous
+
+    def _request_sampling_overrides(self) -> dict[str, Any]:
+        """Return this thread's request-scoped sampling overrides, if any."""
+        return dict(getattr(self._local, "sampling_overrides", None) or {})
+
     def chat(
         self,
         agent: ModelAgent,
@@ -260,16 +300,21 @@ class ModelClient:
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
-        When ``temperature``/``top_p`` are omitted, ``default_temperature`` and
-        ``default_top_p`` are used so request-scoped Completions sampling can be
-        applied without threading kwargs through every orchestrator hop.
+        When ``temperature``/``top_p`` are omitted, thread-local
+        ``request_sampling`` overrides win over ``default_temperature`` /
+        ``default_top_p`` so concurrent Completions/chat requests cannot
+        observe each other's knobs.
         """
         self._local.usage = None
-        # Expose the effective sampling knobs for request-path tests / diagnostics.
+        overrides = self._request_sampling_overrides()
+        if temperature is None:
+            temperature = overrides.get("temperature")
+        if top_p is None:
+            top_p = overrides.get("top_p")
         effective_temperature = self.default_temperature if temperature is None else temperature
         effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
+        effective_presence = overrides.get("presence_penalty", self.default_presence_penalty)
+        effective_frequency = overrides.get("frequency_penalty", self.default_frequency_penalty)
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
@@ -289,7 +334,7 @@ class ModelClient:
             "messages": messages,
             "temperature": effective_temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": overrides.get("max_output_tokens", self.max_output_tokens),
         }
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
@@ -351,6 +396,9 @@ class ModelClient:
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        overrides = self._request_sampling_overrides()
+        effective_temperature = overrides.get("temperature", temperature)
+        effective_max_tokens = overrides.get("max_output_tokens", self.max_output_tokens)
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -361,9 +409,9 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": effective_temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": effective_max_tokens,
         }
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
