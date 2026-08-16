@@ -301,8 +301,8 @@ def _validate_completions_echo(body: dict[str, Any]) -> bool | None:
     if "echo" not in body:
         return None
     echo = body.get("echo")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if echo is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if echo is None or (isinstance(echo, str) and not echo.strip()):
         return None
     if not isinstance(echo, bool):
         raise RequestError(400, "invalid_echo", "echo must be a boolean")
@@ -423,8 +423,8 @@ def _validate_completions_n(body: dict[str, Any]) -> int | None:
     if "n" not in body:
         return None
     n = body.get("n")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if n is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if n is None or (isinstance(n, str) and not n.strip()):
         return None
     if isinstance(n, bool) or not isinstance(n, int) or n < 1:
         raise RequestError(400, "invalid_n", "n must be a positive integer")
@@ -449,8 +449,8 @@ def _validate_responses_n(body: dict[str, Any]) -> int | None:
     if "n" not in body:
         return None
     n = body.get("n")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if n is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if n is None or (isinstance(n, str) and not n.strip()):
         return None
     if isinstance(n, bool) or not isinstance(n, int):
         raise RequestError(400, "invalid_n", "n must be an integer")
@@ -534,8 +534,8 @@ def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None
     if "parallel_tool_calls" not in body:
         return None
     value = body.get("parallel_tool_calls")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if value is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if not isinstance(value, bool):
         raise RequestError(
@@ -555,8 +555,8 @@ def _validate_responses_seed(body: dict[str, Any]) -> int | None:
     if "seed" not in body:
         return None
     seed = body.get("seed")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if seed is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if seed is None or (isinstance(seed, str) and not seed.strip()):
         return None
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise RequestError(400, "invalid_seed", "seed must be an integer")
@@ -578,14 +578,15 @@ def _validate_responses_stop(body: dict[str, Any]) -> str | list[str] | None:
     if stop is None:
         return None
     if isinstance(stop, str):
-        # Empty string is omit-equivalent (no stop sequences).
-        if not stop:
+        # Empty/whitespace string is omit-equivalent (no stop sequences).
+        if not stop.strip():
             return None
         if len(stop) > 256:
             raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
         return stop
     if isinstance(stop, list):
-        # Empty array is omit-equivalent (no stop sequences).
+        # Drop whitespace-only items; empty result is omit-equivalent.
+        stop = [item for item in stop if not (isinstance(item, str) and not item.strip())]
         if not stop:
             return None
         if len(stop) > 4:
@@ -613,13 +614,14 @@ def _validate_completions_stop(body: dict[str, Any]) -> str | list[str] | None:
     if stop is None:
         return None
     if isinstance(stop, str):
-        # Empty string is omit-equivalent (no stop sequences).
-        if not stop:
+        # Empty/whitespace string is omit-equivalent (no stop sequences).
+        if not stop.strip():
             return None
         if len(stop) > 256:
             raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
     elif isinstance(stop, list):
-        # Empty array is omit-equivalent (no stop sequences).
+        # Drop whitespace-only items; empty result is omit-equivalent.
+        stop = [item for item in stop if not (isinstance(item, str) and not item.strip())]
         if not stop:
             return None
         if len(stop) > 4:
@@ -649,8 +651,8 @@ def _validate_completions_seed(body: dict[str, Any]) -> int | None:
     if "seed" not in body:
         return None
     seed = body.get("seed")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if seed is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if seed is None or (isinstance(seed, str) and not seed.strip()):
         return None
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise RequestError(400, "invalid_seed", "seed must be an integer")
@@ -669,8 +671,8 @@ def _validate_completions_frequency_penalty(body: dict[str, Any]) -> float | Non
     if "frequency_penalty" not in body:
         return None
     value = body.get("frequency_penalty")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if value is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise RequestError(400, "invalid_frequency_penalty", "frequency_penalty must be a number in [-2, 2]")
@@ -684,8 +686,8 @@ def _validate_completions_presence_penalty(body: dict[str, Any]) -> float | None
     if "presence_penalty" not in body:
         return None
     value = body.get("presence_penalty")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if value is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if isinstance(value, bool) or not isinstance(value, (int, float)):
         raise RequestError(400, "invalid_presence_penalty", "presence_penalty must be a number in [-2, 2]")
@@ -699,8 +701,8 @@ def _validate_completions_temperature(body: dict[str, Any]) -> float | None:
     if "temperature" not in body:
         return None
     temperature = body.get("temperature")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if temperature is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if temperature is None or (isinstance(temperature, str) and not temperature.strip()):
         return None
     if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
         raise RequestError(400, "invalid_temperature", "temperature must be a number in [0, 2]")
@@ -714,8 +716,8 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     if "top_p" not in body:
         return None
     top_p = body.get("top_p")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if top_p is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if top_p is None or (isinstance(top_p, str) and not top_p.strip()):
         return None
     if isinstance(top_p, bool) or not isinstance(top_p, (int, float)):
         raise RequestError(400, "invalid_top_p", "top_p must be a number in (0, 1]")
@@ -741,8 +743,8 @@ def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
     if "max_tokens" not in body:
         return None
     max_tokens = body.get("max_tokens")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if max_tokens is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if max_tokens is None or (isinstance(max_tokens, str) and not max_tokens.strip()):
         return None
     if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
         raise RequestError(400, "invalid_max_tokens", "max_tokens must be a positive integer")
@@ -763,8 +765,10 @@ def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
     if "max_completion_tokens" not in body:
         return None
     max_completion_tokens = body.get("max_completion_tokens")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if max_completion_tokens is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if max_completion_tokens is None or (
+        isinstance(max_completion_tokens, str) and not max_completion_tokens.strip()
+    ):
         return None
     if (
         isinstance(max_completion_tokens, bool)
@@ -796,8 +800,8 @@ def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
     if "max_output_tokens" not in body:
         return None
     value = body.get("max_output_tokens")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if value is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if isinstance(value, bool) or not isinstance(value, int) or value < 1:
         raise RequestError(
@@ -927,8 +931,8 @@ def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
     if "best_of" not in body:
         return None
     best_of = body.get("best_of")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if best_of is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if best_of is None or (isinstance(best_of, str) and not best_of.strip()):
         return None
     if isinstance(best_of, bool) or not isinstance(best_of, int) or best_of < 1:
         raise RequestError(400, "invalid_best_of", "best_of must be a positive integer")
@@ -2528,12 +2532,13 @@ def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
 def _validate_embeddings_dimensions(body: dict[str, Any]) -> None:
     """OpenAI ``dimensions`` — not applied; non-null values fail closed.
 
-    Explicit JSON ``null`` is treated as omit (SDK optional default). Any other
+    Explicit JSON ``null`` or empty/whitespace string is treat-as-omit. Any other
     value fails closed so clients cannot believe reduced dimensionality was applied.
     """
     if "dimensions" not in body:
         return
-    if body.get("dimensions") is None:
+    value = body.get("dimensions")
+    if value is None or (isinstance(value, str) and not value.strip()):
         return
     raise RequestError(
         400,
@@ -3222,6 +3227,9 @@ def build_server(
                         # provider passthrough; without tools, true fails closed.
                         # Explicit JSON null is treat-as-omit (SDK optional default).
                         ptc = body.get("parallel_tool_calls")
+                        # Empty/whitespace string is treat-as-omit (SDK optional default).
+                        if isinstance(ptc, str) and not ptc.strip():
+                            ptc = None
                         if ptc is not None:
                             if not isinstance(ptc, bool):
                                 raise RequestError(
@@ -3263,7 +3271,9 @@ def build_server(
                     if "include_orchestration_trace" in body:
                         include_trace_raw = body.get("include_orchestration_trace")
                         # Explicit JSON null is treat-as-omit (SDK optional default).
-                        if include_trace_raw is None:
+                        if include_trace_raw is None or (
+                            isinstance(include_trace_raw, str) and not include_trace_raw.strip()
+                        ):
                             include_trace = bool(security.expose_trace_by_default)
                         elif not isinstance(include_trace_raw, bool):
                             raise RequestError(
@@ -3321,8 +3331,11 @@ def build_server(
                         frequency_penalty = _validate_completions_frequency_penalty(body)
                     if "seed" in body:
                         # Type-check then fail closed: chat route does not apply seed.
-                        # Explicit JSON null is treat-as-omit (SDK optional default).
-                        if body.get("seed") is not None:
+                        # Explicit JSON null or empty/whitespace string is treat-as-omit.
+                        seed_raw = body.get("seed")
+                        if seed_raw is not None and not (
+                            isinstance(seed_raw, str) and not seed_raw.strip()
+                        ):
                             try:
                                 _validate_completions_seed(body)
                             except RequestError as exc:
@@ -3355,8 +3368,13 @@ def build_server(
                                 ) from exc
                             raise
                     if "stop" in body:
-                        # Explicit JSON null, empty string, or empty [] is treat-as-omit.
+                        # Explicit JSON null, empty string, empty [], or all-whitespace
+                        # array items is treat-as-omit (SDK optional default).
                         stop_val = body.get("stop")
+                        if isinstance(stop_val, list):
+                            stop_val = [s for s in stop_val if not (isinstance(s, str) and not s.strip())]
+                            if not stop_val:
+                                stop_val = []
                         if stop_val is not None and stop_val != [] and stop_val != "":
                             try:
                                 _validate_completions_stop(body)
@@ -3391,6 +3409,9 @@ def build_server(
                         # Explicit JSON null is treat-as-omit (SDK optional default).
                         if "logprobs" in body:
                             lp = body.get("logprobs")
+                            # Empty/whitespace string is treat-as-omit.
+                            if isinstance(lp, str) and not lp.strip():
+                                lp = None
                             if lp is not None:
                                 if not isinstance(lp, bool):
                                     raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
@@ -3820,8 +3841,12 @@ def build_server(
                     # stream=true is not implemented for Responses passthrough.
                     if "stream" in body:
                         stream = body.get("stream")
-                        # Explicit JSON null / false are omit-equivalent no-ops.
-                        if stream is None or stream is False:
+                        # Explicit JSON null / false / empty string are omit-equivalent no-ops.
+                        if (
+                            stream is None
+                            or stream is False
+                            or (isinstance(stream, str) and not stream.strip())
+                        ):
                             pass
                         elif not isinstance(stream, bool):
                             raise RequestError(400, "invalid_stream", "stream must be a boolean")
