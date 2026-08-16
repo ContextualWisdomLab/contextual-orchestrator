@@ -1,0 +1,82 @@
+name: Apply quality-first cost-aware adaptive policy
+
+on:
+  push:
+    branches:
+      - feat/reasoning-effort-and-verify-mode
+    paths:
+      - scripts/stage_quality_cost_policy_test.py
+      - scripts/apply_quality_cost_policy.py
+      - .github/workflows/apply-quality-cost-policy.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: apply-quality-cost-policy-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  red-green-verify:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # actions/checkout@v4
+        with:
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install locked test dependencies
+        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Stage the regression before production changes
+        run: python scripts/stage_quality_cost_policy_test.py
+
+      - name: Prove the regression is red for the missing policy
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          python -m pytest -q tests/test_quality_cost_adaptive_default.py > /tmp/adaptive-red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/adaptive-red.log
+          test "$status" -ne 0
+          grep -Eq "FAILED|ERROR" /tmp/adaptive-red.log
+
+      - name: Apply the minimal production implementation
+        run: python scripts/apply_quality_cost_policy.py
+
+      - name: Prove the regression is green
+        run: python -m pytest -q tests/test_quality_cost_adaptive_default.py
+
+      - name: Run the complete repository suite
+        run: python -m pytest -q
+
+      - name: Verify Python syntax and patch integrity
+        shell: bash
+        run: |
+          python -m compileall -q contextual_orchestrator tests/test_quality_cost_adaptive_default.py
+          git diff --check
+
+      - name: Publish the verified source commit
+        env:
+          TARGET_BRANCH: feat/reasoning-effort-and-verify-mode
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm scripts/stage_quality_cost_policy_test.py
+          rm scripts/apply_quality_cost_policy.py
+          rm .github/workflows/apply-quality-cost-policy.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add --all
+          git diff --cached --check
+          git commit -m "feat(routing): adopt quality-first cost-aware adaptive default"
+          git push origin "HEAD:${TARGET_BRANCH}"
