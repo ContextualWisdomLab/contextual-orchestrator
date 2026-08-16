@@ -98,15 +98,34 @@ def test_http_responses_rejects_conversation() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_truncation() -> None:
+def test_http_responses_accepts_truncation_auto_and_disabled_as_noop() -> None:
+    """OpenAI truncation auto|disabled are omit-equivalent (no multi-turn window)."""
+    server, thread, port = _server()
+    try:
+        for value in ("auto", "disabled", " AUTO ", "Disabled"):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "input": f"hello truncation {value}",
+                    "truncation": value,
+                },
+            )
+            assert status == 200, (value, body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_unknown_truncation() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "input": "hello truncation",
-                "truncation": "auto",
+                "input": "hello truncation bad",
+                "truncation": "aggressive",
             },
         )
         assert status == 400, body
@@ -134,7 +153,8 @@ def test_http_responses_rejects_include() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_text_control() -> None:
+def test_http_responses_accepts_official_text_format_text() -> None:
+    """Official OpenAI text.format type=text is accepted on Responses."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -145,8 +165,27 @@ def test_http_responses_rejects_text_control() -> None:
                 "text": {"format": {"type": "text"}},
             },
         )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_unsupported_text_shape() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "hello text control bad",
+                "text": {"verbosity": "high"},
+            },
+        )
         assert status == 400, body
-        assert "invalid_text" in json.dumps(body)
+        blob = json.dumps(body)
+        assert "invalid_text" in blob or "unknown" not in blob
+        assert status == 400
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -156,7 +195,9 @@ if __name__ == "__main__":
     test_http_responses_accepts_baseline_without_conversation_controls()
     test_http_responses_rejects_previous_response_id()
     test_http_responses_rejects_conversation()
-    test_http_responses_rejects_truncation()
+    test_http_responses_accepts_truncation_auto_and_disabled_as_noop()
+    test_http_responses_rejects_unknown_truncation()
     test_http_responses_rejects_include()
-    test_http_responses_rejects_text_control()
+    test_http_responses_accepts_official_text_format_text()
+    test_http_responses_rejects_unsupported_text_shape()
     print("ok")

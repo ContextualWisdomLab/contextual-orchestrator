@@ -1326,11 +1326,19 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
             "conversation is not supported on /v1/responses",
         )
     if "truncation" in body and _present_nonempty(body.get("truncation")):
-        raise RequestError(
-            400,
-            "invalid_truncation",
-            "truncation is not supported on /v1/responses",
-        )
+        trunc = body.get("truncation")
+        # OpenAI truncation auto|disabled are honest no-ops here: this gateway
+        # has no multi-turn conversation window to truncate. Other values fail
+        # closed so clients never believe an unsupported policy applied.
+        if isinstance(trunc, str) and trunc.strip().lower() in {"auto", "disabled"}:
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_truncation",
+                "truncation must be auto or disabled on /v1/responses "
+                "(or omit; multi-turn truncation is not applied)",
+            )
     if "include" in body:
         include = body.get("include")
         # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
