@@ -53,6 +53,25 @@ OpenAI-compatible backends reject a null JSON Schema object.
   Distinguishes a present `null` member from an omitted member. Redistribution
   of the RFC text is not required here; the citation is the normative source.
 
+## Orchestration honesty (route vs conduct)
+
+Tool-calling and `response_format` requests take the single-agent
+passthrough path. That path is the Fugu-style route hop, not a Conductor
+workflow or a TRINITY trusted-trace plane. `mode=conduct` and
+`include_orchestration_trace=true` must fail closed there so a billed
+completion cannot claim a workflow or audit trace that never ran.
+
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y.
+  (2025). *Learning to orchestrate agents in natural language with the
+  Conductor*. arXiv. https://arxiv.org/abs/2512.04388
+  Grounds workflow steps, access lists, and why `conduct` cannot be
+  silently dropped on a single-agent proxy.
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y.
+  (2025). *Trinity: An evolved LLM coordinator*. arXiv.
+  https://arxiv.org/abs/2512.04695
+  Grounds Thinker / Worker / Verifier roles and why a trusted
+  orchestration trace is not produced on passthrough.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including

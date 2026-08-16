@@ -1235,6 +1235,53 @@ def _validate_include_orchestration_trace_flag(body: dict[str, Any], default: bo
     return include_trace_raw
 
 
+def _validate_chat_passthrough_orchestration_controls(body: dict[str, Any]) -> None:
+    """Fail-closed ``conduct`` and trusted-trace on tools / ``response_format``.
+
+    Passthrough is single-agent (the route path). A Conductor workflow and a
+    TRINITY trusted-trace plane do not run here, so ``mode=conduct`` and
+    ``include_orchestration_trace=true`` must 400 instead of billing a silent
+    completion (Nielsen et al., 2025; Xu et al., 2025). Each of
+    ``orchestration``, ``orchestration_mode``, and ``mode`` is checked on its
+    own so a mixed ``orchestration=route`` plus ``mode=conduct`` body cannot
+    hide conduct. ``auto`` / ``route``, omitted / null / empty mode, and
+    omitted / null / empty / ``false`` trace stay honest no-ops.
+    """
+    for key in ("orchestration", "orchestration_mode", "mode"):
+        if key not in body:
+            continue
+        raw_mode = body.get(key)
+        if raw_mode is None or (isinstance(raw_mode, str) and not raw_mode.strip()):
+            continue
+        mode = _validate_mode(raw_mode)
+        if mode == "conduct":
+            raise RequestError(
+                400,
+                "invalid_mode",
+                "mode=conduct is not supported with tools or response_format; "
+                "omit mode or set mode=route",
+            )
+    if "include_orchestration_trace" not in body:
+        return
+    include_trace_raw = body.get("include_orchestration_trace")
+    if include_trace_raw is None or (
+        isinstance(include_trace_raw, str) and not include_trace_raw.strip()
+    ):
+        return
+    if not isinstance(include_trace_raw, bool):
+        raise RequestError(
+            400,
+            "invalid_include_orchestration_trace",
+            "include_orchestration_trace must be a boolean",
+        )
+    if include_trace_raw is True:
+        raise RequestError(
+            400,
+            "invalid_include_orchestration_trace",
+            "include_orchestration_trace=true is not supported with tools or "
+            "response_format; omit it or set false",
+        )
+
 
 def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     """Fail closed when ``model_name`` is not served by any enabled agent.
@@ -3932,10 +3979,7 @@ def build_server(
                                 "or response_format; omit it or set false",
                             )
                         _validate_chat_passthrough_request_knobs(body)
-                        _validate_request_mode_if_present(body)
-                        _validate_include_orchestration_trace_flag(
-                            body, bool(security.expose_trace_by_default)
-                        )
+                        _validate_chat_passthrough_orchestration_controls(body)
                         _validate_messages(body.get("messages"))
                         started_at = time.perf_counter()
                         if stream:

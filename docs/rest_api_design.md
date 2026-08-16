@@ -143,16 +143,20 @@ optional `index` (non-negative integer or JSON `null`). Extra entry keys
 fail closed as `unknown_tool_call_fields`; extra `function` keys fail
 closed as `unknown_tool_call_function_fields`. The same gate runs on the
 tools / `response_format` path, including `stream=true`, before the first
-SSE byte. Non-boolean `include_orchestration_trace` and unknown `mode` /
-`orchestration` / `orchestration_mode` also fail closed on that path
-(`invalid_include_orchestration_trace` / `invalid_mode`) instead of
-billing a silent completion.
+SSE byte. Unknown `mode` / `orchestration` / `orchestration_mode`,
+`mode=conduct`, non-boolean `include_orchestration_trace`, and
+`include_orchestration_trace=true` also fail closed on that path
+(`invalid_mode` / `invalid_include_orchestration_trace`) instead of billing
+a silent single-agent completion. Passthrough has no Conductor workflow or
+TRINITY trusted-trace plane (Nielsen et al., 2025; Xu et al., 2025). Omit
+those knobs, or send `mode=route` / `include_orchestration_trace=false`.
 
 Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when
 the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
 pool `model`; omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
-and `stream_options.include_usage` on tool-calling requests. When declaring
+`mode=conduct`, `include_orchestration_trace=true`, and
+`stream_options.include_usage` on tool-calling requests. When declaring
 tools, omit unused `description` / `parameters` / `strict` or leave the SDK
 default `null` — both become omit before the provider hop. On assistant
 `tool_calls`, send only `id` / `type` / `function` / optional `index`.
@@ -169,6 +173,14 @@ https://html.spec.whatwg.org/multipage/server-sent-events.html
 Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data
 interchange format* (RFC 8259). Internet Engineering Task Force.
 https://doi.org/10.17487/RFC8259
+
+Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).
+*Learning to orchestrate agents in natural language with the Conductor*.
+arXiv. https://arxiv.org/abs/2512.04388
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
+*Trinity: An evolved LLM coordinator*. arXiv.
+https://arxiv.org/abs/2512.04695
 
 ## Production Library Target
 
