@@ -1598,7 +1598,11 @@ class TaskOrchestrator:
     def conduct(
         self, messages: list[ChatMessage], *, reasoning_effort: str | None = None
     ) -> dict[str, Any]:
-        """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
+        """Run a planned workflow: fixed template, or a Conductor-style generated plan.
+
+        Rejected checks serve the public rejection envelope. A generated plan
+        that omits a verifier still answers, with ``answer_status="unchecked"``.
+        """
         task = self._latest_user_text(messages)
         plan_source = "template"
         if self.policy.workflow_planning == "generated":
@@ -1654,21 +1658,27 @@ class TaskOrchestrator:
 
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
-            verifier_text = last_output("verifier")
-            if verifier_text:
+            has_verifier = any(step.role == "verifier" for step in steps)
+            if has_verifier:
                 verification = self._judge_verifier_output(
-                    verifier_text, upstream, last_output("worker"), require_explicit_verdict=True
+                    last_output("verifier"),
+                    upstream,
+                    last_output("worker"),
+                    require_explicit_verdict=True,
                 )
                 if self.policy.verifier_judge == "model":
                     verification = self._model_judge_verification(
                         task, verification, reasoning_effort=reasoning_effort
                     )
+                answer_status = "accepted" if verification.get("accepted") else "rejected"
             else:
                 verification = {
-                    "accepted": True,
+                    "accepted": False,
                     "reason": "generated plan omitted a verifier step",
                     "verifier_output": "",
+                    "check_status": "unchecked",
                 }
+                answer_status = "unchecked"
             answer = outputs[steps[-1].id]
         else:
             verification = self._judge_verifier_output(
@@ -1679,14 +1689,14 @@ class TaskOrchestrator:
                     task, verification, reasoning_effort=reasoning_effort
                 )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
+            answer_status = "accepted" if verification.get("accepted") else "rejected"
 
-        accepted = bool(verification.get("accepted"))
-        if not accepted:
+        if answer_status == "rejected":
             answer = self._rejected_verify_answer(verification)
         return {
             "mode": "conduct",
             "answer": answer,
-            "answer_status": "accepted" if accepted else "rejected",
+            "answer_status": answer_status,
             "trace": trace,
             "verification": verification,
             "plan_source": plan_source,

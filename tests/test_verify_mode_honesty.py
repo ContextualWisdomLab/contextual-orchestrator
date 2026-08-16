@@ -248,6 +248,7 @@ def test_architecture_note_does_not_claim_per_role_allocation() -> None:
     assert "per-role/per-request" not in text
     assert "request-level" in text
     assert "#568" in text or "issue 568" in text.lower()
+    assert "unchecked" in text
 
 
 def test_chat_response_echoes_routing_decision_and_redacts_verification() -> None:
@@ -298,6 +299,26 @@ def test_persisted_run_echoes_applied_reasoning_effort() -> None:
     )
     assert record["reasoning_effort"]["requested"] == "high"
     assert record["reasoning_effort"]["status"] == "applied"
+
+
+def test_persisted_run_echoes_rejected_answer_status() -> None:
+    record = _orchestrator(RejectingVerdictClient()).run(
+        [{"role": "user", "content": "Does record B follow from record A?"}],
+        mode="verify",
+    )
+    assert record["answer_status"] == "rejected"
+    assert "worker says yes" not in record["answer"]
+
+
+def test_complete_verify_http_echoes_produced_answer_status() -> None:
+    result = _orchestrator(RejectingVerdictClient()).complete(
+        [{"role": "user", "content": "Does record B follow from record A?"}],
+        mode="verify",
+    )
+    body = chat_completion_response(result)
+    assert body["orchestration"]["answer_status"] == "rejected"
+    final = chat_completion_chunks(result)[-1]
+    assert final["orchestration"]["answer_status"] == "rejected"
 
 
 def test_stream_chunks_redact_verification_secrets() -> None:
@@ -404,6 +425,8 @@ if __name__ == "__main__":
     test_architecture_note_does_not_claim_per_role_allocation()
     test_chat_response_echoes_routing_decision_and_redacts_verification()
     test_persisted_run_echoes_applied_reasoning_effort()
+    test_persisted_run_echoes_rejected_answer_status()
+    test_complete_verify_http_echoes_produced_answer_status()
     test_stream_chunks_redact_verification_secrets()
     test_batch_envelope_reports_dropped_reasoning_effort()
     test_empty_verifier_ledger_still_counts_worker()

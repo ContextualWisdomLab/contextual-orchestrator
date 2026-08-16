@@ -142,8 +142,54 @@ def test_generated_plan_without_verifier_still_serves_synthesizer() -> None:
     result = orchestrator.conduct([{"role": "user", "content": "solve"}])
     assert result["plan_source"] == "generated"
     assert result["answer"] == "step-output(2)"
-    assert result["answer_status"] == "accepted"
+    assert result["answer_status"] == "unchecked"
+    assert result["verification"]["accepted"] is not True
     assert result["verification"]["reason"] == "generated plan omitted a verifier step"
+
+
+class _EmptyVerifierPlannerClient(_PlannerClient):
+    """A present verifier step that returns nothing is a failed check, not an omit."""
+
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+        self.calls.append(messages)
+        if len(self.calls) == 1:
+            return self.plan_text
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return ""
+        return f"step-output({len(self.calls) - 1})"
+
+
+def test_generated_plan_empty_verifier_step_fails_closed() -> None:
+    plan = json.dumps({"steps": [
+        {"id": 0, "role": "worker", "agent_id": "general_agent", "subtask": "do the work", "access": []},
+        {"id": 1, "role": "verifier", "agent_id": "general_agent", "subtask": "check", "access": [0]},
+        {"id": 2, "role": "synthesizer", "agent_id": "general_agent", "subtask": "answer", "access": [0, 1]},
+    ]})
+    client = _EmptyVerifierPlannerClient(plan)
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "model-x", tags=("reasoning", "writing", "planning", "research"))],
+        client=client,
+    )
+    orchestrator.policy = replace(orchestrator.policy, workflow_planning="generated")
+    result = orchestrator.conduct([{"role": "user", "content": "solve"}])
+    assert result["plan_source"] == "generated"
+    assert result["answer_status"] == "rejected"
+    assert result["verification"]["accepted"] is False
+    assert "step-output(3)" not in result["answer"]
+    assert "Verification rejected" in result["answer"]
+
+
+def test_persisted_generated_plan_without_verifier_is_unchecked() -> None:
+    plan = json.dumps({"steps": [
+        {"id": 0, "role": "worker", "agent_id": "general_agent", "subtask": "do the work", "access": []},
+        {"id": 1, "role": "synthesizer", "agent_id": "general_agent", "subtask": "answer", "access": [0]},
+    ]})
+    orchestrator, _ = _orch(plan)
+    record = orchestrator.run([{"role": "user", "content": "solve"}], mode="conduct")
+    assert record["answer_status"] == "unchecked"
+    assert record["answer"] == "step-output(2)"
+    assert record["verification"]["accepted"] is not True
 
 
 def test_unknown_agent_id_is_reselected_not_fatal() -> None:
