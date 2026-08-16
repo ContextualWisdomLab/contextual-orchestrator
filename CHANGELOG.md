@@ -6,6 +6,12 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add a durable, normalized provider catalog for the organization `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `BYTEZ_API_KEY`, `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` accounts; trusted bootstrap writes values only to the encrypted credential registry, discovers provider models account by account, preserves last-known-good catalogs on isolated failures, generates role-tagged agents, and starts the gateway from enabled database candidates with `--provider-catalog-dsn`.
+- Add a provider-aware runtime client that preserves the hardened OpenAI-compatible transport for OpenAI, OpenRouter, and NVIDIA NIM while using a narrow native Bytez Key/input adapter and failing closed for unsupported Bytez passthrough response shapes.
+- Add a trust-separated Provider Catalog Sync workflow: pull requests run secret-free offline contracts, while protected-main scheduled/manual runs require the complete five-key inventory plus durable KV DSN/passphrase, verify generated evidence contains no secret value, and never downgrade a configured database to process memory.
+
 ### Security
 
 - Fail closed with a stable redacted error when an explicitly configured Postgres KV backend cannot be imported, initialized, or seeded, and route `CostRoutingCoordinator(postgres_dsn=...)` through that authoritative factory, preventing a silent downgrade of configuration, routing, price, and credential authority to process-local memory.
@@ -31,6 +37,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Add durable provider-catalog design, implementation plan, operator guide, and APA 7 doctoring covering credential/catalog separation, normalized data, account-isolated refresh, route/conduct pool construction, native Bytez handling, trusted Actions bootstrap, rotation, incident response, evidence interpretation, and rollback.
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, and the supported-platform uncertainty boundary.
 - Add provider-response resource-bound doctoring covering the 8 MiB fail-closed limit, HTTP framing preflight, `text/event-stream` media-type enforcement, bounded SSE reads, OpenAI-compatible `[DONE]` completion evidence, malformed-event and premature-EOF handling, batch-output partitioning, incident handling, and operational rollback.
 - Add provider-stream UTF-8 doctoring grounding strict SSE/JSON decoding and redacted malformed-input handling in the WHATWG HTML Standard and RFC 8259, with verification, failure, rollback, and authority boundaries.

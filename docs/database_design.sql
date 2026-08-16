@@ -10,6 +10,63 @@ create table agent_pool (
   updated_at timestamptz not null default now()
 );
 
+create table provider_accounts (
+  provider_account_id text primary key,
+  provider_name text not null,
+  credential_name text not null,
+  base_url text not null,
+  models_path text,
+  transport_name text not null,
+  auth_header_name text not null,
+  auth_prefix text not null,
+  enabled_flag boolean not null default true,
+  priority_rank integer not null default 0,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now()
+);
+
+create table provider_models (
+  provider_model_id text primary key,
+  provider_account_id text not null references provider_accounts(provider_account_id),
+  model_name text not null,
+  display_name text not null,
+  context_window integer,
+  input_price_usd_per_million numeric(20, 8),
+  output_price_usd_per_million numeric(20, 8),
+  enabled_flag boolean not null default true,
+  first_discovered_at timestamptz not null,
+  last_seen_at timestamptz not null,
+  unique (provider_account_id, model_name)
+);
+
+create table model_capabilities (
+  provider_model_id text not null references provider_models(provider_model_id) on delete cascade,
+  capability_name text not null,
+  primary key (provider_model_id, capability_name)
+);
+
+create table model_modalities (
+  provider_model_id text not null references provider_models(provider_model_id) on delete cascade,
+  modality_name text not null,
+  primary key (provider_model_id, modality_name)
+);
+
+create table catalog_refresh_runs (
+  catalog_refresh_id text primary key,
+  provider_account_id text not null references provider_accounts(provider_account_id),
+  refresh_status text not null,
+  observed_model_count integer not null default 0,
+  error_code text,
+  started_at timestamptz not null,
+  finished_at timestamptz not null
+);
+
+create index provider_models_account_idx
+  on provider_models (provider_account_id, enabled_flag);
+
+create index catalog_refresh_account_idx
+  on catalog_refresh_runs (provider_account_id, finished_at desc);
+
 create table orchestration_policy (
   policy_id text primary key,
   policy_name text not null,

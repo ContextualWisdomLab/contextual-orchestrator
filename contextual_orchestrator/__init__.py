@@ -46,6 +46,22 @@ from .kv_config import (
     get_config_store,
 )
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .provider_catalog import (
+    DEFAULT_PROVIDER_ACCOUNTS,
+    CatalogHttpError,
+    CatalogModelRecord,
+    DiscoveredModel,
+    InMemoryProviderCatalogStore,
+    PostgresProviderCatalogStore,
+    ProviderAccount,
+    ProviderAwareModelClient,
+    ProviderCatalogHttpClient,
+    ProviderCatalogService,
+    ProviderCatalogUnavailable,
+    bootstrap_provider_credentials,
+    build_catalog_orchestrator,
+    normalize_models_document,
+)
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 __all__ = [
@@ -56,6 +72,21 @@ __all__ = [
     "get_credential",
     "register_credential",
     "NotConfigured",
+    # durable provider catalog
+    "DEFAULT_PROVIDER_ACCOUNTS",
+    "ProviderAccount",
+    "DiscoveredModel",
+    "CatalogModelRecord",
+    "CatalogHttpError",
+    "ProviderCatalogUnavailable",
+    "InMemoryProviderCatalogStore",
+    "PostgresProviderCatalogStore",
+    "ProviderCatalogHttpClient",
+    "ProviderAwareModelClient",
+    "ProviderCatalogService",
+    "bootstrap_provider_credentials",
+    "normalize_models_document",
+    "build_catalog_orchestrator",
     # cost review
     "ATTRIBUTION_DIMENSIONS",
     "AttributionDimensions",
