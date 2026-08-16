@@ -1,0 +1,57 @@
+name: Diagnose multimodal cumulative merge
+
+on:
+  push:
+    branches:
+      - feat/multimodal-content-parts-tip-http-honesty-20260816191047
+    paths:
+      - .github/workflows/diagnose-multimodal-cumulative-merge.yml
+
+concurrency:
+  group: diagnose-multimodal-cumulative-merge
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  diagnose:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 5
+    steps:
+      - name: Check out exact branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: feat/multimodal-content-parts-tip-http-honesty-20260816191047
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Report exact conflict set
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_feature=870930a55b1609a4f4d62cf4955a7c926360159a
+          expected_base=ff21ba7c361d24d887ef2068ae877cc7622d946f
+          git merge-base --is-ancestor "$expected_feature" HEAD
+          unexpected="$({ git diff --name-only "$expected_feature"...HEAD || true; } | grep -v '^\.github/workflows/diagnose-multimodal-cumulative-merge\.yml$' || true)"
+          if [ -n "$unexpected" ]; then
+            printf 'Unexpected branch changes after reviewed feature:\n%s\n' "$unexpected" >&2
+            exit 1
+          fi
+          git fetch origin feat/reasoning-effort-none-store-stream-empty-noop-http-honesty-20260814114817
+          actual_base="$(git rev-parse origin/feat/reasoning-effort-none-store-stream-empty-noop-http-honesty-20260814114817)"
+          if [ "$actual_base" != "$expected_base" ]; then
+            echo "Cumulative base moved from $expected_base to $actual_base." >&2
+            exit 1
+          fi
+          git config user.name 'contextual-orchestrator-diagnostics[bot]'
+          git config user.email 'contextual-orchestrator-diagnostics[bot]@users.noreply.github.com'
+          set +e
+          git merge --no-commit --no-ff "$expected_base"
+          merge_status=$?
+          set -e
+          conflicts="$(git diff --name-only --diff-filter=U | LC_ALL=C sort)"
+          printf 'merge_status=%s\n' "$merge_status"
+          printf 'conflict_count=%s\n' "$(printf '%s\n' "$conflicts" | sed '/^$/d' | wc -l)"
+          printf 'conflicts_begin\n%s\nconflicts_end\n' "$conflicts"
+          exit 1
