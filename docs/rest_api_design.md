@@ -144,12 +144,15 @@ fail closed as `unknown_tool_call_fields`; extra `function` keys fail
 closed as `unknown_tool_call_function_fields`. The same gate runs on the
 tools / `response_format` path, including `stream=true`, before the first
 SSE byte. Unknown `mode` / `orchestration` / `orchestration_mode`,
-`mode=conduct`, non-boolean `include_orchestration_trace`, and
-`include_orchestration_trace=true` also fail closed on that path
-(`invalid_mode` / `invalid_include_orchestration_trace`) instead of billing
-a silent single-agent completion. Passthrough has no Conductor workflow or
+whitespace-only `mode`, `mode=conduct`, non-boolean
+`include_orchestration_trace`, and `include_orchestration_trace=true` also
+fail closed on that path (`invalid_mode` /
+`invalid_include_orchestration_trace`) instead of billing a silent
+single-agent completion. Passthrough has no Conductor workflow or
 TRINITY trusted-trace plane (Nielsen et al., 2025; Xu et al., 2025). Omit
 those knobs, or send `mode=route` / `include_orchestration_trace=false`.
+Do not send `mode` as spaces — whitespace-only mode is `invalid_mode`,
+matching the orchestration `or` chain.
 
 Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when

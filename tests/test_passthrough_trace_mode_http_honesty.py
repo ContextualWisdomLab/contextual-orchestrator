@@ -114,10 +114,26 @@ def test_http_tools_rejects_include_orchestration_trace_non_boolean_stream() -> 
         thread.join(timeout=5)
 
 
-def test_http_tools_accepts_include_orchestration_trace_boolean_and_null() -> None:
+def test_http_tools_rejects_include_orchestration_trace_true() -> None:
+    """Passthrough has no TRINITY plane — true must 400, not bill."""
     server, thread, port = _server()
     try:
-        for value in (True, False, None):
+        status, body = _post(
+            port,
+            _tools_payload(include_orchestration_trace=True),
+        )
+        assert status == 400, body
+        assert "invalid_include_orchestration_trace" in json.dumps(body)
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_tools_accepts_include_orchestration_trace_false_and_null() -> None:
+    server, thread, port = _server()
+    try:
+        for value in (False, None):
             status, body = _post(
                 port,
                 _tools_payload(include_orchestration_trace=value),
@@ -163,7 +179,8 @@ def test_http_tools_accepts_valid_mode_on_passthrough() -> None:
 if __name__ == "__main__":
     test_http_tools_rejects_include_orchestration_trace_non_boolean()
     test_http_tools_rejects_include_orchestration_trace_non_boolean_stream()
-    test_http_tools_accepts_include_orchestration_trace_boolean_and_null()
+    test_http_tools_rejects_include_orchestration_trace_true()
+    test_http_tools_accepts_include_orchestration_trace_false_and_null()
     test_http_tools_rejects_invalid_mode()
     test_http_tools_rejects_mode_non_string()
     test_http_tools_accepts_valid_mode_on_passthrough()

@@ -57,7 +57,7 @@ OpenAI-compatible backends reject a null JSON Schema object.
 
 Tool-calling and `response_format` requests take the single-agent
 passthrough path. That path is the Fugu-style route hop, not a Conductor
-workflow or a TRINITY trusted-trace plane. `mode=conduct` and
+workflow or a TRINITY trusted-trace plane. `mode=conduct`, whitespace-only `mode`, and
 `include_orchestration_trace=true` must fail closed there so a billed
 completion cannot claim a workflow or audit trace that never ran.
 

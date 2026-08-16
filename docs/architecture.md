@@ -28,7 +28,7 @@ The Fugu report combines these ideas into production constraints:
 - Fugu-Ultra is optimized for quality by generating deeper workflows over a broader agent pool.
 - The agent pool is swappable, allowing provider preference, model exclusion, and compliance controls.
 - Multi-agent tool/function-call workflows need memory discipline: isolate agents inside the current workflow, but keep useful shared memory across turns.
-- Tool-calling passthrough must be schema-honest: SDK JSON `null` on optional `tool.function` fields is popped before the provider hop so Fugu-style tool workflows do not fail on omit-vs-null mismatches (OpenAI, 2024; Bray, 2017). Assistant `tool_calls` history is similarly fail-closed: only `id`, `type`, `function`, and optional `index` are accepted so unknown keys cannot be smuggled on the single-agent proxy (OpenAI, 2024). `mode=conduct` and `include_orchestration_trace=true` also fail closed on that path — passthrough is the route hop, not a Conductor workflow or TRINITY trusted-trace plane (Nielsen et al., 2025; Xu et al., 2025).
+- Tool-calling passthrough must be schema-honest: SDK JSON `null` on optional `tool.function` fields is popped before the provider hop so Fugu-style tool workflows do not fail on omit-vs-null mismatches (OpenAI, 2024; Bray, 2017). Assistant `tool_calls` history is similarly fail-closed: only `id`, `type`, `function`, and optional `index` are accepted so unknown keys cannot be smuggled on the single-agent proxy (OpenAI, 2024). `mode=conduct`, whitespace-only `mode`, and `include_orchestration_trace=true` also fail closed on that path — passthrough is the route hop, not a Conductor workflow or TRINITY trusted-trace plane (Nielsen et al., 2025; Xu et al., 2025).
 
 ## Implementation Mapping
 

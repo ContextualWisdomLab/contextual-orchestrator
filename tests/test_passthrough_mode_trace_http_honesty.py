@@ -138,6 +138,52 @@ def test_http_chat_tools_rejects_mixed_route_and_conduct_keys() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tools_rejects_orchestration_conduct() -> None:
+    """orchestration=conduct is conduct even when mode is omitted."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _invoice_tools_body(orchestration="conduct"))
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_mode" in blob
+        assert "conduct" in blob
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_rejects_orchestration_mode_conduct() -> None:
+    """orchestration_mode=conduct is conduct even when mode is omitted."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            _invoice_tools_body(orchestration_mode="conduct"),
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_mode" in blob
+        assert "conduct" in blob
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_rejects_whitespace_only_mode() -> None:
+    """Whitespace-only mode is truthy on the orchestration or-chain."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _invoice_tools_body(mode="   "))
+        assert status == 400, body
+        assert "invalid_mode" in json.dumps(body)
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_tools_rejects_non_boolean_include_orchestration_trace() -> None:
     server, thread, port = _server()
     try:
@@ -181,6 +227,47 @@ def test_http_chat_tools_stream_rejects_conduct_mode() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tools_stream_rejects_include_orchestration_trace_true() -> None:
+    """SSE tools proxy must 400 JSON, not billed chunks, when trace=true."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            _invoice_tools_body(include_orchestration_trace=True, stream=True),
+        )
+        assert status == 400, body
+        assert "invalid_include_orchestration_trace" in json.dumps(body)
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_response_format_rejects_mode_conduct() -> None:
+    """response_format plus mode=conduct must not bill a single-agent proxy."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [
+                    {"role": "user", "content": "Summarize invoice INV-4412 as JSON."}
+                ],
+                "response_format": {"type": "json_object"},
+                "mode": "conduct",
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_mode" in blob
+        assert "conduct" in blob
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_response_format_rejects_include_orchestration_trace_true() -> None:
     server, thread, port = _server()
     try:
@@ -197,6 +284,19 @@ def test_http_chat_response_format_rejects_include_orchestration_trace_true() ->
         )
         assert status == 400, body
         assert "invalid_include_orchestration_trace" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_accepts_empty_string_mode_as_omit() -> None:
+    """JSON empty-string mode stays omit-equivalent; spaces do not."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _invoice_tools_body(mode=""))
+        assert status == 200, body
+        assert isinstance(body, dict)
+        assert body.get("object") == "chat.completion"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -221,9 +321,15 @@ if __name__ == "__main__":
     test_http_chat_tools_rejects_bogus_mode()
     test_http_chat_tools_rejects_conduct_mode()
     test_http_chat_tools_rejects_mixed_route_and_conduct_keys()
+    test_http_chat_tools_rejects_orchestration_conduct()
+    test_http_chat_tools_rejects_orchestration_mode_conduct()
+    test_http_chat_tools_rejects_whitespace_only_mode()
     test_http_chat_tools_rejects_non_boolean_include_orchestration_trace()
     test_http_chat_tools_rejects_include_orchestration_trace_true()
     test_http_chat_tools_stream_rejects_conduct_mode()
+    test_http_chat_tools_stream_rejects_include_orchestration_trace_true()
+    test_http_chat_response_format_rejects_mode_conduct()
     test_http_chat_response_format_rejects_include_orchestration_trace_true()
+    test_http_chat_tools_accepts_empty_string_mode_as_omit()
     test_http_chat_tools_accepts_route_mode_and_trace_false()
     print("ok")

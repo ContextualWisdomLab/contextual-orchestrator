@@ -1244,14 +1244,16 @@ def _validate_chat_passthrough_orchestration_controls(body: dict[str, Any]) -> N
     completion (Nielsen et al., 2025; Xu et al., 2025). Each of
     ``orchestration``, ``orchestration_mode``, and ``mode`` is checked on its
     own so a mixed ``orchestration=route`` plus ``mode=conduct`` body cannot
-    hide conduct. ``auto`` / ``route``, omitted / null / empty mode, and
-    omitted / null / empty / ``false`` trace stay honest no-ops.
+    hide conduct. JSON null and ``""`` stay omit-equivalent; whitespace-only
+    mode is truthy on the orchestration ``or`` chain and is ``invalid_mode``.
+    ``auto`` / ``route`` and omitted / null / empty / ``false`` trace stay
+    honest no-ops.
     """
     for key in ("orchestration", "orchestration_mode", "mode"):
         if key not in body:
             continue
         raw_mode = body.get(key)
-        if raw_mode is None or (isinstance(raw_mode, str) and not raw_mode.strip()):
+        if raw_mode is None or raw_mode == "":
             continue
         mode = _validate_mode(raw_mode)
         if mode == "conduct":
