@@ -124,11 +124,20 @@ batch job plane: `routing.channel=batch` and `routing.latency_tolerant=true`
 fail closed (`invalid_routing`) instead of billing a silent sync
 completion. Send known sync dimensions only (`channel=sync` or omit).
 
+Assistant `tool_calls` entries accept only `id`, `type`, `function`, and
+optional `index`. Extra siblings or `function` keys fail closed
+(`unknown_tool_call_fields`) so they cannot smuggle to the provider.
+`mode=conduct`, unknown modes, and `include_orchestration_trace=true` /
+non-boolean values fail closed on the tools path — passthrough has no
+workflow or trace plane. Omit those knobs, or send `mode=route` /
+`include_orchestration_trace=false`.
+
 Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; omit `stream` (or set
 `false`) on tool-calling requests; always send a pool `model`; omit batch
-routing hints, `seed`, `stop`, `n>1`, and `logprobs` on tool-calling
-requests.
+routing hints, `seed`, `stop`, `n>1`, `logprobs`, `mode=conduct`, and
+`include_orchestration_trace=true` on tool-calling requests; send
+`tool_calls` with only `id` / `type` / `function` / optional `index`.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create

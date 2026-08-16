@@ -1711,6 +1711,53 @@ def _validate_chat_passthrough_request_knobs(body: dict[str, Any]) -> None:
         _validate_openai_metadata(body)
 
 
+def _validate_chat_passthrough_gateway_knobs(body: dict[str, Any]) -> None:
+    """Fail-closed gateway knobs that otherwise run only after tools proxy.
+
+    ``mode`` / ``orchestration`` / ``orchestration_mode`` and
+    ``include_orchestration_trace`` are applied only on the orchestration
+    path. Tools / ``response_format`` proxy is single-agent and strips those
+    keys, so a billed ``chat.completion`` would hide that conduct/trace never
+    ran. ``auto`` and ``route`` are honest (passthrough is the route).
+    ``conduct``, unknown modes, non-boolean trace, and ``trace=true`` fail
+    closed with the same named errors as orchestration.
+    """
+    for key in ("orchestration", "orchestration_mode", "mode"):
+        if key not in body:
+            continue
+        raw_mode = body.get(key)
+        if raw_mode is None or (isinstance(raw_mode, str) and not raw_mode.strip()):
+            continue
+        mode = _validate_mode(raw_mode)
+        if mode == "conduct":
+            raise RequestError(
+                400,
+                "invalid_mode",
+                "mode=conduct is not supported with tools or response_format; "
+                "omit mode or set mode=route",
+            )
+    if "include_orchestration_trace" not in body:
+        return
+    include_trace_raw = body.get("include_orchestration_trace")
+    if include_trace_raw is None or (
+        isinstance(include_trace_raw, str) and not include_trace_raw.strip()
+    ):
+        return
+    if not isinstance(include_trace_raw, bool):
+        raise RequestError(
+            400,
+            "invalid_include_orchestration_trace",
+            "include_orchestration_trace must be a boolean",
+        )
+    if include_trace_raw is True:
+        raise RequestError(
+            400,
+            "invalid_include_orchestration_trace",
+            "include_orchestration_trace=true is not supported with tools or "
+            "response_format; omit it or set false",
+        )
+
+
 def _validate_chat_message_passthrough_honesty(body: dict[str, Any]) -> None:
     """Fail-closed weight/prefix/refusal/annotations/content/name before tools proxy.
 
@@ -1876,8 +1923,10 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
 
     Each entry must be a function tool call with non-empty ``id``,
     ``function.name``, and string ``function.arguments`` (JSON text).
-    Explicit JSON null or empty ``tool_calls`` arrays are treat-as-omit.
-    Validated before passthrough so multi-turn tool histories fail closed.
+    Extra siblings or ``function`` keys fail closed
+    (``unknown_tool_call_fields``). Explicit JSON null or empty
+    ``tool_calls`` arrays are treat-as-omit. Validated before passthrough
+    so multi-turn tool histories fail closed.
     """
     messages = body.get("messages")
     if not isinstance(messages, list):
@@ -1917,6 +1966,29 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "invalid_message",
                     "each tool_calls entry must be an object",
                 )
+            # OpenAI tool_calls entries are id + type + function (+ optional index).
+            # Extra siblings fail closed so clients cannot smuggle uninterpreted
+            # fields through tools passthrough.
+            unknown_call = sorted(set(call) - {"id", "type", "function", "index"})
+            if unknown_call:
+                raise RequestError(
+                    400,
+                    "unknown_tool_call_fields",
+                    "each tool_calls entry accepts only id, type, function, and index",
+                    {"fields": unknown_call},
+                )
+            if "index" in call:
+                call_index = call.get("index")
+                if call_index is not None and (
+                    isinstance(call_index, bool)
+                    or not isinstance(call_index, int)
+                    or call_index < 0
+                ):
+                    raise RequestError(
+                        400,
+                        "invalid_message",
+                        "each tool_calls index must be a non-negative integer",
+                    )
             call_id = call.get("id")
             if not isinstance(call_id, str) or not call_id.strip():
                 raise RequestError(
@@ -1961,6 +2033,14 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     400,
                     "invalid_message",
                     "each tool_calls function.name must match [a-zA-Z0-9_-]",
+                )
+            unknown_fn = sorted(set(function) - {"name", "arguments"})
+            if unknown_fn:
+                raise RequestError(
+                    400,
+                    "unknown_tool_call_fields",
+                    "each tool_calls function accepts only name and arguments",
+                    {"fields": unknown_fn},
                 )
             arguments = function.get("arguments")
             if not isinstance(arguments, str):
@@ -3844,6 +3924,7 @@ def build_server(
                                 "or response_format; omit it or set false",
                             )
                         _validate_chat_passthrough_request_knobs(body)
+                        _validate_chat_passthrough_gateway_knobs(body)
                         _validate_messages(body.get("messages"))
                         started_at = time.perf_counter()
                         proxied = self._run(
