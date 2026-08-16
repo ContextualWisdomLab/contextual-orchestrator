@@ -12,7 +12,7 @@ class RecordingClient:
     def __init__(self) -> None:
         self.calls = []
 
-    def chat(self, agent: ModelAgent, messages, temperature: float = 0.2) -> str:
+    def chat(self, agent: ModelAgent, messages, temperature: float = 0.2, **_kwargs) -> str:
         self.calls.append((agent.id, messages))
         return f"{agent.id}:{len(self.calls)}"
 

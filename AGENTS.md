@@ -113,4 +113,6 @@ push or open a PR.
   RMSE is computed from θ̂ versus known true parameters, not a rank
   constant. Do not change production route/conduct defaults until
   `production_default_change_allowed` is true. Temperature is not effort.
+  An opt-in catalog applies `reasoning_effort` and `max_tokens` on
+  `ModelClient` chat, stream, and batch.
 <!-- END cwl-agent-guidance -->

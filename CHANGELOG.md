@@ -18,15 +18,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   live defaults unchanged while the gate is false. Pass
   `role_effort_catalog=default_role_effort_catalog()` to attach the same
   `reasoning_effort_snapshot` on `complete`, `run`, `stream_route`, and
-  `batch_route`; omit it to keep today's payload.
+  `batch_route`, and to send that role's `reasoning_effort` and
+  `max_tokens` on `ModelClient` chat, stream, and batch. Omit it to keep
+  today's payload and request body.
 
 ### Fixed
 
 - Reject missing profiles, blank `profile_version`, and fractional seeds.
   Snapshot hashing now fails closed on extra or missing roles. The
-  production-default gate returns false on junk reports and on
-  `measurement_status=estimated`. Access-list scope is a real ablation
-  factor, not a duplicate label.
+  production-default gate returns false on junk reports, omitted or
+  unrecognized `measurement_status`, and anything other than an explicit
+  `measured` status. Boolean true-θ values fail closed. Access-list scope
+  is a real ablation factor, not a duplicate label. `stream_route` writes
+  the same snapshot to `--state-db` as `run` and `batch_route`. The
+  Hypothesis/Atheris profile target strips `true_theta` before parse so
+  the ablation invariants actually run.
 
 ### References
 

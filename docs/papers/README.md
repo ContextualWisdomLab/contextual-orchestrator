@@ -63,7 +63,9 @@ redistribution is unclear.
   and compare it to known true parameters; a rank constant is not an estimate.
 
 Buyer next action: call `run_equal_budget_ablation` and read
-`production_default_change_allowed` before changing live defaults.
+`production_default_change_allowed` before changing live defaults. Pass
+`role_effort_catalog` to apply per-role `reasoning_effort` and
+`max_tokens` on `ModelClient`.
 
 ## Batch execution / load balancing
 

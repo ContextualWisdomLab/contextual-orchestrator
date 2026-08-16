@@ -12,7 +12,7 @@ class RecordingClient:
     def __init__(self) -> None:
         self.calls: list[tuple[str, list[dict[str, str]]]] = []
 
-    def chat(self, agent: ModelAgent, messages, temperature: float = 0.2) -> str:
+    def chat(self, agent: ModelAgent, messages, temperature: float = 0.2, **_kwargs) -> str:
         self.calls.append((agent.id, messages))
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
         return f"{agent.id}:{len(self.calls)}:{last[:20]}"

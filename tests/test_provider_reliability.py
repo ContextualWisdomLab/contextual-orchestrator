@@ -90,7 +90,7 @@ class _AgentDownClient(ModelClient):
         self.down_id = down_id
         self.calls: list[str] = []
 
-    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2, **_kwargs) -> str:  # type: ignore[override]
         self.calls.append(agent.id)
         if agent.id == self.down_id:
             raise RuntimeError(f"{agent.id} unavailable")
@@ -123,7 +123,7 @@ def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     ]
 
     class AllDown(ModelClient):
-        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2, **_kwargs) -> str:  # type: ignore[override]
             raise RuntimeError("everything is down")
 
     orchestrator = TaskOrchestrator(agents, client=AllDown())

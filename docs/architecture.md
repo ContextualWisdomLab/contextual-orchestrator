@@ -47,7 +47,9 @@ This repository implements the interface and control plane, not the trained coor
   locked until `production_default_change_allowed` passes a true-θ RMSE gate.
   The ablation emits θ̂ and RMSE(θ̂, θ); a rank constant is not an estimate.
   Buyer next action: run `python tests/test_reasoning_effort_profile.py`
-  and keep live defaults unchanged while that gate is false.
+  and keep live defaults unchanged while that gate is false. Pass
+  `role_effort_catalog` to apply per-role `reasoning_effort` and
+  `max_tokens` on `ModelClient` without changing `OrchestrationPolicy`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

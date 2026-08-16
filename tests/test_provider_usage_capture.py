@@ -23,7 +23,7 @@ class _ReportingClient(ModelClient):
         super().__init__()
         self._completion_tokens = completion_tokens
 
-    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2, **_kwargs) -> str:  # type: ignore[override]
         self._local.usage = {
             "prompt_tokens": 5,
             "completion_tokens": self._completion_tokens,

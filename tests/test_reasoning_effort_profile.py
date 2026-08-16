@@ -9,17 +9,21 @@ Sampling temperature is not reasoning effort.
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 import sys
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
     PROFILE_VERSION,
     PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD,
     WORKFLOW_ROLES,
     EffortProfileError,
+    apply_request_knobs,
     default_role_effort_catalog,
     estimate_theta,
     estimate_theta_rmse,
@@ -28,6 +32,7 @@ from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
     run_equal_budget_ablation,
     snapshot_role_effort_catalog,
 )
+from fuzz.targets import exercise_reasoning_effort_profile  # noqa: E402
 
 
 def test_parse_rejects_unknown_profile_keys() -> None:
@@ -251,6 +256,51 @@ def test_production_gate_rejects_junk_and_estimated_status() -> None:
     unlocked["robustness_passed"] = True
     unlocked["measurement_status"] = "estimated"
     assert production_default_change_allowed(unlocked) is False
+    for status in (None, "", "guessed", "MEASURED"):
+        junk = dict(report)
+        junk["robustness_passed"] = True
+        if status is None:
+            junk.pop("measurement_status", None)
+        else:
+            junk["measurement_status"] = status
+        assert production_default_change_allowed(junk) is False
+
+
+def test_ablation_rejects_boolean_true_theta() -> None:
+    try:
+        run_equal_budget_ablation((True, False))
+    except EffortProfileError:
+        return
+    raise AssertionError("boolean true_theta must fail closed")
+
+
+def test_fuzz_target_reaches_ablation_with_true_theta() -> None:
+    catalog = default_role_effort_catalog()
+    payload = dict(catalog["worker"].as_dict())
+    payload["true_theta"] = [-1.5, 0.0, 1.5]
+    exercise_reasoning_effort_profile(payload)
+
+
+class _RecordingClient(ModelClient):
+    """Capture opt-in profiles passed into chat, stream, and batch."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.chat_profiles: list[object] = []
+        self.stream_profiles: list[object] = []
+        self.batch_profiles: list[object] = []
+
+    def chat(self, agent, messages, temperature=0.2, effort_profile=None):  # type: ignore[override]
+        self.chat_profiles.append(effort_profile)
+        return super().chat(agent, messages, temperature=temperature)
+
+    def stream_chat(self, agent, messages, temperature=0.2, effort_profile=None):  # type: ignore[override]
+        self.stream_profiles.append(effort_profile)
+        yield from super().stream_chat(agent, messages, temperature=temperature)
+
+    def batch_chat(self, agent, requests, temperature=0.2, effort_profile=None, **kwargs):  # type: ignore[override]
+        self.batch_profiles.append(effort_profile)
+        return super().batch_chat(agent, requests, temperature=temperature, **kwargs)
 
 
 def test_opt_in_catalog_attaches_identical_snapshot_on_route_and_conduct() -> None:
@@ -276,6 +326,94 @@ def test_opt_in_catalog_attaches_identical_snapshot_on_route_and_conduct() -> No
         [ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning"))]
     ).complete([{"role": "user", "content": "Write one sentence."}], mode="route")
     assert "reasoning_effort_snapshot" not in defaulted
+
+
+def test_apply_request_knobs_omit_profile_keeps_today_body() -> None:
+    body = apply_request_knobs(
+        {"model": "mock-planner", "temperature": 0.2},
+        None,
+        default_max_tokens=2048,
+    )
+    assert body["max_tokens"] == 2048
+    assert "reasoning_effort" not in body
+
+
+def test_apply_request_knobs_uses_role_effort_not_temperature() -> None:
+    catalog = default_role_effort_catalog()
+    worker = apply_request_knobs({}, catalog["worker"], default_max_tokens=2048)
+    thinker = apply_request_knobs({}, catalog["thinker"], default_max_tokens=2048)
+    assert worker["reasoning_effort"] == "medium"
+    assert thinker["reasoning_effort"] == "high"
+    assert worker["max_tokens"] == catalog["worker"].max_output_tokens
+    assert thinker["max_tokens"] == catalog["thinker"].max_output_tokens
+    assert worker["max_tokens"] != 2048
+    assert worker["temperature"] == catalog["worker"].temperature
+
+
+def test_opt_in_catalog_passes_role_profiles_to_model_client() -> None:
+    catalog = default_role_effort_catalog()
+    client = _RecordingClient()
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+            ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation"), priority=1),
+            ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "security", "review"), priority=2),
+        ],
+        client=client,
+        role_effort_catalog=catalog,
+    )
+    orchestrator.complete([{"role": "user", "content": "Write one sentence."}], mode="route")
+    assert client.chat_profiles
+    worker_profile = client.chat_profiles[0]
+    assert worker_profile is catalog["worker"]
+    client.chat_profiles.clear()
+    orchestrator.complete(
+        [{"role": "user", "content": "Analyze the architecture, implement the code, and verify risks."}],
+        mode="conduct",
+    )
+    roles = {profile.reasoning_effort for profile in client.chat_profiles if profile is not None}
+    assert "high" in roles
+    assert "medium" in roles
+    list(orchestrator.stream_route([{"role": "user", "content": "Write one sentence."}]))
+    assert client.stream_profiles and client.stream_profiles[0] is catalog["worker"]
+    orchestrator.batch_route(["Write one sentence."])
+    assert client.batch_profiles and client.batch_profiles[0] is catalog["worker"]
+    defaulted_client = _RecordingClient()
+    TaskOrchestrator(
+        [ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning"))],
+        client=defaulted_client,
+    ).complete([{"role": "user", "content": "Write one sentence."}], mode="route")
+    assert defaulted_client.chat_profiles == [None]
+
+
+def test_stream_route_persists_snapshot_across_state_db_restart() -> None:
+    catalog = default_role_effort_catalog()
+    expected = snapshot_role_effort_catalog(catalog).snapshot_hash
+    with tempfile.TemporaryDirectory() as directory:
+        db_path = os.path.join(directory, "state.db")
+        first = TaskOrchestrator(
+            [ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning"))],
+            role_effort_catalog=catalog,
+            state_db=db_path,
+        )
+        stream_id = "run_effort_stream_store"
+        list(
+            first.stream_route(
+                [{"role": "user", "content": "Write one sentence."}],
+                workflow_run_id=stream_id,
+            )
+        )
+        first.close()
+        second = TaskOrchestrator(
+            [ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning"))],
+            role_effort_catalog=catalog,
+            state_db=db_path,
+        )
+        try:
+            restored = second.get_workflow_run(stream_id)
+            assert restored["reasoning_effort_snapshot"]["snapshot_hash"] == expected
+        finally:
+            second.close()
 
 
 def test_persisted_run_stream_and_batch_keep_snapshot() -> None:
@@ -332,6 +470,12 @@ if __name__ == "__main__":  # pragma: no cover
     test_access_list_scope_changes_rmse()
     test_equal_budget_ablation_keeps_production_default_locked()
     test_production_gate_rejects_junk_and_estimated_status()
+    test_ablation_rejects_boolean_true_theta()
+    test_fuzz_target_reaches_ablation_with_true_theta()
+    test_apply_request_knobs_omit_profile_keeps_today_body()
+    test_apply_request_knobs_uses_role_effort_not_temperature()
+    test_opt_in_catalog_passes_role_profiles_to_model_client()
+    test_stream_route_persists_snapshot_across_state_db_restart()
     test_opt_in_catalog_attaches_identical_snapshot_on_route_and_conduct()
     test_persisted_run_stream_and_batch_keep_snapshot()
     test_doctoring_cites_fugu_trinity_conductor_apa7()

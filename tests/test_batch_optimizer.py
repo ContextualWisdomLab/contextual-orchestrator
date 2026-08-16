@@ -24,12 +24,12 @@ class _CountingClient(ModelClient):
         self.chat_calls = 0
         self.batch_calls = 0
 
-    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2, **_kwargs) -> str:  # type: ignore[override]
         self.chat_calls += 1
         return super().chat(agent, messages, temperature)
 
     def batch_chat(self, agent: ModelAgent, requests: dict, temperature: float = 0.2,  # type: ignore[override]
-                   poll_interval: float = 5.0, poll_timeout: float = 3600.0) -> dict:
+                   poll_interval: float = 5.0, poll_timeout: float = 3600.0, **_kwargs) -> dict:
         self.batch_calls += 1
         return {
             custom_id: {"content": self._mock(agent, messages),

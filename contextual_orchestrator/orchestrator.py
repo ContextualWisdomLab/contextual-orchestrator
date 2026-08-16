@@ -29,6 +29,7 @@ from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .reasoning_effort_profile import (
     ReasoningEffortProfile,
+    apply_request_knobs,
     snapshot_role_effort_catalog,
 )
 
@@ -250,8 +251,19 @@ class ModelClient:
         self._local.usage = None
         return usage
 
-    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
-        """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
+    def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float = 0.2,
+        effort_profile: ReasoningEffortProfile | None = None,
+    ) -> str:
+        """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
+
+        Buyer next action: pass the role's opt-in ``effort_profile`` so the
+        provider sees that role's ``reasoning_effort`` and ``max_tokens``.
+        Omit it to keep today's body.
+        """
         self._local.usage = None
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
@@ -263,13 +275,16 @@ class ModelClient:
                 f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV"
             )
 
-        payload = {  # pragma: no cover
-            "model": agent.model,
-            "messages": messages,
-            "temperature": temperature,
-            "stream": False,
-            "max_tokens": self.max_output_tokens,
-        }
+        payload = apply_request_knobs(  # pragma: no cover
+            {
+                "model": agent.model,
+                "messages": messages,
+                "temperature": temperature,
+                "stream": False,
+            },
+            effort_profile,
+            default_max_tokens=self.max_output_tokens,
+        )
         return self._send_with_retry(agent, payload)
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
@@ -317,12 +332,20 @@ class ModelClient:
             context=self._ssl_context,
         )
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+    def stream_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float = 0.2,
+        effort_profile: ReasoningEffortProfile | None = None,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
+        Buyer next action: pass the role's opt-in ``effort_profile`` so streamed
+        requests carry the same knobs as ``chat``.
         """
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
@@ -331,13 +354,16 @@ class ModelClient:
             return
 
         self._validate_provider(agent)  # pragma: no cover
-        payload = {  # pragma: no cover
-            "model": agent.model,
-            "messages": messages,
-            "temperature": temperature,
-            "stream": True,
-            "max_tokens": self.max_output_tokens,
-        }
+        payload = apply_request_knobs(  # pragma: no cover
+            {
+                "model": agent.model,
+                "messages": messages,
+                "temperature": temperature,
+                "stream": True,
+            },
+            effort_profile,
+            default_max_tokens=self.max_output_tokens,
+        )
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
@@ -513,12 +539,15 @@ class ModelClient:
         temperature: float = 0.2,
         poll_interval: float = 5.0,
         poll_timeout: float = 3600.0,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Run many chat requests through the provider's Batch API and return results by id.
 
         ``requests`` maps a caller custom_id to its messages. Suited to eval/benchmark
         workloads (24h completion window, ~half the price); real-time chat should keep
         using ``chat``. The mock path answers synchronously so tests and local runs work.
+        Buyer next action: pass the worker's opt-in ``effort_profile`` so batch
+        JSONL bodies match sync/stream knobs.
         """
         if agent.base_url.startswith("mock://"):
             return {
@@ -526,7 +555,9 @@ class ModelClient:
                 for custom_id, messages in requests.items()
             }
         self._validate_provider(agent)  # pragma: no cover
-        return self._batch_run(agent, requests, temperature, poll_interval, poll_timeout)  # pragma: no cover
+        return self._batch_run(  # pragma: no cover
+            agent, requests, temperature, poll_interval, poll_timeout, effort_profile
+        )
 
     def _batch_run(
         self,
@@ -535,6 +566,7 @@ class ModelClient:
         temperature: float,
         poll_interval: float,
         poll_timeout: float,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
         lines = [
@@ -542,12 +574,15 @@ class ModelClient:
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
-                    "model": agent.model,
-                    "messages": messages,
-                    "temperature": temperature,
-                    "max_tokens": self.max_output_tokens,
-                },
+                "body": apply_request_knobs(
+                    {
+                        "model": agent.model,
+                        "messages": messages,
+                        "temperature": temperature,
+                    },
+                    effort_profile,
+                    default_max_tokens=self.max_output_tokens,
+                ),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]
@@ -950,7 +985,9 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
+        for delta in self.client.stream_chat(
+            agent, messages, effort_profile=self._role_effort_profile("worker")
+        ):
             parts.append(delta)
             yield delta
         answer = "".join(parts)
@@ -972,6 +1009,8 @@ class TaskOrchestrator:
         )
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
             "workflow_run_created",
             {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
@@ -1063,7 +1102,11 @@ class TaskOrchestrator:
 
         answers: dict[int, dict[str, Any]] = {}
         for agent_id, requests in requests_by_agent.items():
-            for custom_id, result in self.client.batch_chat(agents_by_id[agent_id], requests).items():
+            for custom_id, result in self.client.batch_chat(
+                agents_by_id[agent_id],
+                requests,
+                effort_profile=self._role_effort_profile("worker"),
+            ).items():
                 answers[int(custom_id.rsplit("_", 1)[1])] = result
 
         records: list[dict[str, Any]] = []
@@ -1460,6 +1503,17 @@ class TaskOrchestrator:
             }
         )
 
+    def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
+        """Return the opt-in catalog profile for a workflow role, or None.
+
+        Buyer next action: pass ``role_effort_catalog`` on the constructor so
+        ``ModelClient`` can send that role's knobs. Omit it to keep today's
+        request body.
+        """
+        if self.role_effort_catalog is None:
+            return None
+        return self.role_effort_catalog.get(role)
+
     def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
         """Attach a replayable role-effort snapshot when the operator opted in.
 
@@ -1498,10 +1552,14 @@ class TaskOrchestrator:
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
-        raw = self.client.chat(planner, [
-            {"role": "system", "content": system},
-            {"role": "user", "content": task},
-        ])
+        raw = self.client.chat(
+            planner,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": task},
+            ],
+            effort_profile=self._role_effort_profile("planner"),
+        )
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -1587,7 +1645,9 @@ class TaskOrchestrator:
         last_error: Exception | None = None
         for agent in candidates:
             try:
-                output = self.client.chat(agent, messages)
+                output = self.client.chat(
+                    agent, messages, effort_profile=self._role_effort_profile(role)
+                )
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
                 self._record_failure(agent.id)
@@ -1649,14 +1709,18 @@ class TaskOrchestrator:
             return fallback
         judge = self._select_agent(task, "verifier")
         try:
-            reply = self.client.chat(judge, [
-                {"role": "system", "content": (
-                    "You are the verification judge. Read the verifier report about the task. "
-                    "Reply with exactly one word: ACCEPT if the verified work is sound, "
-                    "REJECT if it has disqualifying problems."
-                )},
-                {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
-            ])
+            reply = self.client.chat(
+                judge,
+                [
+                    {"role": "system", "content": (
+                        "You are the verification judge. Read the verifier report about the task. "
+                        "Reply with exactly one word: ACCEPT if the verified work is sound, "
+                        "REJECT if it has disqualifying problems."
+                    )},
+                    {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
+                ],
+                effort_profile=self._role_effort_profile("judge"),
+            )
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return fallback
         upper = (reply or "").strip().upper()

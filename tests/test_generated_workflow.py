@@ -37,7 +37,7 @@ class _PlannerClient(ModelClient):
         self.plan_text = plan_text
         self.calls: list[list[dict]] = []
 
-    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2, **_kwargs) -> str:  # type: ignore[override]
         self.calls.append(messages)
         if len(self.calls) == 1:
             return self.plan_text

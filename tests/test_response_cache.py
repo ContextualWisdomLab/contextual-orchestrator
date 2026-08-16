@@ -23,7 +23,7 @@ class _CountingClient(ModelClient):
         super().__init__()
         self.calls = 0
 
-    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2, **_kwargs) -> str:  # type: ignore[override]
         self.calls += 1
         return super().chat(agent, messages, temperature)
 

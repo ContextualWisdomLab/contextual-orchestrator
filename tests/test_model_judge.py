@@ -29,7 +29,7 @@ class _ScriptedClient(ModelClient):
         self.judge_reply = judge_reply
         self.calls = 0
 
-    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+    def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2, **_kwargs) -> str:  # type: ignore[override]
         self.calls += 1
         if self.calls == 3:
             return RISKY_VERIFIER_REPORT  # term matcher sees "risk"/"error" -> would reject
@@ -85,7 +85,7 @@ def test_ambiguous_judge_reply_keeps_term_verdict() -> None:
 
 def test_judge_failure_keeps_term_verdict() -> None:
     class _FailingJudge(_ScriptedClient):
-        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2, **_kwargs) -> str:  # type: ignore[override]
             self.calls += 1
             if self.calls == 3:
                 return RISKY_VERIFIER_REPORT

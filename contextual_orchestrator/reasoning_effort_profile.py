@@ -31,6 +31,7 @@ WORKFLOW_ROLES = (
 REASONING_EFFORT_LEVELS = ("none", "low", "medium", "high")
 ACCESS_LIST_SCOPES = ("none", "role", "workflow")
 UNSUPPORTED_FALLBACKS = ("abstain", "omit", "error")
+MEASURED_MEASUREMENT_STATUSES = frozenset({"measured"})
 _EFFORT_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
 _ACCESS_RANK = {"none": 0, "role": 1, "workflow": 2}
 _PROFILE_KEYS = frozenset(
@@ -256,6 +257,33 @@ def snapshot_role_effort_catalog(
     )
 
 
+def apply_request_knobs(
+    payload: Mapping[str, Any],
+    profile: ReasoningEffortProfile | None,
+    *,
+    default_max_tokens: int,
+) -> dict[str, Any]:
+    """Overlay opt-in role knobs onto a chat/completions or batch body.
+
+    Buyer next action: pass the role's catalog profile so the provider sees
+    ``reasoning_effort`` and ``max_tokens`` from that role. Omit the profile
+    to keep today's ``max_tokens`` and leave ``reasoning_effort`` off the wire.
+    Temperature stays a sampling field; it is copied from the profile only
+    when the operator opted in, and it is never treated as effort.
+    """
+    body = dict(payload)
+    if profile is None:
+        body.setdefault("max_tokens", default_max_tokens)
+        return body
+    body["max_tokens"] = profile.max_output_tokens
+    body["reasoning_effort"] = profile.reasoning_effort
+    body["temperature"] = profile.temperature
+    body["top_p"] = profile.top_p
+    if profile.seed is not None:
+        body["seed"] = profile.seed
+    return body
+
+
 def _shrinkage_weight(
     reasoning_effort: str,
     extra_workflow_steps: float,
@@ -401,7 +429,11 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
     chain-of-thought. Buyer next action: read ``measurement_status`` and
     ``production_default_change_allowed`` before changing live defaults.
     """
-    theta = tuple(float(value) for value in true_theta)
+    theta_values: list[float] = []
+    for value in true_theta:
+        _reject_non_finite_number(value, "true_theta")
+        theta_values.append(float(value))
+    theta = tuple(theta_values)
     budget_tokens = 1024
     baseline = _ablation_arm(
         theta,
@@ -498,8 +530,9 @@ def production_default_change_allowed(report: Mapping[str, Any]) -> bool:
     """Return whether a live default change is allowed from this ablation.
 
     Buyer next action: keep current route/conduct defaults when this is false.
-    A later slice may unlock only after RMSE improvement, a non-estimated
-    measurement, and robustness all clear the predeclared gate.
+    A later slice may unlock only after RMSE improvement, an explicit
+    ``measured`` status, and robustness all clear the predeclared gate.
+    Omitted, blank, or junk ``measurement_status`` stays locked.
     """
     try:
         baseline = float(report["single_model_baseline"]["rmse"])
@@ -508,7 +541,7 @@ def production_default_change_allowed(report: Mapping[str, Any]) -> bool:
         return False
     if not math.isfinite(baseline) or not math.isfinite(candidate) or baseline <= 0:
         return False
-    if report.get("measurement_status") == "estimated":
+    if report.get("measurement_status") not in MEASURED_MEASUREMENT_STATUSES:
         return False
     if report.get("robustness_passed") is not True:
         return False

@@ -34,7 +34,8 @@ deserialize request config validate untrusted input"`):
 5. **Reasoning-effort profile** — `parse_reasoning_effort_profile` (issue #568).
    Arbitrary decoded JSON must yield a finite `ReasoningEffortProfile` or raise
    `EffortProfileError` / `TypeError` / `ValueError`. Never crash on NaN,
-   infinity, bool-as-number, or unknown keys.
+   infinity, bool-as-number, or unknown keys. A sibling `true_theta` list is
+   stripped before parse so the equal-budget ablation invariants also run.
 
 ## Running locally
 
