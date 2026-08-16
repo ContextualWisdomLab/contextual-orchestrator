@@ -20,7 +20,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   named `response.*` events and `function_call` argument deltas keyed by
   `item_id` (`.done` also carries `name`) that reconstruct to the same
   invoice `lookup_balance` JSON body; content-only streams still match
-  `output_text`; live providers are piped verbatim. Next action: send
+  `output_text` and emit `response.content_part.done` after
+  `response.output_text.done`; live providers are piped verbatim. Next action: send
   `stream=true` on Responses SDK clients; include the invoice id in
   `input`; omit `stream_options.include_usage`. Correlate argument
   chunks with `item_id` from `response.output_item.added`. Order
@@ -31,6 +32,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Mock `/v1/responses` content streams now emit
+  `response.content_part.done` after `response.output_text.done` and
+  before `response.output_item.done`, with the next contiguous
+  `sequence_number`. Function-call streams still omit that event. Next
+  action: wait for `response.content_part.done` on content parts; close
+  the stream on `response.completed` or `response.failed`.
 - Mid-stream `/v1/responses` provider failure now emits
   `response.failed` with `sequence_number` equal to the last forwarded
   event plus one, and still drops a Chat `data: [DONE]` trailer. Next

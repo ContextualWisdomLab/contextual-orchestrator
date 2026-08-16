@@ -651,7 +651,9 @@ class ModelClient:
         and ``response.function_call_arguments.delta`` keyed by ``item_id``
         so a streamed invoice lookup reconstructs to the same arguments as
         ``proxy_completion``. Content completions emit
-        ``response.output_text.delta``. The stream ends on
+        ``response.output_text.delta``. Content parts close with
+        ``response.content_part.done`` after ``response.output_text.done``
+        and before ``response.output_item.done``. The stream ends on
         ``response.completed`` — Chat Completions ``data: [DONE]`` is not
         a Responses event. Live providers are still piped verbatim by
         ``_stream_raw``.
@@ -771,6 +773,15 @@ class ModelClient:
                         "output_index": index,
                         "content_index": 0,
                         "text": text,
+                    },
+                )
+                yield emit(
+                    "response.content_part.done",
+                    {
+                        "item_id": item_id,
+                        "output_index": index,
+                        "content_index": 0,
+                        "part": {"type": "output_text", "text": text},
                     },
                 )
             done_item = dict(item)

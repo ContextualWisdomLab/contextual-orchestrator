@@ -8,7 +8,9 @@ must emit ``text/event-stream`` Responses events with contiguous
 ``response.created``. Function tools reconstruct to the same
 ``output[].type=function_call`` as the non-stream JSON body
 (including ``lookup_balance`` / ``INV-9``); content-only streams still match
-``output_text``. The stream ends on ``response.completed`` without a Chat
+``output_text``. Content streams emit ``response.content_part.done`` after
+``response.output_text.done`` and before ``response.output_item.done``.
+The stream ends on ``response.completed`` without a Chat
 ``data: [DONE]`` trailer. A mid-stream provider failure emits
 ``response.failed`` continuing the last forwarded ``sequence_number``.
 A live Chat ``[DONE]`` trailer is dropped. ``stream_options.include_usage=true``
@@ -391,6 +393,63 @@ def test_http_responses_stream_content_matches_json() -> None:
         thread.join(timeout=5)
 
 
+def test_http_responses_stream_emits_content_part_done() -> None:
+    """Mock content streams must close the part the way openai-python waits.
+
+    Official ``response.content_part.done`` follows ``response.output_text.done``
+    and precedes ``response.output_item.done``. ``part.text`` must equal the
+    reconstructed ledger summary. Function-call streams have no content part
+    and must not emit this event (OpenAI, 2024).
+    """
+    server, thread, port = _server()
+    try:
+        payload = {"model": "mock-planner", "input": "summarize the ledger"}
+        json_status, _json_type, json_body = _post_raw(port, payload)
+        assert json_status == 200, json_body
+        expected = json.loads(json_body)["output"][0]["content"][0]["text"]
+        item_id = json.loads(json_body)["output"][0]["id"]
+        status, content_type, body = _post_raw(port, {**payload, "stream": True})
+        assert status == 200, body
+        assert content_type.startswith("text/event-stream")
+        events = _sse_events(body)
+        types = [event.get("type") for event in events]
+        assert "response.content_part.added" in types
+        assert "response.output_text.done" in types
+        assert "response.content_part.done" in types
+        assert types.index("response.output_text.done") < types.index(
+            "response.content_part.done"
+        )
+        assert types.index("response.content_part.done") < types.index(
+            "response.output_item.done"
+        )
+        numbers = [event.get("sequence_number") for event in events]
+        assert numbers == list(range(len(events))), numbers
+        done = next(
+            event for event in events if event.get("type") == "response.content_part.done"
+        )
+        assert done["item_id"] == item_id
+        assert done["output_index"] == 0
+        assert done["content_index"] == 0
+        assert done["part"]["type"] == "output_text"
+        assert done["part"]["text"] == expected == "[general_agent] responses-mock"
+        tool_status, _tool_type, tool_body = _post_raw(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "look up invoice INV-20260816009",
+                "tools": _LOOKUP_TOOLS,
+                "stream": True,
+            },
+        )
+        assert tool_status == 200, tool_body
+        tool_types = [event.get("type") for event in _sse_events(tool_body)]
+        assert "response.content_part.done" not in tool_types
+        assert "response.function_call_arguments.done" in tool_types
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_responses_stream_tool_choice_none_keeps_content() -> None:
     """``tool_choice=none`` on the stream path must stay output_text, not function_call."""
     server, thread, port = _server()
@@ -466,6 +525,7 @@ if __name__ == "__main__":
     test_http_responses_stream_drops_live_done_trailer()
     test_http_responses_stream_emits_function_call_events()
     test_http_responses_stream_content_matches_json()
+    test_http_responses_stream_emits_content_part_done()
     test_http_responses_stream_tool_choice_none_keeps_content()
     test_http_responses_stream_still_rejects_include_usage()
     test_http_responses_stream_still_rejects_non_boolean_stream()

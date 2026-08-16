@@ -73,8 +73,10 @@ chunk.
   and `name` on `.done` so an SDK can attach argument chunks to the
   `output_item.added` function_call. Also grounds contiguous
   `sequence_number` starting at 0, the `response.in_progress`
-  lifecycle event after `response.created`, and `response.failed`
-  continuing that sequence instead of restarting at 0.
+  lifecycle event after `response.created`, `response.failed`
+  continuing that sequence instead of restarting at 0, and
+  `response.content_part.done` after `response.output_text.done` on
+  content streams.
 - OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
   https://platform.openai.com/docs/guides/streaming-responses
   Grounds the named SSE `event:` field. Chat Completions still end with

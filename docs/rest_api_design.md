@@ -128,7 +128,8 @@ named `response.*` events (OpenAI, 2024). Mock events carry a contiguous
 `response.in_progress` before output items. Function tools reconstruct
 to the same `output[].type=function_call` as the non-stream JSON body
 (`lookup_balance` binds `INV-` identifiers, defaulting to `INV-9`);
-content-only streams still match `output_text`. Live provider frames are
+content-only streams still match `output_text` and emit
+`response.content_part.done` after `response.output_text.done`. Live provider frames are
 forwarded as sent; the gateway drops a Chat Completions `data: [DONE]`
 trailer. A mid-stream provider failure emits `response.failed` with
 `sequence_number` equal to the last forwarded value plus one. The stream
@@ -175,9 +176,10 @@ default `null` — both become omit before the provider hop. On assistant
 `/v1/responses`, send a non-empty `input` and `stream=true` when the SDK
 reads events. Order mock events by `sequence_number`. Correlate
 `response.function_call_arguments.delta` chunks with `item_id` from
-`response.output_item.added`. Close the Responses stream on
-`response.completed` or `response.failed`; Chat Completions still end
-with `data: [DONE]`.
+`response.output_item.added`. Wait for `response.content_part.done`
+after `response.output_text.done` on content streams. Close the
+Responses stream on `response.completed` or `response.failed`; Chat
+Completions still end with `data: [DONE]`.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
