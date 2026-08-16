@@ -21,11 +21,23 @@ from __future__ import annotations
 
 import os
 import threading
-from typing import Any, Dict, Iterable, Optional, Protocol, Tuple
+from typing import Any, Dict, Iterable, NamedTuple, Optional, Protocol, Tuple
 
 PROVIDER_EGRESS_CATEGORY = "provider_egress"
 ALLOWED_PROVIDER_HOSTS_KEY = "allowed_provider_hosts"
 _ALLOWED_HOSTS_ENV = "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"
+
+PROCESS_BOOTSTRAP_CATEGORY = "process_bootstrap"
+STATE_DATABASE_PATH_KEY = "state_database_path"
+AGENTS_DATABASE_PATH_KEY = "agents_database_path"
+CLEARFOLIO_VIEWER_URL_KEY = "clearfolio_viewer_url"
+PROVIDER_CA_BUNDLE_KEY = "provider_ca_bundle"
+_PROCESS_BOOTSTRAP_ENV = {
+    STATE_DATABASE_PATH_KEY: "CONTEXTUAL_ORCHESTRATOR_STATE_DB",
+    AGENTS_DATABASE_PATH_KEY: "CONTEXTUAL_ORCHESTRATOR_AGENTS_DB",
+    CLEARFOLIO_VIEWER_URL_KEY: "CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL",
+    PROVIDER_CA_BUNDLE_KEY: "CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE",
+}
 
 _runtime_store: ConfigStore | None = None
 _runtime_lock = threading.Lock()
@@ -229,3 +241,77 @@ def seed_provider_egress_from_environ() -> None:
         raw = os.environ.get(_ALLOWED_HOSTS_ENV, "")
         if raw.strip():
             store.set(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, raw)
+
+
+class ProcessBootstrapSettings(NamedTuple):
+    """Resolved sqlite / Clearfolio / provider-CA paths from CLI or the process KV."""
+
+    state_database_path: str | None
+    agents_database_path: str | None
+    clearfolio_viewer_url: str | None
+    provider_ca_bundle: str | None
+
+
+def _optional_config_text(raw: Any) -> str | None:
+    """Return a stripped string, or ``None`` when the value is empty or whitespace."""
+    if raw is None:
+        return None
+    text = str(raw).strip()
+    return text or None
+
+
+def _first_process_bootstrap_text(explicit: str | None, key: str) -> str | None:
+    """Prefer a non-empty explicit value; otherwise read the process KV."""
+    chosen = _optional_config_text(explicit)
+    if chosen is not None:
+        return chosen
+    return _optional_config_text(get_runtime_config(PROCESS_BOOTSTRAP_CATEGORY, key, None))
+
+
+def resolve_process_bootstrap(
+    *,
+    state_database_path: str | None = None,
+    agents_database_path: str | None = None,
+    clearfolio_viewer_url: str | None = None,
+    provider_ca_bundle: str | None = None,
+) -> ProcessBootstrapSettings:
+    """Return process sqlite/Clearfolio/CA settings. CLI wins; else the process KV.
+
+    Never reads ``os.getenv``. Empty and whitespace-only values are omitted so a
+    stored ``" "`` cannot freeze the in-memory default.
+    """
+    return ProcessBootstrapSettings(
+        state_database_path=_first_process_bootstrap_text(
+            state_database_path, STATE_DATABASE_PATH_KEY
+        ),
+        agents_database_path=_first_process_bootstrap_text(
+            agents_database_path, AGENTS_DATABASE_PATH_KEY
+        ),
+        clearfolio_viewer_url=_first_process_bootstrap_text(
+            clearfolio_viewer_url, CLEARFOLIO_VIEWER_URL_KEY
+        ),
+        provider_ca_bundle=_first_process_bootstrap_text(
+            provider_ca_bundle, PROVIDER_CA_BUNDLE_KEY
+        ),
+    )
+
+
+def seed_process_bootstrap_from_environ() -> None:
+    """Bootstrap: copy sqlite/Clearfolio/CA env vars into KV when those keys are empty.
+
+    This is the only allowed ``os.environ`` read for those process paths.
+    Init-time constructors must call :func:`resolve_process_bootstrap`.
+    The empty-check and write share ``_runtime_lock`` so concurrent
+    ``main()`` + ``serve()`` seeds cannot both observe an empty key.
+    ``None``, ``""``, and whitespace-only values count as empty.
+    Gateway Bearer tokens stay on the #621 slice and are not copied here.
+    """
+    store = get_runtime_config_store()
+    with _runtime_lock:
+        for key, env_name in _PROCESS_BOOTSTRAP_ENV.items():
+            existing = store.get(PROCESS_BOOTSTRAP_CATEGORY, key, None)
+            if existing is not None and str(existing).strip():
+                continue
+            raw = os.environ.get(env_name, "")
+            if raw.strip():
+                store.set(PROCESS_BOOTSTRAP_CATEGORY, key, raw)

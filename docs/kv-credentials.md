@@ -176,6 +176,41 @@ process.
 Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 SC-7; ISO/IEC
 27001:2022 A.8.20.
 
+## Process bootstrap paths (config, not secrets)
+
+Sqlite state, the agent-pool file, the Clearfolio viewer URL, and the
+provider CA bundle are **config**, stored under `process_bootstrap` /
+`state_database_path`, `agents_database_path`, `clearfolio_viewer_url`,
+and `provider_ca_bundle` in the same process-wide runtime ConfigStore.
+They are not credentials. Gateway Bearer tokens are a separate slice
+(`gateway_auth_token` on #621) and are not copied here.
+
+At process start (`python -m contextual_orchestrator` or `serve()`),
+`seed_process_bootstrap_from_environ()` may copy
+`CONTEXTUAL_ORCHESTRATOR_STATE_DB`, `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`,
+`CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`, and
+`CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE` into those KV keys **once**,
+when each key is still empty (`None`, `""`, or whitespace-only). After
+that, changing the env var does nothing until the next bootstrap.
+`TaskOrchestrator`, `ModelClient`, and `build_server` read only the
+process store when the constructor argument is omitted. `--state-db`,
+`--agents-db`, `--clearfolio-url`, and `--provider-ca-bundle` still win.
+`--insecure-skip-tls-verify` stays an explicit CLI opt-out and is never
+seeded from env. `build_server()` does not seed — embedders that skip
+`serve()` / `__main__` must call `seed_process_bootstrap_from_environ()`
+or `set_runtime_config` themselves.
+
+Buyer next action: call
+`set_runtime_config("process_bootstrap", "state_database_path", "state.db")`
+(and the matching keys for the agent pool, Clearfolio URL, or CA bundle),
+or start the process with the env var set so bootstrap can copy it, then
+send traffic. Do not write the key only into a new Postgres `ConfigStore`
+and expect init to honor it. Do not expect a later env edit to change the
+sqlite file, viewer URL, or CA bundle on a running process.
+
+Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 CM-6; ISO/IEC
+27001:2022 A.8.9.
+
 ## Gateway direction
 
 This credential seam is the durable first step of growing

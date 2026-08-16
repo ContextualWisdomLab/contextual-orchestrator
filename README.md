@@ -40,7 +40,7 @@ HTTP serving is hardened for local lab use:
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
-- State is in-memory by default. Pass `--state-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_STATE_DB`) to persist workflow runs, evaluation runs, audit, and analytics to a stdlib sqlite file so they survive a restart; without it, behavior is unchanged.
+- State is in-memory by default. Pass `--state-db PATH`, seed `process_bootstrap.state_database_path` on the process KV, or set `CONTEXTUAL_ORCHESTRATOR_STATE_DB` at process start so bootstrap can copy it once. That sqlite file keeps workflow runs, evaluation runs, audit, and analytics across a restart; without it, behavior is unchanged. Changing the env var on a running process does not switch files.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
 - `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
 
@@ -60,7 +60,7 @@ Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints.
 }
 ```
 
-The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
+The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH`, seed `process_bootstrap.agents_database_path`, or set `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB` at process start so bootstrap can copy it once. Stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
 
 Seed the credential into the KV once at bootstrap:
 
@@ -257,6 +257,7 @@ python tests/test_conventions.py
 python tests/test_api_contract.py
 python tests/test_security_hardening.py
 python tests/test_provider_host_allowlist_kv.py
+python tests/test_process_bootstrap_kv.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py

@@ -19,6 +19,24 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Process sqlite paths, the Clearfolio viewer URL, and the provider CA
+  bundle (`process_bootstrap.state_database_path`,
+  `agents_database_path`, `clearfolio_viewer_url`, `provider_ca_bundle`)
+  are read from the **process-wide runtime ConfigStore** at init, not from
+  a live `os.getenv`. `CONTEXTUAL_ORCHESTRATOR_STATE_DB`,
+  `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`,
+  `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`, and
+  `CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE` are copied into those KV
+  keys once at process start (`seed_process_bootstrap_from_environ`).
+  Changing the env var on a running process no longer changes the sqlite
+  file, viewer URL, or CA bundle. `--state-db`, `--agents-db`,
+  `--clearfolio-url`, and `--provider-ca-bundle` still win.
+  `--insecure-skip-tls-verify` stays an explicit CLI opt-out. Buyer next
+  action: call `set_runtime_config("process_bootstrap",
+  "state_database_path", "state.db")` (or start with the env var set so
+  bootstrap can copy it). Do not write the key only into a new
+  `get_config_store(postgres_dsn=...)` instance. Gateway Bearer tokens
+  remain the #621 slice.
 - Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is
   read from the **process-wide runtime ConfigStore** at request time, not from
   `os.getenv` and not from a separately constructed Postgres `com_config`
@@ -68,6 +86,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - International Organization for Standardization. (2022). *Information
   security, cybersecurity and privacy protection — Information security
   controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
+  (A.8.20 boundary protection; A.8.9 configuration management)
 - OpenAI. (2024). *Create chat completion*. OpenAI API reference.
   https://platform.openai.com/docs/api-reference/chat/create
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data

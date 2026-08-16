@@ -80,6 +80,24 @@ publication; this repo cites it rather than vendoring the full PDF.
   Annex **A.8.20** (Network security) is the same allowlist expressed as an
   operator control. The standard text is not attached (copyright).
 
+## Configuration settings (process bootstrap paths)
+
+- Joint Task Force. (2020). *Security and privacy controls for information
+  systems and organizations* (NIST Special Publication 800-53 Rev. 5).
+  National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-53r5
+  Control **CM-6** (Configuration Settings) is the process-bootstrap KV:
+  sqlite paths, the Clearfolio viewer URL, and the provider CA bundle are
+  read from `process_bootstrap.*` at init, not from a live `os.getenv`.
+  Buyer next action: seed `process_bootstrap.state_database_path` (and the
+  matching keys) or start once with the env var set.
+
+- International Organization for Standardization. (2022). *Information
+  security, cybersecurity and privacy protection — Information security
+  controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
+  Annex **A.8.9** (Configuration management) is the same authorized-store
+  rule. The standard text is not attached (copyright).
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

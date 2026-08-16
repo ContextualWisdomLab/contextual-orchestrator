@@ -27,7 +27,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
-from .kv_config import allowed_provider_hosts
+from .kv_config import allowed_provider_hosts, resolve_process_bootstrap
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -231,6 +231,10 @@ class ModelClient:
         # TLS trust for provider egress. Default verifies against the system trust store;
         # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
         # explicit dev-only opt-out (insecure) for self-signed endpoints.
+        # Omitted ca_bundle reads process_bootstrap.provider_ca_bundle from the KV.
+        if ca_bundle is None:
+            ca_bundle = resolve_process_bootstrap().provider_ca_bundle
+        self.provider_ca_bundle = ca_bundle
         self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
 
     @staticmethod
@@ -1097,6 +1101,13 @@ class TaskOrchestrator:
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
+        # Omitted paths read process_bootstrap.* from the process KV (env is bootstrap only).
+        bootstrap = resolve_process_bootstrap(
+            state_database_path=state_db,
+            agents_database_path=agents_db,
+        )
+        state_db = bootstrap.state_database_path
+        agents_db = bootstrap.agents_database_path
         self._pool_store = _AgentPoolStore(agents_db) if agents_db else None
         if self._pool_store is not None:
             stored = {agent.id: agent for agent in self._pool_store.load_all()}

@@ -57,11 +57,13 @@ push or open a PR.
   Postgres credential registry (`get_credential(name)`); reuse that pattern (a
   DB-backed KV is fine) unless a dedicated KV is adopted.
 - **Known deviation to migrate:** `__main__.py` still accepts
-  `CONTEXTUAL_ORCHESTRATOR_*` tokens and bind/TLS flags from env as
-  **process bootstrap**. Provider API keys and the provider-host allowlist
-  are KV-backed at request time (`get_credential`,
-  `allowed_provider_hosts`). Do not reintroduce `os.getenv` inside
-  `ModelClient._validate_provider` or `ModelClient.chat`.
+  `CONTEXTUAL_ORCHESTRATOR_*` tokens and bind host/port flags from env as
+  **process bootstrap**. Provider API keys, the provider-host allowlist,
+  sqlite/Clearfolio/CA paths (`process_bootstrap.*`), and request-time
+  egress are KV-backed (`get_credential`, `allowed_provider_hosts`,
+  `resolve_process_bootstrap`). Do not reintroduce `os.getenv` inside
+  `ModelClient._validate_provider`, `ModelClient.chat`, or
+  `TaskOrchestrator.__init__`. Gateway Bearer tokens are the #621 slice.
 
 ### This repo: the org LLM gateway
 

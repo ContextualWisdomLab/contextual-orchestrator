@@ -79,6 +79,15 @@ Request-time egress allowlisting is a KV config read, not a new dependency.
 | Runtime config | Existing `ConfigStore` / `InMemoryConfigStore` in `kv_config.py`; credential KV (`get_credential`) | Reuse `ConfigStore` as a process-wide request-time store (`provider_egress.allowed_provider_hosts`). Env `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` is bootstrap transport via `seed_provider_egress_from_environ` only. | New allowlist library, OS-level firewall helper, treating the host list as a secret in `get_credential`. |
 | Control baseline | NIST SP 800-53 Rev. 5 SC-7; ISO/IEC 27001:2022 A.8.20 | Document the allowlist as boundary protection. Empty KV set means "no extra hostname filter"; private/loopback/reserved addresses still fail closed. | Shipping a full NIST/ISO control catalog in this slice. |
 
+## Process bootstrap paths (2026-08-16)
+
+Sqlite / Clearfolio / provider-CA process settings are a KV config read, not a new dependency.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Process config | Existing `ConfigStore` / `InMemoryConfigStore`; argparse env defaults in `__main__.py` | Reuse `ConfigStore` as `process_bootstrap.*`. Env is bootstrap transport via `seed_process_bootstrap_from_environ` only. CLI flags win. | New settings library, dotenv loader, treating paths as secrets in `get_credential`. |
+| Control baseline | NIST SP 800-53 Rev. 5 CM-6; ISO/IEC 27001:2022 A.8.9 | Document authorized configuration settings. Empty KV keeps the in-memory / viewer-disabled / system-trust defaults. `--insecure-skip-tls-verify` stays explicit CLI only. | Seeding TLS verification opt-out from env. Gateway Bearer tokens (owned by #621). |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

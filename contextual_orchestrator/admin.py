@@ -42,7 +42,7 @@ ADMIN_TRANSLATIONS = {
         "doc_viewer_open": "Open viewer",
         "doc_viewer_open_doc": "Open document",
         "doc_viewer_docid": "docId",
-        "doc_viewer_hint": "Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.",
+        "doc_viewer_hint": "Set --clearfolio-url, or seed process_bootstrap.clearfolio_viewer_url (CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL copies once at start).",
         "observability_title": "Observability",
         "spend_title": "Spend",
         "spend_model": "Model",
@@ -276,7 +276,7 @@ ADMIN_TRANSLATIONS = {
         "doc_viewer_open": "뷰어 열기",
         "doc_viewer_open_doc": "문서 열기",
         "doc_viewer_docid": "docId",
-        "doc_viewer_hint": "--clearfolio-url (또는 CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) 설정 시 활성화됩니다.",
+        "doc_viewer_hint": "--clearfolio-url을 주거나 process_bootstrap.clearfolio_viewer_url을 시드하세요. CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL은 시작 시 한 번만 복사됩니다.",
         "observability_title": "관측",
         "spend_title": "비용",
         "spend_model": "모델",
@@ -967,7 +967,7 @@ Summarize this research thread and verify claims.</textarea>
             <input id="docViewerDocId" type="text" data-i18n-placeholder="doc_viewer_docid" placeholder="docId" />
             <button id="docViewerOpenDoc" class="btn" data-i18n="doc_viewer_open_doc">Open document</button>
           </div>
-          <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.</p>
+          <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Set --clearfolio-url, or seed process_bootstrap.clearfolio_viewer_url (CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL copies once at start).</p>
         </section>
       </section>
       <section class="detail-grid view" data-view="observability" hidden>

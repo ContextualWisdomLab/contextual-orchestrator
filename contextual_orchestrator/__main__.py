@@ -8,7 +8,7 @@ import os
 import sys
 
 from .credentials import register_credential
-from .kv_config import seed_provider_egress_from_environ
+from .kv_config import seed_process_bootstrap_from_environ, seed_provider_egress_from_environ
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
@@ -65,8 +65,8 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
-    parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
-                        help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
+    parser.add_argument("--state-db", default=None,
+                        help="Optional sqlite path to persist runs/audit/analytics across restarts (default: process KV / in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -77,11 +77,11 @@ def main() -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
-    parser.add_argument("--clearfolio-url", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL") or None,
-                        help="Base URL of a Clearfolio deployment to use as the admin document viewer (default: disabled).")
-    parser.add_argument("--agents-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None,
+    parser.add_argument("--clearfolio-url", default=None,
+                        help="Base URL of a Clearfolio deployment to use as the admin document viewer (default: process KV / disabled).")
+    parser.add_argument("--agents-db", default=None,
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
-    parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
+    parser.add_argument("--provider-ca-bundle", default=None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
     parser.add_argument("--insecure-skip-tls-verify", action="store_true",
                         help="Dev only: do not verify provider TLS certificates (insecure).")
@@ -96,6 +96,7 @@ def main() -> None:
     args = parser.parse_args()
 
     seed_provider_egress_from_environ()
+    seed_process_bootstrap_from_environ()
     client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),
