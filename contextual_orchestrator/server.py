@@ -85,6 +85,20 @@ ALLOWED_COMPLETIONS_KEYS = {
     "reasoning", "background", "include",
 } | {"attribution", "routing"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
+# Chat message object keys this gateway interprets. Anything else fails closed
+# with unknown_message_fields (named error, not silent strip/smuggle).
+ALLOWED_MESSAGE_KEYS = {
+    "role",
+    "content",
+    "name",
+    "tool_call_id",
+    "tool_calls",
+    "refusal",
+    "annotations",
+    "audio",
+    "function_call",
+    "weight",
+}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
@@ -1294,6 +1308,40 @@ def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
     return parts
 
 
+def _reject_unknown_message_keys(message: dict[str, Any]) -> None:
+    """Fail closed on chat message keys outside the OpenAI surface we honor.
+
+    Named ``unknown_message_fields`` (with the key list) beats silent strip on
+    the orchestration path or silent smuggle on tools passthrough.
+    """
+    unknown = sorted(set(message) - ALLOWED_MESSAGE_KEYS)
+    if unknown:
+        raise RequestError(
+            400,
+            "unknown_message_fields",
+            "message contains unsupported fields",
+            {"fields": unknown},
+        )
+
+
+def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
+    """Reject unknown message keys and legacy function role before passthrough."""
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if isinstance(role, str) and role == "function":
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "function role is not supported on /v1/chat/completions; use tool instead",
+            )
+        _reject_unknown_message_keys(message)
+
+
 def _validate_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
@@ -1311,6 +1359,15 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                 "invalid_message_role",
                 "developer role is not supported on /v1/chat/completions; use system instead",
             )
+        if isinstance(role, str) and role == "function":
+            # Legacy Completions function-calling role; tool replaces it.
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "function role is not supported on /v1/chat/completions; use tool instead",
+            )
+        # Named error for unsupported keys — never silent strip or passthrough smuggle.
+        _reject_unknown_message_keys(message)
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
         # OpenAI assistant tool turns often send content:null with tool_calls; treat
@@ -3422,6 +3479,7 @@ def build_server(
                             )
                     # Shape-check tool results and message audio/function_call before
                     # passthrough or orchestration (named errors, not silent drop).
+                    _validate_chat_message_known_fields(body)
                     _validate_chat_tool_message_ids(body)
                     _validate_chat_assistant_tool_calls(body)
                     _validate_chat_message_audio_function_call(body)
