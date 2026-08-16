@@ -18,6 +18,10 @@ consume untrusted bytes/JSON:
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
+5. ``kv_config._parse_host_allowlist`` -- CSV / sequence hostname allowlist
+   parser used at request time. Arbitrary decoded JSON must yield a
+   ``frozenset[str]`` of stripped lower-case hosts or raise a documented
+   parse error -- never an unhandled crash.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -28,6 +32,7 @@ import json
 from typing import Any
 
 from contextual_orchestrator import server
+from contextual_orchestrator.kv_config import _parse_host_allowlist
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
@@ -188,3 +193,21 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
             continue
         assert frame.startswith("data: ")
         json.loads(frame[len("data: "):])
+
+
+def exercise_host_allowlist(raw: Any) -> None:
+    """Drive the provider-host allowlist parser over arbitrary decoded JSON.
+
+    Invariants: never crashes on JSON-ish values; successful results are a
+    ``frozenset`` of non-empty stripped lower-case strings; parsing the
+    result again is a no-op.
+    """
+    try:
+        hosts = _parse_host_allowlist(raw)
+    except (TypeError, ValueError, AttributeError, RecursionError):
+        return
+    assert isinstance(hosts, frozenset), f"allowlist must be frozenset, got {type(hosts)!r}"
+    for host in hosts:
+        assert isinstance(host, str) and host
+        assert host == host.strip().lower()
+    assert _parse_host_allowlist(hosts) == hosts

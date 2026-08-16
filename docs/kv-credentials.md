@@ -150,20 +150,28 @@ principle **"No os.getenv, values from KV"**, that source moves to the KV:
 ## Provider host allowlist (config, not a secret)
 
 The approved-gateway hostname list is **config**, stored under
-`provider_egress` / `allowed_provider_hosts` in the process KV
-(`set_runtime_config` / `allowed_provider_hosts()`). It is not a
-credential.
+`provider_egress` / `allowed_provider_hosts` in the **process-wide runtime
+ConfigStore** (`set_runtime_config` / `allowed_provider_hosts()`). The
+default store is `InMemoryConfigStore`. It is not a credential, and it is
+**not** a separately constructed `get_config_store(postgres_dsn=...)` /
+`com_config` instance unless you install that store with
+`set_runtime_config_store()` at bootstrap.
 
 At process start (`python -m contextual_orchestrator` or `serve()`),
 `seed_provider_egress_from_environ()` may copy
 `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` into that KV key **once**,
 when the key is still empty. After that, changing the env var does nothing
 until the next bootstrap. Request-time `_validate_provider` reads only the
-KV.
+process store. `build_server()` does not seed — embedders that skip
+`serve()` / `__main__` must call `seed_provider_egress_from_environ()` or
+`set_runtime_config` themselves.
 
-Buyer next action: seed the allowlist into the KV (or start the process
-with the env var set so bootstrap can copy it), then send traffic. Do not
-expect a later env edit to change egress policy on a running process.
+Buyer next action: call `set_runtime_config("provider_egress",
+"allowed_provider_hosts", "api.example.com")` (or start the process with
+the env var set so bootstrap can copy it), then send traffic. Do not write
+the key only into a new Postgres `ConfigStore` and expect egress to honor
+it. Do not expect a later env edit to change egress policy on a running
+process.
 
 Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 SC-7; ISO/IEC
 27001:2022 A.8.20.

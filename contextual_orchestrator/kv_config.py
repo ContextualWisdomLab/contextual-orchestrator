@@ -216,10 +216,14 @@ def seed_provider_egress_from_environ() -> None:
 
     This is the only allowed ``os.environ`` read for the host allowlist.
     Request-time validation must call :func:`allowed_provider_hosts`.
+    The empty-check and write share ``_runtime_lock`` so concurrent
+    ``main()`` + ``serve()`` seeds cannot both observe an empty key.
     """
-    existing = get_runtime_config(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, None)
-    if existing not in (None, ""):
-        return
-    raw = os.environ.get(_ALLOWED_HOSTS_ENV, "")
-    if raw.strip():
-        set_runtime_config(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, raw)
+    store = get_runtime_config_store()
+    with _runtime_lock:
+        existing = store.get(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, None)
+        if existing not in (None, ""):
+            return
+        raw = os.environ.get(_ALLOWED_HOSTS_ENV, "")
+        if raw.strip():
+            store.set(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, raw)

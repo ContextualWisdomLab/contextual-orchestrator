@@ -18,6 +18,7 @@ from hypothesis import given, settings, strategies as st
 
 from fuzz.targets import (
     exercise_agent_config,
+    exercise_host_allowlist,
     exercise_orchestration,
     exercise_redaction,
     exercise_request_body,
@@ -108,3 +109,16 @@ def test_redaction_never_crashes_and_is_idempotent(text: str) -> None:
 )
 def test_orchestration_on_arbitrary_prompt(prompt: str, mode: str) -> None:
     exercise_orchestration(prompt, mode)
+
+
+@_SETTINGS
+@given(
+    st.none()
+    | st.text(max_size=256)
+    | st.lists(st.text(max_size=64) | st.integers() | st.none(), max_size=12)
+    | st.integers()
+    | st.booleans()
+    | _json_values
+)
+def test_host_allowlist_parser_never_crashes(raw: object) -> None:
+    exercise_host_allowlist(raw)
