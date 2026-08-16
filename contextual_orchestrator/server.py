@@ -1441,6 +1441,25 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                     "non-empty message function_call is not supported on /v1/chat/completions; "
                     "use tool_calls instead",
                 )
+        if "weight" in message:
+            # OpenAI fine-tune style message weight (0 or 1). Explicit null is
+            # treat-as-omit. 0/1 are honest no-ops (no fine-tune plane here).
+            # Other values fail closed so clients never believe weighting applied.
+            weight = message.get("weight")
+            if weight is None:
+                pass
+            elif isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                raise RequestError(
+                    400,
+                    "invalid_message_weight",
+                    "message weight must be 0 or 1",
+                )
+            elif float(weight) not in (0.0, 1.0):
+                raise RequestError(
+                    400,
+                    "invalid_message_weight",
+                    "message weight must be 0 or 1",
+                )
         validated.append(entry)
     return validated
 
