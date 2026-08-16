@@ -1917,6 +1917,27 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "invalid_message",
                     "each tool_calls entry must be an object",
                 )
+            # OpenAI non-stream entries: id/type/function; optional index from
+            # stream assembly. Anything else fails closed (no silent smuggle).
+            unknown_call_keys = sorted(set(call) - {"id", "type", "function", "index"})
+            if unknown_call_keys:
+                raise RequestError(
+                    400,
+                    "unknown_tool_call_fields",
+                    "tool_calls entry contains unsupported fields",
+                    {"fields": unknown_call_keys},
+                )
+            if "index" in call:
+                index_value = call.get("index")
+                # Explicit JSON null is treat-as-omit (SDK optional default).
+                if index_value is None:
+                    pass
+                elif isinstance(index_value, bool) or not isinstance(index_value, int) or index_value < 0:
+                    raise RequestError(
+                        400,
+                        "invalid_tool_calls",
+                        "each tool_calls index must be a non-negative integer",
+                    )
             call_id = call.get("id")
             if not isinstance(call_id, str) or not call_id.strip():
                 raise RequestError(
@@ -1942,6 +1963,14 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     400,
                     "invalid_message",
                     "each tool_calls entry requires a function object",
+                )
+            unknown_function_keys = sorted(set(function) - {"name", "arguments"})
+            if unknown_function_keys:
+                raise RequestError(
+                    400,
+                    "unknown_tool_call_function_fields",
+                    "tool_calls function contains unsupported fields",
+                    {"fields": unknown_function_keys},
                 )
             name = function.get("name")
             if not isinstance(name, str) or not name.strip():
