@@ -67,3 +67,18 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## References
+
+OpenAI. (2024). *Create chat completion*. OpenAI API reference.
+https://platform.openai.com/docs/api-reference/chat/create
+
+Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*.
+https://sakana.ai/fugu-release/
+
+Zhang, J., et al. (2025). *TRINITY: An evolved LLM coordinator*
+(arXiv:2512.04695). https://doi.org/10.48550/arXiv.2512.04695
+
+Zhang, J., et al. (2025). *Learning to orchestrate agents in natural language
+with the Conductor* (arXiv:2512.04388).
+https://doi.org/10.48550/arXiv.2512.04388
