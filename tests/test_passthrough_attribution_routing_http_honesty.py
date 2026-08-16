@@ -222,6 +222,27 @@ def test_http_chat_tools_accepts_known_sync_attribution_and_routing() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tools_rejects_non_string_user_content() -> None:
+    """Numeric content is 400 on orchestration; tools must not bill 200."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": 123}],
+                "tools": _LOOKUP_TOOLS,
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_message" in blob
+        assert "content" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_tools_rejects_unknown_stream_options_key_even_when_null() -> None:
     """Unknown-null stream_options must 400 on the billed tools path too."""
     server, thread, port = _server()
@@ -252,5 +273,6 @@ if __name__ == "__main__":
     test_http_chat_tools_rejects_latency_tolerant_true()
     test_http_chat_response_format_rejects_unknown_attribution()
     test_http_chat_tools_accepts_known_sync_attribution_and_routing()
+    test_http_chat_tools_rejects_non_string_user_content()
     test_http_chat_tools_rejects_unknown_stream_options_key_even_when_null()
     print("ok")

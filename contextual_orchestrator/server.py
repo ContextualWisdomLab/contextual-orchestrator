@@ -1598,8 +1598,8 @@ def _validate_chat_message_passthrough_honesty(body: dict[str, Any]) -> None:
     These checks otherwise live only in ``_validate_messages``, which runs after
     the tools passthrough early return. SDK clients that send ``tools`` plus
     fine-tune weight, prefix, refusal, annotations, empty user/system content,
-    or a participant name must get the same named error as the orchestration
-    path — never a silent smuggle to the provider.
+    non-string user content, or a participant name must get the same named
+    error as the orchestration path — never a silent smuggle to the provider.
     """
     messages = body.get("messages")
     if not isinstance(messages, list):
@@ -1611,9 +1611,18 @@ def _validate_chat_message_passthrough_honesty(body: dict[str, Any]) -> None:
         content = message.get("content")
         if isinstance(content, list):
             _validate_message_content_parts(content)
-        elif role in {"user", "system"} and (
-            content is None or (isinstance(content, str) and not content.strip())
-        ):
+        elif not isinstance(content, str):
+            # Match ``_validate_messages``: assistant/tool null is omit-equivalent;
+            # any other non-string (including user content 123) fails closed.
+            if content is None and role in {"assistant", "tool"}:
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "message role or content is invalid",
+                )
+        elif role in {"user", "system"} and not content.strip():
             raise RequestError(
                 400,
                 "invalid_message_content",
