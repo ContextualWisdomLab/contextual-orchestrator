@@ -20,6 +20,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Meaning-unit HTML cuts keep innermost leaves, so a wrapped
   `<div><p>Good morning</p><p>Invoice INV-…</p></div>` no longer becomes one
   vector. RFC 2397 `data:image` units now accept charset parameters, URL-safe
-  `-_`, and MIME line wraps so a scanned invoice does not glue onto the
-  balance paragraph. Next action: POST the raw Gmail HTML or MIME-wrapped
-  scan with `chunking_strategy=meaning_units` and search `chunk_units`.
+  `-_`, and RFC 2045 folded last lines (including a 76-column wrap whose
+  final line is 15 alphabet characters plus `=`). Next action: POST the raw
+  Gmail HTML or a 76-column MIME-wrapped scan with
+  `chunking_strategy=meaning_units` and search `chunk_units` — leftover
+  base64 must not be in the invoice vector.

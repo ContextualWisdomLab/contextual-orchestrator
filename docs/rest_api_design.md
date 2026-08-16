@@ -15,7 +15,7 @@
 |---|---|---|
 | `GET` | `/openapi.json` | API contract |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
-| `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch. Send `chunking_strategy=meaning_units` to embed email, HTML, image, and paragraph units separately and read `chunk_units` for source offsets. |
+| `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch. Send `chunking_strategy=meaning_units` to embed email, HTML, RFC 2397/2045 image, and paragraph units separately and read `chunk_units` for source offsets. A 76-column MIME wrap must keep leftover base64 out of the invoice vector. |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |

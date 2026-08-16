@@ -63,9 +63,10 @@ Researched before adding `contextual_orchestrator/semantic_chunking.py`:
 | [LangChain RecursiveCharacterTextSplitter](https://python.langchain.com/docs/how_to/recursive_text_splitter/) | Skip. | Adds a runtime dependency and splits on character budgets, then the coordinator already token-splits and averages parts back to one vector. |
 | [LlamaIndex SentenceSplitter](https://docs.llamaindex.ai/) | Skip. | Same dependency and token-window grain. Does not isolate email parties or `data:image` offsets. |
 | Similarity-breakpoint “semantic chunking” (LangChain / LlamaIndex) | Skip. | Qu et al. (2025) found computational cost is not justified by consistent retrieval gains. |
-| [RFC 2397 data URL scheme](https://www.rfc-editor.org/rfc/rfc2397) | Cite as the `data:image` authority; accept optional `;k=v` parameters, URL-safe `-_`, and MIME line wraps in the payload. | Masinter (1998). A parser library is not justified for span isolation. |
+| [RFC 2397 data URL scheme](https://www.rfc-editor.org/rfc/rfc2397) | Cite as the `data:image` authority; accept optional `;k=v` parameters and URL-safe `-_`. | Masinter (1998). A parser library is not justified for span isolation. |
+| [RFC 2045 MIME bodies](https://www.rfc-editor.org/rfc/rfc2045) | Cite as the 76-column fold authority. Do not use a `{16,}` continuation floor — the last folded line may be 15 alphabet characters plus padding. | Freed & Borenstein (1996). Stdlib walker; no MIME library. |
 
-Selected: stdlib regular expressions plus paragraph/email/HTML/image detectors. Custom code that was deliberately skipped: LLM-as-chunker, perplexity chunking, and any new pip dependency.
+Selected: stdlib regular expressions plus a fold walker for `data:image` payloads, plus paragraph/email/HTML detectors. Custom code that was deliberately skipped: LLM-as-chunker, perplexity chunking, and any new pip dependency.
 
 ## Required For New Designs
 

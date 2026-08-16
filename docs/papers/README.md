@@ -76,8 +76,14 @@ later averaged away.
 - Masinter, L. (1998). *The "data" URL scheme* (RFC 2397). RFC Editor.
   https://doi.org/10.17487/RFC2397
   Cite + link (IETF). `data:image` units accept optional media-type parameters,
-  `;base64`, URL-safe `-_`, and MIME line wraps so a scanned invoice keeps one
-  `source_offset` for a later OCR job.
+  `;base64`, and URL-safe `-_` so a scanned invoice keeps one `source_offset`
+  for a later OCR job.
+- Freed, N., & Borenstein, N. (1996). *Multipurpose Internet Mail Extensions
+  (MIME) Part One: Format of Internet Message Bodies* (RFC 2045). RFC Editor.
+  https://doi.org/10.17487/RFC2045
+  Cite + link (IETF). A 76-column fold may end on a short padded last line.
+  The image walker must accept that line; leftover base64 must not join the
+  invoice unit.
 
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no

@@ -70,6 +70,35 @@ INVOICE_IMAGE_MIME_WRAP = (
     "The amount on that scan is 1840.00 USD for INV-20260816."
 )
 
+_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+"
+    "ip1sAAAAASUVORK5CYII="
+)
+
+INVOICE_IMAGE_RFC2045_WRAP = (
+    "See the scanned invoice below.\n"
+    f"data:image/png;base64,{_PNG_B64[:76]}\n"
+    f"{_PNG_B64[76:]}\n"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
+INVOICE_IMAGE_SHORT_LAST_LINE = (
+    "See the scanned invoice below.\n"
+    f"data:image/png;base64,{_PNG_B64[:80]}\n"
+    f"{_PNG_B64[80:]}\n"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
+INVOICE_IMAGE_SAME_LINE_PROSE = (
+    f"data:image/png;base64,{_PNG_B64}"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
+INVOICE_IMAGE_FOLLOWING_ALNUM = (
+    f"data:image/png;base64,{_PNG_B64}\n"
+    "PleaseRemitInvoiceINV20260816Now\n"
+)
+
 INVOICE_QUERY = "invoice INV-20260816 balance due 1840.00 USD"
 
 
@@ -189,6 +218,50 @@ def test_mime_wrapped_data_image_keeps_full_payload() -> None:
     assert image.chunk_text.endswith("=")
 
 
+def test_rfc2045_column_76_wrap_keeps_invoice_out_of_the_image() -> None:
+    _assert_image_isolated(INVOICE_IMAGE_RFC2045_WRAP, "data:image/png;base64,")
+    image = next(
+        unit
+        for unit in meaning_unit_chunks(INVOICE_IMAGE_RFC2045_WRAP)
+        if unit.chunk_kind == "embedded_image"
+    )
+    assert _PNG_B64[76:] in image.chunk_text
+    invoice = next(
+        unit for unit in meaning_unit_chunks(INVOICE_IMAGE_RFC2045_WRAP)
+        if "INV-20260816" in unit.chunk_text
+    )
+    assert "AAAASUVORK5CYII" not in invoice.chunk_text
+    assert "SUVORK5CYII" not in invoice.chunk_text
+
+
+def test_short_padded_last_line_stays_in_the_image() -> None:
+    _assert_image_isolated(INVOICE_IMAGE_SHORT_LAST_LINE, "data:image/png;base64,")
+    image = next(
+        unit
+        for unit in meaning_unit_chunks(INVOICE_IMAGE_SHORT_LAST_LINE)
+        if unit.chunk_kind == "embedded_image"
+    )
+    assert image.chunk_text.endswith(_PNG_B64[80:])
+
+
+def test_same_line_prose_after_padding_is_not_in_the_image() -> None:
+    units = meaning_unit_chunks(INVOICE_IMAGE_SAME_LINE_PROSE)
+    image = next(unit for unit in units if unit.chunk_kind == "embedded_image")
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert image.chunk_text.endswith("=")
+    assert "The amount" not in image.chunk_text
+    assert "data:image" not in invoice.chunk_text
+
+
+def test_following_alnum_line_is_not_swallowed_by_the_image() -> None:
+    units = meaning_unit_chunks(INVOICE_IMAGE_FOLLOWING_ALNUM)
+    image = next(unit for unit in units if unit.chunk_kind == "embedded_image")
+    follow = next(unit for unit in units if "INV20260816" in unit.chunk_text)
+    assert image.chunk_text.endswith("=")
+    assert "PleaseRemit" not in image.chunk_text
+    assert follow.chunk_kind != "embedded_image"
+
+
 def test_expand_embedding_inputs_preserves_input_index() -> None:
     texts, units = expand_embedding_inputs(
         [INVOICE_EMAIL, "single note"],
@@ -291,6 +364,10 @@ if __name__ == "__main__":
     test_charset_data_image_is_its_own_unit()
     test_urlsafe_data_image_keeps_full_payload()
     test_mime_wrapped_data_image_keeps_full_payload()
+    test_rfc2045_column_76_wrap_keeps_invoice_out_of_the_image()
+    test_short_padded_last_line_stays_in_the_image()
+    test_same_line_prose_after_padding_is_not_in_the_image()
+    test_following_alnum_line_is_not_swallowed_by_the_image()
     test_expand_embedding_inputs_preserves_input_index()
     test_expand_omitted_strategy_keeps_one_document_unit()
     test_units_do_not_overlap()

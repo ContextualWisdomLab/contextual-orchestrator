@@ -37,6 +37,20 @@ Please remit payment for invoice INV-20260816. The balance due is 1840.00 USD by
 Kind regards,
 Alice Billing
 """
+INVOICE_WRAPPED_HTML = (
+    "<div><p>Good morning from support.</p>"
+    "<p>Invoice INV-20260816 balance due is 1840.00 USD.</p></div>"
+)
+_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+"
+    "ip1sAAAAASUVORK5CYII="
+)
+INVOICE_IMAGE_RFC2045_WRAP = (
+    "See the scanned invoice below.\n"
+    f"data:image/png;base64,{_PNG_B64[:76]}\n"
+    f"{_PNG_B64[76:]}\n"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
 INVOICE_QUERY = "invoice INV-20260816 balance due 1840.00 USD"
 
 _TEST_AUTH_TOKEN = "meaning_units_http_honesty_token"  # noqa: S105
@@ -139,6 +153,57 @@ def _get(port: int, batch_id: str) -> tuple[int, dict]:
         return response.status, json.loads(response.read().decode("utf-8"))
 
 
+def test_http_wrapped_html_keeps_invoice_out_of_the_greeting() -> None:
+    server, thread, port = _serve()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-a",
+                "inputs": [INVOICE_WRAPPED_HTML],
+                "chunking_strategy": "meaning_units",
+            },
+        )
+        assert status == 200, body
+        units = [MeaningUnit(**item) for item in body["chunk_units"]]
+        greeting = next(unit for unit in units if "Good morning" in unit.chunk_text)
+        invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+        assert greeting is not invoice
+        assert "INV-20260816" not in greeting.chunk_text
+        assert "Good morning" not in invoice.chunk_text
+        ranked = rank_meaning_units(INVOICE_QUERY, units)
+        assert "INV-20260816" in ranked[0].chunk_text
+        assert "Good morning" not in ranked[0].chunk_text
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_rfc2045_wrap_keeps_leftover_base64_out_of_the_invoice() -> None:
+    server, thread, port = _serve()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-a",
+                "inputs": [INVOICE_IMAGE_RFC2045_WRAP],
+                "chunking_strategy": "meaning_units",
+            },
+        )
+        assert status == 200, body
+        units = [MeaningUnit(**item) for item in body["chunk_units"]]
+        image = next(unit for unit in units if unit.chunk_kind == "embedded_image")
+        invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+        assert image.chunk_text.endswith("=")
+        assert _PNG_B64[76:] in image.chunk_text
+        assert "AAAASUVORK5CYII" not in invoice.chunk_text
+        assert "data:image" not in invoice.chunk_text
+        assert len(body["embeddings"]) == len(units)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_unknown_chunking_strategy_fails_closed() -> None:
     server, thread, port = _serve()
     try:
@@ -198,6 +263,8 @@ def test_http_non_string_chunking_strategy_fails_closed() -> None:
 if __name__ == "__main__":
     test_http_omit_keeps_one_vector_per_input()
     test_http_meaning_units_exposes_invoice_chunk_for_search()
+    test_http_wrapped_html_keeps_invoice_out_of_the_greeting()
+    test_http_rfc2045_wrap_keeps_leftover_base64_out_of_the_invoice()
     test_http_unknown_chunking_strategy_fails_closed()
     test_http_null_chunking_strategy_is_omit()
     test_http_non_string_chunking_strategy_fails_closed()

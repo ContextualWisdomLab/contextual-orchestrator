@@ -188,9 +188,10 @@ is read from a **KV config store**, never `os.getenv`.
   `routing.embedding_max_chars_per_part`, default 240,000) and reduces part
   vectors with a token-weighted average, so Azure/LiteLLM over-limit embedding
   requests are split internally instead of surfacing as caller errors. Send
-  `chunking_strategy=meaning_units` to embed email, HTML, image, and paragraph
-  units separately and read `chunk_units` for source offsets; omit it to keep
-  one vector per submitted string. It routes
+  `chunking_strategy=meaning_units` to embed email, HTML, RFC 2397/2045 image,
+  and paragraph units separately and read `chunk_units` for source offsets;
+  omit it to keep one vector per submitted string. A 76-column MIME-wrapped
+  scan must keep leftover base64 out of the invoice vector. It routes
   through the same RoutingPolicy/cost optimiser and `pg-llm-batch` embeddings
   backend (local in-process backend standalone), and records one usage-ledger row
   per original vector with the full attribution dimensions (service, team,

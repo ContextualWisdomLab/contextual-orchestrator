@@ -38,9 +38,11 @@ gateway cuts at linguistic units:
 - HTML blocks (`html_block`) — innermost leaves only, so a Gmail
   `<div><p>greeting</p><p>invoice</p></div>` stays two retrieval grains
 - RFC 2397 `data:image/...;base64,` spans (`embedded_image`) including
-  `;charset=` (and other parameters), URL-safe `-_`, and MIME line wraps,
-  with the original `source_offset` so a later OCR/object-tag job can
-  attach to the same place
+  `;charset=` (and other parameters), URL-safe `-_`, and RFC 2045 folded
+  lines (a 76-column wrap may end on a short padded last line). The
+  original `source_offset` is kept so a later OCR/object-tag job can
+  attach to the same place. Same-line prose after padding and a following
+  alphanumeric invoice line stay out of the image unit.
 - remaining prose as `body_paragraph` (default retrieval grain)
 
 `unit_grain=body_sentence` is available in-process for UAX #29-style sentence
@@ -84,3 +86,7 @@ https://doi.org/10.48550/arXiv.2005.11401
 
 Masinter, L. (1998). *The "data" URL scheme* (RFC 2397). RFC Editor.
 https://doi.org/10.17487/RFC2397
+
+Freed, N., & Borenstein, N. (1996). *Multipurpose Internet Mail Extensions
+(MIME) Part One: Format of Internet Message Bodies* (RFC 2045). RFC Editor.
+https://doi.org/10.17487/RFC2045
