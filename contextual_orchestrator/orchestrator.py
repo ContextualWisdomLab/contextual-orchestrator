@@ -449,7 +449,18 @@ class ModelClient:
         """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
         echoed = {
             key: payload[key]
-            for key in ("model", "response_format", "tools", "tool_choice", "temperature", "max_tokens")
+            for key in (
+                "model",
+                "response_format",
+                "tools",
+                "tool_choice",
+                "temperature",
+                "max_tokens",
+                "instructions",
+                "metadata",
+                "messages",
+                "top_logprobs",
+            )
             if key in payload
         }
         if endpoint.strip("/") == "responses":

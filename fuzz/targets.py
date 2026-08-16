@@ -106,6 +106,31 @@ def exercise_request_body(raw: bytes) -> None:
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
 
+    # Omit-equivalent instructions/metadata must leave the body persist-clean.
+    if "instructions" in body:
+        try:
+            instructions = server._validate_responses_instructions(body)
+        except RequestError:
+            pass
+        else:
+            if instructions is None:
+                assert "instructions" not in body
+    if "metadata" in body:
+        try:
+            metadata = server._validate_openai_metadata(body)
+        except RequestError:
+            pass
+        else:
+            if metadata is None:
+                leftover = body.get("metadata")
+                assert leftover is None or (
+                    isinstance(leftover, dict)
+                    and not any(value is None for value in leftover.values())
+                )
+            else:
+                assert body.get("metadata") == metadata
+                assert all(isinstance(value, str) for value in metadata.values())
+
 
 def exercise_agent_config(value: Any) -> None:
     """Drive ``ModelAgent.from_dict`` over an arbitrary decoded JSON value."""

@@ -1667,6 +1667,42 @@ def _validate_chat_tool_message_ids(body: dict[str, Any]) -> None:
             )
 
 
+def _validate_chat_logprobs_surface(body: dict[str, Any]) -> None:
+    """Fail-closed chat ``logprobs`` / ``top_logprobs`` before any proxy.
+
+    Chat route and tools passthrough do not return token logprobs. Explicit
+    JSON null, empty/whitespace string, or ``0`` on ``top_logprobs`` is
+    treat-as-omit and popped so the upstream payload matches an omitted
+    field. ``logprobs=true`` and nonzero ``top_logprobs`` stay named 400s
+    even when ``tools`` would otherwise take the passthrough return.
+    """
+    if "logprobs" not in body and "top_logprobs" not in body:
+        return
+    if "logprobs" in body:
+        lp = body.get("logprobs")
+        if isinstance(lp, str) and not lp.strip():
+            lp = None
+        if lp is not None:
+            if not isinstance(lp, bool):
+                raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
+            if lp is True:
+                raise RequestError(
+                    400,
+                    "invalid_logprobs",
+                    "logprobs=true is not supported on /v1/chat/completions",
+                )
+    if "top_logprobs" in body:
+        tlp = body.get("top_logprobs")
+        if tlp is None or tlp == 0 or (isinstance(tlp, str) and not tlp.strip()):
+            body.pop("top_logprobs", None)
+            return
+        raise RequestError(
+            400,
+            "invalid_top_logprobs",
+            "top_logprobs is not supported on /v1/chat/completions",
+        )
+
+
 def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
     """OpenAI assistant ``tool_calls`` array shape on chat messages.
 
@@ -1759,8 +1795,10 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "each tool_calls function.name must match [a-zA-Z0-9_-]",
                 )
             arguments = function.get("arguments")
-            # Explicit JSON null is treat-as-omit → empty JSON-text arguments.
+            # Explicit JSON null / missing is treat-as-omit → empty JSON-text.
+            # Write back so proxy_completion forwards a string, not JSON null.
             if arguments is None:
+                function["arguments"] = ""
                 arguments = ""
             if not isinstance(arguments, str):
                 raise RequestError(
@@ -1773,15 +1811,18 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
 def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
     """OpenAI ``metadata`` — object of string pairs, at most 16 entries.
 
-    Keys ≤64 characters; values ≤512 characters. Non-objects and non-string
-    entries fail closed so clients cannot store untyped junk that cost or
-    observability consumers would silently drop.
+    Keys ≤64 characters; values ≤512 characters. Explicit JSON null values
+    are treat-as-omit for that key and written back onto ``body`` so
+    ``proxy_completion`` does not forward non-string values. Non-objects and
+    other non-string entries fail closed so clients cannot store untyped junk
+    that cost or observability consumers would silently drop.
     """
     if "metadata" not in body:
         return None
     metadata = body.get("metadata")
     # Explicit JSON null is treat-as-omit (SDK optional default).
     if metadata is None:
+        body.pop("metadata", None)
         return None
     if not isinstance(metadata, dict):
         raise RequestError(400, "invalid_metadata", "metadata must be an object")
@@ -1805,7 +1846,12 @@ def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
                 "metadata values must be at most 512 characters",
             )
         validated[key] = value
-    return validated if validated else None
+    if not validated:
+        if any(value is None for value in metadata.values()):
+            body.pop("metadata", None)
+        return None
+    body["metadata"] = validated
+    return validated
 
 
 def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
@@ -2799,15 +2845,18 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
 def _validate_responses_instructions(body: dict[str, Any]) -> str | None:
     """Responses API ``instructions`` — optional non-empty string ≤32000 chars.
 
-    OpenAI system-style instructions for the Responses surface. Empty strings
-    and non-strings fail closed so clients cannot ship a silent no-op that
-    looks like a configured system prompt.
+    OpenAI system-style instructions for the Responses surface. Explicit
+    JSON null or empty/whitespace strings are treat-as-omit and popped so
+    ``proxy_completion`` does not forward a blank system prompt. Non-strings
+    fail closed so clients cannot ship a silent no-op that looks like a
+    configured system prompt.
     """
     if "instructions" not in body:
         return None
     value = body.get("instructions")
     # Explicit JSON null or empty/whitespace string is treat-as-omit.
     if value is None or (isinstance(value, str) and not value.strip()):
+        body.pop("instructions", None)
         return None
     if not isinstance(value, str):
         raise RequestError(400, "invalid_instructions", "instructions must be a string")
@@ -3606,6 +3655,9 @@ def build_server(
                     _validate_chat_tool_message_ids(body)
                     _validate_chat_assistant_tool_calls(body)
                     _validate_chat_message_audio_function_call(body)
+                    _validate_chat_logprobs_surface(body)
+                    if "metadata" in body:
+                        _validate_openai_metadata(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "tools" in body:
@@ -3794,34 +3846,6 @@ def build_server(
                                     "n greater than 1 is not supported on /v1/chat/completions",
                                 ) from exc
                             raise
-                    if "logprobs" in body or "top_logprobs" in body:
-                        # Chat route path does not return token logprobs; fail closed.
-                        # Explicit JSON null is treat-as-omit (SDK optional default).
-                        if "logprobs" in body:
-                            lp = body.get("logprobs")
-                            # Empty/whitespace string is treat-as-omit.
-                            if isinstance(lp, str) and not lp.strip():
-                                lp = None
-                            if lp is not None:
-                                if not isinstance(lp, bool):
-                                    raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
-                                if lp is True:
-                                    raise RequestError(
-                                        400,
-                                        "invalid_logprobs",
-                                        "logprobs=true is not supported on /v1/chat/completions",
-                                    )
-                        if "top_logprobs" in body:
-                            # Explicit JSON null, empty/whitespace string, or 0 is treat-as-omit.
-                            tlp = body.get("top_logprobs")
-                            if isinstance(tlp, str) and not tlp.strip():
-                                tlp = None
-                            if tlp is not None and tlp != 0:
-                                raise RequestError(
-                                    400,
-                                    "invalid_top_logprobs",
-                                    "top_logprobs is not supported on /v1/chat/completions",
-                                )
                     if "store" in body:
                         _validate_chat_store(body)
                     if "modalities" in body:

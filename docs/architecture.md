@@ -42,6 +42,26 @@ The deliberate simplification is the policy. The paper systems learn routing and
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 
+## SDK omit-real persist
+
+Official OpenAI SDKs serialize omitted optional fields as JSON `null` or as empty/whitespace strings. Returning HTTP 200 while leaving those keys on the proxied body is not omit: providers then reject `tool_calls[].function.arguments: null`, blank Responses `instructions`, and non-string `metadata` values after this gateway already accepted the request.
+
+Buyer next action: send the same payload the SDK emits. Expect the upstream echo to match an omitted field (key absent, or `arguments` as `""`), and expect `tools` + nonzero `top_logprobs` to return `invalid_top_logprobs` instead of a silent passthrough.
+
+Locked by `tests/test_tip_reland_sdk_omit_persist_http_honesty.py` on the #668 substrate. Independent of Fugu/TRINITY/Conductor compute allocation: this is the OpenAI wire contract the coordinator sits behind (OpenAI, n.d.-a, n.d.-b).
+
+### References
+
+OpenAI. (n.d.-a). *Create chat completion*. OpenAI Platform. https://platform.openai.com/docs/api-reference/chat/create
+
+OpenAI. (n.d.-b). *Create a model response*. OpenAI Platform. https://platform.openai.com/docs/api-reference/responses/create
+
+Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://doi.org/10.48550/arXiv.2512.04695
+
+Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). https://doi.org/10.48550/arXiv.2512.04388
+
 ## Product Planning Interpretation
 
 The product is not a Fugu clone. It is a control-plane prototype for the same public shape: one compatible API with hidden orchestration. The enterprise value comes from exposing the hidden operating evidence:
