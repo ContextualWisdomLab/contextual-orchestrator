@@ -26,10 +26,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   chunks with `item_id` from `response.output_item.added`. Order
   events by `sequence_number` (starts at 0; `response.in_progress`
   follows `response.created`). Close the Responses stream on
-  `response.completed` — do not wait for Chat `data: [DONE]`.
+  `response.completed` or `response.failed` — do not wait for Chat
+  `data: [DONE]`.
 
 ### Fixed
 
+- Mid-stream `/v1/responses` provider failure now emits
+  `response.failed` with `sequence_number` equal to the last forwarded
+  event plus one, and still drops a Chat `data: [DONE]` trailer. Next
+  action: order events by `sequence_number`; treat `response.failed` as
+  the stream end.
 - Fail closed on unknown assistant `tool_calls` entry and `function` keys
   (`unknown_tool_call_fields` / `unknown_tool_call_function_fields`) on both
   the orchestration path and the tools / `response_format` SSE proxy.

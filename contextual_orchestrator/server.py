@@ -3268,6 +3268,32 @@ def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str,
     return _strip_trace(safe_payload)
 
 
+def _responses_event_sequence_number(frame: str) -> int | None:
+    """Return ``sequence_number`` from one Responses SSE frame, if present.
+
+    openai-python orders ``response.*`` events by this field. A mid-stream
+    ``response.failed`` must continue the last forwarded value, not restart
+    at 0 (OpenAI, 2024).
+    """
+    for line in frame.splitlines():
+        if not line.startswith("data:"):
+            continue
+        raw = line[5:].strip()
+        if not raw or raw == "[DONE]":
+            return None
+        try:
+            payload = json.loads(raw)
+        except json.JSONDecodeError:
+            return None
+        if not isinstance(payload, dict):
+            return None
+        value = payload.get("sequence_number")
+        if isinstance(value, int) and not isinstance(value, bool):
+            return value
+        return None
+    return None
+
+
 def build_server(
     orchestrator: TaskOrchestrator,
     host: str = "127.0.0.1",
@@ -4745,12 +4771,17 @@ def build_server(
             try:
                 self._begin_sse()
                 saw_done = False
+                last_sequence_number = -1
                 try:
                     for frame in orchestrator.proxy_completion_stream(body, endpoint=endpoint):
                         if frame.strip() == "data: [DONE]":
                             if is_responses:
                                 continue
                             saw_done = True
+                        elif is_responses:
+                            seen_sequence = _responses_event_sequence_number(frame)
+                            if seen_sequence is not None:
+                                last_sequence_number = max(last_sequence_number, seen_sequence)
                         self.wfile.write(frame.encode("utf-8"))
                         self.wfile.flush()
                     if not saw_done and not is_responses:
@@ -4759,7 +4790,7 @@ def build_server(
                     if is_responses:
                         error_payload = {
                             "type": "response.failed",
-                            "sequence_number": 0,
+                            "sequence_number": last_sequence_number + 1,
                             "response": {
                                 "id": f"resp-{int(time.time() * 1000)}",
                                 "object": "response",

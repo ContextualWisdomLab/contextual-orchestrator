@@ -9,8 +9,10 @@ must emit ``text/event-stream`` Responses events with contiguous
 ``output[].type=function_call`` as the non-stream JSON body
 (including ``lookup_balance`` / ``INV-9``); content-only streams still match
 ``output_text``. The stream ends on ``response.completed`` without a Chat
-``data: [DONE]`` trailer. ``stream_options.include_usage=true`` and
-non-boolean ``stream`` still fail closed.
+``data: [DONE]`` trailer. A mid-stream provider failure emits
+``response.failed`` continuing the last forwarded ``sequence_number``.
+A live Chat ``[DONE]`` trailer is dropped. ``stream_options.include_usage=true``
+and non-boolean ``stream`` still fail closed.
 
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
 https://platform.openai.com/docs/guides/streaming-responses
@@ -37,7 +39,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    _responses_event_sequence_number,
+    build_server,
+)
 
 _TEST_AUTH_TOKEN = "passthrough_sse_responses_http_honesty_token"  # noqa: S105
 
@@ -140,8 +146,12 @@ def _reconstruct_output_text(body: str) -> str:
     return "".join(pieces)
 
 
-def _server():
-    server = build_server(build(), port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+def _server(orchestrator: TaskOrchestrator | None = None):
+    server = build_server(
+        orchestrator or build(),
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, server.server_address[1]
@@ -195,6 +205,20 @@ def test_proxy_completion_responses_tool_choice_none_keeps_content() -> None:
     assert item["content"][0]["text"] == "[general_agent] responses-mock"
 
 
+def test_responses_event_sequence_number_reads_data_line() -> None:
+    """Parser must read sequence_number and ignore Chat [DONE] / invalid JSON."""
+    assert (
+        _responses_event_sequence_number(
+            'event: response.created\ndata: {"sequence_number": 3}\n\n'
+        )
+        == 3
+    )
+    assert _responses_event_sequence_number("data: [DONE]\n\n") is None
+    assert _responses_event_sequence_number("data: not-json\n\n") is None
+    assert _responses_event_sequence_number('data: {"sequence_number": true}\n\n') is None
+    assert _responses_event_sequence_number("event: response.failed\n\n") is None
+
+
 def test_http_responses_stream_uses_official_envelope() -> None:
     """Official Responses SSE: sequence_number, in_progress, no Chat [DONE].
 
@@ -229,6 +253,90 @@ def test_http_responses_stream_uses_official_envelope() -> None:
         assert call["name"] == "lookup_balance"
         assert json.loads(call["arguments"]) == {"invoice_id": "INV-20260816009"}
         assert int(call["delta_chunks"]) >= 2
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_failed_stream_continues_sequence_and_drops_done() -> None:
+    """Mid-stream provider failure must continue sequence_number, not restart at 0.
+
+    openai-python orders ``response.*`` events by ``sequence_number``. After
+    ``response.created`` (0) and ``response.in_progress`` (1) have been
+    flushed, ``response.failed`` must be 2. Chat ``data: [DONE]`` is not a
+    Responses event (OpenAI, 2024).
+    """
+    orchestrator = build()
+    original_stream = orchestrator.proxy_completion_stream
+
+    def _fail_after_lifecycle(body: dict, endpoint: str = "chat/completions"):
+        yielded = 0
+        for frame in original_stream(body, endpoint=endpoint):
+            yield frame
+            yielded += 1
+            if yielded >= 2:
+                raise RuntimeError("provider stream failed")
+
+    orchestrator.proxy_completion_stream = _fail_after_lifecycle  # type: ignore[method-assign]
+    server, thread, port = _server(orchestrator)
+    try:
+        status, content_type, body = _post_raw(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "look up invoice INV-20260816009",
+                "tools": _LOOKUP_TOOLS,
+                "stream": True,
+            },
+        )
+        assert status == 200, body
+        assert content_type.startswith("text/event-stream")
+        assert "data: [DONE]" not in body
+        events = _sse_events(body)
+        assert [event.get("type") for event in events] == [
+            "response.created",
+            "response.in_progress",
+            "response.failed",
+        ]
+        assert [event.get("sequence_number") for event in events] == [0, 1, 2]
+        assert events[-1]["response"]["status"] == "failed"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_stream_drops_live_done_trailer() -> None:
+    """A live provider Chat ``[DONE]`` trailer must not appear on ``/v1/responses``."""
+    orchestrator = build()
+    original_stream = orchestrator.proxy_completion_stream
+
+    def _inject_done_trailer(body: dict, endpoint: str = "chat/completions"):
+        for frame in original_stream(body, endpoint=endpoint):
+            yield frame
+            if "response.in_progress" in frame:
+                yield "data: [DONE]\n\n"
+
+    orchestrator.proxy_completion_stream = _inject_done_trailer  # type: ignore[method-assign]
+    server, thread, port = _server(orchestrator)
+    try:
+        status, content_type, body = _post_raw(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "look up invoice INV-20260816009",
+                "tools": _LOOKUP_TOOLS,
+                "stream": True,
+            },
+        )
+        assert status == 200, body
+        assert content_type.startswith("text/event-stream")
+        assert "data: [DONE]" not in body
+        events = _sse_events(body)
+        numbers = [event.get("sequence_number") for event in events]
+        assert numbers == list(range(len(events))), numbers
+        assert events[-1]["type"] == "response.completed"
+        call = _reconstruct_function_call(body)
+        assert json.loads(call["arguments"]) == {"invoice_id": "INV-20260816009"}
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -352,7 +460,10 @@ if __name__ == "__main__":
     test_proxy_completion_responses_function_tools_bind_invoice()
     test_proxy_completion_responses_native_tools_bind_invoice()
     test_proxy_completion_responses_tool_choice_none_keeps_content()
+    test_responses_event_sequence_number_reads_data_line()
     test_http_responses_stream_uses_official_envelope()
+    test_http_responses_failed_stream_continues_sequence_and_drops_done()
+    test_http_responses_stream_drops_live_done_trailer()
     test_http_responses_stream_emits_function_call_events()
     test_http_responses_stream_content_matches_json()
     test_http_responses_stream_tool_choice_none_keeps_content()
