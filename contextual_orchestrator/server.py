@@ -1592,6 +1592,125 @@ def _validate_chat_message_audio_function_call(body: dict[str, Any]) -> None:
                 )
 
 
+def _validate_chat_passthrough_request_knobs(body: dict[str, Any]) -> None:
+    """Fail-closed request knobs that otherwise run only after tools proxy.
+
+    Seed, stop, n, logprobs, logit_bias, token/penalty ranges, reasoning
+    effort, service_tier, store, modalities, prediction, metadata, and
+    ``user`` must raise the same named errors on the tools /
+    ``response_format`` path as on the orchestration path. Otherwise an
+    OpenAI SDK tool-calling body bills a sync completion for a field this
+    gateway does not apply.
+    """
+    _validate_completions_user(body)
+    if "max_completion_tokens" in body:
+        _validate_chat_max_completion_tokens(body)
+    elif "max_tokens" in body:
+        _validate_completions_max_tokens(body)
+    if "presence_penalty" in body:
+        _validate_completions_presence_penalty(body)
+    if "frequency_penalty" in body:
+        _validate_completions_frequency_penalty(body)
+    if "seed" in body:
+        seed_raw = body.get("seed")
+        if seed_raw is not None and not (
+            isinstance(seed_raw, str) and not seed_raw.strip()
+        ):
+            try:
+                _validate_completions_seed(body)
+            except RequestError as exc:
+                if exc.code == "invalid_seed" and "not supported" in exc.message:
+                    raise RequestError(
+                        400,
+                        "invalid_seed",
+                        "seed is not supported on /v1/chat/completions",
+                    ) from exc
+                raise
+            raise RequestError(
+                400,
+                "invalid_seed",
+                "seed is not supported on /v1/chat/completions",
+            )
+    if "logit_bias" in body:
+        try:
+            _validate_completions_logit_bias(body)
+        except RequestError as exc:
+            if exc.code == "invalid_logit_bias" and "not supported" in exc.message:
+                raise RequestError(
+                    400,
+                    "invalid_logit_bias",
+                    "logit_bias is not supported on /v1/chat/completions",
+                ) from exc
+            raise
+    if "stop" in body:
+        stop_val = body.get("stop")
+        if isinstance(stop_val, list):
+            stop_val = [s for s in stop_val if not (isinstance(s, str) and not s.strip())]
+            if not stop_val:
+                stop_val = []
+        if stop_val is not None and stop_val != [] and stop_val != "":
+            try:
+                _validate_completions_stop(body)
+            except RequestError as exc:
+                if exc.code == "invalid_stop" and "not supported" in exc.message:
+                    raise RequestError(
+                        400,
+                        "invalid_stop",
+                        "stop sequences are not supported on /v1/chat/completions",
+                    ) from exc
+                raise
+            raise RequestError(
+                400,
+                "invalid_stop",
+                "stop sequences are not supported on /v1/chat/completions",
+            )
+    if "n" in body:
+        try:
+            _validate_completions_n(body)
+        except RequestError as exc:
+            if exc.code == "invalid_n" and "not supported" in exc.message:
+                raise RequestError(
+                    400,
+                    "invalid_n",
+                    "n greater than 1 is not supported on /v1/chat/completions",
+                ) from exc
+            raise
+    if "logprobs" in body or "top_logprobs" in body:
+        if "logprobs" in body:
+            lp = body.get("logprobs")
+            if isinstance(lp, str) and not lp.strip():
+                lp = None
+            if lp is not None:
+                if not isinstance(lp, bool):
+                    raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
+                if lp is True:
+                    raise RequestError(
+                        400,
+                        "invalid_logprobs",
+                        "logprobs=true is not supported on /v1/chat/completions",
+                    )
+        if "top_logprobs" in body:
+            tlp = body.get("top_logprobs")
+            if tlp is not None and tlp != 0:
+                raise RequestError(
+                    400,
+                    "invalid_top_logprobs",
+                    "top_logprobs is not supported on /v1/chat/completions",
+                )
+    if "store" in body:
+        _validate_chat_store(body)
+    if "modalities" in body:
+        _validate_chat_modalities(body)
+    if "prediction" in body:
+        _validate_chat_prediction(body)
+    if "reasoning_effort" in body:
+        _validate_chat_reasoning_effort(body)
+    if "service_tier" in body:
+        _validate_service_tier(body, endpoint_path="/v1/chat/completions")
+    if "metadata" in body:
+        _validate_openai_metadata(body)
+
+
 def _validate_chat_message_passthrough_honesty(body: dict[str, Any]) -> None:
     """Fail-closed weight/prefix/refusal/annotations/content/name before tools proxy.
 
@@ -3724,6 +3843,7 @@ def build_server(
                                 "routing.latency_tolerant=true is not supported with tools "
                                 "or response_format; omit it or set false",
                             )
+                        _validate_chat_passthrough_request_knobs(body)
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")

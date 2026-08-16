@@ -112,7 +112,10 @@ empty user/system content, non-string user content, and participant `name` use t
 the tools passthrough path as on the orchestration path. `stream=true` with
 `tools` or `response_format` fails closed (`invalid_stream`) — this gateway
 does not SSE-proxy tool calls yet. Missing `model` and out-of-range
-`temperature` / `top_p` also fail closed before passthrough.
+`temperature` / `top_p` also fail closed before passthrough. `seed`, `stop`,
+`n>1`, `logprobs`, `logit_bias`, out-of-range token/penalty knobs,
+unsupported `reasoning_effort`, and non-default `service_tier` use the same
+named errors on the tools path — do not send them on tool-calling requests.
 
 `attribution` and `routing` use the same named errors on the tools /
 `response_format` path as on the orchestration path. Unknown spend
@@ -123,7 +126,8 @@ completion. Send known sync dimensions only (`channel=sync` or omit).
 
 Next action: keep SDK-default nulls; replace `developer` with `system`; omit
 `stream` (or set `false`) on tool-calling requests; always send a pool
-`model`; omit batch routing hints on tool-calling requests.
+`model`; omit batch routing hints, `seed`, `stop`, `n>1`, and `logprobs` on
+tool-calling requests.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create

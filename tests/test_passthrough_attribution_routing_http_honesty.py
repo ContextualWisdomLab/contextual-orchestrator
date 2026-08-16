@@ -243,6 +243,40 @@ def test_http_chat_tools_rejects_non_string_user_content() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tools_rejects_orchestration_fail_closed_knobs() -> None:
+    """SDK knobs that 400 on the route path must not bill 200 through tools."""
+    cases = (
+        ({"seed": 1}, "invalid_seed"),
+        ({"stop": ["END"]}, "invalid_stop"),
+        ({"n": 2}, "invalid_n"),
+        ({"logprobs": True}, "invalid_logprobs"),
+        ({"logit_bias": {"1": 1}}, "invalid_logit_bias"),
+        ({"max_tokens": -1}, "invalid_max_tokens"),
+        ({"presence_penalty": 3}, "invalid_presence_penalty"),
+        ({"frequency_penalty": 3}, "invalid_frequency_penalty"),
+        ({"reasoning_effort": "invalid_level"}, "invalid_reasoning_effort"),
+        ({"service_tier": "not-a-tier"}, "invalid_service_tier"),
+        ({"top_logprobs": 5}, "invalid_top_logprobs"),
+    )
+    server, thread, port = _server()
+    try:
+        for extra, error_code in cases:
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "invoice lookup"}],
+                    "tools": _LOOKUP_TOOLS,
+                    **extra,
+                },
+            )
+            assert status == 400, (extra, body)
+            assert error_code in json.dumps(body), (extra, body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_tools_rejects_unknown_stream_options_key_even_when_null() -> None:
     """Unknown-null stream_options must 400 on the billed tools path too."""
     server, thread, port = _server()
@@ -274,5 +308,6 @@ if __name__ == "__main__":
     test_http_chat_response_format_rejects_unknown_attribution()
     test_http_chat_tools_accepts_known_sync_attribution_and_routing()
     test_http_chat_tools_rejects_non_string_user_content()
+    test_http_chat_tools_rejects_orchestration_fail_closed_knobs()
     test_http_chat_tools_rejects_unknown_stream_options_key_even_when_null()
     print("ok")
