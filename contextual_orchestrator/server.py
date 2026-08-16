@@ -1549,6 +1549,91 @@ def _validate_chat_passthrough_spend_knobs(body: dict[str, Any]) -> None:
     _validate_completions_frequency_penalty(body)
     _validate_chat_seed(body)
     _validate_chat_n(body)
+    _validate_completions_user(body)
+    _validate_chat_stop(body)
+    _validate_chat_logit_bias(body)
+    _validate_chat_logprobs(body)
+
+
+def _validate_chat_stop(body: dict[str, Any]) -> None:
+    """Chat Completions ``stop`` — omit-equivalent no-op; any sequence fails closed.
+
+    JSON null, empty string, empty ``[]``, and all-whitespace array items are
+    treat-as-omit. A present stop sequence is not applied on chat or tools
+    passthrough, so it fails closed with ``invalid_stop``.
+    """
+    if "stop" not in body:
+        return
+    stop_val = body.get("stop")
+    if isinstance(stop_val, list):
+        stop_val = [s for s in stop_val if not (isinstance(s, str) and not s.strip())]
+        if not stop_val:
+            stop_val = []
+    if stop_val is None or stop_val == [] or stop_val == "":
+        return
+    try:
+        _validate_completions_stop(body)
+    except RequestError as exc:
+        if exc.code == "invalid_stop" and "not supported" in exc.message:
+            raise RequestError(
+                400,
+                "invalid_stop",
+                "stop sequences are not supported on /v1/chat/completions",
+            ) from exc
+        raise
+    raise RequestError(
+        400,
+        "invalid_stop",
+        "stop sequences are not supported on /v1/chat/completions",
+    )
+
+
+def _validate_chat_logit_bias(body: dict[str, Any]) -> None:
+    """Chat Completions ``logit_bias`` — empty ``{}`` omit; non-empty fails closed."""
+    if "logit_bias" not in body:
+        return
+    try:
+        _validate_completions_logit_bias(body)
+    except RequestError as exc:
+        if exc.code == "invalid_logit_bias" and "not supported" in exc.message:
+            raise RequestError(
+                400,
+                "invalid_logit_bias",
+                "logit_bias is not supported on /v1/chat/completions",
+            ) from exc
+        raise
+
+
+def _validate_chat_logprobs(body: dict[str, Any]) -> None:
+    """Chat Completions logprobs — boolean only; ``true`` and nonzero top fail closed.
+
+    This gateway never returns token logprobs on chat or tools passthrough.
+    ``logprobs=false``, JSON null, empty string, and ``top_logprobs`` 0/null
+    remain omit-equivalent no-ops.
+    """
+    if "logprobs" not in body and "top_logprobs" not in body:
+        return
+    if "logprobs" in body:
+        lp = body.get("logprobs")
+        if isinstance(lp, str) and not lp.strip():
+            lp = None
+        if lp is not None:
+            if not isinstance(lp, bool):
+                raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
+            if lp is True:
+                raise RequestError(
+                    400,
+                    "invalid_logprobs",
+                    "logprobs=true is not supported on /v1/chat/completions",
+                )
+    if "top_logprobs" in body:
+        tlp = body.get("top_logprobs")
+        if tlp is not None and tlp != 0:
+            raise RequestError(
+                400,
+                "invalid_top_logprobs",
+                "top_logprobs is not supported on /v1/chat/completions",
+            )
 
 
 def _reject_chat_passthrough_batch_routing(body: dict[str, Any]) -> None:
@@ -3842,75 +3927,10 @@ def build_server(
                     if "frequency_penalty" in body:
                         frequency_penalty = _validate_completions_frequency_penalty(body)
                     _validate_chat_seed(body)
-                    if "logit_bias" in body:
-                        # Empty {} is an honest no-op (shared Completions helper).
-                        # Non-empty maps fail closed with a chat-path message.
-                        try:
-                            _validate_completions_logit_bias(body)
-                        except RequestError as exc:
-                            if (
-                                exc.code == "invalid_logit_bias"
-                                and "not supported" in exc.message
-                            ):
-                                raise RequestError(
-                                    400,
-                                    "invalid_logit_bias",
-                                    "logit_bias is not supported on /v1/chat/completions",
-                                ) from exc
-                            raise
-                    if "stop" in body:
-                        # Explicit JSON null, empty string, empty [], or all-whitespace
-                        # array items is treat-as-omit (SDK optional default).
-                        stop_val = body.get("stop")
-                        if isinstance(stop_val, list):
-                            stop_val = [s for s in stop_val if not (isinstance(s, str) and not s.strip())]
-                            if not stop_val:
-                                stop_val = []
-                        if stop_val is not None and stop_val != [] and stop_val != "":
-                            try:
-                                _validate_completions_stop(body)
-                            except RequestError as exc:
-                                # Completions helper fails closed with a Completions path message;
-                                # re-surface for chat with the chat endpoint string.
-                                if exc.code == "invalid_stop" and "not supported" in exc.message:
-                                    raise RequestError(
-                                        400,
-                                        "invalid_stop",
-                                        "stop sequences are not supported on /v1/chat/completions",
-                                    ) from exc
-                                raise
-                            raise RequestError(
-                                400,
-                                "invalid_stop",
-                                "stop sequences are not supported on /v1/chat/completions",
-                            )
+                    _validate_chat_logit_bias(body)
+                    _validate_chat_stop(body)
                     _validate_chat_n(body)
-                    if "logprobs" in body or "top_logprobs" in body:
-                        # Chat route path does not return token logprobs; fail closed.
-                        # Explicit JSON null is treat-as-omit (SDK optional default).
-                        if "logprobs" in body:
-                            lp = body.get("logprobs")
-                            # Empty/whitespace string is treat-as-omit.
-                            if isinstance(lp, str) and not lp.strip():
-                                lp = None
-                            if lp is not None:
-                                if not isinstance(lp, bool):
-                                    raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
-                                if lp is True:
-                                    raise RequestError(
-                                        400,
-                                        "invalid_logprobs",
-                                        "logprobs=true is not supported on /v1/chat/completions",
-                                    )
-                        if "top_logprobs" in body:
-                            # Explicit JSON null or 0 is treat-as-omit (SDK optional default).
-                            tlp = body.get("top_logprobs")
-                            if tlp is not None and tlp != 0:
-                                raise RequestError(
-                                    400,
-                                    "invalid_top_logprobs",
-                                    "top_logprobs is not supported on /v1/chat/completions",
-                                )
+                    _validate_chat_logprobs(body)
                     if "store" in body:
                         _validate_chat_store(body)
                     if "modalities" in body:

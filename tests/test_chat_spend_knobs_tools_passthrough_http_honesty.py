@@ -245,6 +245,116 @@ def test_http_chat_accepts_sync_routing_with_tools() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_stop_sequence_with_tools() -> None:
+    """Chat does not apply stop; tools bodies must not bill a stopped proxy."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(stop="END"))
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_stop" in blob
+        assert "not supported" in blob
+        assert "chat" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_accepts_null_stop_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(stop=None))
+        assert status == 200, body
+        assert body.get("object") == "chat.completion"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_blank_user_with_tools() -> None:
+    """Blank user would attribute spend to an empty identity."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(user="   "))
+        assert status == 400, body
+        assert "invalid_user" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_accepts_named_user_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(user="invoice-clerk"))
+        assert status == 200, body
+        assert body.get("object") == "chat.completion"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_logprobs_true_with_tools() -> None:
+    """Route path never returns token logprobs; do not bill as if it did."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(logprobs=True))
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_logprobs" in blob
+        assert "not supported" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_accepts_logprobs_false_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(logprobs=False))
+        assert status == 200, body
+        assert body.get("object") == "chat.completion"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_nonzero_top_logprobs_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(top_logprobs=5))
+        assert status == 400, body
+        assert "invalid_top_logprobs" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_nonzero_logit_bias_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(logit_bias={"50256": 2}))
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_logit_bias" in blob
+        assert "not supported" in blob
+        assert "chat" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_accepts_empty_logit_bias_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(logit_bias={}))
+        assert status == 200, body
+        assert body.get("object") == "chat.completion"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_rejects_seed_with_tools()
     test_http_chat_accepts_null_seed_with_tools()
@@ -259,4 +369,13 @@ if __name__ == "__main__":
     test_http_chat_rejects_batch_channel_with_tools()
     test_http_chat_rejects_latency_tolerant_true_with_tools()
     test_http_chat_accepts_sync_routing_with_tools()
+    test_http_chat_rejects_stop_sequence_with_tools()
+    test_http_chat_accepts_null_stop_with_tools()
+    test_http_chat_rejects_blank_user_with_tools()
+    test_http_chat_accepts_named_user_with_tools()
+    test_http_chat_rejects_logprobs_true_with_tools()
+    test_http_chat_accepts_logprobs_false_with_tools()
+    test_http_chat_rejects_nonzero_top_logprobs_with_tools()
+    test_http_chat_rejects_nonzero_logit_bias_with_tools()
+    test_http_chat_accepts_empty_logit_bias_with_tools()
     print("ok")
