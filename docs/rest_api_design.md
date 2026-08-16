@@ -128,8 +128,10 @@ dimensions fail closed (`invalid_attribution`). Tools passthrough has no
 batch job plane: `routing.channel=batch` and `routing.latency_tolerant=true`
 fail closed (`invalid_routing`) instead of billing a silent sync
 completion. Send known sync dimensions only (`channel=sync` or omit).
-A streamed `temperature` on the route path uses the same request-scoped
-default as the non-stream path — it is not reset to `0.2`.
+A streamed `temperature`, `top_p`, `presence_penalty`, and
+`frequency_penalty` on the route path use the same request-scoped
+defaults as the non-stream path — temperature is not reset to `0.2`, and
+nucleus/penalty knobs are not dropped.
 
 Optional `tools[].function.description`, `parameters`, and `strict` sent as
 JSON `null` are omit-real: the gateway pops those keys before

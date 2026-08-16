@@ -353,10 +353,17 @@ class ModelClient:
 
         When ``temperature`` is omitted, ``default_temperature`` is used so a
         streamed ``/v1/chat/completions`` request applies the same sampling
-        the buyer sent on the non-stream path.
+        the buyer sent on the non-stream path. ``top_p``, ``presence_penalty``,
+        and ``frequency_penalty`` follow the same request-scoped defaults.
         """
         effective_temperature = self.default_temperature if temperature is None else temperature
+        effective_top_p = self.default_top_p
+        effective_presence = self.default_presence_penalty
+        effective_frequency = self.default_frequency_penalty
         self._local.last_temperature = effective_temperature
+        self._local.last_top_p = effective_top_p
+        self._local.last_presence_penalty = effective_presence
+        self._local.last_frequency_penalty = effective_frequency
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -371,6 +378,12 @@ class ModelClient:
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
+        if effective_top_p is not None:  # pragma: no cover
+            payload["top_p"] = effective_top_p
+        if effective_presence is not None:  # pragma: no cover
+            payload["presence_penalty"] = effective_presence
+        if effective_frequency is not None:  # pragma: no cover
+            payload["frequency_penalty"] = effective_frequency
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
