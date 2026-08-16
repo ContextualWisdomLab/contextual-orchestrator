@@ -130,6 +130,23 @@ def exercise_request_body(raw: bytes) -> None:
                     if "strict" in schema:
                         assert isinstance(schema["strict"], bool)
 
+    # Tools honesty: successful function names match [a-zA-Z0-9_-]{1,64} ASCII.
+    if "tools" in body:
+        try:
+            tools = server._validate_chat_tools(body)
+        except RequestError:
+            pass
+        else:
+            if tools:
+                for item in tools:
+                    function = item.get("function")
+                    assert isinstance(function, dict)
+                    tool_name = function.get("name")
+                    assert isinstance(tool_name, str) and 1 <= len(tool_name) <= 64
+                    assert tool_name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in tool_name
+                    )
+
 
 def exercise_agent_config(value: Any) -> None:
     """Drive ``ModelAgent.from_dict`` over an arbitrary decoded JSON value."""

@@ -23,6 +23,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   ASCII is required: `str.isalnum()` alone accepted Unicode letters and
   digits (`café`, `名前`, Arabic-Indic digits). The request-body fuzz
   target now exercises that validator.
+- Fail closed on `tools[].function.name` outside ASCII
+  `[a-zA-Z0-9_-]{1,64}` so buyers get `invalid_tools` instead of an
+  opaque provider rejection. The same `str.isalnum()` Unicode leak that
+  `#669` closed on `json_schema.name` applied here.
 
 ### Documentation
 

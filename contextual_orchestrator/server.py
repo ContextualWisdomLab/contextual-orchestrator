@@ -2595,11 +2595,13 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
 
     An empty array is treated as omit: many SDKs send ``tools: []`` when no tools
     are configured. Non-empty entries must be objects with ``type`` == ``function``
-    and a ``function`` object that has a non-empty ``name``. Explicit JSON
-    ``null`` on optional ``description``, ``parameters``, and ``strict`` is
-    popped in place so passthrough matches omit. Empty or whitespace-only
-    ``description`` is also popped. Shape-only validation
-    before passthrough; provider schema depth is not re-checked here.
+    and a ``function`` object that has a non-empty ``name`` matching
+    ``[a-zA-Z0-9_-]{1,64}`` (ASCII only — ``str.isalnum()`` is not
+    sufficient). Explicit JSON ``null`` on optional ``description``,
+    ``parameters``, and ``strict`` is popped in place so passthrough
+    matches omit. Empty or whitespace-only ``description`` is also
+    popped. Shape-only validation before passthrough; provider schema
+    depth is not re-checked here.
     """
     if "tools" not in body:
         return None
@@ -2671,14 +2673,16 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "invalid_tools",
                 "each tool.function.name must be a non-empty string",
             )
-        # OpenAI function names: [a-zA-Z0-9_-]{1,64}
+        # OpenAI function names: [a-zA-Z0-9_-]{1,64}. Fail closed so buyers
+        # get invalid_tools instead of a provider 400.
+        # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
         if len(name) > 64:
             raise RequestError(
                 400,
                 "invalid_tools",
                 "each tool.function.name must be at most 64 characters",
             )
-        if not all(ch.isalnum() or ch in "_-" for ch in name):
+        if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
             raise RequestError(
                 400,
                 "invalid_tools",

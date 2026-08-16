@@ -40,8 +40,8 @@ This repository implements the interface and control plane, not the trained coor
   Compatibility honesty: JSON-null SDK optionals on `tools[].function` and
   `response_format.json_schema` are popped in place before
   `proxy_completion` so providers see omit, not `null`.
-  `json_schema.name` must match `[a-zA-Z0-9_-]{1,64}` (ASCII only;
-  `str.isalnum()` is not sufficient).
+  `json_schema.name` and `tool.function.name` must match
+  `[a-zA-Z0-9_-]{1,64}` (ASCII only; `str.isalnum()` is not sufficient).
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

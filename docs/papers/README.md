@@ -40,10 +40,12 @@ redistribution; each is cited below with its arXiv identifier.
 - OpenAI. (2024). *Create chat completion*. OpenAI API reference.
   https://platform.openai.com/docs/api-reference/chat/create
   Grounds the official `tools[].function` and `response_format.json_schema`
-  optional fields (`description`, `parameters`/`schema`, `strict`). Official
-  SDKs serialize omitted optionals as JSON `null`; this gateway pops those
-  keys before proxy so passthrough matches omit. Copyrighted vendor docs —
-  cite + link only; no PDF vendored.
+  optional fields (`description`, `parameters`/`schema`, `strict`) and the
+  `tools[].function.name` charset `[a-zA-Z0-9_-]{1,64}` (ASCII only;
+  `str.isalnum()` is not the regex). Official SDKs serialize omitted
+  optionals as JSON `null`; this gateway pops those keys before proxy so
+  passthrough matches omit. Copyrighted vendor docs — cite + link only;
+  no PDF vendored.
 
 - OpenAI. (2024). *Structured outputs*. OpenAI Platform.
   https://platform.openai.com/docs/guides/structured-outputs
