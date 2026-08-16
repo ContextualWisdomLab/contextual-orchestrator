@@ -42,6 +42,30 @@ The deliberate simplification is the policy. The paper systems learn routing and
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 
+## SDK omit-real persist
+
+Official OpenAI SDKs serialize omitted optional fields as JSON `null` or as empty/whitespace strings. Returning HTTP 200 while leaving those keys on the proxied body is not omit: providers then reject `tool_calls[].function.arguments: null`, blank Responses `instructions`, and non-string `metadata` values after this gateway already accepted the request.
+
+Buyer next action: send the same payload the SDK emits. Expect the upstream echo to match an omitted field (key absent, or `arguments` as `""`), and expect `tools` + nonzero `top_logprobs` to return `invalid_top_logprobs` instead of a silent passthrough.
+
+Locked by `tests/test_tip_reland_sdk_omit_persist_http_honesty.py` on the #668 substrate. Independent of Fugu/TRINITY/Conductor compute allocation: this is the OpenAI wire contract the coordinator sits behind (OpenAI, n.d.-a, n.d.-b).
+
+Compatibility honesty for Structured Outputs and tools: `response_format.json_schema.name` and `tools[].function.name` (also message `name` and `tool_calls[].function.name`) must match `[a-zA-Z0-9_-]{1,64}`. ASCII is required — `str.isalnum()` alone accepts Unicode letters and digits (`café`, `名前`, Arabic-Indic digits) and would forward an illegal name for an opaque provider 400. Illegal names return named `invalid_response_format` / `invalid_tools` / `invalid_message` / `invalid_message_name`. Locked by `tests/test_json_schema_name_charset_http_honesty.py` and `tests/test_tool_function_name_charset_http_honesty.py` on the #686 substrate.
+
+Official Responses `text.format` accepts `type` text / json_object / json_schema (flat schema keys), pops null/blank optionals, rejects `verbosity` and dual-plane `text`+`response_format`. Locked by `tests/test_responses_text_format_http_honesty.py` on the #687 substrate.
+
+### References
+
+OpenAI. (n.d.-a). *Create chat completion*. OpenAI Platform. https://platform.openai.com/docs/api-reference/chat/create
+
+OpenAI. (n.d.-b). *Create a model response*. OpenAI Platform. https://platform.openai.com/docs/api-reference/responses/create
+
+Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://doi.org/10.48550/arXiv.2512.04695
+
+Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). https://doi.org/10.48550/arXiv.2512.04388
+
 ## Product Planning Interpretation
 
 The product is not a Fugu clone. It is a control-plane prototype for the same public shape: one compatible API with hidden orchestration. The enterprise value comes from exposing the hidden operating evidence:
