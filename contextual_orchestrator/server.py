@@ -2559,7 +2559,8 @@ def _omit_null_tool_function_field(
     Leaving those keys on the body is not omit-equivalent: ``proxy_completion``
     forwards the request verbatim and several providers reject ``null``
     ``parameters``, ``description``, or ``strict``. Pop the key in place so the
-    upstream payload matches an omitted field. Non-null values of the wrong
+    upstream payload matches an omitted field. Blank ``description`` strings
+    are popped by the caller after this helper. Non-null values of the wrong
     type stay ``invalid_tools``.
     """
     if field_name not in function:
