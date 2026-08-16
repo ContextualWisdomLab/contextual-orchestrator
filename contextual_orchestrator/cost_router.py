@@ -219,14 +219,20 @@ class CostRoutingCoordinator:
         Verify and conduct issue more than one upstream call. Invoicing only the
         final answer would make those modes look as cheap as a single route.
         """
-        outputs = [
-            str(step.get("output", ""))
-            for step in result.get("trace") or []
-            if isinstance(step, dict) and step.get("output")
-        ]
-        if len(outputs) >= 2:
-            return sum(int(self.token_counter.count_text(text, model)) for text in outputs)
-        return int(self.token_counter.count_text(result.get("answer", ""), model))
+        steps = [step for step in result.get("trace") or [] if isinstance(step, dict)]
+        if not steps:
+            return int(self.token_counter.count_text(result.get("answer", ""), model))
+        billed_tokens = 0
+        for step in steps:
+            usage = step.get("usage")
+            if isinstance(usage, dict) and usage.get("completion_tokens") is not None:
+                billed_tokens += int(usage["completion_tokens"])
+                reasoning_tokens = usage.get("reasoning_tokens")
+                if reasoning_tokens is not None:
+                    billed_tokens += int(reasoning_tokens)
+                continue
+            billed_tokens += int(self.token_counter.count_text(str(step.get("output") or ""), model))
+        return billed_tokens
 
     # ------------------------------------------------------------------
     # Batch lifecycle

@@ -33,7 +33,7 @@ This repository implements the interface and control plane, not the trained coor
 
 - `contextual_orchestrator.orchestrator.Agent`: one configured worker model.
 - `Orchestrator.route_once`: the low-latency routing path.
-- `Orchestrator.route_and_verify` (`mode="verify"`): one worker call plus one checked verifier judgment — for adjudication-shaped requests that need a verified verdict without the full four-step workflow's cost.
+- `Orchestrator.route_and_verify` (`mode="verify"`): one worker call plus one checked verifier judgment — for adjudication-shaped requests that need a verified verdict without the full four-step workflow's cost. The verifier must put `ACCEPT` or `REJECT` on the first line (or use those words as whole tokens). Everyday praise, `password`/`looks good` substrings, and negated accepts (`not accepted`) fail closed. A rejected worker answer stays on the trace; sync and SSE surfaces redact `orchestration.verification`.
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `reasoning_effort` (request-level only, OpenAI-compatible `minimal`/`low`/`medium`/`high`): threads through every provider call in a request (`ModelClient.chat`/`stream_chat`) so a caller can raise test-time compute for one adjudication without changing embeddings or other cheap calls. This is **not** per-role allocation. Issue #568 remains open for a versioned `reasoning_effort_profile` per thinker/worker/verifier/synthesizer/planner/judge, equal-budget ablation, and the same snapshot on sync, stream, and batch.

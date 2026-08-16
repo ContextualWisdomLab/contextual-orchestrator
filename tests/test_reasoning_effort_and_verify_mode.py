@@ -83,6 +83,8 @@ def test_valid_reasoning_effort_is_accepted() -> None:
         server.shutdown()
     assert status == 200
     assert body["orchestration"]["mode"] == "route"
+    assert body["orchestration"]["reasoning_effort"]["requested"] == "high"
+    assert body["orchestration"]["reasoning_effort"]["status"] == "applied"
 
 
 if __name__ == "__main__":

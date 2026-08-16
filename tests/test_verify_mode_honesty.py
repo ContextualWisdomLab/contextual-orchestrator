@@ -19,7 +19,10 @@ from contextual_orchestrator import (  # noqa: E402
     ModelAgent,
     TaskOrchestrator,
 )
-from contextual_orchestrator.orchestrator import chat_completion_response  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    chat_completion_chunks,
+    chat_completion_response,
+)
 
 
 class NeutralVerdictClient:
@@ -40,6 +43,58 @@ class RejectingVerdictClient:
         if "Role: verifier" in system:
             return "I reject this. The answer is unsafe and fails the adjudication."
         return "worker says yes"
+
+
+class PasswordSubstringClient:
+    """Verifier discusses a password reset; must not match the old ``pass`` needle."""
+
+    def chat(self, agent: ModelAgent, messages, reasoning_effort: str | None = None) -> str:
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return "I read the worker write-up about the password reset flow."
+        return "Use this password: hunter2 looks good"
+
+
+class LooksGoodClient:
+    """Everyday praise is not an accept verdict."""
+
+    def chat(self, agent: ModelAgent, messages, reasoning_effort: str | None = None) -> str:
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return "The write-up looks good overall."
+        return "secret worker payload"
+
+
+class NegatedAcceptClient:
+    """A refused accept must not count as an accept."""
+
+    def chat(self, agent: ModelAgent, messages, reasoning_effort: str | None = None) -> str:
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return "I have not accepted this answer."
+        return "secret worker payload"
+
+
+class ConductRejectingClient:
+    """Conduct path whose verifier rejects and whose worker text is unique."""
+
+    def chat(self, agent: ModelAgent, messages, reasoning_effort: str | None = None) -> str:
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return "I reject this. The answer is unsafe and fails the adjudication."
+        if "Role: worker" in system:
+            return "conduct worker secret"
+        return f"{agent.id} supporting step"
+
+
+class EmptyVerifierLongWorkerClient:
+    """Empty verifier plus a long worker must still invoice the worker tokens."""
+
+    def chat(self, agent: ModelAgent, messages, reasoning_effort: str | None = None) -> str:
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return ""
+        return "W" * 400
 
 
 class NarrowStreamClient:
@@ -85,6 +140,33 @@ def test_rejected_verify_does_not_serve_worker_answer() -> None:
     assert framed["choices"][0]["finish_reason"] != "stop" or "reject" in framed["choices"][0]["message"]["content"].lower()
 
 
+def test_password_substring_does_not_accept_verify() -> None:
+    result = _orchestrator(PasswordSubstringClient()).complete(
+        [{"role": "user", "content": "Does the reset follow the policy?"}],
+        mode="verify",
+    )
+    assert result["verification"]["accepted"] is False
+    assert "hunter2" not in result["answer"]
+
+
+def test_looks_good_does_not_accept_verify() -> None:
+    result = _orchestrator(LooksGoodClient()).complete(
+        [{"role": "user", "content": "Does record B follow from record A?"}],
+        mode="verify",
+    )
+    assert result["verification"]["accepted"] is False
+    assert "secret worker payload" not in result["answer"]
+
+
+def test_negated_accept_is_a_reject() -> None:
+    result = _orchestrator(NegatedAcceptClient()).complete(
+        [{"role": "user", "content": "Does record B follow from record A?"}],
+        mode="verify",
+    )
+    assert result["verification"]["accepted"] is False
+    assert "secret worker payload" not in result["answer"]
+
+
 def test_auto_does_not_verify_everyday_english_substrings() -> None:
     orchestrator = _orchestrator()
     for prompt in (
@@ -92,6 +174,11 @@ def test_auto_does_not_verify_everyday_english_substrings() -> None:
         "Add a checkbox to the form.",
         "Send the confirmation email.",
         "Check the logs.",
+        "Please validate the form.",
+        "Don't judge me.",
+        "Judge this contest.",
+        "확인해주세요",
+        "평가 부탁",
     ):
         result = orchestrator.complete([{"role": "user", "content": prompt}])
         assert result["mode"] == "route", prompt
@@ -147,6 +234,65 @@ def test_batch_envelope_reports_dropped_reasoning_effort() -> None:
     assert submitted["reasoning_effort"]["status"] == "dropped"
 
 
+def test_persisted_run_echoes_applied_reasoning_effort() -> None:
+    record = _orchestrator().run(
+        [{"role": "user", "content": "Write one sentence."}],
+        mode="route",
+        reasoning_effort="high",
+    )
+    assert record["reasoning_effort"]["requested"] == "high"
+    assert record["reasoning_effort"]["status"] == "applied"
+
+
+def test_stream_chunks_redact_verification_secrets() -> None:
+    result = {
+        "mode": "verify",
+        "answer": "Verification rejected the worker answer.",
+        "verification": {
+            "accepted": False,
+            "reason": "explicit reject",
+            "verifier_output": "Bearer abcdefghijklmnopqrstuvwxyz",
+        },
+        "routing_decision": {
+            "selected_mode": "verify",
+            "reason": "task_requires_bounded_independent_verification",
+        },
+        "reasoning_effort": {"requested": "high", "applied": "high", "status": "applied"},
+        "trace": [{"agent_id": "mock_verifier", "output": "ok"}],
+    }
+    final = chat_completion_chunks(result)[-1]
+    assert "abcdefghijklmnopqrstuvwxyz" not in str(final["orchestration"]["verification"])
+    assert "[REDACTED]" in final["orchestration"]["verification"]["verifier_output"]
+    assert final["orchestration"]["routing_decision"]["selected_mode"] == "verify"
+    assert final["orchestration"]["reasoning_effort"]["status"] == "applied"
+
+
+def test_empty_verifier_ledger_still_counts_worker() -> None:
+    coordinator = CostRoutingCoordinator(
+        _orchestrator(EmptyVerifierLongWorkerClient()),
+        InMemoryConfigStore(),
+    )
+    verified = coordinator.complete(
+        [{"role": "user", "content": "Does record B follow from record A?"}],
+        mode="verify",
+    )
+    model_name = "mock-a"
+    worker_tokens = coordinator.token_counter.count_text("W" * 400, model_name)
+    public_only = coordinator.token_counter.count_text(verified["answer"], model_name)
+    assert verified["usage"]["completion_tokens"] >= worker_tokens
+    assert verified["usage"]["completion_tokens"] != public_only
+
+
+def test_conduct_reject_does_not_serve_worker_answer() -> None:
+    result = _orchestrator(ConductRejectingClient()).complete(
+        [{"role": "user", "content": "Analyze the architecture and verify the change."}],
+        mode="conduct",
+    )
+    assert result["mode"] == "conduct"
+    assert result["verification"]["accepted"] is False
+    assert "conduct worker secret" not in result["answer"]
+
+
 def test_verify_ledger_counts_worker_and_verifier_outputs() -> None:
     coordinator = CostRoutingCoordinator(
         _orchestrator(RejectingVerdictClient()),
@@ -176,11 +322,18 @@ def test_stream_route_omits_unset_reasoning_effort_kwarg() -> None:
 if __name__ == "__main__":
     test_neutral_verify_verdict_is_not_fallback_accepted()
     test_rejected_verify_does_not_serve_worker_answer()
+    test_password_substring_does_not_accept_verify()
+    test_looks_good_does_not_accept_verify()
+    test_negated_accept_is_a_reject()
     test_auto_does_not_verify_everyday_english_substrings()
     test_auto_still_verifies_explicit_adjudication()
     test_architecture_note_does_not_claim_per_role_allocation()
     test_chat_response_echoes_routing_decision_and_redacts_verification()
+    test_persisted_run_echoes_applied_reasoning_effort()
+    test_stream_chunks_redact_verification_secrets()
     test_batch_envelope_reports_dropped_reasoning_effort()
+    test_empty_verifier_ledger_still_counts_worker()
+    test_conduct_reject_does_not_serve_worker_answer()
     test_verify_ledger_counts_worker_and_verifier_outputs()
     test_stream_route_omits_unset_reasoning_effort_kwarg()
     print("ok")

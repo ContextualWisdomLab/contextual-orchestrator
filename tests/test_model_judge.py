@@ -52,10 +52,11 @@ MESSAGES = [{"role": "user", "content": "design and verify the migration plan"}]
 
 
 def test_terms_judge_false_negatives_on_risk_vocabulary() -> None:
-    # Baseline showing the problem the model judge fixes.
+    # Risk vocabulary without ACCEPT/REJECT is fail-closed, not substring-rejected.
     orchestrator, client = _orch("unused", judge_mode="terms")
     result = orchestrator.conduct(MESSAGES)
-    assert result["verification"]["accepted"] is False  # term matcher trips on "risks"/"error"
+    assert result["verification"]["accepted"] is False
+    assert "explicit accept or reject" in result["verification"]["reason"]
     assert client.calls == 4  # no judge call in terms mode
 
 
@@ -73,7 +74,14 @@ def test_model_judge_reject_is_respected() -> None:
     result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is False
     assert result["verification"]["judge"] == "model"
-    assert result["answer"] == "step-output(2)"  # falls back to the worker output
+    assert "step-output(2)" not in result["answer"]
+
+
+def test_model_judge_not_accept_is_reject() -> None:
+    orchestrator, _ = _orch("I DO NOT ACCEPT")
+    result = orchestrator.conduct(MESSAGES)
+    assert result["verification"]["accepted"] is False
+    assert "step-output(2)" not in result["answer"]
 
 
 def test_ambiguous_judge_reply_keeps_term_verdict() -> None:
@@ -110,3 +118,4 @@ if __name__ == "__main__":
             fn()
             print(f"ok {name}")
     print("ok")
+
