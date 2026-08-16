@@ -131,7 +131,12 @@ completion. Send known sync dimensions only (`channel=sync` or omit).
 A streamed `temperature`, `top_p`, `presence_penalty`, and
 `frequency_penalty` on the route path use the same request-scoped
 defaults as the non-stream path — temperature is not reset to `0.2`, and
-nucleus/penalty knobs are not dropped.
+nucleus/penalty knobs are not dropped (Holtzman et al., 2020).
+
+Whitespace-padded `tool_choice` strings (`" none "`, `"\\tnone\\n"`) are
+the same omit-equivalent `none` as the exact token: the gateway writes
+the stripped value back and mock `lookup_balance` stays `content` /
+`stop`. Send `none` when you want no tool call; do not rely on padding.
 
 Optional `tools[].function.description`, `parameters`, and `strict` sent as
 JSON `null` are omit-real: the gateway pops those keys before
@@ -172,6 +177,10 @@ Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., & Cao, Y.
 (2023). ReAct: Synergizing reasoning and acting in language models.
 *International Conference on Learning Representations*.
 https://arxiv.org/abs/2210.03629
+
+Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The
+curious case of neural text degeneration. *International Conference on
+Learning Representations*. https://arxiv.org/abs/1904.09751
 
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
 https://platform.openai.com/docs/guides/streaming-responses

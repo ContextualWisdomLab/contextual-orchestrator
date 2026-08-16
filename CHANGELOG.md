@@ -45,6 +45,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   streamed route completions the same way `chat()` already does. Next
   action: send the nucleus and penalty knobs you want; streaming no longer
   drops them.
+- Treat whitespace-padded `tool_choice` (`" none "`, `"\\tnone\\n"`) as
+  exact `none` on mock JSON and SSE tools: keep `content` / `stop` instead
+  of emitting `tool_calls`. The validator now writes the stripped token
+  back so live providers see `none`. Next action: send `none` to skip
+  tools; incidental padding is still omit-equivalent.
 
 ### References
 

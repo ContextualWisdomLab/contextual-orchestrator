@@ -487,12 +487,16 @@ class ModelClient:
         return " ".join(pieces)
 
     def _selected_function_name(self, payload: dict[str, Any]) -> str | None:
-        """Return the function a mock agent should call, or None for ``tool_choice=none``."""
+        """Return the function a mock agent should call, or None for ``tool_choice=none``.
+
+        Incidental whitespace around ``none`` matches the HTTP validator so a
+        padded SDK string does not emit ``tool_calls``.
+        """
         tools = payload.get("tools")
         if not isinstance(tools, list) or not tools:
             return None
         tool_choice = payload.get("tool_choice")
-        if tool_choice == "none":
+        if isinstance(tool_choice, str) and tool_choice.strip() == "none":
             return None
         if isinstance(tool_choice, dict):
             named = str(((tool_choice.get("function") or {}).get("name") or "")).strip()

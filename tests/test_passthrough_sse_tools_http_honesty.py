@@ -232,6 +232,34 @@ def test_http_chat_tools_stream_still_rejects_seed() -> None:
     assert "invalid_seed" in raw
 
 
+def test_http_chat_tools_stream_tool_choice_none_keeps_content() -> None:
+    """Exact and padded ``tool_choice=none`` must stay content/stop on SSE."""
+    server, thread, port = _server()
+    try:
+        for choice in ("none", " none ", "\tnone\n"):
+            payload = {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up the invoice"}],
+                "tools": _LOOKUP_TOOLS,
+                "tool_choice": choice,
+            }
+            json_status, _, json_raw = _post_raw(port, payload)
+            sse_status, content_type, sse = _post_raw(port, {**payload, "stream": True})
+            assert json_status == 200, (choice, json_raw)
+            assert sse_status == 200, (choice, sse)
+            assert content_type.startswith("text/event-stream"), content_type
+            reference = json.loads(json_raw)["choices"][0]
+            assert reference["finish_reason"] == "stop", choice
+            assert "tool_calls" not in reference["message"], choice
+            streamed, finish_reason = _reconstruct_tool_calls(sse)
+            assert finish_reason == "stop", choice
+            assert streamed == []
+            assert _reconstruct_content(sse) == reference["message"]["content"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_tools_stream_rejects_include_usage() -> None:
     """Usage chunks are not emitted — do not accept include_usage=true."""
     server, thread, port = _server()
@@ -303,6 +331,28 @@ def test_proxy_completion_tool_choice_none_keeps_content() -> None:
     assert result["choices"][0]["finish_reason"] == "stop"
     assert "tool_calls" not in result["choices"][0]["message"]
     assert result["choices"][0]["message"]["content"] == "[general_agent] chat-mock"
+
+
+def test_proxy_completion_padded_tool_choice_none_keeps_content() -> None:
+    """Validator already accepts padded none; mock selection must match it.
+
+    `_validate_chat_tool_choice` strips incidental whitespace so ``" none "``
+    and ``"\\tnone\\n"`` are omit-equivalent none. The mock selector used to
+    require an exact ``"none"`` string, so a padded none still emitted
+    ``tool_calls`` after the HTTP path accepted the body.
+    """
+    for choice in (" none ", "\tnone\n"):
+        result = build().proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up the invoice"}],
+                "tools": _LOOKUP_TOOLS,
+                "tool_choice": choice,
+            }
+        )
+        assert result["choices"][0]["finish_reason"] == "stop", choice
+        assert "tool_calls" not in result["choices"][0]["message"], choice
+        assert result["choices"][0]["message"]["content"] == "[general_agent] chat-mock"
 
 
 def test_proxy_completion_defaults_invoice_identifier_when_prompt_omits_it() -> None:
@@ -410,9 +460,11 @@ if __name__ == "__main__":
     test_http_chat_tools_stream_still_rejects_empty_messages()
     test_http_chat_tools_stream_still_rejects_seed()
     test_http_chat_tools_stream_rejects_include_usage()
+    test_http_chat_tools_stream_tool_choice_none_keeps_content()
     test_proxy_completion_named_tool_choice_binds_invoice_from_content_parts()
     test_proxy_completion_generic_function_uses_query_argument()
     test_proxy_completion_tool_choice_none_keeps_content()
+    test_proxy_completion_padded_tool_choice_none_keeps_content()
     test_proxy_completion_defaults_invoice_identifier_when_prompt_omits_it()
     test_proxy_completion_stream_yields_mock_tool_calls()
     test_stream_raw_pipes_tool_call_deltas_verbatim()

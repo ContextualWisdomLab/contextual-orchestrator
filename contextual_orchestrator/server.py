@@ -2957,6 +2957,8 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
         return None
     if isinstance(choice, str):
         # Strip incidental whitespace so " none " / " auto " match honest no-ops.
+        # Write the stripped token back so mock selection and live providers
+        # see `none`/`auto`/`required`, not the padded SDK string.
         choice = choice.strip()
         if choice not in ("none", "auto", "required"):
             raise RequestError(
@@ -2964,6 +2966,7 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
                 "invalid_tool_choice",
                 "tool_choice string must be one of none, auto, required",
             )
+        body["tool_choice"] = choice
         return choice
     if isinstance(choice, dict):
         # OpenAI named tool_choice is {type, function}; extra siblings fail closed.
