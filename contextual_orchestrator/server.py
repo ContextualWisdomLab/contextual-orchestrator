@@ -401,8 +401,8 @@ def _validate_service_tier(body: dict[str, Any], *, endpoint_path: str) -> str |
         return None
     if not isinstance(service_tier, str):
         raise RequestError(400, "invalid_service_tier", "service_tier must be a string")
-    # Strip incidental whitespace so " auto " matches auto (honest no-op).
-    service_tier = service_tier.strip()
+    # Strip incidental whitespace and casefold so " AUTO " matches auto.
+    service_tier = service_tier.strip().lower()
     if service_tier not in ("auto", "default"):
         raise RequestError(
             400,
@@ -2051,11 +2051,17 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
     if unknown:
         raise RequestError(400, "invalid_routing", "routing contains unsupported keys", {"fields": unknown})
     channel = routing.get("channel")
-    if channel is not None and channel not in {"sync", "batch"}:
+    # Explicit JSON null or empty/whitespace is treat-as-omit for optional keys.
+    if channel is None or (isinstance(channel, str) and not channel.strip()):
+        channel = None
+    elif not isinstance(channel, str) or channel.strip().lower() not in {"sync", "batch"}:
         raise RequestError(400, "invalid_routing", "routing.channel must be sync or batch")
+    else:
+        channel = channel.strip().lower()
     if "latency_tolerant" in routing:
         latency_tolerant = routing.get("latency_tolerant")
-        if not isinstance(latency_tolerant, bool):
+        # Explicit JSON null is treat-as-omit (SDK optional default).
+        if latency_tolerant is not None and not isinstance(latency_tolerant, bool):
             raise RequestError(
                 400,
                 "invalid_routing",
@@ -2063,13 +2069,29 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
             )
     if "priority" in routing:
         priority = routing.get("priority")
-        if not isinstance(priority, str) or priority not in {"interactive", "normal", "bulk"}:
+        if priority is None or (isinstance(priority, str) and not priority.strip()):
+            pass  # omit
+        elif not isinstance(priority, str) or priority.strip().lower() not in {
+            "interactive",
+            "normal",
+            "bulk",
+        }:
             raise RequestError(
                 400,
                 "invalid_routing",
                 "routing.priority must be one of interactive, normal, bulk",
             )
-    return routing
+    # Rebuild without omitted null optional keys for honest passthrough shape.
+    cleaned: dict[str, Any] = {}
+    if channel is not None:
+        cleaned["channel"] = channel
+    if "latency_tolerant" in routing and routing.get("latency_tolerant") is not None:
+        cleaned["latency_tolerant"] = routing["latency_tolerant"]
+    if "priority" in routing:
+        priority = routing.get("priority")
+        if isinstance(priority, str) and priority.strip():
+            cleaned["priority"] = priority.strip().lower()
+    return cleaned if cleaned else {}
 
 
 def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[BatchRequest]:
