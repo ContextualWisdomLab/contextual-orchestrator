@@ -2628,6 +2628,13 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "invalid_tools",
                 "each tool.function.description must be a string when provided",
             )
+        description = function.get("description")
+        if isinstance(description, str) and len(description) > 1024:
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.function.description must be at most 1024 characters",
+            )
         validated.append(item)
     return validated
 
