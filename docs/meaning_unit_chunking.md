@@ -35,9 +35,12 @@ that cost is not justified by consistent gains over simpler splits. This
 gateway cuts at linguistic units:
 
 - email parties (`email_sender`, `email_recipient`, `email_subject`, `email_copy`)
-- HTML blocks (`html_block`)
-- `data:image/...;base64,` spans (`embedded_image`) with the original
-  `source_offset` so a later OCR/object-tag job can attach to the same place
+- HTML blocks (`html_block`) — innermost leaves only, so a Gmail
+  `<div><p>greeting</p><p>invoice</p></div>` stays two retrieval grains
+- RFC 2397 `data:image/...;base64,` spans (`embedded_image`) including
+  `;charset=` (and other parameters), URL-safe `-_`, and MIME line wraps,
+  with the original `source_offset` so a later OCR/object-tag job can
+  attach to the same place
 - remaining prose as `body_paragraph` (default retrieval grain)
 
 `unit_grain=body_sentence` is available in-process for UAX #29-style sentence
@@ -78,3 +81,6 @@ Küttler, H., Lewis, M., Yih, W., Rocktäschel, T., Riedel, S., & Kiela, D.
 (2020). Retrieval-augmented generation for knowledge-intensive NLP tasks.
 In *Advances in Neural Information Processing Systems, 33*.
 https://doi.org/10.48550/arXiv.2005.11401
+
+Masinter, L. (1998). *The "data" URL scheme* (RFC 2397). RFC Editor.
+https://doi.org/10.17487/RFC2397

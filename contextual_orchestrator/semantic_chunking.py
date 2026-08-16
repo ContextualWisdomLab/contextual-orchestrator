@@ -5,13 +5,14 @@ provider call under a ceiling and then averages parts back into one vector.
 That is the wrong grain for retrieval: a naruon invoice email then embeds the
 greeting, the balance line, and the signature as one point.
 
-This module cuts at linguistic meaning units — email parties, HTML blocks,
-embedded images, paragraphs, and sentences — so a later lexical or neural
-search can recover the invoice line without the greeting (Zhao et al., 2024;
-Qu et al., 2025; Unicode Consortium, 2024). Similarity-breakpoint “semantic
-chunking” is deliberately not used: Qu et al. (2025) found that cost is not
-justified by consistent gains. Sentence cuts follow the Unicode text
-segmentation intent in UAX #29 without adding a Unicode dependency.
+This module cuts at linguistic meaning units — email parties, innermost HTML
+leaves, RFC 2397 embedded images, paragraphs, and sentences — so a later
+lexical or neural search can recover the invoice line without the greeting
+(Zhao et al., 2024; Qu et al., 2025; Unicode Consortium, 2024; Masinter,
+1998). Similarity-breakpoint “semantic chunking” is deliberately not used:
+Qu et al. (2025) found that cost is not justified by consistent gains.
+Sentence cuts follow the Unicode text segmentation intent in UAX #29 without
+adding a Unicode dependency.
 """
 
 from __future__ import annotations
@@ -24,11 +25,21 @@ _EMAIL_HEADER = re.compile(
     r"^(From|To|Cc|Bcc|Subject|Reply-To|Date):\s*.+$",
     re.MULTILINE | re.IGNORECASE,
 )
-_IMAGE = re.compile(r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
+_IMAGE = re.compile(
+    r"data:image/[A-Za-z0-9.+-]+(?:;[A-Za-z0-9!#$&^_.+-]+(?:=[^;,\s]+)?)*;base64,"
+    r"[A-Za-z0-9+/_-]+(?:=[A-Za-z0-9+/_=-]*)*"
+    r"(?:\r?\n[A-Za-z0-9+/_-]{16,}[ \t=]*)*",
+    re.IGNORECASE,
+)
+_HTML_OPEN = re.compile(
+    r"<(p|div|li|h[1-6]|tr|td|section|article|blockquote)\b",
+    re.IGNORECASE,
+)
 _HTML_BLOCK = re.compile(
     r"<(p|div|li|h[1-6]|tr|td|section|article|blockquote)\b[^>]*>.*?</\1>",
     re.IGNORECASE | re.DOTALL,
 )
+_TAG_ONLY = re.compile(r"^(?:\s*</?[A-Za-z][^>]*>\s*)+$")
 _PARAGRAPH_BREAK = re.compile(r"\n\s*\n+")
 _SENTENCE_CUT = re.compile(r"(?<=[.!?。！？])(?=\s+(?:[A-Z\"'(가-힣]))")
 _TOKEN = re.compile(r"[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*|[가-힣]+")
@@ -114,10 +125,10 @@ def meaning_unit_chunks(
             kind = _EMAIL_KIND.get(match.group(1).lower(), "email_header")
             reserved.append((match.start(), match.end(), kind, match.group(0)))
     if "<" in text and ">" in text:
-        for match in _HTML_BLOCK.finditer(text):
-            if _overlaps(reserved, match.start(), match.end()):
+        for start, end, piece in _html_leaf_spans(text):
+            if _overlaps(reserved, start, end):
                 continue
-            reserved.append((match.start(), match.end(), "html_block", match.group(0)))
+            reserved.append((start, end, "html_block", piece))
 
     reserved.sort(key=lambda item: (item[0], item[1]))
     units: list[MeaningUnit] = []
@@ -129,7 +140,11 @@ def meaning_unit_chunks(
         cursor = max(cursor, end)
     if cursor < len(text):
         units.extend(_split_plain(text[cursor:], cursor, input_index, unit_grain))
-    units = [unit for unit in units if unit.chunk_text.strip()]
+    units = [
+        unit
+        for unit in units
+        if unit.chunk_text.strip() and _TAG_ONLY.match(unit.chunk_text) is None
+    ]
     if not units:
         return [MeaningUnit("source_document", 0, len(text), text, input_index, 0)]
     return [unit.with_index(input_index, index) for index, unit in enumerate(units)]
@@ -201,6 +216,31 @@ def _looks_like_email(text: str) -> bool:
         if len(headers) >= 8:
             break
     return bool({"from", "to", "subject"} & set(headers))
+
+
+def _html_leaf_spans(text: str) -> list[tuple[int, int, str]]:
+    """Return innermost HTML blocks so a wrapper div does not hide inner ``<p>``.
+
+    ``finditer`` on the wrapper tag consumes every nested paragraph. Gmail and
+    naruon bodies arrive as ``<div><p>greeting</p><p>invoice</p></div>``. This
+    walks each opener, then drops a match that strictly contains another.
+    """
+    found: list[tuple[int, int, str]] = []
+    for opener in _HTML_OPEN.finditer(text):
+        block = _HTML_BLOCK.match(text, opener.start())
+        if block is None:
+            continue
+        found.append((block.start(), block.end(), block.group(0)))
+    leaves: list[tuple[int, int, str]] = []
+    for start, end, piece in found:
+        contained = any(
+            start < other_start and other_end <= end and (other_start, other_end) != (start, end)
+            for other_start, other_end, _ in found
+        )
+        if contained:
+            continue
+        leaves.append((start, end, piece))
+    return leaves
 
 
 def _overlaps(reserved: list[tuple[int, int, str, str]], start: int, end: int) -> bool:

@@ -73,6 +73,11 @@ later averaged away.
   https://doi.org/10.48550/arXiv.2005.11401
   Grounds why the retrieved *chunk*, not the whole document, is the generation
   context. `rag-2005.11401.pdf` when vendored.
+- Masinter, L. (1998). *The "data" URL scheme* (RFC 2397). RFC Editor.
+  https://doi.org/10.17487/RFC2397
+  Cite + link (IETF). `data:image` units accept optional media-type parameters,
+  `;base64`, URL-safe `-_`, and MIME line wraps so a scanned invoice keeps one
+  `source_offset` for a later OCR job.
 
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no

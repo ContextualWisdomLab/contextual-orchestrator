@@ -44,6 +44,32 @@ INVOICE_WITH_IMAGE = (
     "The amount on that scan is 1840.00 USD for INV-20260816."
 )
 
+INVOICE_WRAPPED_HTML = (
+    "<div><p>Good morning from support.</p>"
+    "<p>Invoice INV-20260816 balance due is 1840.00 USD.</p></div>"
+)
+
+INVOICE_IMAGE_CHARSET = (
+    "See the scanned invoice below.\n"
+    "data:image/png;charset=utf-8;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=\n"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
+INVOICE_IMAGE_URLSAFE = (
+    "See the scanned invoice below.\n"
+    "data:image/png;base64,"
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8_-8AAwMCAO-ip1s=\n"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
+INVOICE_IMAGE_MIME_WRAP = (
+    "See the scanned invoice below.\n"
+    "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwC\n"
+    "AAAC0lEQVR42mP8/x8AAwMCAO+ip1sAAAAASUVORK5CYII=\n"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
 INVOICE_QUERY = "invoice INV-20260816 balance due 1840.00 USD"
 
 
@@ -99,6 +125,21 @@ def test_html_blocks_keep_invoice_out_of_the_greeting() -> None:
     assert "Good morning" not in invoice.chunk_text
 
 
+def test_wrapped_div_keeps_invoice_out_of_the_greeting() -> None:
+    units = meaning_unit_chunks(INVOICE_WRAPPED_HTML)
+    for unit in units:
+        _assert_span(INVOICE_WRAPPED_HTML, unit)
+    greeting = next(unit for unit in units if "Good morning" in unit.chunk_text)
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert greeting is not invoice
+    assert "INV-20260816" not in greeting.chunk_text
+    assert "Good morning" not in invoice.chunk_text
+    assert not any(unit.chunk_text.strip() in {"<div>", "</div>"} for unit in units)
+    ranked = rank_meaning_units(INVOICE_QUERY, units)
+    assert "INV-20260816" in ranked[0].chunk_text
+    assert "Good morning" not in ranked[0].chunk_text
+
+
 def test_embedded_image_keeps_source_offset_and_neighbors() -> None:
     units = meaning_unit_chunks(INVOICE_WITH_IMAGE)
     image = next(unit for unit in units if unit.chunk_kind == "embedded_image")
@@ -107,6 +148,45 @@ def test_embedded_image_keeps_source_offset_and_neighbors() -> None:
     invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
     assert invoice.chunk_kind != "embedded_image"
     assert image.source_offset < invoice.source_offset
+
+
+def _assert_image_isolated(source: str, prefix: str) -> None:
+    units = meaning_unit_chunks(source)
+    for unit in units:
+        _assert_span(source, unit)
+    image = next(unit for unit in units if unit.chunk_kind == "embedded_image")
+    assert source[image.source_offset :].startswith(prefix)
+    assert "INV-20260816" not in image.chunk_text
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert invoice.chunk_kind != "embedded_image"
+    assert "data:image" not in invoice.chunk_text
+    assert image.source_offset < invoice.source_offset
+
+
+def test_charset_data_image_is_its_own_unit() -> None:
+    _assert_image_isolated(INVOICE_IMAGE_CHARSET, "data:image/png;charset=utf-8;base64,")
+
+
+def test_urlsafe_data_image_keeps_full_payload() -> None:
+    _assert_image_isolated(INVOICE_IMAGE_URLSAFE, "data:image/png;base64,")
+    image = next(
+        unit
+        for unit in meaning_unit_chunks(INVOICE_IMAGE_URLSAFE)
+        if unit.chunk_kind == "embedded_image"
+    )
+    assert "_-" in image.chunk_text
+    assert image.chunk_text.endswith("=")
+
+
+def test_mime_wrapped_data_image_keeps_full_payload() -> None:
+    _assert_image_isolated(INVOICE_IMAGE_MIME_WRAP, "data:image/png;base64,")
+    image = next(
+        unit
+        for unit in meaning_unit_chunks(INVOICE_IMAGE_MIME_WRAP)
+        if unit.chunk_kind == "embedded_image"
+    )
+    assert "\n" in image.chunk_text
+    assert image.chunk_text.endswith("=")
 
 
 def test_expand_embedding_inputs_preserves_input_index() -> None:
@@ -206,7 +286,11 @@ if __name__ == "__main__":
     test_invoice_email_isolates_sender_subject_and_balance_line()
     test_invoice_query_ranks_the_balance_unit_first()
     test_html_blocks_keep_invoice_out_of_the_greeting()
+    test_wrapped_div_keeps_invoice_out_of_the_greeting()
     test_embedded_image_keeps_source_offset_and_neighbors()
+    test_charset_data_image_is_its_own_unit()
+    test_urlsafe_data_image_keeps_full_payload()
+    test_mime_wrapped_data_image_keeps_full_payload()
     test_expand_embedding_inputs_preserves_input_index()
     test_expand_omitted_strategy_keeps_one_document_unit()
     test_units_do_not_overlap()
