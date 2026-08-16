@@ -1,0 +1,146 @@
+name: Provider Catalog Sync
+
+on:
+  pull_request:
+  workflow_dispatch:
+  schedule:
+    - cron: "17 */6 * * *"
+
+permissions:
+  contents: read
+
+concurrency:
+  group: provider-catalog-${{ github.ref }}
+  cancel-in-progress: false
+
+jobs:
+  contract:
+    name: Offline provider-catalog contracts
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout exact revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.event_name == 'pull_request' && github.event.pull_request.head.sha || github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked test dependencies
+        run: |
+          python -m pip install --require-hashes -r requirements-opencode-review-ci.txt
+          python -m pip install --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Run provider-catalog contracts
+        run: |
+          python -m pytest tests/test_provider_catalog.py tests/test_provider_catalog_coverage.py -q
+          python -m compileall -q contextual_orchestrator
+
+  synchronize:
+    name: Seed credentials and refresh durable catalog
+    if: >-
+      github.event_name != 'pull_request' &&
+      github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: production
+    env:
+      CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
+      CONTEXTUAL_ORCHESTRATOR_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
+      CONTEXTUAL_ORCHESTRATOR_CATALOG_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
+      CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
+      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+      NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+      BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+    steps:
+      - name: Checkout protected default-branch revision
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked runtime and database dependencies
+        run: python -m pip install --require-hashes -r requirements.lock
+
+      - name: Validate trusted bootstrap inventory
+        shell: bash
+        run: |
+          set +x
+          required=(
+            CONTEXTUAL_ORCHESTRATOR_KV_DSN
+            CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE
+            NVIDIA_NIM_API_KEY
+            NVIDIA_NIM_API_KEY_SUB
+            BYTEZ_API_KEY
+            OPENROUTER_API_KEY
+            OPENAI_API_KEY
+          )
+          for name in "${required[@]}"; do
+            value="${!name:-}"
+            if [[ -z "$value" ]]; then
+              echo "::error title=Provider catalog bootstrap blocked::Required secret $name is not configured"
+              exit 2
+            fi
+            echo "::add-mask::$value"
+          done
+
+      - name: Seed encrypted credential registry and refresh model catalog
+        shell: bash
+        run: |
+          set +x
+          python -m contextual_orchestrator.provider_catalog \
+            bootstrap-and-sync \
+            --require-all \
+            --agents-output "$RUNNER_TEMP/provider-agents.json" \
+            > "$RUNNER_TEMP/provider-catalog-summary.json"
+
+      - name: Verify secret-free generated agent pool
+        shell: bash
+        run: |
+          python - <<'PY'
+          import json
+          import os
+          from pathlib import Path
+
+          agents_path = Path(os.environ["RUNNER_TEMP"]) / "provider-agents.json"
+          summary_path = Path(os.environ["RUNNER_TEMP"]) / "provider-catalog-summary.json"
+          agents = json.loads(agents_path.read_text(encoding="utf-8"))["agents"]
+          summary = json.loads(summary_path.read_text(encoding="utf-8"))
+          if not agents:
+              raise SystemExit("provider catalog produced no candidate agents")
+          forbidden = {
+              os.environ[name]
+              for name in (
+                  "NVIDIA_NIM_API_KEY",
+                  "NVIDIA_NIM_API_KEY_SUB",
+                  "BYTEZ_API_KEY",
+                  "OPENROUTER_API_KEY",
+                  "OPENAI_API_KEY",
+              )
+          }
+          serialized = json.dumps({"agents": agents, "summary": summary})
+          if any(secret and secret in serialized for secret in forbidden):
+              raise SystemExit("generated provider evidence contains a secret value")
+          print(json.dumps({
+              "candidate_agent_count": len(agents),
+              "candidate_model_count": summary["candidate_model_count"],
+              "measurement_status": summary["measurement_status"],
+          }, sort_keys=True))
+          PY
+
+      - name: Confirm runtime secret-source boundary
+        shell: bash
+        run: |
+          unset NVIDIA_NIM_API_KEY NVIDIA_NIM_API_KEY_SUB BYTEZ_API_KEY OPENROUTER_API_KEY OPENAI_API_KEY
+          echo "Provider credentials are persisted in the encrypted KV registry; runtime resolves names only."
