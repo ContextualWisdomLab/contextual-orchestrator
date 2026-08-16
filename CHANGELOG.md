@@ -22,10 +22,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `inference_auth_token`) resolve from the credential KV. `--auth-token`
   and the split pair still win. `CONTEXTUAL_ORCHESTRATOR_TOKEN` /
   `_ADMIN_TOKEN` / `_INFERENCE_TOKEN` are copied into those KV names once
-  at process start (`seed_server_auth_from_environ`). Changing the env
-  var on a running process no longer changes who can call the API.
-  Buyer next action: pass `--auth-token` (or start once with the env var
-  so bootstrap can copy it), then send that Bearer value.
+  at process start (`seed_server_auth_from_environ`). Seed and resolve
+  strip surrounding whitespace so a mounted-secret newline still
+  authorizes. Changing the env var on a running process — or restarting
+  after the KV name is already set — no longer changes who can call the
+  API. Buyer next action: pass `--auth-token` (or start once with the
+  env var so bootstrap can copy it), then send that Bearer value. Rotate
+  a persisted key with `--auth-token` or `register-credential`.
 - Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is
   read from the **process-wide runtime ConfigStore** at request time, not from
   `os.getenv` and not from a separately constructed Postgres `com_config`

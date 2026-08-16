@@ -104,6 +104,17 @@ def test_resolve_server_auth_tokens_ignores_live_environment() -> None:
         _restore_env(_TOKEN_ENV, previous)
 
 
+def test_resolve_server_auth_tokens_strips_persisted_kv_whitespace() -> None:
+    """A persisted newline must still resolve to the Bearer buyers send."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        register_credential(GATEWAY_AUTH_TOKEN, "persisted_gateway_token\n")
+        auth_token, _, _ = resolve_server_auth_tokens()
+        assert auth_token == "persisted_gateway_token"
+    finally:
+        set_backend(None)
+
+
 def test_explicit_cli_token_wins_over_kv() -> None:
     set_backend(InMemoryCredentialBackend())
     try:
@@ -118,33 +129,72 @@ def test_http_authorize_uses_seeded_kv_not_later_env() -> None:
     """Buyer next action: seed once, then send the KV token. A later env edit is ignored."""
     previous = os.environ.get(_TOKEN_ENV)
     set_backend(InMemoryCredentialBackend())
-    os.environ[_TOKEN_ENV] = "seeded_gateway_token"
-    seed_server_auth_from_environ()
-    os.environ[_TOKEN_ENV] = "later_env_token"
-    auth_token, admin_token, inference_token = resolve_server_auth_tokens()
-    server = build_server(
-        _build_orchestrator(),
-        port=0,
-        security=SecurityConfig(
-            auth_token=auth_token,
-            admin_token=admin_token,
-            inference_token=inference_token,
-            rate_limit_requests=10_000,
-        ),
-    )
-    thread = threading.Thread(target=server.serve_forever, daemon=True)
-    thread.start()
-    port = server.server_address[1]
+    server = None
+    thread = None
     try:
+        os.environ[_TOKEN_ENV] = "seeded_gateway_token"
+        seed_server_auth_from_environ()
+        os.environ[_TOKEN_ENV] = "later_env_token"
+        auth_token, admin_token, inference_token = resolve_server_auth_tokens()
+        server = build_server(
+            _build_orchestrator(),
+            port=0,
+            security=SecurityConfig(
+                auth_token=auth_token,
+                admin_token=admin_token,
+                inference_token=inference_token,
+                rate_limit_requests=10_000,
+            ),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = server.server_address[1]
         seeded_status = _post_chat(f"http://127.0.0.1:{port}/v1/chat/completions", "seeded_gateway_token")
         later_status = _post_chat(f"http://127.0.0.1:{port}/v1/chat/completions", "later_env_token")
     finally:
-        server.shutdown()
-        thread.join(timeout=5)
+        if server is not None:
+            server.shutdown()
+        if thread is not None:
+            thread.join(timeout=5)
         set_backend(None)
         _restore_env(_TOKEN_ENV, previous)
     assert seeded_status == 200
     assert later_status == 401
+
+
+def test_http_authorize_strips_seeded_secret_newline() -> None:
+    """Mounted-secret trailing newline must still authorize the stripped Bearer."""
+    previous = os.environ.get(_TOKEN_ENV)
+    set_backend(InMemoryCredentialBackend())
+    server = None
+    thread = None
+    try:
+        os.environ[_TOKEN_ENV] = "seeded_gateway_token\n"
+        seed_server_auth_from_environ()
+        assert get_credential(GATEWAY_AUTH_TOKEN) == "seeded_gateway_token"
+        auth_token, admin_token, inference_token = resolve_server_auth_tokens()
+        server = build_server(
+            _build_orchestrator(),
+            port=0,
+            security=SecurityConfig(
+                auth_token=auth_token,
+                admin_token=admin_token,
+                inference_token=inference_token,
+                rate_limit_requests=10_000,
+            ),
+        )
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        port = server.server_address[1]
+        stripped_status = _post_chat(f"http://127.0.0.1:{port}/v1/chat/completions", "seeded_gateway_token")
+    finally:
+        if server is not None:
+            server.shutdown()
+        if thread is not None:
+            thread.join(timeout=5)
+        set_backend(None)
+        _restore_env(_TOKEN_ENV, previous)
+    assert stripped_status == 200
 
 
 def test_serve_security_tokens_seeds_split_admin_inference() -> None:
@@ -174,7 +224,9 @@ def test_serve_security_tokens_seeds_split_admin_inference() -> None:
 if __name__ == "__main__":
     test_seed_server_auth_from_environ_copies_once()
     test_resolve_server_auth_tokens_ignores_live_environment()
+    test_resolve_server_auth_tokens_strips_persisted_kv_whitespace()
     test_explicit_cli_token_wins_over_kv()
     test_http_authorize_uses_seeded_kv_not_later_env()
+    test_http_authorize_strips_seeded_secret_newline()
     test_serve_security_tokens_seeds_split_admin_inference()
     print("ok")

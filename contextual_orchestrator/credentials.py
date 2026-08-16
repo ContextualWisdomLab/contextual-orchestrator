@@ -237,8 +237,10 @@ def seed_server_auth_from_environ() -> None:
 
     This is the only allowed ``os.environ`` read for gateway authenticators.
     Request-time authorization must use :func:`resolve_server_auth_tokens` or
-    :func:`get_credential`. The empty-check and write share ``_backend_lock``
-    so concurrent ``main()`` seeds cannot both observe an empty key.
+    :func:`get_credential`. Stored values are stripped so a mounted secret
+    trailing newline still matches the Bearer buyers send. The empty-check
+    and write share ``_backend_lock`` so concurrent ``main()`` seeds cannot
+    both observe an empty key.
     """
     backend = get_backend()
     with _backend_lock:
@@ -247,8 +249,9 @@ def seed_server_auth_from_environ() -> None:
             if (existing or "").strip():
                 continue
             raw = os.environ.get(env_name, "")
-            if raw.strip():
-                backend.set(credential_name, raw)
+            stripped = raw.strip()
+            if stripped:
+                backend.set(credential_name, stripped)
 
 
 def resolve_server_auth_tokens(
@@ -263,7 +266,7 @@ def resolve_server_auth_tokens(
     the split pair) or seed the credential KV, then send that Bearer value.
     """
     return (
-        (auth_token or "").strip() or get_credential(GATEWAY_AUTH_TOKEN) or "",
-        (admin_token or "").strip() or get_credential(ADMIN_AUTH_TOKEN) or "",
-        (inference_token or "").strip() or get_credential(INFERENCE_AUTH_TOKEN) or "",
+        (auth_token or "").strip() or (get_credential(GATEWAY_AUTH_TOKEN) or "").strip(),
+        (admin_token or "").strip() or (get_credential(ADMIN_AUTH_TOKEN) or "").strip(),
+        (inference_token or "").strip() or (get_credential(INFERENCE_AUTH_TOKEN) or "").strip(),
     )

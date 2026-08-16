@@ -160,10 +160,11 @@ default store is `InMemoryConfigStore`. It is not a credential, and it is
 At process start (`python -m contextual_orchestrator` or `serve()`),
 `seed_provider_egress_from_environ()` may copy
 `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` into that KV key **once**,
-when the key is still empty. After that, changing the env var does nothing
-until the next bootstrap. Request-time `_validate_provider` reads only the
-process store. `build_server()` does not seed — embedders that skip
-`serve()` / `__main__` must call `seed_provider_egress_from_environ()` or
+when the key is still empty. Seed skips any non-empty key. A later env
+edit does not change a live process or a persisted key — restart does
+not recopy. Request-time `_validate_provider` reads only the process
+store. `build_server()` does not seed — embedders that skip `serve()` /
+`__main__` must call `seed_provider_egress_from_environ()` or
 `set_runtime_config` themselves.
 
 Buyer next action: call `set_runtime_config("provider_egress",
@@ -186,16 +187,23 @@ are not read from `os.getenv` at request time.
 At process start, `seed_server_auth_from_environ()` may copy
 `CONTEXTUAL_ORCHESTRATOR_TOKEN`, `CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN`,
 and `CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN` into those KV names
-**once**, when the name is still empty. After that, changing the env var
-does nothing until the next bootstrap. `python -m contextual_orchestrator
---serve` resolves tokens with `resolve_server_auth_tokens()`: an explicit
-`--auth-token` / `--admin-token` / `--inference-token` wins; otherwise
-the KV value is used.
+**once**, when the name is still empty. Seed skips any non-empty key.
+A later env edit does not change a live process or a persisted key —
+restart does not recopy. Rotate with `--auth-token` or
+`register-credential`. Seed and resolve strip surrounding whitespace so
+a Docker/K8s secret trailing newline still matches the Bearer buyers
+send. `python -m contextual_orchestrator --serve` resolves tokens with
+`resolve_server_auth_tokens()`: an explicit `--auth-token` /
+`--admin-token` / `--inference-token` wins; otherwise the KV value is
+used. `serve()` seeds provider egress but not gateway auth — embedders
+that skip `__main__` must pass `SecurityConfig` or call seed + resolve
+themselves.
 
 Buyer next action: pass `--auth-token` (or the split pair), or start
 once with the matching env var so bootstrap can copy it, then send that
 Bearer value. Do not edit the env var on a live process and expect
-authorization to change. Do not expect argparse to read the env var as
+authorization to change. Do not rotate a persisted KV by changing the
+env var and restarting. Do not expect argparse to read the env var as
 the flag default.
 
 Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 IA-5; Grassi et

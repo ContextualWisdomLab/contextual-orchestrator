@@ -68,8 +68,8 @@ Serve-time Bearer authenticators are secrets, not config. Reuse the existing cre
 
 | Area | Researched | Decision | Skipped |
 |---|---|---|---|
-| Authenticator store | Existing `get_credential` / `register_credential` (`InMemoryCredentialBackend`, pgcrypto `PostgresCredentialBackend`); process `ConfigStore` used for the host allowlist | Store `gateway_auth_token`, `admin_auth_token`, and `inference_auth_token` in the credential KV. `CONTEXTUAL_ORCHESTRATOR_TOKEN` / `_ADMIN_TOKEN` / `_INFERENCE_TOKEN` are bootstrap transport via `seed_server_auth_from_environ` only. Explicit `--auth-token` / `--admin-token` / `--inference-token` still win. | New auth library, OAuth/OIDC in this slice, putting tokens in `provider_egress` ConfigStore (they are secrets). |
-| Control baseline | NIST SP 800-53 Rev. 5 IA-5; NIST SP 800-63B | Document authenticators as KV-managed secrets. A later env edit must not change a live process. | Shipping a full authenticator lifecycle (rotation API, AAL2) in this slice. |
+| Authenticator store | Existing `get_credential` / `register_credential` (`InMemoryCredentialBackend`, pgcrypto `PostgresCredentialBackend`); process `ConfigStore` used for the host allowlist | Store `gateway_auth_token`, `admin_auth_token`, and `inference_auth_token` in the credential KV. `CONTEXTUAL_ORCHESTRATOR_TOKEN` / `_ADMIN_TOKEN` / `_INFERENCE_TOKEN` are bootstrap transport via `seed_server_auth_from_environ` only. Explicit `--auth-token` / `--admin-token` / `--inference-token` still win. Seed and resolve strip whitespace (mounted-secret newlines). Seed skips any non-empty key — restart does not recopy a persisted authenticator. | New auth library, OAuth/OIDC in this slice, putting tokens in `provider_egress` ConfigStore (they are secrets). |
+| Control baseline | NIST SP 800-53 Rev. 5 IA-5; NIST SP 800-63B | Document authenticators as KV-managed secrets. A later env edit must not change a live process or a persisted key. Rotate with `--auth-token` or `register-credential`. | Shipping a full authenticator lifecycle (rotation API, AAL2) in this slice. |
 
 ## Required For New Designs
 
