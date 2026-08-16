@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
+from collections.abc import Iterator
+from contextlib import contextmanager
 from contextvars import ContextVar
 import copy
 from dataclasses import dataclass, replace
@@ -251,6 +253,83 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    @contextmanager
+    def apply_request_sampling(
+        self,
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+        max_output_tokens: int | None = None,
+    ) -> Iterator[None]:
+        """Bind sampling knobs to this thread only for the duration of one request.
+
+        ``ThreadingHTTPServer`` serves concurrent Completions/chat on one shared
+        ``ModelClient``. Writing ``default_temperature`` (and siblings) on the
+        instance races those requests. Thread-local knobs keep each request's
+        temperature, top_p, penalties, and max tokens isolated without mutating
+        process-wide defaults.
+        """
+        local = self._local
+        previous = {
+            "request_temperature": getattr(local, "request_temperature", None),
+            "request_top_p": getattr(local, "request_top_p", None),
+            "request_presence_penalty": getattr(local, "request_presence_penalty", None),
+            "request_frequency_penalty": getattr(local, "request_frequency_penalty", None),
+            "request_max_output_tokens": getattr(local, "request_max_output_tokens", None),
+        }
+        if temperature is not None:
+            local.request_temperature = temperature
+        if top_p is not None:
+            local.request_top_p = top_p
+        if presence_penalty is not None:
+            local.request_presence_penalty = presence_penalty
+        if frequency_penalty is not None:
+            local.request_frequency_penalty = frequency_penalty
+        if max_output_tokens is not None:
+            local.request_max_output_tokens = max_output_tokens
+        try:
+            yield
+        finally:
+            for key, value in previous.items():
+                setattr(local, key, value)
+
+    def _effective_sampling(
+        self,
+        temperature: float | None = None,
+        top_p: float | None = None,
+    ) -> tuple[float, float | None, float | None, float | None, int]:
+        """Resolve call kwargs, then this-thread request knobs, then process defaults.
+
+        Returns ``(temperature, top_p, presence_penalty, frequency_penalty, max_output_tokens)``.
+        """
+        local = self._local
+        effective_temperature = (
+            temperature if temperature is not None else getattr(local, "request_temperature", None)
+        )
+        if effective_temperature is None:
+            effective_temperature = self.default_temperature
+        effective_top_p = top_p if top_p is not None else getattr(local, "request_top_p", None)
+        if effective_top_p is None:
+            effective_top_p = self.default_top_p
+        effective_presence = getattr(local, "request_presence_penalty", None)
+        if effective_presence is None:
+            effective_presence = self.default_presence_penalty
+        effective_frequency = getattr(local, "request_frequency_penalty", None)
+        if effective_frequency is None:
+            effective_frequency = self.default_frequency_penalty
+        effective_max_tokens = getattr(local, "request_max_output_tokens", None)
+        if effective_max_tokens is None:
+            effective_max_tokens = self.max_output_tokens
+        return (
+            effective_temperature,
+            effective_top_p,
+            effective_presence,
+            effective_frequency,
+            effective_max_tokens,
+        )
+
     def chat(
         self,
         agent: ModelAgent,
@@ -260,20 +339,24 @@ class ModelClient:
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
-        When ``temperature``/``top_p`` are omitted, ``default_temperature`` and
-        ``default_top_p`` are used so request-scoped Completions sampling can be
-        applied without threading kwargs through every orchestrator hop.
+        When ``temperature``/``top_p`` are omitted, this-thread request knobs from
+        ``apply_request_sampling`` win, then process ``default_temperature`` /
+        ``default_top_p``. Concurrent Completions/chat requests therefore keep
+        isolated sampling without mutating shared client fields.
         """
         self._local.usage = None
-        # Expose the effective sampling knobs for request-path tests / diagnostics.
-        effective_temperature = self.default_temperature if temperature is None else temperature
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
+        (
+            effective_temperature,
+            effective_top_p,
+            effective_presence,
+            effective_frequency,
+            effective_max_tokens,
+        ) = self._effective_sampling(temperature, top_p)
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
         self._local.last_frequency_penalty = effective_frequency
+        self._local.last_max_output_tokens = effective_max_tokens
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
@@ -289,7 +372,7 @@ class ModelClient:
             "messages": messages,
             "temperature": effective_temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": effective_max_tokens,
         }
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
@@ -344,12 +427,19 @@ class ModelClient:
             context=self._ssl_context,
         )
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+    def stream_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
+        When ``temperature`` is omitted, this-thread request knobs then process
+        defaults apply — same isolation as ``chat()``.
         """
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
@@ -358,12 +448,19 @@ class ModelClient:
             return
 
         self._validate_provider(agent)  # pragma: no cover
+        (
+            effective_temperature,
+            _effective_top_p,
+            _effective_presence,
+            _effective_frequency,
+            effective_max_tokens,
+        ) = self._effective_sampling(temperature)
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": effective_temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": effective_max_tokens,
         }
         yield from self._stream_send(agent, payload)  # pragma: no cover
 

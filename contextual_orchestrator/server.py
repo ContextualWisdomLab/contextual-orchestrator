@@ -3461,24 +3461,16 @@ def build_server(
                         attribution["service"] = "completions_api"
                     routing = _validate_routing(body.get("routing"))
                     started_at = time.perf_counter()
-                    # Apply request sampling knobs to the provider client for this call.
+                    # Bind sampling knobs to this request thread only — never mutate
+                    # the shared ModelClient defaults (ThreadingHTTPServer race).
                     model_client = orchestrator.client
-                    previous_max_tokens = model_client.max_output_tokens
-                    previous_temperature = model_client.default_temperature
-                    previous_top_p = model_client.default_top_p
-                    previous_presence = model_client.default_presence_penalty
-                    previous_frequency = model_client.default_frequency_penalty
-                    if max_tokens is not None:
-                        model_client.max_output_tokens = max_tokens
-                    if temperature is not None:
-                        model_client.default_temperature = temperature
-                    if top_p is not None:
-                        model_client.default_top_p = top_p
-                    if presence_penalty is not None:
-                        model_client.default_presence_penalty = presence_penalty
-                    if frequency_penalty is not None:
-                        model_client.default_frequency_penalty = frequency_penalty
-                    try:
+                    with model_client.apply_request_sampling(
+                        temperature=temperature,
+                        top_p=top_p,
+                        presence_penalty=presence_penalty,
+                        frequency_penalty=frequency_penalty,
+                        max_output_tokens=max_tokens,
+                    ):
                         result = self._run(lambda: coordinator.complete(
                             messages,
                             mode="route",
@@ -3487,12 +3479,6 @@ def build_server(
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                         ))
-                    finally:
-                        model_client.max_output_tokens = previous_max_tokens
-                        model_client.default_temperature = previous_temperature
-                        model_client.default_top_p = previous_top_p
-                        model_client.default_presence_penalty = previous_presence
-                        model_client.default_frequency_penalty = previous_frequency
                     # Batch-channel Completions return a job handle (202), not a
                     # text_completion body — match chat Completions honesty so
                     # clients never receive a 500 on a valid batch routing hint.
@@ -3820,22 +3806,13 @@ def build_server(
                         _validate_openai_metadata(body)
                     started_at = time.perf_counter()
                     model_client = orchestrator.client
-                    previous_max_tokens = model_client.max_output_tokens
-                    previous_temperature = model_client.default_temperature
-                    previous_top_p = model_client.default_top_p
-                    previous_presence = model_client.default_presence_penalty
-                    previous_frequency = model_client.default_frequency_penalty
-                    if max_tokens is not None:
-                        model_client.max_output_tokens = max_tokens
-                    if temperature is not None:
-                        model_client.default_temperature = temperature
-                    if top_p is not None:
-                        model_client.default_top_p = top_p
-                    if presence_penalty is not None:
-                        model_client.default_presence_penalty = presence_penalty
-                    if frequency_penalty is not None:
-                        model_client.default_frequency_penalty = frequency_penalty
-                    try:
+                    with model_client.apply_request_sampling(
+                        temperature=temperature,
+                        top_p=top_p,
+                        presence_penalty=presence_penalty,
+                        frequency_penalty=frequency_penalty,
+                        max_output_tokens=max_tokens,
+                    ):
                         if stream and orchestrator.would_route(messages, mode):
                             self._stream_route_completion(orchestrator, security, messages, model_name)
                             orchestrator.record_analytics_event(
@@ -3858,12 +3835,6 @@ def build_server(
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                         ))
-                    finally:
-                        model_client.max_output_tokens = previous_max_tokens
-                        model_client.default_temperature = previous_temperature
-                        model_client.default_top_p = previous_top_p
-                        model_client.default_presence_penalty = previous_presence
-                        model_client.default_frequency_penalty = previous_frequency
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(

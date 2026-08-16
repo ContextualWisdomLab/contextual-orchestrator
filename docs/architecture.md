@@ -6,6 +6,7 @@
 - Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
 - TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
 - Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+- OpenAI. (n.d.). *Chat Completions API*. OpenAI Platform. https://platform.openai.com/docs/api-reference/chat/create
 
 ## What The Architecture Is
 
@@ -44,6 +45,12 @@ This repository implements the interface and control plane, not the trained coor
   tools/response_format passthrough early-return so SDK tool-calling bodies
   cannot smuggle unsupported values upstream. Omit-equivalent
   `max_tool_calls` (JSON null / empty string) is stripped, not forwarded.
+- Request sampling (`temperature`, `top_p`, penalties, `max_tokens`) is bound
+  on `ModelClient` thread-local state via `apply_request_sampling`. The HTTP
+  adapter must not mutate process-wide `default_temperature` (and siblings) on
+  `ThreadingHTTPServer`; concurrent Completions/chat requests would otherwise
+  cross knobs. OpenAI documents these as per-request body fields
+  (OpenAI, n.d.).
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
