@@ -81,6 +81,39 @@ create index audit_event_retention_idx
   on audit_event (retention_expires_at)
   where deleted_at is null;
 
+create table image_payload (
+  payload_digest text primary key,
+  mime_type text not null,
+  byte_length integer not null,
+  created_at timestamptz not null default now()
+);
+
+create table image_placement (
+  placement_id text primary key,
+  payload_digest text not null references image_payload(payload_digest),
+  workflow_run_id text references workflow_run(workflow_run_id),
+  message_index integer not null,
+  part_index integer not null,
+  source_kind text not null,
+  adjacent_text text not null,
+  created_at timestamptz not null default now()
+);
+
+create table image_recognition_event (
+  recognition_event_id text primary key,
+  payload_digest text not null references image_payload(payload_digest),
+  recognized_text text not null default '',
+  object_tags text not null default '',
+  model_name text not null default '',
+  observed_at timestamptz not null default now()
+);
+
+create index image_placement_payload_idx
+  on image_placement (payload_digest);
+
+create index image_recognition_payload_idx
+  on image_recognition_event (payload_digest, observed_at);
+
 create view workflow_run_safe_view as
 select
   workflow_run_id,

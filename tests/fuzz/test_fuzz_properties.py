@@ -18,6 +18,7 @@ from hypothesis import given, settings, strategies as st
 
 from fuzz.targets import (
     exercise_agent_config,
+    exercise_image_catalog,
     exercise_orchestration,
     exercise_redaction,
     exercise_request_body,
@@ -99,6 +100,12 @@ def test_agent_config_parser_shaped(value: dict) -> None:
 @given(st.text(max_size=4096))
 def test_redaction_never_crashes_and_is_idempotent(text: str) -> None:
     exercise_redaction(text)
+
+
+@_SETTINGS
+@given(_json_values)
+def test_image_catalog_never_crashes_on_arbitrary_messages(value: object) -> None:
+    exercise_image_catalog(value)
 
 
 @settings(max_examples=100, deadline=None)

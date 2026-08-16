@@ -8,7 +8,7 @@ and asserts the invariants that must hold *for arbitrary input*:
   ``AttributeError``, ``RecursionError``, ``SystemError`` or a hang; and
 * structural invariants on any successful result (shape, types, idempotence).
 
-CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
+CodeGraph (``codegraph explore``) surfaced these surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
@@ -18,6 +18,9 @@ consume untrusted bytes/JSON:
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
+5. ``orchestrator.collect_image_catalog`` -- multimodal content-part parsing.
+   Arbitrary message lists must yield the 3NF catalog shape and never echo
+   raw ``data:image`` payloads.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -32,6 +35,7 @@ from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
     chat_completion_chunks,
+    collect_image_catalog,
     redact_text,
     redact_value,
     sse_stream_body,
@@ -123,6 +127,21 @@ def exercise_agent_config(value: Any) -> None:
     assert isinstance(agent.provider_exclusions, tuple)
     assert isinstance(agent.priority, int)
     assert isinstance(agent.disabled, bool)
+
+
+def exercise_image_catalog(messages: Any) -> None:
+    """Drive image-placement parsing over arbitrary message lists.
+
+    Invariants: never crashes, always returns the three 3NF collections, never
+    embeds a ``data:image`` payload in the catalog JSON, and is JSON-serialisable.
+    """
+    catalog = collect_image_catalog(messages)
+    assert isinstance(catalog, dict)
+    assert isinstance(catalog.get("image_payloads"), list)
+    assert isinstance(catalog.get("image_placements"), list)
+    assert isinstance(catalog.get("image_recognition_events"), list)
+    blob = json.dumps(catalog)
+    assert "data:image" not in blob
 
 
 def exercise_redaction(text: str) -> None:

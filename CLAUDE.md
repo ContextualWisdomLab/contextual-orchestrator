@@ -85,7 +85,7 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 
 ### Modules (`contextual_orchestrator/`)
 
-- `orchestrator.py` — the domain heart: `ModelAgent`, `WorkflowStep`, `OrchestrationPolicy`, `ModelClient`, `TaskOrchestrator`, secret/PII redaction, budget enforcement, spend analytics, and the commercial-readiness report generators behind `/api/v1/*`. Domain code stays here until a second implementation forces extraction (see `docs/code_conventions.md`).
+- `orchestrator.py` — the domain heart: `ModelAgent`, `WorkflowStep`, `OrchestrationPolicy`, `ModelClient`, `TaskOrchestrator`, `collect_image_catalog` (3NF figure placement), secret/PII redaction, budget enforcement, spend analytics, and the commercial-readiness report generators behind `/api/v1/*`. Domain code stays here until a second implementation forces extraction (see `docs/code_conventions.md`).
 - `server.py` — HTTP delivery adapter and `SecurityConfig`; all request validation lives here.
 - `admin.py` — static HTML/CSS/JS for the `/admin` operator console (stays inline while the product is dependency-free).
 - `credentials.py` / `kv_config.py` — the KV seam: `get_credential`/`register_credential` over pluggable backends (`InMemoryCredentialBackend` default; pgcrypto-encrypted `PostgresCredentialBackend`, selected via `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`).

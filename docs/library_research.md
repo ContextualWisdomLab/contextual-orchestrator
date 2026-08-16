@@ -53,6 +53,17 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Image placement catalog (2026-08-16)
+
+Invoice and email figures must stay searchable at the text they sat next to.
+This is a parsing and 3NF identity problem, not a new vision library.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Inline image parse | RFC 2397 `data:` URLs; OpenAI `image_url` content parts; stdlib `base64` + `hashlib` | Keep identity as SHA-256 of decoded bytes. Never persist the raw payload on the catalog. | Pillow, pypdfium, Tesseract, ColPali runtime, a second OCR service. |
+| Layout-aware retrieval | Faysse et al. (2024) ColPali; Xu et al. (2020) LayoutLM | Record `image_placement.message_index` / `part_index` / `adjacent_text` so a later embedder can retrieve the figure with the pay line. | Shipping a VLM retriever in this slice. |
+| Temporal recognition | Separate `image_recognition_event` rows | OCR/object tags arrive later and must not be attributes of `image_payload`. | Writing fake OCR text in the first catalog pass. |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

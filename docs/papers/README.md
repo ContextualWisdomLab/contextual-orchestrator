@@ -43,6 +43,36 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## Visually rich document retrieval (image placement)
+
+Invoice and email figures are retrieval objects, not decoration. Text-only
+chunking drops the picture that sat under ``Please pay invoice 1042``.
+
+- Faysse, M., Sibille, H., Wu, T., Omrani, B., Viaud, G., Hudelot, C., &
+  Colombo, P. (2024). *ColPali: Efficient document retrieval with vision
+  language models* (arXiv:2407.01449). arXiv.
+  https://doi.org/10.48550/arXiv.2407.01449
+  `colpali-2407.01449.pdf`
+  Grounds **keeping the figure as a first-class retrieval unit** next to its
+  source offset. Distributed under the arXiv non-exclusive license.
+
+- Xu, Y., Li, M., Cui, L., Huang, S., Wei, F., & Zhou, M. (2020). LayoutLM:
+  Pre-training of text and layout for document image understanding. In
+  *Proceedings of the 26th ACM SIGKDD International Conference on Knowledge
+  Discovery & Data Mining* (pp. 1192–1200). Association for Computing
+  Machinery. https://doi.org/10.1145/3394486.3403172
+  Grounds **2-D / sequential position** as a retrieval signal. ACM copyright;
+  cited and summarized, not vendored.
+
+- Masinter, L. (1998). *The "data" URL scheme* (RFC 2397). Internet
+  Engineering Task Force. https://doi.org/10.17487/RFC2397
+  Grounds **inline `data:image/...;base64,` identity** without storing the
+  payload on the catalog. IETF RFC; public.
+
+Buyer next action: send the PNG as an OpenAI `image_url` part under the pay
+line, then search `orchestration.image_content_catalog.image_placements`
+for `invoice 1042`.
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

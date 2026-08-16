@@ -29,6 +29,7 @@ These stories are derived from the product planning reboot, not from generic adm
 ## API Consumer
 
 - As an API consumer, I want a single chat-completion compatible endpoint so that I can adopt orchestration without rewriting client code.
+- As an API consumer, I want an invoice PNG under ``Please pay invoice 1042`` to stay searchable at that line so that I can retrieve the figure, not only the words.
 - As an API consumer, I want resource-oriented REST endpoints so that enterprise integrations can manage pools, policies, workflow runs, and locales.
 
 ## Localization Manager

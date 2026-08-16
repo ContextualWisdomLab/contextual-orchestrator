@@ -4,6 +4,8 @@ from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
 from contextvars import ContextVar
+import base64
+import binascii
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
@@ -29,7 +31,7 @@ from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 
 
-ChatMessage = dict[str, str]
+ChatMessage = dict[str, Any]
 
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
@@ -37,6 +39,106 @@ class BudgetExceededError(RuntimeError):
     def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.detail = detail or {}
+
+
+def flatten_message_text(content: Any) -> str:
+    """Return concatenated text parts from a chat ``content`` value.
+
+    OpenAI vision callers send a list of ``text`` and ``image_url`` parts.
+    Routing and adjacent-text anchors need the words that sat next to the
+    figure, not the base64 payload.
+    """
+    if isinstance(content, str):
+        return content
+    if not isinstance(content, list):
+        return ""
+    texts: list[str] = []
+    for part in content:
+        if isinstance(part, dict) and isinstance(part.get("text"), str):
+            texts.append(part["text"])
+    return " ".join(texts)
+
+
+def _parse_image_source(url: str) -> tuple[str, str, int, str] | None:
+    """Return ``(payload_digest, mime_type, byte_length, source_kind)`` or None."""
+    if url.startswith("data:"):
+        header, separator, payload = url.partition(",")
+        if not separator or ";base64" not in header.lower():
+            return None
+        media = header[5:].split(";", 1)[0].strip().lower()
+        if not media.startswith("image/"):
+            return None
+        try:
+            raw = base64.b64decode(payload, validate=True)
+        except (ValueError, binascii.Error):
+            return None
+        if not raw:
+            return None
+        return hashlib.sha256(raw).hexdigest(), media, len(raw), "inline_data_uri"
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        return None
+    return hashlib.sha256(url.encode("utf-8")).hexdigest(), "image/remote", 0, "remote_https"
+
+
+def collect_image_catalog(messages: list[Any]) -> dict[str, Any]:
+    """Build a 3NF image catalog that keeps each figure at its source offset.
+
+    ``image_payload`` is identity by digest so the same invoice PNG on a
+    reminder thread is one payload with two ``image_placement`` rows.
+    ``image_recognition_event`` stays empty until a later vision/OCR pass
+    (temporal modeling: tags are not attributes of the bytes).
+    """
+    payloads: dict[str, dict[str, Any]] = {}
+    placements: list[dict[str, Any]] = []
+    if not isinstance(messages, list):
+        return {
+            "image_payloads": [],
+            "image_placements": [],
+            "image_recognition_events": [],
+        }
+    for message_index, message in enumerate(messages):
+        if not isinstance(message, dict):
+            continue
+        content = message.get("content")
+        adjacent_text = flatten_message_text(content)
+        if not isinstance(content, list):
+            continue
+        for part_index, part in enumerate(content):
+            if not isinstance(part, dict) or part.get("type") != "image_url":
+                continue
+            image_url = part.get("image_url")
+            if isinstance(image_url, str):
+                url = image_url
+            elif isinstance(image_url, dict):
+                url = image_url.get("url")
+            else:
+                continue
+            if not isinstance(url, str) or not url.strip():
+                continue
+            parsed = _parse_image_source(url.strip())
+            if parsed is None:
+                continue
+            payload_digest, mime_type, byte_length, source_kind = parsed
+            payloads[payload_digest] = {
+                "payload_digest": payload_digest,
+                "mime_type": mime_type,
+                "byte_length": byte_length,
+            }
+            placements.append(
+                {
+                    "payload_digest": payload_digest,
+                    "message_index": message_index,
+                    "part_index": part_index,
+                    "source_kind": source_kind,
+                    "adjacent_text": adjacent_text,
+                }
+            )
+    return {
+        "image_payloads": list(payloads.values()),
+        "image_placements": placements,
+        "image_recognition_events": [],
+    }
 
 
 def estimate_tokens(text: str) -> int:
@@ -492,9 +594,13 @@ class ModelClient:
         return f"{agent.base_url.rstrip('/')}{path}"
 
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
-        last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
+        last = next(
+            (flatten_message_text(m.get("content", "")) for m in reversed(messages) if m.get("role") == "user"),
+            "",
+        )
         role = "worker"
-        system = messages[0]["content"] if messages and messages[0].get("role") == "system" else ""
+        system_content = messages[0].get("content", "") if messages and messages[0].get("role") == "system" else ""
+        system = flatten_message_text(system_content)
         match = re.search(r"Role: ([a-z]+)", system)
         if match:
             role = match.group(1)
@@ -924,8 +1030,11 @@ class TaskOrchestrator:
     def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
-            return self.route_once(messages)
-        return self.conduct(messages)
+            result = self.route_once(messages)
+        else:
+            result = self.conduct(messages)
+        result["image_content_catalog"] = collect_image_catalog(messages)
+        return result
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
@@ -993,6 +1102,8 @@ class TaskOrchestrator:
             "trace": result["trace"],
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
+            "image_content_catalog": result.get("image_content_catalog")
+            or collect_image_catalog(messages),
         }
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
@@ -1600,7 +1711,10 @@ class TaskOrchestrator:
         return hits >= self.policy.conduct_hint_threshold or len(text) > 700
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
-        return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
+        return next(
+            (flatten_message_text(m.get("content", "")) for m in reversed(messages) if m.get("role") == "user"),
+            "",
+        )
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Ask a model to judge the verifier report (fixes term-matching false negatives).
@@ -8500,6 +8614,9 @@ def chat_completion_response(
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
+    catalog = result.get("image_content_catalog")
+    if catalog:
+        orchestration["image_content_catalog"] = catalog
     return {
         "id": f"chatcmpl-{int(time.time() * 1000)}",
         "object": "chat.completion",

@@ -83,6 +83,9 @@ jobs:
       - name: Fuzz orchestration engine
         run: python fuzz/fuzz_orchestration.py -max_total_time=${FUZZ_SECONDS} -artifact_prefix=crash- fuzz/corpus/orchestration
 
+      - name: Fuzz image placement catalog
+        run: python fuzz/fuzz_image_catalog.py -max_total_time=${FUZZ_SECONDS} -artifact_prefix=crash- fuzz/corpus/image_catalog
+
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5

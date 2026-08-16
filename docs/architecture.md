@@ -2,10 +2,15 @@
 
 ## Sources Read
 
-- Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
-- Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-- TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
-- Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+APA 7th citations (titles retained for paper-contract search):
+
+- Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
+- Tang, Y., Cetin, E., Xu, J., Sun, Q., Nielsen, S., Richard, V., Goda, H., Tymchenko, I., Nguyen, N., Lee, H., Ashiga, M., Kotyan, S., Kuroki, S., & Clanuwat, T. (2026). *Sakana Fugu technical report* (arXiv:2606.21228). arXiv. https://doi.org/10.48550/arXiv.2606.21228
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026). *TRINITY: An evolved LLM coordinator* (arXiv:2512.04695). arXiv. https://doi.org/10.48550/arXiv.2512.04695
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2026). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). arXiv. https://doi.org/10.48550/arXiv.2512.04388
+- Faysse, M., Sibille, H., Wu, T., Omrani, B., Viaud, G., Hudelot, C., & Colombo, P. (2024). *ColPali: Efficient document retrieval with vision language models* (arXiv:2407.01449). arXiv. https://doi.org/10.48550/arXiv.2407.01449
+- Xu, Y., Li, M., Cui, L., Huang, S., Wei, F., & Zhou, M. (2020). LayoutLM: Pre-training of text and layout for document image understanding. In *Proceedings of the 26th ACM SIGKDD International Conference on Knowledge Discovery & Data Mining* (pp. 1192–1200). Association for Computing Machinery. https://doi.org/10.1145/3394486.3403172
+- Masinter, L. (1998). *The "data" URL scheme* (RFC 2397). Internet Engineering Task Force. https://doi.org/10.17487/RFC2397
 
 ## What The Architecture Is
 
@@ -31,12 +36,40 @@ The Fugu report combines these ideas into production constraints:
 
 This repository implements the interface and control plane, not the trained coordinator.
 
-- `contextual_orchestrator.orchestrator.Agent`: one configured worker model.
-- `Orchestrator.route_once`: the low-latency routing path.
-- `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
+- `contextual_orchestrator.orchestrator.ModelAgent`: one configured worker model.
+- `TaskOrchestrator.route_once`: the low-latency routing path.
+- `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
+- `collect_image_catalog`: 3NF image payload / placement / recognition-event split so a figure stays next to its pay line.
+
+```mermaid
+erDiagram
+    IMAGE_PAYLOAD ||--o{ IMAGE_PLACEMENT : appears_on
+    IMAGE_PAYLOAD ||--o{ IMAGE_RECOGNITION_EVENT : recognized_as
+    WORKFLOW_RUN ||--o{ IMAGE_PLACEMENT : contains
+    IMAGE_PAYLOAD {
+        text payload_digest PK
+        text mime_type
+        int byte_length
+    }
+    IMAGE_PLACEMENT {
+        text placement_id PK
+        text payload_digest FK
+        int message_index
+        int part_index
+        text source_kind
+        text adjacent_text
+    }
+    IMAGE_RECOGNITION_EVENT {
+        text recognition_event_id PK
+        text payload_digest FK
+        text recognized_text
+        text object_tags
+        timestamptz observed_at
+    }
+```
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
-- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server. Buyer next action: send OpenAI `text` + `image_url` parts; read `orchestration.image_content_catalog` to find the figure.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

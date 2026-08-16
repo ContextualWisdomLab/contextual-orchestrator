@@ -33,6 +33,7 @@ Provide one API and one domain model:
 - TRINITY: make thinker, worker, and verifier roles visible in the trace.
 - Conductor: show natural-language subtasks and access lists as first-class audit objects.
 - Enterprise operations: treat provider exclusion, locale bundles, and replayable workflow evidence as product surfaces.
+- Image placement: keep invoice and email figures searchable at the text they sat next to (ColPali / LayoutLM).
 
 ## Non-Goals
 

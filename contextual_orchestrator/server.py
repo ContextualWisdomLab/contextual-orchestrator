@@ -183,16 +183,56 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
-def _validate_messages(messages: Any) -> list[dict[str, str]]:
+def _validate_content_parts(content: list[Any]) -> list[dict[str, Any]]:
+    """Accept OpenAI text + image_url parts; keep the figure at its offset."""
+    if not content:
+        raise RequestError(400, "invalid_message_content", "content parts must be a non-empty array")
+    cleaned: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            raise RequestError(400, "invalid_message_content", "each content part must be an object")
+        part_type = part.get("type")
+        if part_type == "text":
+            text = part.get("text")
+            if not isinstance(text, str) or not text.strip():
+                raise RequestError(400, "invalid_message_content", "text content part requires non-empty text")
+            cleaned.append({"type": "text", "text": text})
+            continue
+        if part_type == "image_url":
+            image_url = part.get("image_url")
+            if isinstance(image_url, str):
+                url = image_url
+            elif isinstance(image_url, dict):
+                url = image_url.get("url")
+            else:
+                raise RequestError(400, "invalid_message_content", "image_url content part requires a url")
+            if not isinstance(url, str) or not url.strip():
+                raise RequestError(400, "invalid_message_content", "image_url content part requires a non-empty url")
+            url = url.strip()
+            if url.startswith("javascript:") or url.startswith("data:text/"):
+                raise RequestError(400, "invalid_message_content", "image_url must be https or data:image")
+            if not (url.startswith("https://") or url.lower().startswith("data:image/")):
+                raise RequestError(400, "invalid_message_content", "image_url must be https or data:image")
+            cleaned.append({"type": "image_url", "image_url": {"url": url}})
+            continue
+        raise RequestError(400, "invalid_message_content", "content part type must be text or image_url")
+    return cleaned
+
+
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
-    validated: list[dict[str, str]] = []
+    validated: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
         content = message.get("content")
-        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        if isinstance(content, list):
+            content = _validate_content_parts(content)
+        elif not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
         validated.append({"role": role, "content": content})
     return validated
