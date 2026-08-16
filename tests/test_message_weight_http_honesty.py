@@ -129,9 +129,29 @@ def test_http_chat_rejects_weight_out_of_range_with_tools() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_weight_out_of_range_with_response_format() -> None:
+    """response_format passthrough must not skip message-weight fail-closed checks."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "weighted json turn", "weight": 0.5}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_message_weight" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_accepts_weight_null_zero_one()
     test_http_chat_rejects_weight_out_of_range()
     test_http_chat_rejects_weight_non_number()
     test_http_chat_rejects_weight_out_of_range_with_tools()
+    test_http_chat_rejects_weight_out_of_range_with_response_format()
     print("ok")

@@ -198,10 +198,67 @@ def test_http_chat_rejects_name_on_tool_message_with_tools() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_missing_messages_with_tools() -> None:
+    """SDK tool bodies without messages must not proxy as an empty history."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "tools": _LOOKUP_TOOLS,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_message" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_empty_messages_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [],
+                "tools": _LOOKUP_TOOLS,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_message" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_non_object_message_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": ["not an object"],
+                "tools": _LOOKUP_TOOLS,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_message" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_rejects_developer_role_with_tools()
     test_http_chat_rejects_empty_user_content_with_tools()
     test_http_chat_rejects_input_audio_content_part_with_tools()
     test_http_chat_rejects_empty_message_name_with_tools()
     test_http_chat_rejects_name_on_tool_message_with_tools()
+    test_http_chat_rejects_missing_messages_with_tools()
+    test_http_chat_rejects_empty_messages_with_tools()
+    test_http_chat_rejects_non_object_message_with_tools()
     print("ok")

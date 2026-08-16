@@ -1437,13 +1437,13 @@ def _validate_chat_message_content_and_name(body: dict[str, Any]) -> None:
     """Content shape and participant name — must run before tools passthrough.
 
     ``_validate_messages`` is skipped on the tools/response_format early return.
-    Empty user/system content, unsupported content-part types, and invalid
-    ``name`` values must still fail closed so SDK tool-calling bodies cannot
-    smuggle them upstream.
+    Missing or empty ``messages``, empty user/system content, unsupported
+    content-part types, and invalid ``name`` values must still fail closed so
+    SDK tool-calling bodies cannot smuggle them upstream.
     """
     messages = body.get("messages")
-    if not isinstance(messages, list):
-        return
+    if not isinstance(messages, list) or not messages:
+        raise RequestError(400, "invalid_message", "messages must be a non-empty array")
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")

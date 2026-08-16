@@ -153,10 +153,38 @@ def test_http_chat_rejects_unknown_tool_call_fields_with_tools() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_unknown_tool_call_function_fields_with_tools() -> None:
+    """Unknown tool_calls.function keys must fail closed on the tools path."""
+    server, thread, port = _server()
+    try:
+        call = _valid_call()
+        call["function"] = {
+            "name": "lookup_item",
+            "arguments": "{}",
+            "description": "smuggle",
+        }
+        payload = _payload(call)
+        payload["tools"] = [
+            {
+                "type": "function",
+                "function": {"name": "lookup_item", "parameters": {"type": "object"}},
+            }
+        ]
+        status, body = _post(port, payload)
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "unknown_tool_call_function_fields" in blob
+        assert "description" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_accepts_tool_calls_with_optional_index()
     test_http_chat_rejects_unknown_tool_call_entry_fields()
     test_http_chat_rejects_unknown_tool_call_function_fields()
     test_http_chat_rejects_invalid_tool_call_index()
     test_http_chat_rejects_unknown_tool_call_fields_with_tools()
+    test_http_chat_rejects_unknown_tool_call_function_fields_with_tools()
     print("ok")
