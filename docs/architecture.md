@@ -8,6 +8,7 @@ APA 7th citations (titles retained for paper-contract search):
 - Sakana AI. (2026). *Sakana Fugu Technical Report*. https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
 - Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://arxiv.org/abs/2512.04695
 - Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
+- Baker, F. B. (2001). *The basics of item response theory* (2nd ed.). ERIC Clearinghouse on Assessment and Evaluation. https://eric.ed.gov/?id=ED458219
 
 ## What The Architecture Is
 
@@ -57,6 +58,7 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   roles, and Conductor steps/access lists become an explicit catalog. Sampling
   temperature is not reasoning effort. Production route/conduct defaults stay
   locked until `production_default_change_allowed` passes a true-θ RMSE gate.
+  The ablation emits θ̂ and RMSE(θ̂, θ); a rank constant is not an estimate.
   Buyer next action: run `python tests/test_reasoning_effort_profile.py`
   and keep live defaults unchanged while that gate is false.
 
