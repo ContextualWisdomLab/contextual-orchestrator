@@ -3690,7 +3690,24 @@ def build_server(
                         if "attribution" in body:
                             _validate_attribution(body.get("attribution"))
                         if "routing" in body:
-                            _validate_routing(body.get("routing"))
+                            routing = _validate_routing(body.get("routing"))
+                            # Passthrough has no batch job plane — fail closed
+                            # instead of billing a silent sync completion.
+                            if routing and routing.get("channel") == "batch":
+                                raise RequestError(
+                                    400,
+                                    "invalid_routing",
+                                    "routing.channel=batch is not supported with tools or "
+                                    "response_format on this gateway; omit routing or set "
+                                    "channel=sync",
+                                )
+                            if routing and routing.get("latency_tolerant") is True:
+                                raise RequestError(
+                                    400,
+                                    "invalid_routing",
+                                    "routing.latency_tolerant=true is not supported with "
+                                    "tools or response_format on this gateway",
+                                )
                         # SSE passthrough is a follow-up — stream=true would otherwise
                         # return a JSON completion while the SDK waits for SSE.
                         stream = _normalize_chat_stream_flag(body)

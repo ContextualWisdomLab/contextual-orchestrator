@@ -269,6 +269,45 @@ def test_http_chat_rejects_unknown_routing_key_with_tools() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_batch_channel_with_tools() -> None:
+    """Passthrough has no batch job plane — do not bill a silent sync completion."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up the invoice"}],
+                "tools": _LOOKUP_TOOLS,
+                "routing": {"channel": "batch"},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_routing" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_latency_tolerant_true_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up the invoice"}],
+                "tools": _LOOKUP_TOOLS,
+                "routing": {"latency_tolerant": True},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_routing" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_unknown_null_stream_options_with_tools() -> None:
     """Unknown stream_options keys stay fail-closed even when the value is null."""
     server, thread, port = _server()
@@ -301,5 +340,7 @@ if __name__ == "__main__":
     test_http_chat_rejects_max_tokens_negative_with_tools()
     test_http_chat_rejects_unknown_attribution_with_tools()
     test_http_chat_rejects_unknown_routing_key_with_tools()
+    test_http_chat_rejects_batch_channel_with_tools()
+    test_http_chat_rejects_latency_tolerant_true_with_tools()
     test_http_chat_rejects_unknown_null_stream_options_with_tools()
     print("ok")
