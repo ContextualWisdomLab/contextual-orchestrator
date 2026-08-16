@@ -2184,7 +2184,14 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
     unknown = sorted(set(attribution) - allowed)
     if unknown:
         raise RequestError(400, "invalid_attribution", "attribution contains unsupported dimensions", {"fields": unknown})
-    return {key: str(value) for key, value in attribution.items()}
+    # Explicit JSON null or empty/whitespace values are treat-as-omit for each
+    # known dimension (SDK optional keys); non-empty values stringify.
+    cleaned: dict[str, Any] = {}
+    for key, value in attribution.items():
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        cleaned[key] = str(value)
+    return cleaned or None
 
 
 def _validate_routing(routing: Any) -> dict[str, Any] | None:
@@ -4151,20 +4158,17 @@ def build_server(
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     if "include_orchestration_trace" in body:
-                        include_trace_raw = body.get("include_orchestration_trace")
-                        # Explicit JSON null is treat-as-omit (SDK optional default).
-                        if include_trace_raw is None or (
-                            isinstance(include_trace_raw, str) and not include_trace_raw.strip()
-                        ):
+                        # Null/empty omit; bool, int 0/1, and "true"/"false"/"0"/"1"
+                        # strings coerce (SDK form/query parity with stream/store).
+                        coerced_trace = _coerce_optional_bool(
+                            body.get("include_orchestration_trace"),
+                            error_code="invalid_include_orchestration_trace",
+                            message="include_orchestration_trace must be a boolean",
+                        )
+                        if coerced_trace is None:
                             include_trace = bool(security.expose_trace_by_default)
-                        elif not isinstance(include_trace_raw, bool):
-                            raise RequestError(
-                                400,
-                                "invalid_include_orchestration_trace",
-                                "include_orchestration_trace must be a boolean",
-                            )
                         else:
-                            include_trace = include_trace_raw
+                            include_trace = coerced_trace
                     else:
                         include_trace = bool(security.expose_trace_by_default)
                     stream = body.get("stream", False)
