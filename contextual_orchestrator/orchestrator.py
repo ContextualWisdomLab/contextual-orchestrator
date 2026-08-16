@@ -161,7 +161,7 @@ class OrchestrationPolicy:
     route_p95_seconds: float = 2.5
     conduct_hint_threshold: int = 2
     verifier_required: bool = True
-    verifier_positive_terms: tuple[str, ...] = ("verified", "accepted", "confirmed", "pass", "good", "ok")
+    verifier_positive_terms: tuple[str, ...] = ("verified", "accepted", "confirmed", "pass")
     verifier_negative_terms: tuple[str, ...] = ("reject", "disagree", "conflict", "unsafe", "fails", "error", "risky")
     # Conductor-style planning (arXiv:2512.04388): "generated" asks the planner model to
     # emit the workflow (subtasks, worker assignment, access lists); "template" keeps the
@@ -847,13 +847,8 @@ class TaskOrchestrator:
     )
     VERIFICATION_HINTS = (
         "verify",
-        "validate",
-        "judge",
         "adjudicate",
         "검증",
-        "검토",
-        "평가",
-        "확인",
         "심사",
     )
 
@@ -1132,6 +1127,10 @@ class TaskOrchestrator:
             "verification": result.get("verification"),
             "routing_decision": result.get("routing_decision"),
         }
+        if result.get("reasoning_effort") is not None:
+            record["reasoning_effort"] = result["reasoning_effort"]
+        if result.get("answer_status") is not None:
+            record["answer_status"] = result["answer_status"]
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         if self._store is not None:
@@ -1657,8 +1656,8 @@ class TaskOrchestrator:
                     task, verification, reasoning_effort=reasoning_effort
                 )
             answer = outputs[steps[-1].id]
-            if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
-                answer = last_output("worker")
+            if not verification["accepted"] and self.policy.verifier_required:
+                answer = self._rejected_verify_answer(verification)
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
             if self.policy.verifier_judge == "model":
@@ -1667,7 +1666,7 @@ class TaskOrchestrator:
                 )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
-                answer = outputs[steps[1].id]
+                answer = self._rejected_verify_answer(verification)
 
         return {
             "mode": "conduct",
@@ -1947,10 +1946,11 @@ class TaskOrchestrator:
         except Exception:  # noqa: BLE001 - judge failure must not break the request
             return fallback
         upper = (reply or "").strip().upper()
-        if "ACCEPT" in upper and "REJECT" not in upper:
+        verdict = re.match(r"\s*(ACCEPT|REJECT)\b", upper)
+        if verdict and verdict.group(1) == "ACCEPT":
             return {"accepted": True, "reason": "model judge accepted the verifier report",
                     "verifier_output": verifier_output, "judge": "model"}
-        if "REJECT" in upper and "ACCEPT" not in upper:
+        if verdict and verdict.group(1) == "REJECT":
             return {"accepted": False, "reason": "model judge rejected the verifier report",
                     "verifier_output": verifier_output, "judge": "model"}
         return fallback
@@ -1968,6 +1968,20 @@ class TaskOrchestrator:
             "The worker text is in the orchestration trace, not in this completion."
         )
 
+    def _has_verdict_term(self, text: str, term: str) -> bool:
+        """Return whether ``term`` is an un-negated verdict token in ``text``.
+
+        ASCII terms use word boundaries so ``pass`` does not match ``password``.
+        A leading ``not`` / ``never`` / ``do not`` turns an accept word into a
+        reject, so ``I have not accepted this`` cannot rubber-stamp.
+        """
+        if not self._text_has_hint(text, term):
+            return False
+        if any("\uac00" <= character <= "\ud7a3" for character in term):
+            return True
+        negated = rf"(?<![\w])(?:not|never|cannot|can't|don't|do not)\s+{re.escape(term)}(?![\w])"
+        return re.search(negated, text) is None
+
     def _judge_verifier_output(
         self,
         verifier_output: str,
@@ -1977,13 +1991,22 @@ class TaskOrchestrator:
         require_explicit_verdict: bool = False,
     ) -> dict[str, Any]:
         lowered = verifier_output.lower()
-        if any(term in lowered for term in self.policy.verifier_negative_terms):  # pragma: no cover
+        if any(self._has_verdict_term(lowered, term) for term in self.policy.verifier_negative_terms):
             return {
                 "accepted": False,
                 "reason": "verifier output flagged disagreement or risk",
                 "verifier_output": verifier_output,
             }
-        if any(term in lowered for term in self.policy.verifier_positive_terms):  # pragma: no cover
+        if any(
+            self._text_has_hint(lowered, term) and not self._has_verdict_term(lowered, term)
+            for term in self.policy.verifier_positive_terms
+        ):
+            return {
+                "accepted": False,
+                "reason": "verifier output negated its accept vocabulary",
+                "verifier_output": verifier_output,
+            }
+        if any(self._has_verdict_term(lowered, term) for term in self.policy.verifier_positive_terms):
             return {
                 "accepted": True,
                 "reason": "verifier output accepted the synthesized result",
@@ -8897,7 +8920,13 @@ def chat_completion_chunks(
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result.get("mode"),
-        "verification": result.get("verification"),
+        "verification": redact_value(result["verification"]) if result.get("verification") is not None else None,
+        "channel": result.get("channel"),
+        "routing_reason": result.get("routing_reason"),
+        "routing_decision": result.get("routing_decision"),
+        "reasoning_effort": result.get("reasoning_effort"),
+        "usage_record_id": result.get("usage_record_id"),
+        "cost": result.get("cost"),
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])

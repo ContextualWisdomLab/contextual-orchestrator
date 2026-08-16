@@ -73,7 +73,9 @@ def test_model_judge_reject_is_respected() -> None:
     result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is False
     assert result["verification"]["judge"] == "model"
-    assert result["answer"] == "step-output(2)"  # falls back to the worker output
+    assert result["answer"] != "step-output(2)"
+    assert "step-output(2)" not in result["answer"]
+    assert "Verification rejected" in result["answer"]
 
 
 def test_ambiguous_judge_reply_keeps_term_verdict() -> None:

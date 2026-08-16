@@ -214,18 +214,31 @@ class CostRoutingCoordinator:
         )
 
     def _completion_tokens_from_result(self, result: Dict[str, Any], model: str) -> int:
-        """Count every provider step output, not only the public completion text.
+        """Count every provider step, not only the public completion text.
 
         Verify and conduct issue more than one upstream call. Invoicing only the
         final answer would make those modes look as cheap as a single route.
+        Prefer provider-reported ``step["usage"].completion_tokens`` when present
+        so reasoning tokens are not dropped. Empty step text is skipped rather
+        than collapsing the invoice back to the public envelope.
         """
-        outputs = [
-            str(step.get("output", ""))
-            for step in result.get("trace") or []
-            if isinstance(step, dict) and step.get("output")
-        ]
-        if len(outputs) >= 2:
-            return sum(int(self.token_counter.count_text(text, model)) for text in outputs)
+        steps = [step for step in result.get("trace") or [] if isinstance(step, dict)]
+        if not steps:
+            return int(self.token_counter.count_text(result.get("answer", ""), model))
+        total = 0
+        counted = False
+        for step in steps:
+            usage = step.get("usage")
+            if isinstance(usage, dict) and usage.get("completion_tokens") is not None:
+                total += int(usage["completion_tokens"])
+                counted = True
+                continue
+            output = str(step.get("output") or "")
+            if output:
+                total += int(self.token_counter.count_text(output, model))
+                counted = True
+        if counted:
+            return total
         return int(self.token_counter.count_text(result.get("answer", ""), model))
 
     # ------------------------------------------------------------------
