@@ -8,6 +8,10 @@
 - Error shape: `{"error_code": "...", "error_message": "...", "error_detail": {...}}` in production.
 - Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
 - OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
+- Bearer tokens for `/admin` and `/v1/*` resolve from CLI flags, then the KV
+  (`gateway_auth_token` / `gateway_admin_token` / `gateway_inference_token`).
+  Seed with `register-credential` before `--serve`. Process env is not the
+  runtime source (NIST SP 800-53 Rev. 5 AC-3 / SC-12).
 
 ## Current Endpoints
 

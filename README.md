@@ -17,7 +17,9 @@ python -m contextual_orchestrator "Summarize why model orchestration helps long 
 Run the OpenAI-compatible subset:
 
 ```bash
-export CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+GATEWAY_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+printf '%s' "$GATEWAY_AUTH_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name gateway_auth_token --value-stdin
 python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000
 ```
 
@@ -29,14 +31,14 @@ http://127.0.0.1:8000/admin
 
 ```bash
 curl -s http://127.0.0.1:8000/v1/chat/completions \
-  -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+  -H "authorization: Bearer $GATEWAY_AUTH_TOKEN" \
   -H 'content-type: application/json' \
   -d '{"model":"contextual-orchestrator","messages":[{"role":"user","content":"Analyze this code review task and verify the answer."}]}' | jq .
 ```
 
 HTTP serving is hardened for local lab use:
 
-- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
+- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` (or KV names `gateway_admin_token` / `gateway_inference_token`) to separate operator and runtime access, or `--auth-token` / `register-credential --name gateway_auth_token` for one local-development token. Process env is bootstrap transport into the KV, not the runtime source.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
@@ -255,6 +257,7 @@ python tests/test_paper_contracts.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
+python tests/test_serve_auth_tokens_kv_honesty.py
 python tests/test_security_hardening.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py

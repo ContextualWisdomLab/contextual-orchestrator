@@ -44,7 +44,9 @@ python fuzz/fuzz_request_body.py -max_total_time=60 fuzz/corpus/request_body
 python -m contextual_orchestrator "your prompt" --agents examples/agents.mock.json
 
 # Serve the OpenAI-compatible API + /admin console
-export CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+GATEWAY_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+printf '%s' "$GATEWAY_AUTH_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name gateway_auth_token --value-stdin
 python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000
 
 # Loopback-only local dev server (auth disabled; loopback only)

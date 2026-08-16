@@ -86,7 +86,33 @@ of a provider key:
 | `CONTEXTUAL_ORCHESTRATOR_KV_DSN`           | Postgres DSN to reach the registry     |
 | `CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE`    | pgcrypto passphrase to unlock secrets  |
 
-These open the KV. They are not provider API keys.
+These open the KV. They are not provider API keys or serve-time Bearer tokens.
+
+## Serve-time gateway tokens
+
+`--serve` resolves Bearer tokens through `resolve_serve_auth_tokens`:
+
+1. Explicit `--auth-token` / `--admin-token` / `--inference-token` (operator CLI).
+2. KV names `gateway_auth_token`, `gateway_admin_token`, `gateway_inference_token`.
+3. Historical aliases `CONTEXTUAL_ORCHESTRATOR_TOKEN`,
+   `CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN`, and
+   `CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN` when registered in the KV.
+
+Process env is **not** read at serve time. Seed the token the same way as a
+provider key:
+
+```bash
+GATEWAY_AUTH_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+printf '%s' "$GATEWAY_AUTH_TOKEN" | python -m contextual_orchestrator \
+  register-credential --name gateway_auth_token --value-stdin
+```
+
+Joint Task Force. (2020). *Security and privacy controls for information
+systems and organizations* (NIST SP 800-53 Rev. 5) (AC-3, SC-12).
+https://doi.org/10.6028/NIST.SP.800-53r5
+
+Barker, E. (2020). *Recommendation for key management: Part 1 – General*
+(NIST SP 800-57 Part 1 Rev. 5). https://doi.org/10.6028/NIST.SP.800-57pt1r5
 
 ## Bootstrapping a credential
 

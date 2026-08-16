@@ -24,6 +24,11 @@ No new dependency is added until it carries real product weight:
 
 Skipped: custom admin framework, custom i18n engine, custom migration engine.
 
+Serve-time Bearer tokens reuse the existing `get_credential` /
+`register_credential` seam (`resolve_serve_auth_tokens`). No new secret
+store, env parser, or dependency — Ponytail: the stdlib KV already covers
+the need (NIST SP 800-53 Rev. 5 AC-3 / SC-12).
+
 ## Commercial Packaging Decision
 
 For the KRW 2,000,000,000 commercial-readiness plan, keep Contextual

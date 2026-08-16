@@ -65,6 +65,11 @@ This repository implements the interface and control plane, not the trained coor
   are applied via `ModelClient.request_sampling` on the calling thread only
   so concurrent Completions/chat and route-stream requests cannot observe
   each other's knobs; `stream_chat` reads the same thread-local overrides.
+  Serve-time Bearer tokens resolve from CLI flags, then the KV
+  (`gateway_auth_token` / `gateway_admin_token` / `gateway_inference_token`,
+  plus historical `CONTEXTUAL_ORCHESTRATOR_*` aliases). Process env is
+  bootstrap transport into the KV, not the runtime source
+  (NIST SP 800-53 Rev. 5 AC-3 / SC-12; NIST SP 800-57 Part 1 Rev. 5).
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

@@ -10,7 +10,9 @@ Environment variables are permitted in exactly ONE place: as *bootstrap
 transport* to connect to the KV itself — the Postgres DSN and the pgcrypto
 passphrase used to open the encrypted registry, and the backend selector.
 That is the single allowed env use in this module. The environment is never
-the runtime *source* of a provider API key.
+the runtime *source* of a provider API key or a serve-time Bearer token.
+Serve tokens resolve through :func:`resolve_serve_auth_tokens` from CLI
+overrides, then the KV (``gateway_auth_token`` and historical aliases).
 
 Backends are pluggable behind :class:`CredentialBackend`:
 
@@ -216,3 +218,53 @@ def get_credential(name: str) -> str | None:
 def register_credential(name: str, value: str) -> None:
     """Register a named secret into the KV (used by the bootstrap CLI)."""
     get_backend().set(name, value)
+
+
+GATEWAY_AUTH_TOKEN_CREDENTIAL = "gateway_auth_token"
+GATEWAY_ADMIN_TOKEN_CREDENTIAL = "gateway_admin_token"
+GATEWAY_INFERENCE_TOKEN_CREDENTIAL = "gateway_inference_token"
+_GATEWAY_AUTH_TOKEN_ALIASES = ("CONTEXTUAL_ORCHESTRATOR_TOKEN",)
+_GATEWAY_ADMIN_TOKEN_ALIASES = ("CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN",)
+_GATEWAY_INFERENCE_TOKEN_ALIASES = ("CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN",)
+
+
+def _first_registered_credential(*credential_names: str) -> str:
+    """Return the first non-empty KV secret among ``credential_names``."""
+    for credential_name in credential_names:
+        value = get_credential(credential_name)
+        if value:
+            return value
+    return ""
+
+
+def resolve_serve_auth_tokens(
+    auth_token: str = "",
+    admin_token: str = "",
+    inference_token: str = "",
+) -> tuple[str, str, str]:
+    """Resolve serve-time API tokens from CLI overrides, then the KV.
+
+    Environment variables are never read here. Seed tokens with
+    :func:`register_credential` (env is bootstrap transport into the KV
+    only). Canonical names are ``gateway_auth_token``,
+    ``gateway_admin_token``, and ``gateway_inference_token``. Historical
+    ``CONTEXTUAL_ORCHESTRATOR_*`` names remain aliases so existing
+    bootstrap scripts keep working.
+
+    Joint Task Force. (2020). *Security and privacy controls for
+    information systems and organizations* (NIST SP 800-53 Rev. 5)
+    (AC-3, SC-12). https://doi.org/10.6028/NIST.SP.800-53r5
+    """
+    resolved_auth = (auth_token or "").strip() or _first_registered_credential(
+        GATEWAY_AUTH_TOKEN_CREDENTIAL,
+        *_GATEWAY_AUTH_TOKEN_ALIASES,
+    )
+    resolved_admin = (admin_token or "").strip() or _first_registered_credential(
+        GATEWAY_ADMIN_TOKEN_CREDENTIAL,
+        *_GATEWAY_ADMIN_TOKEN_ALIASES,
+    )
+    resolved_inference = (inference_token or "").strip() or _first_registered_credential(
+        GATEWAY_INFERENCE_TOKEN_CREDENTIAL,
+        *_GATEWAY_INFERENCE_TOKEN_ALIASES,
+    )
+    return resolved_auth, resolved_admin, resolved_inference

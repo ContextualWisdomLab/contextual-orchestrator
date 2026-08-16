@@ -56,11 +56,12 @@ push or open a PR.
 - The reference implementation is xtrmLLMBatchPython's pgcrypto-encrypted
   Postgres credential registry (`get_credential(name)`); reuse that pattern (a
   DB-backed KV is fine) unless a dedicated KV is adopted.
-- **Known deviation to migrate:** this repo currently resolves provider API
-  keys from env — `ModelClient` reads `os.environ.get(agent.api_key_env)` in
-  `contextual_orchestrator/orchestrator.py` (and `CONTEXTUAL_ORCHESTRATOR_*`
-  tokens in `__main__.py`). Move these to KV-backed reads; keep env only as the
-  bootstrap path that seeds the KV.
+- **Known deviation to migrate:** serve-time Bearer tokens now resolve through
+  `resolve_serve_auth_tokens` (CLI, then KV `gateway_auth_token` /
+  `gateway_admin_token` / `gateway_inference_token`, plus historical
+  `CONTEXTUAL_ORCHESTRATOR_*` aliases). Remaining env read: provider-host
+  allowlist in `ModelClient` (`CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`).
+  Keep env only as the bootstrap path that seeds the KV.
 
 ### This repo: the org LLM gateway
 
