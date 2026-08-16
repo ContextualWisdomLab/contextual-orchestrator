@@ -520,7 +520,8 @@ def _validate_responses_logprobs(body: dict[str, Any]) -> None:
 
     ``logprobs`` must be boolean when present. ``top_logprobs`` requires
     ``logprobs=true`` and must be an integer in [0, 20].
-    Explicit JSON null for either field is treat-as-omit (SDK optional default).
+    Explicit JSON null or empty/whitespace ``top_logprobs`` is treat-as-omit
+    (SDK optional default / no top alternatives), matching chat and Completions.
     """
     if "logprobs" in body:
         lp = body.get("logprobs")
@@ -528,7 +529,7 @@ def _validate_responses_logprobs(body: dict[str, Any]) -> None:
             raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
     if "top_logprobs" in body:
         tlp = body.get("top_logprobs")
-        if tlp is None:
+        if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
             return
         if body.get("logprobs") is not True:
             raise RequestError(
@@ -909,6 +910,44 @@ def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
         "invalid_logprobs",
         "logprobs must be false; token logprobs are not supported on /v1/completions",
     )
+
+
+def _validate_chat_logprobs_surface(body: dict[str, Any]) -> None:
+    """Reject applied chat logprobs; treat SDK blanks as omit before passthrough.
+
+    Chat route and tools passthrough never return token logprobs. Call this
+    before the tools passthrough return so ``tools`` plus a non-omit
+    ``top_logprobs`` cannot look accepted. Explicit JSON null, empty or
+    whitespace string, or ``0`` is treat-as-omit (SDK optional default / no
+    top alternatives). ``logprobs=true`` and any other non-omit
+    ``top_logprobs`` fail closed with named ``invalid_logprobs`` /
+    ``invalid_top_logprobs``.
+    """
+    if "logprobs" not in body and "top_logprobs" not in body:
+        return
+    if "logprobs" in body:
+        lp = body.get("logprobs")
+        if isinstance(lp, str) and not lp.strip():
+            lp = None
+        if lp is not None:
+            if not isinstance(lp, bool):
+                raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
+            if lp is True:
+                raise RequestError(
+                    400,
+                    "invalid_logprobs",
+                    "logprobs=true is not supported on /v1/chat/completions",
+                )
+    if "top_logprobs" in body:
+        tlp = body.get("top_logprobs")
+        if isinstance(tlp, str) and not tlp.strip():
+            tlp = None
+        if tlp is not None and tlp != 0:
+            raise RequestError(
+                400,
+                "invalid_top_logprobs",
+                "top_logprobs is not supported on /v1/chat/completions",
+            )
 
 
 def _validate_completions_top_logprobs(body: dict[str, Any]) -> None:
@@ -1656,6 +1695,8 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
     Each entry must be a function tool call with non-empty ``id``,
     ``function.name``, and string ``function.arguments`` (JSON text).
     Explicit JSON null or empty ``tool_calls`` arrays are treat-as-omit.
+    Explicit JSON null ``function.arguments`` is persisted as an empty
+    JSON-text string so tools passthrough never forwards ``arguments: null``.
     Validated before passthrough so multi-turn tool histories fail closed.
     """
     messages = body.get("messages")
@@ -1742,9 +1783,11 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "each tool_calls function.name must match [a-zA-Z0-9_-]",
                 )
             arguments = function.get("arguments")
-            # Explicit JSON null is treat-as-omit → empty JSON-text arguments
-            # (SDK optional default); non-string non-null remains fail-closed.
+            # Explicit JSON null is treat-as-omit → persist empty JSON-text
+            # arguments (SDK optional default) so proxy_completion forwards a
+            # string, not JSON null. Non-string non-null remains fail-closed.
             if arguments is None:
+                function["arguments"] = ""
                 arguments = ""
             if not isinstance(arguments, str):
                 raise RequestError(
@@ -3573,6 +3616,7 @@ def build_server(
                     _validate_chat_tool_message_ids(body)
                     _validate_chat_assistant_tool_calls(body)
                     _validate_chat_message_audio_function_call(body)
+                    _validate_chat_logprobs_surface(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "tools" in body:
@@ -3761,35 +3805,6 @@ def build_server(
                                     "n greater than 1 is not supported on /v1/chat/completions",
                                 ) from exc
                             raise
-                    if "logprobs" in body or "top_logprobs" in body:
-                        # Chat route path does not return token logprobs; fail closed.
-                        # Explicit JSON null is treat-as-omit (SDK optional default).
-                        if "logprobs" in body:
-                            lp = body.get("logprobs")
-                            # Empty/whitespace string is treat-as-omit.
-                            if isinstance(lp, str) and not lp.strip():
-                                lp = None
-                            if lp is not None:
-                                if not isinstance(lp, bool):
-                                    raise RequestError(400, "invalid_logprobs", "logprobs must be a boolean")
-                                if lp is True:
-                                    raise RequestError(
-                                        400,
-                                        "invalid_logprobs",
-                                        "logprobs=true is not supported on /v1/chat/completions",
-                                    )
-                        if "top_logprobs" in body:
-                            # Explicit JSON null, empty/whitespace string, or 0 is
-                            # treat-as-omit (SDK optional default / no top alts).
-                            tlp = body.get("top_logprobs")
-                            if isinstance(tlp, str) and not tlp.strip():
-                                tlp = None
-                            if tlp is not None and tlp != 0:
-                                raise RequestError(
-                                    400,
-                                    "invalid_top_logprobs",
-                                    "top_logprobs is not supported on /v1/chat/completions",
-                                )
                     if "store" in body:
                         _validate_chat_store(body)
                     if "modalities" in body:

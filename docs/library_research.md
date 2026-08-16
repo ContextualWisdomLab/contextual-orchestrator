@@ -14,6 +14,18 @@ The design researched existing libraries before adding code. The repository keep
 | Database | [PostgreSQL](https://www.postgresql.org/docs/current/sql-syntax-lexical.html) | Default relational store. | PostgreSQL identifiers allow letters, digits, and underscores; the project standardizes on unquoted lower snake_case. |
 | API contract | [OpenAPI 3.1](https://spec.openapis.org/oas/v3.1.0.html) | Contract format for API review and client generation. | OAS defines a language-agnostic HTTP API description for humans and machines. |
 
+## OpenAI compatibility omit research
+
+Researched before persisting null `tool_calls[].function.arguments` and treating empty-string `top_logprobs` as omit on chat, Completions, and Responses:
+
+| Source | Decision | Why not a new library |
+|---|---|---|
+| OpenAI Chat Completions `tool_calls.function.arguments` (JSON-text string) | Persist JSON `null` as `""` on the request body before provider proxy. | Stdlib validation already owns the chat message shape. |
+| OpenAI `top_logprobs` (integer alternatives; chat pairs with boolean `logprobs`) | Empty/whitespace string matches `null`/`0` omit. Hoist the chat check before tools passthrough. | No SDK added; named `invalid_top_logprobs` stays in `server.py`. |
+| OpenAPI 3.1 request validation | Keep handwritten fail-closed checks until FastAPI is the production adapter. | Ponytail: stdlib covers the current lab. |
+
+Citations (APA 7th): OpenAI (2024a, 2024b, 2024c); OpenAPI Initiative (2021). See [rest_api_design.md](rest_api_design.md) Compatibility omit rules.
+
 ## Ponytail Decision
 
 No new dependency is added until it carries real product weight:

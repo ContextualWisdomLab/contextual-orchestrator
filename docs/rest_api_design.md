@@ -93,6 +93,28 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
 
+## Compatibility omit rules (buyer next action)
+
+When an SDK sends an optional Chat Completions, Completions, or Responses knob as JSON `null`, `""`, or ASCII whitespace, treat it as **omit** and continue the request. Do not bill or proxy a feature this gateway does not apply.
+
+| Field | Omit values | Applied / invalid next action |
+|---|---|---|
+| `top_logprobs` on `/v1/chat/completions` and `/v1/completions` | `null`, `""`, whitespace, `0` | Non-zero → `400 invalid_top_logprobs`. Resend without the field, or keep `0`. |
+| `top_logprobs` on `/v1/responses` | `null`, `""`, whitespace | Non-null integer requires `logprobs=true` and `[0, 20]`. |
+| Assistant `tool_calls[].function.arguments` | JSON `null` | Persisted as empty JSON-text `""` before tools passthrough. Objects/arrays → `400 invalid_message`. Send a JSON-text string such as `"{}"`. |
+
+These checks run **before** tools passthrough so a `tools` body cannot smuggle applied `top_logprobs` or leave `arguments: null` on the provider wire.
+
+### Citations (APA 7th)
+
+OpenAI. (2024a). *Create chat completion*. https://platform.openai.com/docs/api-reference/chat/create
+
+OpenAI. (2024b). *Create completion*. https://platform.openai.com/docs/api-reference/completions/create
+
+OpenAI. (2024c). *Create a model response*. https://platform.openai.com/docs/api-reference/responses/create
+
+OpenAPI Initiative. (2021). *OpenAPI specification v3.1.0*. https://spec.openapis.org/oas/v3.1.0.html
+
 ## Production Library Target
 
 FastAPI should replace the current stdlib HTTP adapter when the API needs authentication, richer OpenAPI schema generation, dependency injection, and typed request/response models.
