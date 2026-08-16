@@ -21,7 +21,8 @@ deserialize request config validate untrusted input"`):
 1. **HTTP request body** — `server._coerce_json` / `_reject_unknown_keys` /
    `_validate_mode` / `_validate_messages`. Arbitrary bytes must normalise to a
    validated structure or raise `RequestError` / a JSON decode error — never an
-   unhandled crash.
+   unhandled crash. Successful messages may include optional `name`,
+   `tool_call_id` (tool role), and `tool_calls` (assistant role).
 2. **Agent config** — `orchestrator.ModelAgent.from_dict`. Arbitrary decoded
    JSON must yield a well-typed `ModelAgent` or raise `KeyError`/`TypeError`/
    `ValueError`.

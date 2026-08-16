@@ -16,11 +16,12 @@ The design researched existing libraries before adding code. The repository keep
 
 ## OpenAI compatibility omit research
 
-Researched before persisting null `tool_calls[].function.arguments` and treating empty-string `top_logprobs` as omit on chat, Completions, and Responses:
+Researched before persisting null `tool_calls[].function.arguments`, keeping assistant `tool_calls` on the orchestration rebuild, and treating empty-string `top_logprobs` as omit on chat, Completions, and Responses:
 
 | Source | Decision | Why not a new library |
 |---|---|---|
-| OpenAI Chat Completions `tool_calls.function.arguments` (JSON-text string) | Persist JSON `null` as `""` on the request body before provider proxy. | Stdlib validation already owns the chat message shape. |
+| OpenAI Chat Completions `tool_calls.function.arguments` (JSON-text string) | Persist JSON `null` as `""` on the request body before provider proxy **and** when `_validate_messages` rebuilds history for route/conduct. | Stdlib validation already owns the chat message shape. |
+| OpenAI Chat Completions assistant `tool_calls` array | Keep non-omit `tool_calls` on the orchestration path so a follow-up without `tools` still binds tool results. | No SDK added; the rebuild already lives in `server.py`. |
 | OpenAI `top_logprobs` (integer alternatives; chat pairs with boolean `logprobs`) | Empty/whitespace string matches `null`/`0` omit. Hoist the chat check before tools passthrough. | No SDK added; named `invalid_top_logprobs` stays in `server.py`. |
 | OpenAPI 3.1 request validation | Keep handwritten fail-closed checks until FastAPI is the production adapter. | Ponytail: stdlib covers the current lab. |
 

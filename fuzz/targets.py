@@ -102,9 +102,17 @@ def exercise_request_body(raw: bytes) -> None:
         else:
             assert isinstance(messages, list) and messages
             for message in messages:
-                assert set(message) == {"role", "content"}
+                allowed = {"role", "content", "name", "tool_call_id", "tool_calls"}
+                assert set(message) <= allowed
+                assert {"role", "content"} <= set(message)
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
-                assert isinstance(message["content"], str)
+                assert isinstance(message["content"], str) or isinstance(message["content"], list)
+                if "tool_calls" in message:
+                    assert message["role"] == "assistant"
+                    assert isinstance(message["tool_calls"], list) and message["tool_calls"]
+                if "tool_call_id" in message:
+                    assert message["role"] == "tool"
+                    assert isinstance(message["tool_call_id"], str) and message["tool_call_id"]
 
 
 def exercise_agent_config(value: Any) -> None:

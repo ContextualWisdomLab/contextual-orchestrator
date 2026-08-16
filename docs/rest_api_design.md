@@ -101,9 +101,10 @@ When an SDK sends an optional Chat Completions, Completions, or Responses knob a
 |---|---|---|
 | `top_logprobs` on `/v1/chat/completions` and `/v1/completions` | `null`, `""`, whitespace, `0` | Non-zero → `400 invalid_top_logprobs`. Resend without the field, or keep `0`. |
 | `top_logprobs` on `/v1/responses` | `null`, `""`, whitespace | Non-null integer requires `logprobs=true` and `[0, 20]`. |
-| Assistant `tool_calls[].function.arguments` | JSON `null` | Persisted as empty JSON-text `""` before tools passthrough. Objects/arrays → `400 invalid_message`. Send a JSON-text string such as `"{}"`. |
+| Assistant `tool_calls[].function.arguments` | JSON `null` | Persisted as empty JSON-text `""` before tools passthrough **and** on the orchestration rebuild. Objects/arrays → `400 invalid_message`. Send a JSON-text string such as `"{}"`. |
+| Assistant `tool_calls` history without a current `tools` array | `null`, `[]` | Non-empty arrays stay on the route/conduct message list. Resend the prior tool-call turn so the worker can bind `tool` results; do not omit `tool_calls` on follow-ups. |
 
-These checks run **before** tools passthrough so a `tools` body cannot smuggle applied `top_logprobs` or leave `arguments: null` on the provider wire.
+These checks run **before** tools passthrough so a `tools` body cannot smuggle applied `top_logprobs` or leave `arguments: null` on the provider wire. The orchestration rebuild (`_validate_messages`) keeps the same `tool_calls` so a follow-up without `tools` does not look like an empty assistant reply.
 
 ### Citations (APA 7th)
 

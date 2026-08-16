@@ -1428,6 +1428,14 @@ def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
 
 
 def _validate_messages(messages: Any) -> list[dict[str, Any]]:
+    """Normalise chat history for the orchestration path (route / conduct).
+
+    Rebuilds each message so workers see only interpreted fields. Assistant
+    ``tool_calls`` are kept (null/empty omit) so a follow-up after a tool turn
+    does not look like an empty assistant reply. JSON-null
+    ``function.arguments`` is persisted as empty JSON-text, matching tools
+    passthrough. Other optional keys stay omit-or-fail-closed.
+    """
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
     validated: list[dict[str, Any]] = []
@@ -1621,6 +1629,33 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                     "invalid_message_prefix",
                     "message prefix must be a boolean",
                 )
+        if "tool_calls" in message:
+            # Keep validated assistant tool history on route/conduct. Null or
+            # empty arrays are omit; persist arguments:null as empty JSON-text
+            # so orchestration never forwards a JSON null to a worker.
+            tool_calls = message.get("tool_calls")
+            if tool_calls is None or (isinstance(tool_calls, list) and not tool_calls):
+                pass
+            elif role != "assistant":
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "tool_calls is only valid on assistant messages",
+                )
+            elif not isinstance(tool_calls, list):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "tool_calls must be a non-empty array",
+                )
+            else:
+                for call in tool_calls:
+                    if not isinstance(call, dict):
+                        continue
+                    function = call.get("function")
+                    if isinstance(function, dict) and function.get("arguments") is None:
+                        function["arguments"] = ""
+                entry["tool_calls"] = tool_calls
         validated.append(entry)
     return validated
 
