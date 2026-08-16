@@ -1,9 +1,10 @@
 """Gateway mode and trace knobs must fail closed on tools passthrough.
 
-``_validate_request_mode_if_present`` accepts ``conduct``.
-``_validate_include_orchestration_trace_flag`` returns ``True`` and the
-tools-path call site discarded it, so an invoice-lookup body with
-``mode=conduct`` or ``include_orchestration_trace=true`` billed a
+``_validate_chat_passthrough_orchestration_controls`` is the live gate.
+The leftover ``or``-chain helper is gone: it strip-omitted whitespace
+and hid ``mode=conduct`` behind ``orchestration=route``. An invoice
+lookup with ``mode=conduct``, whitespace-only alias keys, or
+``include_orchestration_trace=true`` must 400 instead of billing a
 single-agent ``chat.completion`` with no Conductor workflow and no
 TRINITY trusted-trace plane (Nielsen et al., 2025; Xu et al., 2025).
 
@@ -184,6 +185,24 @@ def test_http_chat_tools_rejects_whitespace_only_mode() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tools_rejects_whitespace_only_orchestration_aliases() -> None:
+    """Alias keys use the same whitespace-only invalid_mode rule as mode."""
+    server, thread, port = _server()
+    try:
+        for extra in (
+            {"orchestration": "   "},
+            {"orchestration_mode": "   "},
+            {"orchestration": "route", "mode": "   "},
+        ):
+            status, body = _post(port, _invoice_tools_body(**extra))
+            assert status == 400, body
+            assert "invalid_mode" in json.dumps(body)
+            assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_tools_rejects_non_boolean_include_orchestration_trace() -> None:
     server, thread, port = _server()
     try:
@@ -222,6 +241,19 @@ def test_http_chat_tools_stream_rejects_conduct_mode() -> None:
         blob = json.dumps(body)
         assert "invalid_mode" in blob
         assert "conduct" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_stream_rejects_whitespace_only_mode() -> None:
+    """SSE tools proxy must 400 JSON, not billed chunks, when mode is spaces."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _invoice_tools_body(mode="   ", stream=True))
+        assert status == 400, body
+        assert "invalid_mode" in json.dumps(body)
+        assert "choices" not in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -324,9 +356,11 @@ if __name__ == "__main__":
     test_http_chat_tools_rejects_orchestration_conduct()
     test_http_chat_tools_rejects_orchestration_mode_conduct()
     test_http_chat_tools_rejects_whitespace_only_mode()
+    test_http_chat_tools_rejects_whitespace_only_orchestration_aliases()
     test_http_chat_tools_rejects_non_boolean_include_orchestration_trace()
     test_http_chat_tools_rejects_include_orchestration_trace_true()
     test_http_chat_tools_stream_rejects_conduct_mode()
+    test_http_chat_tools_stream_rejects_whitespace_only_mode()
     test_http_chat_tools_stream_rejects_include_orchestration_trace_true()
     test_http_chat_response_format_rejects_mode_conduct()
     test_http_chat_response_format_rejects_include_orchestration_trace_true()

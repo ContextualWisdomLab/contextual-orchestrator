@@ -1200,18 +1200,6 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
-def _validate_request_mode_if_present(body: dict[str, Any]) -> str | None:
-    """Type-check ``mode`` / ``orchestration`` / ``orchestration_mode`` when set.
-
-    Empty or JSON-null values are omit-equivalent. Used on the tools
-    passthrough path so an unknown mode cannot bill a silent completion.
-    """
-    raw_mode = body.get("orchestration") or body.get("orchestration_mode") or body.get("mode")
-    if raw_mode is None or (isinstance(raw_mode, str) and not raw_mode.strip()):
-        return None
-    return _validate_mode(raw_mode)
-
-
 def _validate_include_orchestration_trace_flag(body: dict[str, Any], default: bool) -> bool:
     """Return the include_orchestration_trace flag; non-booleans fail closed.
 

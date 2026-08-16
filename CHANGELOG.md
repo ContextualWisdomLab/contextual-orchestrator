@@ -26,10 +26,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   send only `id`, `type`, `function`, and optional `index` on assistant
   `tool_calls`.
 - Fail closed on tools / `response_format` for unknown `mode`,
-  whitespace-only `mode` (same truthy `or`-chain rule as orchestration),
-  `mode=conduct`, non-boolean `include_orchestration_trace`, and
-  `include_orchestration_trace=true` before the JSON or SSE proxy.
-  Passthrough has no Conductor workflow or trusted-trace plane.
+  whitespace-only `mode` / `orchestration` / `orchestration_mode`
+  (same truthy `or`-chain rule as orchestration), mixed
+  `orchestration=route` plus spaces, `mode=conduct`, non-boolean
+  `include_orchestration_trace`, and `include_orchestration_trace=true`
+  before the JSON or SSE proxy. The leftover `or`-chain helper that
+  strip-omitted spaces and hid `mode=conduct` behind `orchestration=route`
+  is gone; the live gate checks each alias key. Passthrough has no
+  Conductor workflow or trusted-trace plane.
   Next action: omit those knobs, or send `mode=route` /
   `include_orchestration_trace=false`. Do not send `mode` as spaces.
 - Treat official-SDK JSON `null` on optional `tools[].function.description`,
