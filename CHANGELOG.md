@@ -17,6 +17,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Fail closed on unknown assistant `tool_calls` entry and `function` keys
+  (`unknown_tool_call_fields` / `unknown_tool_call_function_fields`) on both
+  the orchestration path and the tools / `response_format` SSE proxy.
+  Optional `index` is a non-negative integer or JSON `null`. Next action:
+  send only `id`, `type`, `function`, and optional `index` on assistant
+  `tool_calls`.
+- Fail closed on tools / `response_format` for non-boolean
+  `include_orchestration_trace` and unknown `mode` before the JSON or SSE
+  proxy. Next action: send a boolean or omit the trace flag; send
+  `auto` / `route` / `conduct` or omit `mode`.
 - Treat official-SDK JSON `null` on optional `tools[].function.description`,
   `parameters`, and `strict` as omit-real: the keys are popped before
   `proxy_completion` so upstream providers see an omitted field, not a null

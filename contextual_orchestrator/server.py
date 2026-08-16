@@ -1200,6 +1200,41 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
+def _validate_request_mode_if_present(body: dict[str, Any]) -> str | None:
+    """Type-check ``mode`` / ``orchestration`` / ``orchestration_mode`` when set.
+
+    Empty or JSON-null values are omit-equivalent. Used on the tools
+    passthrough path so an unknown mode cannot bill a silent completion.
+    """
+    raw_mode = body.get("orchestration") or body.get("orchestration_mode") or body.get("mode")
+    if raw_mode is None or (isinstance(raw_mode, str) and not raw_mode.strip()):
+        return None
+    return _validate_mode(raw_mode)
+
+
+def _validate_include_orchestration_trace_flag(body: dict[str, Any], default: bool) -> bool:
+    """Return the include_orchestration_trace flag; non-booleans fail closed.
+
+    Explicit JSON null or empty/whitespace string is treat-as-omit (SDK
+    optional default). Called on both the tools proxy and the orchestration
+    path so the named error is the same.
+    """
+    if "include_orchestration_trace" not in body:
+        return default
+    include_trace_raw = body.get("include_orchestration_trace")
+    if include_trace_raw is None or (
+        isinstance(include_trace_raw, str) and not include_trace_raw.strip()
+    ):
+        return default
+    if not isinstance(include_trace_raw, bool):
+        raise RequestError(
+            400,
+            "invalid_include_orchestration_trace",
+            "include_orchestration_trace must be a boolean",
+        )
+    return include_trace_raw
+
+
 
 def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     """Fail closed when ``model_name`` is not served by any enabled agent.
@@ -1877,8 +1912,11 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
 
     Each entry must be a function tool call with non-empty ``id``,
     ``function.name``, and string ``function.arguments`` (JSON text).
-    Explicit JSON null or empty ``tool_calls`` arrays are treat-as-omit.
-    Validated before passthrough so multi-turn tool histories fail closed.
+    Allowed entry keys are ``id``, ``type``, ``function``, and optional
+    ``index`` (non-negative int or JSON null). ``function`` may only carry
+    ``name`` and ``arguments``. Explicit JSON null or empty ``tool_calls``
+    arrays are treat-as-omit. Validated before passthrough so multi-turn
+    tool histories fail closed.
     """
     messages = body.get("messages")
     if not isinstance(messages, list):
@@ -1918,6 +1956,27 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "invalid_message",
                     "each tool_calls entry must be an object",
                 )
+            # OpenAI non-stream entries: id/type/function; optional index from
+            # stream assembly. Anything else fails closed (no silent smuggle).
+            unknown_call_keys = sorted(set(call) - {"id", "type", "function", "index"})
+            if unknown_call_keys:
+                raise RequestError(
+                    400,
+                    "unknown_tool_call_fields",
+                    "tool_calls entry contains unsupported fields",
+                    {"fields": unknown_call_keys},
+                )
+            if "index" in call:
+                index_value = call.get("index")
+                # Explicit JSON null is treat-as-omit (SDK optional default).
+                if index_value is None:
+                    pass
+                elif isinstance(index_value, bool) or not isinstance(index_value, int) or index_value < 0:
+                    raise RequestError(
+                        400,
+                        "invalid_tool_calls",
+                        "each tool_calls index must be a non-negative integer",
+                    )
             call_id = call.get("id")
             if not isinstance(call_id, str) or not call_id.strip():
                 raise RequestError(
@@ -1943,6 +2002,14 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     400,
                     "invalid_message",
                     "each tool_calls entry requires a function object",
+                )
+            unknown_function_keys = sorted(set(function) - {"name", "arguments"})
+            if unknown_function_keys:
+                raise RequestError(
+                    400,
+                    "unknown_tool_call_function_fields",
+                    "tool_calls function contains unsupported fields",
+                    {"fields": unknown_function_keys},
                 )
             name = function.get("name")
             if not isinstance(name, str) or not name.strip():
@@ -3865,6 +3932,10 @@ def build_server(
                                 "or response_format; omit it or set false",
                             )
                         _validate_chat_passthrough_request_knobs(body)
+                        _validate_request_mode_if_present(body)
+                        _validate_include_orchestration_trace_flag(
+                            body, bool(security.expose_trace_by_default)
+                        )
                         _validate_messages(body.get("messages"))
                         started_at = time.perf_counter()
                         if stream:
@@ -3896,23 +3967,9 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    if "include_orchestration_trace" in body:
-                        include_trace_raw = body.get("include_orchestration_trace")
-                        # Explicit JSON null is treat-as-omit (SDK optional default).
-                        if include_trace_raw is None or (
-                            isinstance(include_trace_raw, str) and not include_trace_raw.strip()
-                        ):
-                            include_trace = bool(security.expose_trace_by_default)
-                        elif not isinstance(include_trace_raw, bool):
-                            raise RequestError(
-                                400,
-                                "invalid_include_orchestration_trace",
-                                "include_orchestration_trace must be a boolean",
-                            )
-                        else:
-                            include_trace = include_trace_raw
-                    else:
-                        include_trace = bool(security.expose_trace_by_default)
+                    include_trace = _validate_include_orchestration_trace_flag(
+                        body, bool(security.expose_trace_by_default)
+                    )
                     stream = body.get("stream", False)
                     # Explicit JSON null or empty/whitespace string is treat-as-omit
                     # (SDK optional default → non-stream).

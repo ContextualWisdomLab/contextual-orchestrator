@@ -134,13 +134,24 @@ JSON `null` are omit-real: the gateway pops those keys before
 `proxy_completion` so upstream providers see an omitted field, not a null
 schema. Non-null wrong types stay fail-closed with named `invalid_tools`.
 
+Assistant `tool_calls` history accepts only `id`, `type`, `function`, and
+optional `index` (non-negative integer or JSON `null`). Extra entry keys
+fail closed as `unknown_tool_call_fields`; extra `function` keys fail
+closed as `unknown_tool_call_function_fields`. The same gate runs on the
+tools / `response_format` path, including `stream=true`, before the first
+SSE byte. Non-boolean `include_orchestration_trace` and unknown `mode` /
+`orchestration` / `orchestration_mode` also fail closed on that path
+(`invalid_include_orchestration_trace` / `invalid_mode`) instead of
+billing a silent completion.
+
 Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when
 the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
 pool `model`; omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
 and `stream_options.include_usage` on tool-calling requests. When declaring
 tools, omit unused `description` / `parameters` / `strict` or leave the SDK
-default `null` — both become omit before the provider hop.
+default `null` — both become omit before the provider hop. On assistant
+`tool_calls`, send only `id` / `type` / `function` / optional `index`.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
