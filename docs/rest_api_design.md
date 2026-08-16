@@ -156,7 +156,8 @@ billing a silent completion.
 Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when
 the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
-pool `model`; omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
+pool `model`; put the invoice number in the user text (`INV-4419` or
+`invoice 4419`); omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
 and `stream_options.include_usage` on tool-calling requests. When declaring
 tools, omit unused `description` / `parameters` / `strict` or leave the SDK
 default `null` — both become omit before the provider hop. On assistant

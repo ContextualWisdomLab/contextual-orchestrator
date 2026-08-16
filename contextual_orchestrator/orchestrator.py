@@ -518,9 +518,16 @@ class ModelClient:
 
         Invoice lookups bind ``INV-`` identifiers from the user text so a
         streamed ``lookup_balance`` call matches the live provider shape
-        (OpenAI, 2024). A missing identifier defaults to ``INV-9``.
+        (OpenAI, 2024). Bare numbers after ``invoice`` (``invoice 4419``)
+        bind the same way. A missing identifier defaults to ``INV-9``.
         """
         match = re.search(r"INV[-_ ]?\d+", prompt_text, flags=re.IGNORECASE)
+        if match is None:
+            match = re.search(
+                r"invoice(?:\s*(?:id|number|#|:))?\s*\d+",
+                prompt_text,
+                flags=re.IGNORECASE,
+            )
         digits = re.sub(r"\D", "", match.group(0)) if match else ""
         invoice_id = f"INV-{digits}" if digits else "INV-9"
         if match or function_name == "lookup_balance" or "invoice" in prompt_text.lower():

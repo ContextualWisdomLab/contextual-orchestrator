@@ -355,6 +355,23 @@ def test_proxy_completion_padded_tool_choice_none_keeps_content() -> None:
         assert result["choices"][0]["message"]["content"] == "[general_agent] chat-mock"
 
 
+def test_proxy_completion_binds_bare_invoice_number_from_buyer_prompt() -> None:
+    """Buyers say 'invoice 4419', not always 'INV-4419'. Bind the digits they typed."""
+    result = build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [{"role": "user", "content": "What is the outstanding balance on invoice 4419?"}],
+            "tools": _LOOKUP_TOOLS,
+        }
+    )
+    message = result["choices"][0]["message"]
+    assert result["choices"][0]["finish_reason"] == "tool_calls"
+    assert message["tool_calls"][0]["function"]["name"] == "lookup_balance"
+    assert json.loads(message["tool_calls"][0]["function"]["arguments"]) == {
+        "invoice_id": "INV-4419"
+    }
+
+
 def test_proxy_completion_defaults_invoice_identifier_when_prompt_omits_it() -> None:
     """Realistic invoice prompt without an id still binds lookup_balance to INV-9."""
     result = build().proxy_completion(
@@ -465,6 +482,7 @@ if __name__ == "__main__":
     test_proxy_completion_generic_function_uses_query_argument()
     test_proxy_completion_tool_choice_none_keeps_content()
     test_proxy_completion_padded_tool_choice_none_keeps_content()
+    test_proxy_completion_binds_bare_invoice_number_from_buyer_prompt()
     test_proxy_completion_defaults_invoice_identifier_when_prompt_omits_it()
     test_proxy_completion_stream_yields_mock_tool_calls()
     test_stream_raw_pipes_tool_call_deltas_verbatim()

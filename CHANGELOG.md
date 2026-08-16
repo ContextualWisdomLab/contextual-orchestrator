@@ -50,6 +50,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   of emitting `tool_calls`. The validator now writes the stripped token
   back so live providers see `none`. Next action: send `none` to skip
   tools; incidental padding is still omit-equivalent.
+- Bind bare invoice numbers in mock `lookup_balance` (`invoice 4419` →
+  `INV-4419`) instead of defaulting to `INV-9` when the buyer omits the
+  `INV-` prefix. Next action: put the invoice number in the user text;
+  prefixed and bare forms both bind.
 
 ### References
 
