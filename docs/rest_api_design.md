@@ -109,9 +109,14 @@ newer SDK field is never silently accepted.
 
 Message-level `weight`, `prefix`, `refusal`, `annotations`, `developer` role,
 empty user/system content, and participant `name` use the same named errors on
-the tools passthrough path as on the orchestration path. Next action: keep
-SDK-default nulls; replace `developer` with `system`; do not send prefix or
-non-empty refusal.
+the tools passthrough path as on the orchestration path. `stream=true` with
+`tools` or `response_format` fails closed (`invalid_stream`) — this gateway
+does not SSE-proxy tool calls yet. Missing `model` and out-of-range
+`temperature` / `top_p` also fail closed before passthrough.
+
+Next action: keep SDK-default nulls; replace `developer` with `system`; omit
+`stream` (or set `false`) on tool-calling requests; always send a pool
+`model`.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
