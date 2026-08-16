@@ -77,6 +77,8 @@ ALLOWED_COMPLETIONS_KEYS = {
     "store",
     # Chat-era tool surfaces — accepted only for explicit unsupported errors.
     "tools", "tool_choice", "functions", "function_call", "parallel_tool_calls",
+    # Tool-loop budget (chat/Responses-native) — named unsupported, not unknown_fields.
+    "max_tool_calls",
     "response_format",
     # Chat-era structured/output controls — accepted only for explicit migration errors.
     "modalities", "prediction", "reasoning_effort",
@@ -3339,6 +3341,7 @@ def build_server(
                         body, endpoint_path="/v1/completions"
                     )
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/completions")
+                    _validate_max_tool_calls(body, endpoint_path="/v1/completions")
                     _validate_completions_reasoning_object(body)
                     _validate_openai_background(body, endpoint_path="/v1/completions")
                     _validate_chat_include_field(body, endpoint_path="/v1/completions")
