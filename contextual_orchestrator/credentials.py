@@ -25,6 +25,7 @@ Backend selection is a bootstrap setting read from
 
 from __future__ import annotations
 
+from collections.abc import Mapping
 import os
 import threading
 from typing import Protocol
@@ -50,11 +51,16 @@ class CredentialBackend(Protocol):
         """Register (or replace) the secret stored under ``name``."""
         ...
 
+    def set_many(self, values: Mapping[str, str]) -> None:
+        """Atomically register or replace all supplied secrets."""
+        ...
+
 
 class InMemoryCredentialBackend:
     """Process-local credential registry for dev and tests (no Postgres needed)."""
 
     def __init__(self) -> None:
+        """Initialize an empty process-local credential map."""
         self._store: dict[str, str] = {}
         self._lock = threading.Lock()
 
@@ -65,8 +71,12 @@ class InMemoryCredentialBackend:
 
     def set(self, name: str, value: str) -> None:
         """Store ``value`` under ``name`` in the in-memory registry."""
+        self.set_many({name: value})
+
+    def set_many(self, values: Mapping[str, str]) -> None:
+        """Atomically apply a credential batch under one process lock."""
         with self._lock:
-            self._store[name] = value
+            self._store.update(dict(values))
 
 
 # --- Postgres pgcrypto-encrypted credential registry ------------------------
@@ -94,6 +104,13 @@ CREATE TABLE IF NOT EXISTS provider_credentials (
 );
 """
 
+_UPSERT_PROVIDER_CREDENTIAL_SQL = (
+    "INSERT INTO provider_credentials (credential_name, encrypted_value, updated_at) "
+    "VALUES (%s, pgp_sym_encrypt(%s, %s), now()) "
+    "ON CONFLICT (credential_name) DO UPDATE SET "
+    "encrypted_value = EXCLUDED.encrypted_value, updated_at = now()"
+)
+
 
 class PostgresCredentialBackend:
     """pgcrypto-encrypted Postgres credential registry (org reference pattern).
@@ -104,6 +121,7 @@ class PostgresCredentialBackend:
     """
 
     def __init__(self, dsn: str, passphrase: str) -> None:
+        """Retain the validated bootstrap transport for lazy DB access."""
         if not dsn:
             raise NotConfigured("Postgres credential backend requires a bootstrap DSN")
         if not passphrase:
@@ -125,17 +143,19 @@ class PostgresCredentialBackend:
             passphrase=os.environ.get("CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE", ""),
         )
 
-    def _connect(self):  # pragma: no cover - requires a live Postgres
+    def _connect(self):  # pragma: no cover - requires an installed psycopg driver
+        """Open a psycopg connection or raise a stable configuration error."""
         try:
             import psycopg
-        except ImportError as exc:  # pragma: no cover
+        except ImportError as exc:
             raise NotConfigured(
                 "PostgresCredentialBackend needs the 'db' extra (psycopg); "
                 "install contextual-orchestrator[db]"
             ) from exc
         return psycopg.connect(self._dsn)
 
-    def _ensure_schema(self, conn) -> None:  # pragma: no cover - requires a live Postgres
+    def _ensure_schema(self, conn) -> None:
+        """Create the encrypted registry once for the active backend instance."""
         if self._ensured:
             return
         with conn.cursor() as cur:
@@ -143,7 +163,7 @@ class PostgresCredentialBackend:
         conn.commit()
         self._ensured = True
 
-    def get(self, name: str) -> str | None:  # pragma: no cover - requires a live Postgres
+    def get(self, name: str) -> str | None:
         """Decrypt and return the secret for ``name`` via pgcrypto, or ``None``."""
         with self._connect() as conn:
             self._ensure_schema(conn)
@@ -159,17 +179,18 @@ class PostgresCredentialBackend:
         value = row[0]
         return value.decode("utf-8") if isinstance(value, (bytes, bytearray)) else value
 
-    def set(self, name: str, value: str) -> None:  # pragma: no cover - requires a live Postgres
-        """Encrypt ``value`` with pgcrypto and upsert it under ``name``."""
+    def set(self, name: str, value: str) -> None:
+        """Encrypt and upsert one value through the atomic batch path."""
+        self.set_many({name: value})
+
+    def set_many(self, values: Mapping[str, str]) -> None:
+        """Encrypt and upsert a whole credential batch in one transaction."""
         with self._connect() as conn:
             self._ensure_schema(conn)
             with conn.cursor() as cur:
-                cur.execute(
-                    "INSERT INTO provider_credentials (credential_name, encrypted_value, updated_at) "
-                    "VALUES (%s, pgp_sym_encrypt(%s, %s), now()) "
-                    "ON CONFLICT (credential_name) DO UPDATE SET "
-                    "encrypted_value = EXCLUDED.encrypted_value, updated_at = now()",
-                    (name, value, self._passphrase),
+                cur.executemany(
+                    _UPSERT_PROVIDER_CREDENTIAL_SQL,
+                    [(name, value, self._passphrase) for name, value in values.items()],
                 )
             conn.commit()
 
@@ -214,5 +235,10 @@ def get_credential(name: str) -> str | None:
 
 
 def register_credential(name: str, value: str) -> None:
-    """Register a named secret into the KV (used by the bootstrap CLI)."""
+    """Register one named secret into the KV (used by the bootstrap CLI)."""
     get_backend().set(name, value)
+
+
+def register_credentials(values: Mapping[str, str]) -> None:
+    """Atomically register a named secret batch into the active KV backend."""
+    get_backend().set_many(values)
