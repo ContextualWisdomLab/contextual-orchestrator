@@ -6,6 +6,8 @@
 - Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
 - TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
 - Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+- OpenAI. (2024). *Responses API*. https://platform.openai.com/docs/api-reference/responses
+- Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). https://doi.org/10.17487/RFC8259
 
 ## What The Architecture Is
 
@@ -36,7 +38,7 @@ This repository implements the interface and control plane, not the trained coor
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
-- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `contextual_orchestrator.server`: stdlib HTTP adapter for `/v1/chat/completions` and `/v1/responses`. Empty or whitespace Responses `instructions` are removed from the forwarded body (omit-real) so SDK optional defaults do not become a blank upstream system prompt (OpenAI, 2024; Bray, 2017).
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

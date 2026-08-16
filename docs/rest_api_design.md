@@ -15,6 +15,7 @@
 |---|---|---|
 | `GET` | `/openapi.json` | API contract |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
+| `POST` | `/v1/responses` | OpenAI Responses passthrough. Send a non-empty `input`. Leave `instructions` out, or send JSON `null` / empty / whitespace — the gateway removes the key before upstream so SDK optional defaults do not become a blank system prompt. Non-string or >32000-character `instructions` return `invalid_instructions`. |
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |
@@ -92,6 +93,22 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_purchase_approval_packets/latest` | Produce the buyer purchase approval packet that ties proposal, close, procurement, contract, value, security, onboarding, operations, analytics, Figma, review-process policy, packaging decision, and buyer authority follow-ups into one runtime approval artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer finance, procurement, legal, security, and implementation approval. |
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
+
+## Compatibility field honesty
+
+OpenAI SDKs often serialize optional strings as `""` or `"   "`. On `/v1/responses`, those values are **omit-real**: the gateway deletes `instructions` from the forwarded body so the provider sees the same request as if the client omitted the field (OpenAI, 2024; Bray, 2017). If you need a system prompt, send a non-empty string. If you see `invalid_instructions`, fix the type or shorten the value — do not retry the same blank payload.
+
+## Sources
+
+Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
+
+OpenAI. (2024). *Responses API*. OpenAI Platform. https://platform.openai.com/docs/api-reference/responses
+
+Sakana AI. (2026). *Sakana Fugu technical report*. https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+
+Li, Y., et al. (2025). *TRINITY: An evolved LLM coordinator*. arXiv. https://arxiv.org/abs/2512.04695
+
+Zhang, Y., et al. (2025). *Learning to orchestrate agents in natural language with the Conductor*. arXiv. https://arxiv.org/abs/2512.04388
 
 ## Production Library Target
 

@@ -12,7 +12,8 @@ CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
-   ``_reject_unknown_keys`` -- the HTTP request-body parser and validators.
+   ``_validate_responses_instructions`` / ``_reject_unknown_keys`` -- the HTTP
+   request-body parser and validators.
 2. ``orchestrator.ModelAgent.from_dict`` -- the agent-pool config parser.
 3. ``orchestrator.redact_text`` / ``redact_value`` -- secret/PII redaction run
    over arbitrary trace payloads (regex + recursion).
@@ -92,6 +93,19 @@ def exercise_request_body(raw: bytes) -> None:
                 pass
             else:
                 assert mode in server.ALLOWED_MODES
+
+    # Responses instructions: omit-equivalent blanks must not raise, and must
+    # leave the body so passthrough cannot forward a silent no-op prompt.
+    if "instructions" in body:
+        try:
+            instructions = server._validate_responses_instructions(body)
+        except RequestError:
+            pass
+        else:
+            if instructions is None:
+                assert "instructions" not in body
+            else:
+                assert isinstance(instructions, str) and instructions.strip()
 
     # Message validation: returns a normalised list or raises RequestError.
     if "messages" in body:

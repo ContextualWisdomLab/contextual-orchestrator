@@ -477,6 +477,49 @@ OPENAPI_SPEC = {
                 },
             }
         },
+        "/v1/responses": {
+            "post": {
+                "operationId": "create_model_response",
+                "summary": (
+                    "OpenAI Responses passthrough. Omit instructions, or send null/empty/"
+                    "whitespace — the gateway deletes the key before upstream."
+                ),
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["input"],
+                                "properties": {
+                                    "model": {"type": "string"},
+                                    "input": {
+                                        "oneOf": [
+                                            {"type": "string"},
+                                            {"type": "array"},
+                                        ]
+                                    },
+                                    "instructions": {
+                                        "type": ["string", "null"],
+                                        "description": (
+                                            "Optional system-style prompt. JSON null, empty, "
+                                            "or whitespace is omit-real (key removed). "
+                                            "Non-strings and values over 32000 characters "
+                                            "return invalid_instructions."
+                                        ),
+                                    },
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {"description": "Provider Responses object from the selected pool agent"},
+                    "400": {"description": "invalid_instructions, invalid_input, or other fail-closed field"},
+                },
+            }
+        },
         "/api/v1/access_reports/{workflow_run_id}": {
             "get": {
                 "operationId": "get_access_report",

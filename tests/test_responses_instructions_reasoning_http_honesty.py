@@ -12,7 +12,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    _validate_responses_instructions,
+    build_server,
+)
 
 _TEST_AUTH_TOKEN = "responses_instructions_reasoning_http_honesty_token"  # noqa: S105
 
@@ -48,6 +52,14 @@ def _server():
     return server, thread, server.server_address[1]
 
 
+def test_blank_instructions_are_removed_from_request_body() -> None:
+    """SDK blank/null instructions must leave the request body, not stay as a no-op key."""
+    for value in (None, "", "   ", "\t\n", "\u00a0"):
+        body = {"model": "mock-planner", "input": "summarize the ledger", "instructions": value}
+        assert _validate_responses_instructions(body) is None, value
+        assert "instructions" not in body, value
+
+
 def test_http_responses_accepts_nonempty_instructions() -> None:
     server, thread, port = _server()
     try:
@@ -60,6 +72,7 @@ def test_http_responses_accepts_nonempty_instructions() -> None:
             },
         )
         assert status == 200, body
+        assert body.get("echo", {}).get("instructions") == "Be concise and factual."
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -69,15 +82,17 @@ def test_http_responses_accepts_blank_instructions_as_omit() -> None:
     """Empty/whitespace instructions are SDK omit-equivalent (parity with null)."""
     server, thread, port = _server()
     try:
-        status, body = _post(
-            port,
-            {
-                "model": "mock-planner",
-                "input": "summarize the ledger",
-                "instructions": "   ",
-            },
-        )
-        assert status == 200, body
+        for value in (None, "", "   ", "\u00a0"):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "input": "summarize the ledger",
+                    "instructions": value,
+                },
+            )
+            assert status == 200, (value, body)
+            assert "instructions" not in body.get("echo", {}), (value, body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -158,6 +173,7 @@ def test_http_responses_accepts_instructions_omitted() -> None:
 
 
 if __name__ == "__main__":
+    test_blank_instructions_are_removed_from_request_body()
     test_http_responses_accepts_nonempty_instructions()
     test_http_responses_accepts_blank_instructions_as_omit()
     test_http_responses_rejects_instructions_non_string()

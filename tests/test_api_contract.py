@@ -29,6 +29,7 @@ def test_openapi_uses_resource_oriented_operation_ids() -> None:
     assert "get_access_report" in operation_ids
     assert "patch_worker_agent" in operation_ids
     assert "create_evaluation_run" in operation_ids
+    assert "create_model_response" in operation_ids
     assert all(is_two_word_snake_case(operation_id) for operation_id in operation_ids)
 
 
