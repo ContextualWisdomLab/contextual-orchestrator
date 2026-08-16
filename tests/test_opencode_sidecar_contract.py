@@ -35,6 +35,7 @@ def test_opencode_sidecar_doc_states_exact_env_port_and_smoke_curl() -> None:
         "seed-provider-catalog",
         "--allow-public-bind",
         "/v1/chat/completions",
+        "/v1/models",
         "examples/agents.production.json",
         "GitHub Models",
     ):

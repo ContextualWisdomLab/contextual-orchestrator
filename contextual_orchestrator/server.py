@@ -346,6 +346,10 @@ def build_server(
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
                     return
+                if path == "/v1/models":
+                    self._authorize("inference")
+                    self._send(orchestrator.list_public_models())
+                    return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
                     # it is authorized here before the admin gate below.

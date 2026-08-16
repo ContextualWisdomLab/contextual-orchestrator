@@ -262,6 +262,7 @@ python tests/test_paper_contracts.py
 python tests/test_provider_catalog.py
 python tests/test_catalog_bootstrap.py
 python tests/test_provider_catalog_robustness.py
+python tests/test_catalog_discovery.py
 python tests/test_cost_performance_chooser.py
 python tests/test_opencode_sidecar_contract.py
 python tests/test_admin_contract.py

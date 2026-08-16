@@ -7,17 +7,27 @@ Psychological Association* (7th ed.).
 
 ## Claim boundary
 
-The production seed in `examples/agents.production.json` is a **paper-justified
-static catalog** of OpenAI-compatible chat workers. It is not a live snapshot of
-every model a vendor sells.
+Live `GET /v1/models` (or the host’s documented OpenAI-compatible list
+endpoint) is the **primary catalog**. After each of the five secrets is in the
+KV, the gateway lists that host with `get_credential` — never `os.getenv` at
+request time. Chat/completion ids are kept; embeddings, rerank, image, audio,
+and moderation ids are dropped. A cap keeps coding/review/reasoning-capable
+names when a vendor dumps hundreds of ids.
+
+`examples/agents.production.json` (the org static seed) is **only a fallback**
+when a provider has no list API, the list call 401/403/404/429/5xxs, or the
+body is empty or malformed. A successful list **replaces** that provider’s
+seed rows. It is not a live snapshot of every model a vendor sells, and it is
+not walked as the serving catalog when discovery succeeds.
 
 | Claim | Boundary |
 | --- | --- |
-| NVIDIA NIM primary/secondary | Host is `https://integrate.api.nvidia.com/v1`. Seeded chat models are Llama-3.3-Nemotron-Super-49B-v1.5 and Nemotron-3-Super-120B-A12B, taken from NVIDIA model cards (NVIDIA, 2025, 2026). Additional NIM chat models are appended only when `GET /v1/models` succeeds for `NVIDIA_NIM_API_KEY` or `NVIDIA_NIM_API_KEY_SUB`. |
-| OpenAI | Host is `https://api.openai.com/v1`. Static seed uses `gpt-5.5` (already the repo's OpenAI example). Live listing is preferred when `OPENAI_API_KEY` can call `/v1/models`. |
-| OpenRouter | Host is `https://openrouter.ai/api/v1`. Static `anthropic/claude-sonnet-4` and `openai/gpt-4.1` are capability tags for coding/review and reasoning until `/v1/models` returns the caller's available set. |
-| Bytez | Official OpenAI-compatible base URL is `https://api.bytez.com/models/v2/openai/v1` (Bytez, n.d.). The static chat seed is `Qwen/Qwen3-4B` from that document. A public `/models` list is **not guaranteed**; discovery is best-effort and an empty list keeps this static seed. |
-| GitHub Models | **Out of catalog.** `models.github.ai`, Copilot tokens, `gpt-5.6-luna`, and `gpt-5.6-terra` are rejected at agent construction. There is no fallback to GitHub Models when every org secret is missing. |
+| NVIDIA NIM primary/secondary | Host is `https://integrate.api.nvidia.com/v1`. Live list for `NVIDIA_NIM_API_KEY` / `NVIDIA_NIM_API_KEY_SUB` is the catalog. Seeded Llama-3.3-Nemotron-Super-49B-v1.5 and Nemotron-3-Super-120B-A12B (NVIDIA, 2025, 2026) apply only when that list fails. |
+| OpenAI | Host is `https://api.openai.com/v1`. Live `/v1/models` wins. Static `gpt-5.5` is fallback only. |
+| OpenRouter | Host is `https://openrouter.ai/api/v1`. Live list wins. Static `anthropic/claude-sonnet-4` and `openai/gpt-4.1` are fallback capability tags. |
+| Bytez | Official OpenAI-compatible base URL is `https://api.bytez.com/models/v2/openai/v1` (Bytez, n.d.). A public `/models` list is **not guaranteed**; empty/404 keeps the static `Qwen/Qwen3-4B` seed. |
+| Gateway `GET /v1/models` | The orchestrator exposes the composed catalog: `contextual-orchestrator` plus surfaced worker model ids. |
+| GitHub Models | **Out of catalog.** `models.github.ai`, Copilot tokens, `gpt-5.6-luna`, `gpt-5.6-terra`, and `github-models/*` ids are rejected. There is no fallback to GitHub Models when every org secret is missing. |
 
 Missing a secret disables that upstream only (`NotConfigured` per agent). The
 gateway keeps serving every worker whose credential is present. When no
@@ -31,8 +41,9 @@ upstream**, then a policy that picks a cheap/fast path or a deeper path
 (Chen et al., 2023; Ong et al., 2024; Ding et al., 2024). This repo already
 implements Fugu-style `route` versus `conduct` (Sakana AI, 2026), TRINITY
 thinker/worker/verifier roles (Zhang et al., 2025), and Conductor access lists
-(Li et al., 2025). The production seed only supplies tagged workers those
-policies can compose.
+(Li et al., 2025). Discovered chat models are tagged coding / review /
+reasoning (and cheap / fallback when the id or secondary key says so) so those
+policies can compose them. The static seed is not the live walk.
 
 Full-jitter retry on 429/5xx stays inside one worker. If that worker still
 fails, the gateway **re-runs the cost-performance chooser** on the remaining

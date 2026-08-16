@@ -69,7 +69,7 @@ python -m contextual_orchestrator seed-provider-catalog \
   --from-env --skip-missing \
   --agents examples/agents.production.json \
   --agents-db /var/lib/contextual-orchestrator/agents.db \
-  --discover-models
+  --discover-models   # default on; live GET /v1/models wins over the static seed
 
 # or one name at a time
 printf '%s' "$OPENAI_API_KEY" | python -m contextual_orchestrator \
@@ -99,6 +99,16 @@ printf '%s' "$OPENAI_API_KEY" | python -m contextual_orchestrator \
 ```
 
 Strix / any OpenAI SDK uses the same `baseURL` and `model`.
+
+OpenCode can list the composed catalog:
+
+```bash
+curl -sS http://127.0.0.1:8000/v1/models \
+  -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN"
+```
+
+The list always includes `contextual-orchestrator` plus surfaced worker model
+ids from live discovery (static seed only when a provider list fails).
 
 ## Smoke curl
 

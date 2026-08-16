@@ -12,8 +12,11 @@
 - `seed-provider-catalog` CLI and `--seed-from-env` serve flag register the five
   org Actions secrets (`NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
   `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, `BYTEZ_API_KEY`) into the KV. A
-  missing secret skips that upstream. Optional `GET /v1/models` discovery
-  appends chat models; providers without a list API keep the static seed
+  missing secret skips that upstream. **Live `GET /v1/models` is the primary
+  catalog** after each secret is registered (KV credential, never request-time
+  `os.getenv`). The static seed is fallback only when the list is missing,
+  401/403/404/429/5xx, empty, or malformed. The gateway exposes
+  `GET /v1/models` (`contextual-orchestrator` plus surfaced worker ids).
   (`docs/doctoring/provider-catalog.md`).
 - OpenCode/Strix sidecar contract: loopback `http://127.0.0.1:8000/v1`, model
   `contextual-orchestrator` (`.github/workflows/opencode-sidecar.yml`,

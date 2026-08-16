@@ -217,6 +217,8 @@ def catalog_allows_fields(base_url: str, model: str, credential_name: str) -> bo
     lowered_model = (model or "").lower()
     if any(marker in lowered_model for marker in FORBIDDEN_MODEL_MARKERS):
         return False
+    if "github" in lowered_model or "copilot" in lowered_model:
+        return False
     if (credential_name or "") in FORBIDDEN_CREDENTIAL_NAMES:
         return False
     return True
@@ -1385,6 +1387,36 @@ class TaskOrchestrator:
             {"agent_pool_id": agent_pool_id, "agent_id": worker_agent_id},
         )
         return {"removed": worker_agent_id}
+
+    def list_public_models(self) -> dict[str, Any]:
+        """OpenAI-shaped catalog for ``GET /v1/models``.
+
+        Always includes the gateway id ``contextual-orchestrator``. Worker model
+        ids from the live pool are surfaced when they are not GitHub Models /
+        Copilot targets. Prices are not invented here.
+        """
+        rows: list[dict[str, Any]] = [
+            {
+                "id": "contextual-orchestrator",
+                "object": "model",
+                "owned_by": "contextual-orchestrator",
+            }
+        ]
+        seen = {"contextual-orchestrator"}
+        for agent in self.agents:
+            if agent.model in seen:
+                continue
+            if not catalog_allows_fields(agent.base_url, agent.model, agent.credential_name):
+                continue
+            seen.add(agent.model)
+            rows.append(
+                {
+                    "id": agent.model,
+                    "object": "model",
+                    "owned_by": agent.provider_name or "contextual-orchestrator",
+                }
+            )
+        return {"object": "list", "data": rows}
 
     def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""

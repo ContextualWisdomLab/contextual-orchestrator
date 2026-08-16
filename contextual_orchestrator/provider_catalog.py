@@ -1,14 +1,11 @@
-"""Production provider catalog: org secrets, static seed, and optional /v1/models discovery.
+"""Production provider catalog: KV secrets, live GET /v1/models, static fallback.
 
-The catalog is data (``examples/agents.production.json``) plus a bootstrap
-adapter. Runtime provider keys still resolve only through ``get_credential``.
-Environment variables are bootstrap transport into the KV — the same seam as
-``register-credential --from-env`` (see ``docs/kv-credentials.md``).
-
-A missing secret skips that upstream and keeps the rest of the pool serving.
-GitHub Models / Copilot tokens are rejected. Providers that expose
-``GET /v1/models`` can auto-register chat models; providers without a list API
-keep the paper-justified static seed (``docs/doctoring/provider-catalog.md``).
+After each org secret is registered, the primary path is that host's
+OpenAI-compatible ``GET /v1/models`` using ``get_credential`` — never
+``os.getenv`` at request time. The static seed
+(``examples/agents.production.json``) is only a fallback when a provider has
+no list API, the list call 401/403/404/429/5xxs, or the body is empty/malformed
+(``docs/doctoring/provider-catalog.md``). GitHub Models stay out of catalog.
 """
 
 from __future__ import annotations
@@ -49,15 +46,76 @@ PRODUCTION_SEED_PATH = Path(__file__).resolve().parents[1] / "examples" / "agent
 
 _NON_CHAT_MODEL_MARKERS = (
     "embedding",
+    "embed",
+    "rerank",
     "whisper",
     "tts",
     "dall-e",
     "dalle",
     "moderation",
     "transcri",
-    "tts-1",
+    "image",
+    "audio",
+    "flux",
+    "sdxl",
+    "stable-diffusion",
 )
-_DISCOVERY_CAP = 16
+_DISCOVERY_CAP = 32
+_CODING_NAME_MARKERS = (
+    "code",
+    "coder",
+    "starcoder",
+    "codellama",
+    "nemotron",
+    "qwen",
+    "deepseek",
+    "claude",
+    "gpt",
+    "sonnet",
+    "implement",
+)
+_REVIEW_NAME_MARKERS = ("review", "guard", "safety", "critic", "verify")
+_REASONING_NAME_MARKERS = (
+    "reason",
+    "think",
+    "nemotron",
+    "gpt",
+    "claude",
+    "sonnet",
+    "o1",
+    "o3",
+    "o4",
+    "r1",
+)
+_CHEAP_NAME_MARKERS = ("mini", "nano", "small", "haiku", "flash", "-4b", "-7b", "-8b", "-3b")
+
+ORG_PROVIDER_SPECS: tuple[dict[str, str], ...] = (
+    {
+        "credential_name": "NVIDIA_NIM_API_KEY",
+        "base_url": NIM_INTEGRATE_BASE_URL,
+        "provider_name": "nvidia_nim",
+    },
+    {
+        "credential_name": "NVIDIA_NIM_API_KEY_SUB",
+        "base_url": NIM_INTEGRATE_BASE_URL,
+        "provider_name": "nvidia_nim",
+    },
+    {
+        "credential_name": "OPENAI_API_KEY",
+        "base_url": OPENAI_API_BASE_URL,
+        "provider_name": "openai",
+    },
+    {
+        "credential_name": "OPENROUTER_API_KEY",
+        "base_url": OPENROUTER_API_BASE_URL,
+        "provider_name": "openrouter",
+    },
+    {
+        "credential_name": "BYTEZ_API_KEY",
+        "base_url": BYTEZ_OPENAI_BASE_URL,
+        "provider_name": "bytez",
+    },
+)
 
 
 def catalog_allows_agent(agent_or_mapping: ModelAgent | dict[str, Any]) -> bool:
@@ -108,9 +166,9 @@ def register_org_credentials_from_env(*, skip_missing: bool = True) -> dict[str,
 def parse_models_list(payload: Any) -> list[str]:
     """Extract chat model ids from an OpenAI-shaped ``/v1/models`` payload.
 
-    Malformed bodies return an empty list (static seed remains the claim
-    boundary). Embedding/audio/image ids and retired GitHub Models names are
-    dropped.
+    Malformed bodies return an empty list so that provider falls back to the
+    static seed. Embedding/audio/image/rerank ids and retired GitHub Models
+    names are dropped. A successful list is the live catalog.
     """
     if not isinstance(payload, dict):
         return []
@@ -129,6 +187,8 @@ def parse_models_list(payload: Any) -> list[str]:
         if any(marker in lowered for marker in _NON_CHAT_MODEL_MARKERS):
             continue
         if any(marker in lowered for marker in FORBIDDEN_MODEL_MARKERS):
+            continue
+        if "github" in lowered or "copilot" in lowered:
             continue
         if model_id in seen:
             continue
@@ -167,7 +227,35 @@ def discover_provider_models(
             payload = json.loads(response.read().decode("utf-8"))
     except Exception:  # noqa: BLE001 - discovery must never break bootstrap
         return []
-    return parse_models_list(payload)[:_DISCOVERY_CAP]
+    return _cap_chat_models(parse_models_list(payload), _DISCOVERY_CAP)
+
+
+def tag_discovered_model(model: str, *, credential_name: str = "") -> tuple[str, ...]:
+    """Assign Fugu / TRINITY / Conductor tags from the model id. No prices."""
+    lowered = model.lower()
+    tags: list[str] = []
+    if any(marker in lowered for marker in _CODING_NAME_MARKERS):
+        tags.append("coding")
+    if any(marker in lowered for marker in _REVIEW_NAME_MARKERS) or "coding" in tags:
+        tags.append("review")
+    if any(marker in lowered for marker in _REASONING_NAME_MARKERS) or "reasoning" not in tags:
+        tags.append("reasoning")
+    if any(marker in lowered for marker in _CHEAP_NAME_MARKERS):
+        tags.append("cheap")
+    if credential_name.endswith("_SUB"):
+        tags.append("fallback")
+    return tuple(dict.fromkeys(tags))
+
+
+def _cap_chat_models(models: list[str], cap: int) -> list[str]:
+    """Keep coding/review/reasoning-named chat ids first when a vendor dumps hundreds."""
+    preferred = [
+        model
+        for model in models
+        if set(tag_discovered_model(model)) & {"coding", "review", "reasoning"}
+    ]
+    rest = [model for model in models if model not in preferred]
+    return (preferred + rest)[:cap]
 
 
 def _discovered_agent_id(provider_name: str, model: str, existing: set[str]) -> str:
@@ -185,51 +273,114 @@ def _discovered_agent_id(provider_name: str, model: str, existing: set[str]) -> 
     return candidate
 
 
+def _provider_slots(seed: list[ModelAgent]) -> list[tuple[str, str, str, list[ModelAgent]]]:
+    """One slot per org credential (and any extra seed credentials). Seed may override URL."""
+    by_credential: dict[str, list[ModelAgent]] = {}
+    for agent in seed:
+        by_credential.setdefault(agent.credential_name, []).append(agent)
+    slots: list[tuple[str, str, str, list[ModelAgent]]] = []
+    seen: set[str] = set()
+    for spec in ORG_PROVIDER_SPECS:
+        credential_name = spec["credential_name"]
+        rows = by_credential.get(credential_name, [])
+        base_url = rows[0].base_url if rows else spec["base_url"]
+        provider_name = (rows[0].provider_name if rows and rows[0].provider_name else spec["provider_name"])
+        slots.append((credential_name, base_url, provider_name, rows))
+        seen.add(credential_name)
+    for credential_name, rows in by_credential.items():
+        if credential_name in seen:
+            continue
+        slots.append((credential_name, rows[0].base_url, rows[0].provider_name or "discovered", rows))
+    return slots
+
+
+def _agents_from_discovered_models(
+    *,
+    models: list[str],
+    base_url: str,
+    credential_name: str,
+    provider_name: str,
+    existing_ids: set[str],
+) -> list[ModelAgent]:
+    """Build live-pool workers from a successful list response. Seed order is unused."""
+    agents: list[ModelAgent] = []
+    for model in models:
+        if not catalog_allows_fields(base_url, model, credential_name):
+            continue
+        agent_id = _discovered_agent_id(provider_name, model, existing_ids)
+        agents.append(
+            ModelAgent(
+                id=agent_id,
+                model=model,
+                base_url=base_url,
+                credential_key=credential_name,
+                tags=tag_discovered_model(model, credential_name=credential_name),
+                provider_name=provider_name,
+            )
+        )
+        existing_ids.add(agent_id)
+    return agents
+
+
 def compose_provider_catalog(
     seed: list[ModelAgent],
     *,
     discover: bool = False,
     allow_insecure_discovery: bool = False,
 ) -> tuple[list[ModelAgent], list[dict[str, str]]]:
-    """Keep agents whose KV credential is present; optionally append discovered chat models."""
+    """Compose the live pool: discovered chat models win; seed is fallback only.
+
+    When ``discover`` is false the seed rows with a resolvable credential are
+    kept (offline tests). When true, each org secret triggers ``GET /models``
+    and a successful chat list replaces that provider's seed rows.
+    """
     ready: list[ModelAgent] = []
     skipped: list[dict[str, str]] = []
-    for agent in seed:
-        if not catalog_allows_agent(agent):
-            skipped.append({"id": agent.id, "reason": "forbidden_provider"})
+    existing_ids: set[str] = set()
+    if not discover:
+        for agent in seed:
+            if not catalog_allows_agent(agent):
+                skipped.append({"id": agent.id, "reason": "forbidden_provider"})
+                continue
+            if agent.base_url.startswith("mock://") or get_credential(agent.credential_name):
+                ready.append(agent)
+            else:
+                skipped.append({"id": agent.id, "reason": "credential_missing"})
+        return ready, skipped
+
+    for credential_name, base_url, provider_name, seed_rows in _provider_slots(seed):
+        allowed_seed = [agent for agent in seed_rows if catalog_allows_agent(agent)]
+        for agent in seed_rows:
+            if agent not in allowed_seed:
+                skipped.append({"id": agent.id, "reason": "forbidden_provider"})
+        if base_url.startswith("mock://"):
+            ready.extend(allowed_seed)
+            existing_ids.update(agent.id for agent in allowed_seed)
             continue
-        if agent.base_url.startswith("mock://") or get_credential(agent.credential_name):
-            ready.append(agent)
-        else:
-            skipped.append({"id": agent.id, "reason": "credential_missing"})
-    if discover:
-        seen_models = {(agent.base_url, agent.model) for agent in ready}
-        existing_ids = {agent.id for agent in ready}
-        templates: dict[tuple[str, str], ModelAgent] = {}
-        for agent in ready:
-            templates.setdefault((agent.base_url, agent.credential_name), agent)
-        for (base_url, credential_name), template in templates.items():
-            insecure = allow_insecure_discovery or urlparse(base_url).scheme == "http"
-            for model in discover_provider_models(
-                base_url, credential_name, allow_insecure=insecure
-            ):
-                if (base_url, model) in seen_models:
-                    continue
-                if not catalog_allows_fields(base_url, model, credential_name):
-                    continue
-                agent_id = _discovered_agent_id(template.provider_name, model, existing_ids)
-                discovered = ModelAgent(
-                    id=agent_id,
-                    model=model,
+        if get_credential(credential_name) is None:
+            for agent in allowed_seed:
+                skipped.append({"id": agent.id, "reason": "credential_missing"})
+            if not allowed_seed:
+                skipped.append({"id": credential_name.lower(), "reason": "credential_missing"})
+            continue
+        insecure = allow_insecure_discovery or urlparse(base_url).scheme == "http"
+        models = discover_provider_models(base_url, credential_name, allow_insecure=insecure)
+        if models:
+            ready.extend(
+                _agents_from_discovered_models(
+                    models=models,
                     base_url=base_url,
-                    credential_key=credential_name,
-                    tags=template.tags,
-                    priority=max(0, template.priority - 1),
-                    provider_name=template.provider_name,
+                    credential_name=credential_name,
+                    provider_name=provider_name,
+                    existing_ids=existing_ids,
                 )
-                ready.append(discovered)
-                existing_ids.add(agent_id)
-                seen_models.add((base_url, model))
+            )
+            continue
+        if allowed_seed:
+            ready.extend(allowed_seed)
+            existing_ids.update(agent.id for agent in allowed_seed)
+        else:
+            skipped.append({"id": credential_name.lower(), "reason": "discovery_empty"})
     return ready, skipped
 
 
@@ -243,15 +394,15 @@ def persist_catalog_to_agents_db(agents: list[ModelAgent], path: str) -> None:
         store.close()
 
 
-def seed_provider_catalog(
+def bootstrap_org_catalog(
     *,
     seed_agents: list[ModelAgent] | None = None,
     seed_path: str | Path | None = None,
     agents_db: str | None = None,
-    discover: bool = False,
+    discover: bool = True,
     allow_insecure_discovery: bool = False,
-) -> dict[str, Any]:
-    """Register present org secrets, compose the ready pool, and optionally persist it."""
+) -> tuple[list[ModelAgent], dict[str, Any]]:
+    """Register present org secrets, discover chat models, persist, and return the pool."""
     credentials = register_org_credentials_from_env(skip_missing=True)
     agents = seed_agents if seed_agents is not None else load_production_seed(seed_path)
     ready, skipped = compose_provider_catalog(
@@ -259,7 +410,7 @@ def seed_provider_catalog(
     )
     if agents_db and ready:
         persist_catalog_to_agents_db(ready, agents_db)
-    return {
+    report = {
         "registered_credentials": credentials["registered"],
         "skipped_credentials": credentials["skipped"],
         "ready_agents": [
@@ -268,4 +419,25 @@ def seed_provider_catalog(
         ],
         "skipped_agents": skipped,
         "agents_db": agents_db,
+        "discovery": "primary" if discover else "disabled",
     }
+    return ready, report
+
+
+def seed_provider_catalog(
+    *,
+    seed_agents: list[ModelAgent] | None = None,
+    seed_path: str | Path | None = None,
+    agents_db: str | None = None,
+    discover: bool = True,
+    allow_insecure_discovery: bool = False,
+) -> dict[str, Any]:
+    """Register present org secrets, compose the ready pool, and optionally persist it."""
+    _ready, report = bootstrap_org_catalog(
+        seed_agents=seed_agents,
+        seed_path=seed_path,
+        agents_db=agents_db,
+        discover=discover,
+        allow_insecure_discovery=allow_insecure_discovery,
+    )
+    return report

@@ -9,7 +9,7 @@ import sys
 
 from .credentials import register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
-from .provider_catalog import seed_provider_catalog
+from .provider_catalog import bootstrap_org_catalog, seed_provider_catalog
 from .server import SecurityConfig, serve
 
 
@@ -82,8 +82,10 @@ def _seed_provider_catalog_command(argv: list[str]) -> None:
     )
     parser.add_argument(
         "--discover-models",
-        action="store_true",
-        help="GET /v1/models for each registered credential and append discovered chat models.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="GET /v1/models for each registered credential (default: on). "
+        "A failed/empty list keeps that provider's static seed.",
     )
     args = parser.parse_args(argv)
     if not args.from_env:
@@ -132,8 +134,9 @@ def main() -> None:
     )
     parser.add_argument(
         "--discover-models",
-        action="store_true",
-        help="With --seed-from-env, also GET /v1/models for each registered credential.",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="With --seed-from-env, GET /v1/models for each registered credential (default: on).",
     )
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
@@ -149,16 +152,19 @@ def main() -> None:
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
+    agents = load_agents(args.agents)
     if args.seed_from_env:
-        seed_provider_catalog(
+        composed, _report = bootstrap_org_catalog(
             seed_path=args.agents,
             agents_db=args.agents_db,
             discover=args.discover_models,
         )
+        if composed:
+            agents = composed
 
     client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
     orchestrator = TaskOrchestrator(
-        load_agents(args.agents),
+        agents,
         client=client,
         state_db=args.state_db,
         agents_db=args.agents_db,

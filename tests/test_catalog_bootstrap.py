@@ -2,8 +2,8 @@
 
 Env is bootstrap transport only (docs/kv-credentials.md). A missing secret skips
 that upstream and keeps the rest serving — NotConfigured is per-agent, never a
-process crash. Providers that expose GET /v1/models are discovered; others keep
-the paper-justified static seed (docs/doctoring/provider-catalog.md).
+process crash. Live GET /v1/models is the primary catalog after each secret is in the KV;
+the paper-justified static seed is fallback only (docs/doctoring/provider-catalog.md).
 """
 
 from __future__ import annotations
@@ -269,9 +269,9 @@ def test_seed_provider_catalog_discovers_and_skips_partial_keys() -> None:
     assert "OPENAI_API_KEY" in report["registered_credentials"]
     assert "OPENROUTER_API_KEY" in report["skipped_credentials"]
     ready_ids = {item["id"] for item in report["ready_agents"]}
-    assert "openai_primary_agent" in ready_ids
     assert "openrouter_primary_agent" not in ready_ids
     assert any(item["model"] == "o4-mini" for item in report["ready_agents"])
+    assert any(item["model"] == "gpt-5.5" for item in report["ready_agents"])
     assert all("github" not in item["model"].lower() for item in report["ready_agents"])
 
 

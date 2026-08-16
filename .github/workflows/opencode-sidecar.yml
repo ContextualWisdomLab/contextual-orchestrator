@@ -91,6 +91,8 @@ jobs:
             echo "no provider secrets in this job; skip live chat smoke (fail-closed, no GitHub Models fallback)"
             exit 0
           fi
+          curl -sS --fail http://127.0.0.1:8000/v1/models \
+            -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN"
           curl -sS --fail http://127.0.0.1:8000/v1/chat/completions \
             -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN" \
             -H "content-type: application/json" \

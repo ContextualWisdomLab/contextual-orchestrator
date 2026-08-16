@@ -37,9 +37,11 @@ This repository implements the interface and control plane, not the trained coor
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
-- `examples/agents.production.json` + `provider_catalog`: org NIM / OpenAI /
-  OpenRouter / Bytez seed so OpenCode/Strix call one gateway URL. GitHub Models
-  are out of catalog. See `docs/doctoring/provider-catalog.md`.
+- `provider_catalog`: after each of the five KV secrets is registered, live
+  `GET /v1/models` is the catalog (chat ids only). `examples/agents.production.json`
+  is fallback when a list call fails or is empty/malformed. The gateway exposes
+  `GET /v1/models` (`contextual-orchestrator` plus surfaced worker ids). GitHub
+  Models are out of catalog. See `docs/doctoring/provider-catalog.md`.
 
 The product policy is a **cost-performance choose**, not keyword scoring and not
 a walk down the seed JSON / YAML list.

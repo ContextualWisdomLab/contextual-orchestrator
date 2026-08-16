@@ -143,7 +143,9 @@ python -m contextual_orchestrator seed-provider-catalog \
 
 Names: `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENAI_API_KEY`,
 `OPENROUTER_API_KEY`, `BYTEZ_API_KEY`. A missing secret skips that upstream
-and keeps the rest of the pool serving.
+and keeps the rest of the pool serving. After each present secret is in the
+KV, live `GET /v1/models` (using `get_credential`) is the catalog; the static
+seed is fallback only.
 
 The in-memory KV does not survive process exit. CI therefore seeds **inside**
 the serve process (`--seed-from-env`); postgres deploys run

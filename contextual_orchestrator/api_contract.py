@@ -17,6 +17,14 @@ OPENAPI_SPEC = {
         }
     },
     "paths": {
+        "/v1/models": {
+            "get": {
+                "operationId": "list_chat_models",
+                "summary": "List the gateway model id and surfaced worker model ids",
+                "security": [{"inference_bearer_auth": []}],
+                "responses": {"200": {"description": "OpenAI-shaped model list"}},
+            }
+        },
         "/api/v1/agent_pools": {
             "get": {
                 "operationId": "list_agent_pools",

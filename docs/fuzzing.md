@@ -33,7 +33,8 @@ deserialize request config validate untrusted input"`):
    produce a JSON-serialisable record whose SSE framing round-trips.
 5. **Provider `/v1/models` list** — `provider_catalog.parse_models_list`.
    Arbitrary decoded JSON must return a list of non-empty chat model ids and
-   never raise (static seed remains the claim boundary on junk).
+   never raise (junk lists are empty so that provider falls back to the static
+   seed; live discovery still wins when the list is well-formed).
 
 ## Running locally
 
