@@ -17,6 +17,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   null optionals.
 - Pop empty or whitespace-only `tool.function.description` before proxy
   so SDK blank defaults match omit.
+- Accept official Responses `text.format` (flat `type` / `name` / `schema`)
+  instead of rejecting every non-empty `text` with `invalid_text`. Pop
+  JSON-null or blank `description` and JSON-null `strict` before proxy.
 
 ### Documentation
 

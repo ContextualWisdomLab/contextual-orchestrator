@@ -19,9 +19,11 @@ The surfaces were located with CodeGraph (`codegraph explore "parse decode
 deserialize request config validate untrusted input"`):
 
 1. **HTTP request body** — `server._coerce_json` / `_reject_unknown_keys` /
-   `_validate_mode` / `_validate_messages`. Arbitrary bytes must normalise to a
-   validated structure or raise `RequestError` / a JSON decode error — never an
-   unhandled crash.
+   `_validate_mode` / `_validate_messages` / `_validate_responses_text`.
+   Arbitrary bytes must normalise to a validated structure or raise
+   `RequestError` / a JSON decode error — never an unhandled crash. Official
+   Responses `text.format` is included so malformed structured-output objects
+   cannot crash the parser.
 2. **Agent config** — `orchestrator.ModelAgent.from_dict`. Arbitrary decoded
    JSON must yield a well-typed `ModelAgent` or raise `KeyError`/`TypeError`/
    `ValueError`.

@@ -49,7 +49,21 @@ redistribution; each is cited below with its arXiv identifier.
   https://platform.openai.com/docs/guides/structured-outputs
   Grounds fail-closed unknown keys on the `json_schema` object and the
   requirement that `schema` is a JSON Schema object when structured output
-  is requested. Copyrighted vendor docs — cite + link only.
+  is requested. On the Responses API the same contract is `text.format`
+  with flat `type` / `name` / `schema` / `strict` siblings (not nested
+  `response_format.json_schema`). Copyrighted vendor docs — cite + link only.
+
+- OpenAI. (2024). *Create response*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/responses/create
+  Grounds the official `/v1/responses` `text` object and `text.format`
+  field list. Copyrighted vendor docs — cite + link only; no PDF vendored.
+
+- OpenAI. (2024). *Migrate to the Responses API*. OpenAI Platform.
+  https://developers.openai.com/api/docs/guides/migrate-to-responses
+  Grounds the buyer migration: Chat Completions `response_format` becomes
+  Responses `text.format`. This gateway must accept the official shape so
+  SDK clients are not rejected with `invalid_text`. Copyrighted vendor
+  docs — cite + link only.
 
 - Wright, A., Andrews, H., Hutton, B., & Dennis, G. (2022). *JSON Schema: A
   media type for describing JSON documents* (Internet-Draft

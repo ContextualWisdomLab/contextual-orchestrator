@@ -134,7 +134,7 @@ def test_http_responses_rejects_include() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_text_control() -> None:
+def test_http_responses_rejects_unknown_text_format_type() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -142,7 +142,7 @@ def test_http_responses_rejects_text_control() -> None:
             {
                 "model": "mock-planner",
                 "input": "hello text control",
-                "text": {"format": {"type": "text"}},
+                "text": {"format": {"type": "xml"}},
             },
         )
         assert status == 400, body
@@ -158,5 +158,5 @@ if __name__ == "__main__":
     test_http_responses_rejects_conversation()
     test_http_responses_rejects_truncation()
     test_http_responses_rejects_include()
-    test_http_responses_rejects_text_control()
+    test_http_responses_rejects_unknown_text_format_type()
     print("ok")

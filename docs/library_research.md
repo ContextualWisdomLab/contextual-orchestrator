@@ -66,6 +66,20 @@ Researched before adding `_validate_chat_response_format` inner-field omit:
 
 No new dependency. Implementation stays in `contextual_orchestrator/server.py`.
 
+## Responses text.format honesty (2026-08-16)
+
+Researched before accepting official Responses structured output:
+
+| Option | Decision | Why |
+|---|---|---|
+| Official OpenAI Create response + Structured Outputs + migrate-to-Responses docs | Cite (APA 7th) in `docs/papers/README.md`; do not vendor PDFs | Authoritative flat field list: `text.format.type` / `name` / `schema` / `description` / `strict` |
+| Reuse `_validate_chat_response_format` unchanged | Skip | Chat nests `json_schema`; Responses is flat. Reusing the chat helper would reject official SDK payloads |
+| Pydantic / openai SDK | Skip | Stdlib `dict.pop` + `isinstance` covers omit-real and fail-closed; Ponytail forbids a new runtime dependency |
+| Keep `invalid_text` for every non-empty `text` | Skip | Official Python/JS Responses clients never reach the provider; that is a buyer-visible gap |
+| Accept `text.verbosity` in this tip | Defer | Separate unique tip; unknown siblings stay `invalid_text` so buyers can omit verbosity and retry |
+
+No new dependency. Implementation stays in `contextual_orchestrator/server.py`.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
