@@ -11,7 +11,8 @@
 
 The public shape is a single model API. The internal shape is a model pool plus a learned coordinator that decides when to answer directly, when to delegate, how much context each worker receives, when to verify, and how to synthesize the final answer.
 
-The useful split is quality-latency, not separate products:
+The useful split is quality-latency, not separate products. Within a quality-equivalent capability tier, the runtime then minimizes trustworthy configured cost. Missing or malformed price metadata is unpriced, never free. A cheaper lower-capability worker cannot displace a higher-capability worker.
+
 
 - Low-latency routing: select one worker for the current query or turn.
 - Deep orchestration: create a multi-step workflow when the task needs decomposition, independent attempts, verification, or synthesis.

@@ -10,6 +10,7 @@ from functools import wraps
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -46,6 +47,21 @@ def estimate_tokens(text: str) -> int:
     usage when real workers return it.
     """
     return (len(text) + 3) // 4 if text else 0
+
+
+def _known_price_rank(value: Any) -> tuple[int, float]:
+    """Rank valid nonnegative price evidence ahead of unpriced metadata.
+
+    The second value is negated because callers sort descending: a lower known
+    price therefore ranks ahead of a higher known price. Missing, boolean,
+    nonnumeric, negative, NaN, and infinite values are unpriced rather than free.
+    """
+    if type(value) not in (int, float):
+        return (0, 0.0)
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0:
+        return (0, 0.0)
+    return (1, -normalized)
 
 
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
@@ -174,6 +190,8 @@ class OrchestrationPolicy:
         """Return the API-safe policy snapshot for workflow records."""
         return {
             "route_p95_seconds": self.route_p95_seconds,
+            "routing_objective": "maximize_capability_then_minimize_known_cost",
+            "unpriced_model_policy": "unpriced_not_free",
             "conduct_hint_threshold": self.conduct_hint_threshold,
             "verifier_required": self.verifier_required,
             "workflow_planning": self.workflow_planning,
@@ -1525,9 +1543,23 @@ class TaskOrchestrator:
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
     def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
-        """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
+        """Rank by maximum capability, then minimum trustworthy known price."""
         lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+
+        def selection_key(agent: ModelAgent) -> tuple[int, int, int, float, str]:
+            capability_score, tag_count, agent_id = self._score_agent(agent, role, lowered)
+            price_known, inverse_price = _known_price_rank(
+                self.price_per_million.get(agent.model)
+            )
+            return (
+                capability_score,
+                tag_count,
+                price_known,
+                inverse_price,
+                agent_id,
+            )
+
+        return sorted(self.agents, key=selection_key, reverse=True)
 
     def _select_agent(self, text: str, role: str) -> ModelAgent:
         selected = self._ranked_agents(text, role)[0]
