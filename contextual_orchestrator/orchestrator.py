@@ -27,6 +27,10 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .reasoning_effort_profile import (
+    ReasoningEffortProfile,
+    snapshot_role_effort_catalog,
+)
 
 
 ChatMessage = dict[str, str]
@@ -823,6 +827,7 @@ class TaskOrchestrator:
         agents_db: str | None = None,
         cache_ttl: float = 0.0,
         cache_max_entries: int = 256,
+        role_effort_catalog: dict[str, ReasoningEffortProfile] | None = None,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -835,6 +840,10 @@ class TaskOrchestrator:
             raise ValueError("at least one enabled agent is required")
         self.client = client or ModelClient()
         self.policy = OrchestrationPolicy()
+        # Opt-in issue #568 catalog. None keeps production answers and payload
+        # keys unchanged. Buyer next action: pass default_role_effort_catalog()
+        # to attach a replayable snapshot; do not treat that as a default change.
+        self.role_effort_catalog = role_effort_catalog
         # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
         self.price_per_million = dict(price_per_million or {})
         # Operator spend caps; None => disabled (no behavior change). Enforced in run().
@@ -1357,12 +1366,14 @@ class TaskOrchestrator:
         if served_id != agent.id:  # pragma: no cover
             row["served_agent_id"] = served_id
             row["failover_from"] = agent.id
-        return {
-            "mode": "route",
-            "answer": answer,
-            "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
-            "trace": [row],
-        }
+        return self._with_effort_snapshot(
+            {
+                "mode": "route",
+                "answer": answer,
+                "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+                "trace": [row],
+            }
+        )
 
     def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
@@ -1433,13 +1444,32 @@ class TaskOrchestrator:
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
-        return {
-            "mode": "conduct",
-            "answer": answer,
-            "trace": trace,
-            "verification": verification,
-            "plan_source": plan_source,
+        return self._with_effort_snapshot(
+            {
+                "mode": "conduct",
+                "answer": answer,
+                "trace": trace,
+                "verification": verification,
+                "plan_source": plan_source,
+            }
+        )
+
+    def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
+        """Attach a replayable role-effort snapshot when the operator opted in.
+
+        Buyer next action: compare ``reasoning_effort_snapshot.snapshot_hash``
+        across route, conduct, stream persist, and batch replay. Omit the
+        constructor catalog to keep today's payload.
+        """
+        if self.role_effort_catalog is None:
+            return result
+        snapshot = snapshot_role_effort_catalog(self.role_effort_catalog)
+        result["reasoning_effort_snapshot"] = {
+            "profile_version": snapshot.profile_version,
+            "snapshot_hash": snapshot.snapshot_hash,
+            "role_profiles": snapshot.role_profiles,
         }
+        return result
 
     def _plan_generated(self, task: str) -> list[WorkflowStep]:
         """Ask the planner model to generate the workflow (Conductor, arXiv:2512.04388).
