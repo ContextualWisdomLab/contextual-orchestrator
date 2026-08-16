@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import threading
 import urllib.error
 import urllib.request
@@ -12,6 +11,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
+from contextual_orchestrator.kv_config import reset_runtime_config_store, set_runtime_config  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient, chat_completion_response, redact_text, redact_value  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
@@ -258,8 +258,8 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
     client = ModelClient()
     insecure_agent = ModelAgent("insecure_agent", "gpt-example", "http://api.openai.com/v1", "MODEL_KEY")
     unlisted_agent = ModelAgent("unlisted_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY")
-    previous = os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS")
-    os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = "example.com"
+    reset_runtime_config_store()
+    set_runtime_config("provider_egress", "allowed_provider_hosts", "example.com")
     # Register the credential so validation proceeds to the host-safety checks.
     backend = InMemoryCredentialBackend()
     backend.set("MODEL_KEY", "sk-host-check")
@@ -281,10 +281,7 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
             raise AssertionError("unlisted provider should fail")
     finally:
         set_backend(None)
-        if previous is None:
-            os.environ.pop("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", None)
-        else:
-            os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
+        reset_runtime_config_store()
 
 
 def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:
