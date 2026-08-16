@@ -98,6 +98,7 @@ ALLOWED_MESSAGE_KEYS = {
     "audio",
     "function_call",
     "weight",
+    "prefix",
 }
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -1516,6 +1517,24 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                     400,
                     "invalid_message_weight",
                     "message weight must be 0 or 1",
+                )
+        if "prefix" in message:
+            # OpenAI partial-assistant / predicted-outputs style prefix flag.
+            # null/false are honest no-ops; true fails closed (no prefix plane).
+            prefix = message.get("prefix")
+            if prefix is None or prefix is False:
+                pass
+            elif prefix is True:
+                raise RequestError(
+                    400,
+                    "invalid_message_prefix",
+                    "message prefix=true is not supported on /v1/chat/completions",
+                )
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_prefix",
+                    "message prefix must be a boolean",
                 )
         validated.append(entry)
     return validated
