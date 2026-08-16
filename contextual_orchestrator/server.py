@@ -1346,7 +1346,7 @@ def _reject_unknown_message_keys(message: dict[str, Any]) -> None:
 
 
 def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
-    """Reject unknown message keys and legacy function role before passthrough."""
+    """Reject unknown message keys and unsupported roles before passthrough."""
     messages = body.get("messages")
     if not isinstance(messages, list):
         return
@@ -1360,7 +1360,99 @@ def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
                 "invalid_message_role",
                 "function role is not supported on /v1/chat/completions; use tool instead",
             )
+        if isinstance(role, str) and role == "developer":
+            # Newer OpenAI clients send developer in place of system; this gateway
+            # does not apply a separate developer plane — fail closed with migration.
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "developer role is not supported on /v1/chat/completions; use system instead",
+            )
         _reject_unknown_message_keys(message)
+
+
+def _normalize_chat_message_content(role: str, content: Any) -> str | list[dict[str, Any]]:
+    """Shape-check chat message content; fail closed on empty user/system or bad parts.
+
+    OpenAI assistant tool turns often send ``content: null`` with ``tool_calls``;
+    treat explicit JSON null as empty string on assistant/tool (SDK optional
+    default). Vision/omni callers send content-parts arrays — text+image_url
+    pass; other part types fail closed.
+    """
+    if content is None and role in {"assistant", "tool"}:
+        content = ""
+    if isinstance(content, list):
+        content = _validate_message_content_parts(content)
+    elif not isinstance(content, str):
+        raise RequestError(400, "invalid_message", "message role or content is invalid")
+    if role in {"user", "system"} and isinstance(content, str) and not content.strip():
+        raise RequestError(
+            400,
+            "invalid_message_content",
+            "user and system message content must be a non-empty string",
+        )
+    return content
+
+
+def _validate_one_chat_message_name(message: dict[str, Any]) -> str | None:
+    """OpenAI optional participant name on system/user/assistant (not tool).
+
+    Explicit JSON null is treat-as-omit. Empty, oversized, or illegal charset
+    values fail closed so clients never believe a name was applied.
+    """
+    if "name" not in message:
+        return None
+    msg_name = message.get("name")
+    if msg_name is None:
+        return None
+    role = message.get("role")
+    if role == "tool":
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "name is not valid on tool role messages",
+        )
+    if not isinstance(msg_name, str) or not msg_name.strip():
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "message name must be a non-empty string",
+        )
+    if len(msg_name) > 64:
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "message name must be at most 64 characters",
+        )
+    if not all(ch.isalnum() or ch in "_-" for ch in msg_name):
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "message name must match [a-zA-Z0-9_-]",
+        )
+    return msg_name
+
+
+def _validate_chat_message_content_and_name(body: dict[str, Any]) -> None:
+    """Content shape and participant name — must run before tools passthrough.
+
+    ``_validate_messages`` is skipped on the tools/response_format early return.
+    Empty user/system content, unsupported content-part types, and invalid
+    ``name`` values must still fail closed so SDK tool-calling bodies cannot
+    smuggle them upstream.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            raise RequestError(400, "invalid_message", "each message must be an object")
+        role = message.get("role")
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
+            # developer/function already named-rejected in known_fields.
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        _normalize_chat_message_content(role, message.get("content"))
+        _validate_one_chat_message_name(message)
 
 
 def _validate_messages(messages: Any) -> list[dict[str, Any]]:
@@ -1391,24 +1483,7 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
         _reject_unknown_message_keys(message)
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        # OpenAI assistant tool turns often send content:null with tool_calls; treat
-        # explicit JSON null as empty string on assistant/tool (SDK optional default).
-        if content is None and role in {"assistant", "tool"}:
-            content = ""
-        if isinstance(content, list):
-            # Vision/omni callers send OpenAI content-parts arrays. Shape-check and
-            # passthrough text+image_url; other part types fail closed.
-            content = _validate_message_content_parts(content)
-        elif not isinstance(content, str):
-            raise RequestError(400, "invalid_message", "message role or content is invalid")
-        # User/system turns drive the prompt — empty string content is never applied.
-        # Multimodal arrays are non-empty after parts validation.
-        if role in {"user", "system"} and isinstance(content, str) and not content.strip():
-            raise RequestError(
-                400,
-                "invalid_message_content",
-                "user and system message content must be a non-empty string",
-            )
+        content = _normalize_chat_message_content(role, content)
         entry: dict[str, Any] = {"role": role, "content": content}
         if role == "tool":
             # OpenAI tool messages bind results to a prior tool_call via tool_call_id.
@@ -1426,39 +1501,9 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                     "tool_call_id must be at most 128 characters",
                 )
             entry["tool_call_id"] = tool_call_id
-        if "name" in message:
-            # OpenAI optional participant name on system/user/assistant (not tool).
-            msg_name = message.get("name")
-            # Explicit JSON null is treat-as-omit (SDK optional default).
-            if msg_name is None:
-                pass
-            else:
-                if role == "tool":
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "name is not valid on tool role messages",
-                    )
-                if not isinstance(msg_name, str) or not msg_name.strip():
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "message name must be a non-empty string",
-                    )
-                if len(msg_name) > 64:
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "message name must be at most 64 characters",
-                    )
-                # OpenAI participant names are alphanumeric plus underscore/hyphen.
-                if not all(ch.isalnum() or ch in "_-" for ch in msg_name):
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "message name must match [a-zA-Z0-9_-]",
-                    )
-                entry["name"] = msg_name
+        msg_name = _validate_one_chat_message_name(message)
+        if msg_name is not None:
+            entry["name"] = msg_name
         _validate_one_chat_message_honesty(message)
         validated.append(entry)
     return validated
@@ -3545,6 +3590,7 @@ def build_server(
                     _validate_chat_tool_message_ids(body)
                     _validate_chat_assistant_tool_calls(body)
                     _validate_chat_message_audio_function_call(body)
+                    _validate_chat_message_content_and_name(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "tools" in body:
