@@ -2,10 +2,12 @@
 
 ## Sources Read
 
-- Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
-- Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-- TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
-- Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+APA 7th citations (titles retained for paper-contract search):
+
+- Sakana AI. (2026, June 22). *Sakana Fugu: One Model to Command Them All*. https://sakana.ai/fugu-release/
+- Sakana AI. (2026). *Sakana Fugu Technical Report*. https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *TRINITY: An Evolved LLM Coordinator* (arXiv:2512.04695). https://arxiv.org/abs/2512.04695
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to Orchestrate Agents in Natural Language with the Conductor* (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
 
 ## What The Architecture Is
 
