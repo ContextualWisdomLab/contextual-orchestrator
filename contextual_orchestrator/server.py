@@ -1194,10 +1194,58 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     )
 
 
-def _validate_messages(messages: Any) -> list[dict[str, str]]:
+
+def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
+    """OpenAI multimodal content-parts array (text + image_url) for vision callers.
+
+    Parts are shape-checked and returned for provider passthrough. Unsupported
+    part types fail closed with a named error so clients never believe audio or
+    other modalities were processed.
+    """
+    if not content:
+        raise RequestError(
+            400,
+            "invalid_message_content",
+            "multipart content arrays must be non-empty",
+        )
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            raise RequestError(
+                400,
+                "invalid_message_content",
+                "message content part must be an object",
+            )
+        part_type = part.get("type")
+        if part_type == "text":
+            if not isinstance(part.get("text"), str):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "text content part requires a string text field",
+                )
+        elif part_type == "image_url":
+            image_url = part.get("image_url")
+            if not isinstance(image_url, dict) or not isinstance(image_url.get("url"), str):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "image_url content part requires image_url.url as a string",
+                )
+        else:
+            raise RequestError(
+                400,
+                "invalid_message_content",
+                "content part type must be text or image_url",
+            )
+        parts.append(part)
+    return parts
+
+
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
-    validated: list[dict[str, str]] = []
+    validated: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
@@ -1211,34 +1259,27 @@ def _validate_messages(messages: Any) -> list[dict[str, str]]:
                 "invalid_message_role",
                 "developer role is not supported on /v1/chat/completions; use system instead",
             )
-        if isinstance(content, list):
-            # OpenAI multimodal content parts (text/image_url/input_audio/...) are not
-            # applied by this text-only gateway. Fail closed so SDKs cannot silently
-            # believe vision/audio parts were processed as plain text.
-            raise RequestError(
-                400,
-                "invalid_message_content",
-                "multipart content arrays are not supported on /v1/chat/completions; "
-                "pass a string content",
-            )
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
         # OpenAI assistant tool turns often send content:null with tool_calls; treat
         # explicit JSON null as empty string on assistant/tool (SDK optional default).
         if content is None and role in {"assistant", "tool"}:
             content = ""
-        if not isinstance(content, str):
+        if isinstance(content, list):
+            # Vision/omni callers send OpenAI content-parts arrays. Shape-check and
+            # passthrough text+image_url; other part types fail closed.
+            content = _validate_message_content_parts(content)
+        elif not isinstance(content, str):
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        # User/system turns drive the prompt — empty content is never applied and
-        # would only create silent no-op turns. Assistant/tool may still use empty
-        # content when tool_calls or tool results carry the payload.
-        if role in {"user", "system"} and not content.strip():
+        # User/system turns drive the prompt — empty string content is never applied.
+        # Multimodal arrays are non-empty after parts validation.
+        if role in {"user", "system"} and isinstance(content, str) and not content.strip():
             raise RequestError(
                 400,
                 "invalid_message_content",
                 "user and system message content must be a non-empty string",
             )
-        entry: dict[str, str] = {"role": role, "content": content}
+        entry: dict[str, Any] = {"role": role, "content": content}
         if role == "tool":
             # OpenAI tool messages bind results to a prior tool_call via tool_call_id.
             tool_call_id = message.get("tool_call_id")

@@ -29,7 +29,8 @@ from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 
 
-ChatMessage = dict[str, str]
+# content is usually str; multimodal vision messages use OpenAI content-parts lists.
+ChatMessage = dict[str, Any]
 
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
@@ -664,6 +665,9 @@ def _coerce_input_text(value: Any) -> str:
             if isinstance(item, str):
                 parts.append(item)
             elif isinstance(item, dict):
+                # OpenAI content-parts: {"type": "text", "text": "..."}
+                if isinstance(item.get("text"), str):
+                    parts.append(item["text"])
                 content = item.get("content")
                 if isinstance(content, str):
                     parts.append(content)
@@ -672,6 +676,15 @@ def _coerce_input_text(value: Any) -> str:
                         if isinstance(chunk, dict) and isinstance(chunk.get("text"), str):
                             parts.append(chunk["text"])
     return " ".join(parts)
+
+
+def _coerce_message_content_text(content: Any) -> str:
+    """Best-effort plain text from chat message content (string or content-parts)."""
+    if isinstance(content, str):
+        return content
+    if isinstance(content, list):
+        return _coerce_input_text(content)
+    return ""
 
 
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
@@ -1653,7 +1666,13 @@ class TaskOrchestrator:
         return hits >= self.policy.conduct_hint_threshold or len(text) > 700
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
-        return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
+        for message in reversed(messages):
+            if message.get("role") != "user":
+                continue
+            text = _coerce_message_content_text(message.get("content", ""))
+            if text:
+                return text
+        return ""  # pragma: no cover
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Ask a model to judge the verifier report (fixes term-matching false negatives).

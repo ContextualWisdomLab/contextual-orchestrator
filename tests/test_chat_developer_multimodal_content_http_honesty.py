@@ -88,7 +88,8 @@ def test_http_chat_rejects_developer_role() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_multipart_image_content() -> None:
+def test_http_chat_accepts_multipart_image_content() -> None:
+    """Vision callers send text+image_url parts; shape-check and passthrough."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -109,10 +110,8 @@ def test_http_chat_rejects_multipart_image_content() -> None:
                 ],
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_message_content" in blob
-        assert "multipart" in blob or "not supported" in blob
+        assert status == 200, body
+        assert "choices" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -165,7 +164,7 @@ def test_http_chat_rejects_non_string_non_array_content() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_string_content()
     test_http_chat_rejects_developer_role()
-    test_http_chat_rejects_multipart_image_content()
+    test_http_chat_accepts_multipart_image_content()
     test_http_chat_rejects_input_audio_content_part()
     test_http_chat_rejects_non_string_non_array_content()
     print("ok")
