@@ -291,6 +291,40 @@ class ModelClient:
         """Return this thread's request-scoped sampling overrides, if any."""
         return dict(getattr(self._local, "sampling_overrides", None) or {})
 
+    def _effective_request_sampling(
+        self,
+        *,
+        temperature: float | None = None,
+        top_p: float | None = None,
+    ) -> dict[str, Any]:
+        """Resolve thread-local overrides over instance defaults for this call.
+
+        ``chat`` and ``stream_chat`` must share this so route streaming cannot
+        drop ``top_p`` / penalties that Completions already isolated.
+        """
+        overrides = self._request_sampling_overrides()
+        if temperature is None:
+            temperature = overrides.get("temperature")
+        if top_p is None:
+            top_p = overrides.get("top_p")
+        effective = {
+            "temperature": self.default_temperature if temperature is None else temperature,
+            "top_p": self.default_top_p if top_p is None else top_p,
+            "presence_penalty": overrides.get(
+                "presence_penalty", self.default_presence_penalty
+            ),
+            "frequency_penalty": overrides.get(
+                "frequency_penalty", self.default_frequency_penalty
+            ),
+            "max_output_tokens": overrides.get("max_output_tokens", self.max_output_tokens),
+        }
+        self._local.last_temperature = effective["temperature"]
+        self._local.last_top_p = effective["top_p"]
+        self._local.last_presence_penalty = effective["presence_penalty"]
+        self._local.last_frequency_penalty = effective["frequency_penalty"]
+        self._local.last_max_output_tokens = effective["max_output_tokens"]
+        return effective
+
     def chat(
         self,
         agent: ModelAgent,
@@ -306,19 +340,7 @@ class ModelClient:
         observe each other's knobs.
         """
         self._local.usage = None
-        overrides = self._request_sampling_overrides()
-        if temperature is None:
-            temperature = overrides.get("temperature")
-        if top_p is None:
-            top_p = overrides.get("top_p")
-        effective_temperature = self.default_temperature if temperature is None else temperature
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = overrides.get("presence_penalty", self.default_presence_penalty)
-        effective_frequency = overrides.get("frequency_penalty", self.default_frequency_penalty)
-        self._local.last_temperature = effective_temperature
-        self._local.last_top_p = effective_top_p
-        self._local.last_presence_penalty = effective_presence
-        self._local.last_frequency_penalty = effective_frequency
+        effective = self._effective_request_sampling(temperature=temperature, top_p=top_p)
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
@@ -332,16 +354,16 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": effective_temperature,
+            "temperature": effective["temperature"],
             "stream": False,
-            "max_tokens": overrides.get("max_output_tokens", self.max_output_tokens),
+            "max_tokens": effective["max_output_tokens"],
         }
-        if effective_top_p is not None:  # pragma: no cover
-            payload["top_p"] = effective_top_p
-        if effective_presence is not None:  # pragma: no cover
-            payload["presence_penalty"] = effective_presence
-        if effective_frequency is not None:  # pragma: no cover
-            payload["frequency_penalty"] = effective_frequency
+        if effective["top_p"] is not None:  # pragma: no cover
+            payload["top_p"] = effective["top_p"]
+        if effective["presence_penalty"] is not None:  # pragma: no cover
+            payload["presence_penalty"] = effective["presence_penalty"]
+        if effective["frequency_penalty"] is not None:  # pragma: no cover
+            payload["frequency_penalty"] = effective["frequency_penalty"]
         return self._send_with_retry(agent, payload)
 
     def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
@@ -389,16 +411,20 @@ class ModelClient:
             context=self._ssl_context,
         )
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+    def stream_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
+        Thread-local ``request_sampling`` overrides apply the same knobs as ``chat``.
         """
-        overrides = self._request_sampling_overrides()
-        effective_temperature = overrides.get("temperature", temperature)
-        effective_max_tokens = overrides.get("max_output_tokens", self.max_output_tokens)
+        effective = self._effective_request_sampling(temperature=temperature)
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -409,10 +435,16 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": effective_temperature,
+            "temperature": effective["temperature"],
             "stream": True,
-            "max_tokens": effective_max_tokens,
+            "max_tokens": effective["max_output_tokens"],
         }
+        if effective["top_p"] is not None:  # pragma: no cover
+            payload["top_p"] = effective["top_p"]
+        if effective["presence_penalty"] is not None:  # pragma: no cover
+            payload["presence_penalty"] = effective["presence_penalty"]
+        if effective["frequency_penalty"] is not None:  # pragma: no cover
+            payload["frequency_penalty"] = effective["frequency_penalty"]
         yield from self._stream_send(agent, payload)  # pragma: no cover
 
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):

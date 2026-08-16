@@ -1433,6 +1433,18 @@ def _validate_one_chat_message_name(message: dict[str, Any]) -> str | None:
     return msg_name
 
 
+def _require_chat_messages_array(messages: Any) -> list[Any]:
+    """Chat Completions requires a non-empty messages array on every path.
+
+    Tools/response_format passthrough skips ``_validate_messages``. An empty,
+    omitted, null, or non-list ``messages`` value must still fail closed so
+    SDK tool-calling bodies cannot bill a completion with no prompt.
+    """
+    if not isinstance(messages, list) or not messages:
+        raise RequestError(400, "invalid_message", "messages must be a non-empty array")
+    return messages
+
+
 def _validate_chat_message_content_and_name(body: dict[str, Any]) -> None:
     """Content shape and participant name — must run before tools passthrough.
 
@@ -1441,9 +1453,7 @@ def _validate_chat_message_content_and_name(body: dict[str, Any]) -> None:
     ``name`` values must still fail closed so SDK tool-calling bodies cannot
     smuggle them upstream.
     """
-    messages = body.get("messages")
-    if not isinstance(messages, list):
-        return
+    messages = _require_chat_messages_array(body.get("messages"))
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
@@ -1456,8 +1466,7 @@ def _validate_chat_message_content_and_name(body: dict[str, Any]) -> None:
 
 
 def _validate_messages(messages: Any) -> list[dict[str, Any]]:
-    if not isinstance(messages, list) or not messages:
-        raise RequestError(400, "invalid_message", "messages must be a non-empty array")
+    messages = _require_chat_messages_array(messages)
     validated: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):

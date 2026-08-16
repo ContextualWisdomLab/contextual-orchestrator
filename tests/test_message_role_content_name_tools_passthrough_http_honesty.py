@@ -2,8 +2,9 @@
 
 ``_validate_messages`` is skipped when ``tools`` / ``response_format`` force
 single-agent passthrough. Role membership, developer-role migration, content
-shape, and participant ``name`` must still run before the body is proxied so
-SDK tool-calling histories cannot smuggle unsupported values upstream.
+shape, participant ``name``, and a non-empty ``messages`` array must still
+run before the body is proxied so SDK tool-calling histories cannot smuggle
+unsupported values or bill a completion with no prompt.
 """
 
 from __future__ import annotations
@@ -198,10 +199,116 @@ def test_http_chat_rejects_name_on_tool_message_with_tools() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_empty_messages_with_tools() -> None:
+    """SDK tool-calling bodies must not bill a completion with no prompt."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [],
+                "tools": _LOOKUP_TOOLS,
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_message" in blob
+        assert "non-empty" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_omitted_messages_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "tools": _LOOKUP_TOOLS,
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_message" in blob
+        assert "non-empty" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_null_messages_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": None,
+                "tools": _LOOKUP_TOOLS,
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_message" in blob
+        assert "non-empty" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_non_list_messages_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": "look up the invoice",
+                "tools": _LOOKUP_TOOLS,
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_message" in blob
+        assert "non-empty" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_empty_messages_with_response_format() -> None:
+    """response_format is the other PASSTHROUGH_TRIGGER_KEYS early-return."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [],
+                "response_format": {"type": "json_object"},
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_message" in blob
+        assert "non-empty" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_rejects_developer_role_with_tools()
     test_http_chat_rejects_empty_user_content_with_tools()
     test_http_chat_rejects_input_audio_content_part_with_tools()
     test_http_chat_rejects_empty_message_name_with_tools()
     test_http_chat_rejects_name_on_tool_message_with_tools()
+    test_http_chat_rejects_empty_messages_with_tools()
+    test_http_chat_rejects_omitted_messages_with_tools()
+    test_http_chat_rejects_null_messages_with_tools()
+    test_http_chat_rejects_non_list_messages_with_tools()
+    test_http_chat_rejects_empty_messages_with_response_format()
     print("ok")

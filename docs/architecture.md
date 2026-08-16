@@ -40,13 +40,15 @@ This repository implements the interface and control plane, not the trained coor
   Message honesty fields (`weight`, `prefix`, `refusal`, `annotations`,
   `audio`, `function_call`), role membership (`developer` / `function` /
   unknown roles), content shape (empty user/system, multimodal parts),
-  participant `name`, and `max_tool_calls` are validated *before* the
-  tools/response_format passthrough early-return so SDK tool-calling bodies
-  cannot smuggle unsupported values upstream. Omit-equivalent
+  participant `name`, a non-empty `messages` array, and `max_tool_calls`
+  are validated *before* the tools/response_format passthrough early-return
+  so SDK tool-calling bodies cannot smuggle unsupported values or bill a
+  completion with no prompt. Omit-equivalent
   `max_tool_calls` (JSON null / empty string) is stripped, not forwarded.
   Request sampling knobs (`temperature`, `top_p`, penalties, `max_tokens`)
   are applied via `ModelClient.request_sampling` on the calling thread only
-  so concurrent Completions/chat requests cannot observe each other's knobs.
+  so concurrent Completions/chat and route-stream requests cannot observe
+  each other's knobs; `stream_chat` reads the same thread-local overrides.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

@@ -60,7 +60,31 @@ def test_model_client_request_sampling_restores_defaults_on_the_same_thread() ->
     assert client.max_output_tokens == 2048
 
 
+def test_model_client_stream_chat_applies_request_sampling_knobs() -> None:
+    """Route streaming shares the handler thread; all four knobs must apply."""
+    client = ModelClient()
+    client.default_temperature = 0.2
+    client.default_presence_penalty = 0.0
+    client.default_frequency_penalty = 0.0
+    agent = ModelAgent("probe_agent", "mock-planner", tags=("reasoning",))
+    with client.request_sampling(
+        temperature=1.3,
+        top_p=0.55,
+        presence_penalty=0.4,
+        frequency_penalty=0.6,
+        max_output_tokens=48,
+    ):
+        chunks = list(client.stream_chat(agent, [{"role": "user", "content": "stream"}]))
+        assert chunks
+        assert client._local.last_temperature == 1.3
+        assert client._local.last_top_p == 0.55
+        assert client._local.last_presence_penalty == 0.4
+        assert client._local.last_frequency_penalty == 0.6
+        assert client._local.last_max_output_tokens == 48
+
+
 if __name__ == "__main__":
     test_model_client_request_sampling_stays_on_calling_thread()
     test_model_client_request_sampling_restores_defaults_on_the_same_thread()
+    test_model_client_stream_chat_applies_request_sampling_knobs()
     print("ok")
