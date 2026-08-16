@@ -50,6 +50,8 @@ Buyer next action: send the same payload the SDK emits. Expect the upstream echo
 
 Locked by `tests/test_tip_reland_sdk_omit_persist_http_honesty.py` on the #668 substrate. Independent of Fugu/TRINITY/Conductor compute allocation: this is the OpenAI wire contract the coordinator sits behind (OpenAI, n.d.-a, n.d.-b).
 
+Compatibility honesty for Structured Outputs and tools: `response_format.json_schema.name` and `tools[].function.name` (also message `name` and `tool_calls[].function.name`) must match `[a-zA-Z0-9_-]{1,64}`. ASCII is required — `str.isalnum()` alone accepts Unicode letters and digits (`café`, `名前`, Arabic-Indic digits) and would forward an illegal name for an opaque provider 400. Illegal names return named `invalid_response_format` / `invalid_tools` / `invalid_message` / `invalid_message_name`. Locked by `tests/test_json_schema_name_charset_http_honesty.py` and `tests/test_tool_function_name_charset_http_honesty.py` on the #686 substrate.
+
 ### References
 
 OpenAI. (n.d.-a). *Create chat completion*. OpenAI Platform. https://platform.openai.com/docs/api-reference/chat/create

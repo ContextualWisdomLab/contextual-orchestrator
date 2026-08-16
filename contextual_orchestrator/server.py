@@ -1494,8 +1494,11 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                         "invalid_message_name",
                         "message name must be at most 64 characters",
                     )
-                # OpenAI participant names are alphanumeric plus underscore/hyphen.
-                if not all(ch.isalnum() or ch in "_-" for ch in msg_name):
+                # OpenAI participant names: [a-zA-Z0-9_-]{1,64}.
+                # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+                if not msg_name.isascii() or not all(
+                    ch.isalnum() or ch in "_-" for ch in msg_name
+                ):
                     raise RequestError(
                         400,
                         "invalid_message_name",
@@ -1788,7 +1791,10 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "invalid_message",
                     "each tool_calls function.name must be at most 64 characters",
                 )
-            if not all(ch.isalnum() or ch in "_-" for ch in name):
+            # OpenAI function names: [a-zA-Z0-9_-]{1,64}. Fail closed so buyers
+            # get invalid_message instead of a provider 400.
+            # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+            if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
                 raise RequestError(
                     400,
                     "invalid_message",
@@ -2503,6 +2509,8 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
     the ``type`` key. ``json_schema`` accepts only ``type`` and ``json_schema``.
     Extra sibling keys fail closed so clients cannot smuggle unsupported fields
     into a provider-shaped object that this gateway never interpreted.
+    Inside ``json_schema``, ``name`` must match ``[a-zA-Z0-9_-]{1,64}``
+    (ASCII only — ``str.isalnum()`` is not sufficient).
     """
     if "response_format" not in body:
         return None
@@ -2562,6 +2570,21 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.name must be a non-empty string",
             )
+        # OpenAI Structured Outputs: name is [a-zA-Z0-9_-]{1,64}. Fail closed
+        # so buyers get invalid_response_format instead of a provider 400.
+        # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+        if len(name) > 64:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must be at most 64 characters",
+            )
+        if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must match [a-zA-Z0-9_-]",
+            )
         # OpenAI requires json_schema.schema as the actual JSON Schema object.
         # Fail closed when missing or non-object so clients cannot silently
         # believe structured-output enforcement applied without a schema body.
@@ -2617,10 +2640,12 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
 
     An empty array is treated as omit: many SDKs send ``tools: []`` when no tools
     are configured. Non-empty entries must be objects with ``type`` == ``function``
-    and a ``function`` object that has a non-empty ``name``. Explicit JSON
-    ``null`` on optional ``description``, ``parameters``, and ``strict`` is
-    popped in place so passthrough matches omit. Shape-only validation
-    before passthrough; provider schema depth is not re-checked here.
+    and a ``function`` object that has a non-empty ``name`` matching
+    ``[a-zA-Z0-9_-]{1,64}`` (ASCII only — ``str.isalnum()`` is not
+    sufficient). Explicit JSON ``null`` on optional ``description``,
+    ``parameters``, and ``strict`` is popped in place so passthrough
+    matches omit. Shape-only validation before passthrough; provider
+    schema depth is not re-checked here.
     """
     if "tools" not in body:
         return None
@@ -2692,14 +2717,16 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "invalid_tools",
                 "each tool.function.name must be a non-empty string",
             )
-        # OpenAI function names: [a-zA-Z0-9_-]{1,64}
+        # OpenAI function names: [a-zA-Z0-9_-]{1,64}. Fail closed so buyers
+        # get invalid_tools instead of a provider 400.
+        # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
         if len(name) > 64:
             raise RequestError(
                 400,
                 "invalid_tools",
                 "each tool.function.name must be at most 64 characters",
             )
-        if not all(ch.isalnum() or ch in "_-" for ch in name):
+        if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
             raise RequestError(
                 400,
                 "invalid_tools",

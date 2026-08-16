@@ -131,6 +131,39 @@ def exercise_request_body(raw: bytes) -> None:
                 assert body.get("metadata") == metadata
                 assert all(isinstance(value, str) for value in metadata.values())
 
+    # response_format.json_schema.name must match [a-zA-Z0-9_-]{1,64} ASCII.
+    if "response_format" in body:
+        try:
+            fmt = server._validate_chat_response_format(body)
+        except RequestError:
+            pass
+        else:
+            if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
+                schema = fmt.get("json_schema")
+                if isinstance(schema, dict) and "name" in schema:
+                    schema_name = schema["name"]
+                    assert isinstance(schema_name, str) and 1 <= len(schema_name) <= 64
+                    assert schema_name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in schema_name
+                    )
+
+    # Tools honesty: successful function names match [a-zA-Z0-9_-]{1,64} ASCII.
+    if "tools" in body:
+        try:
+            tools = server._validate_chat_tools(body)
+        except RequestError:
+            pass
+        else:
+            if tools:
+                for item in tools:
+                    function = item.get("function")
+                    assert isinstance(function, dict)
+                    tool_name = function.get("name")
+                    assert isinstance(tool_name, str) and 1 <= len(tool_name) <= 64
+                    assert tool_name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in tool_name
+                    )
+
 
 def exercise_agent_config(value: Any) -> None:
     """Drive ``ModelAgent.from_dict`` over an arbitrary decoded JSON value."""
