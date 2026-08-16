@@ -109,10 +109,29 @@ def test_http_chat_rejects_max_tool_calls_one() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_max_tool_calls_false_zero() -> None:
+def test_http_chat_accepts_max_tool_calls_zero_omit() -> None:
+    """Integer 0 is omit-equivalent (no tool-call rounds requested)."""
     server, thread, port = _server()
     try:
-        for value in (False, 0, True):
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "hello"}],
+                "max_tool_calls": 0,
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_max_tool_calls_bool() -> None:
+    """bool is not an integer tool-round count — fail closed."""
+    server, thread, port = _server()
+    try:
+        for value in (False, True):
             status, body = _post(
                 port,
                 {
@@ -132,5 +151,6 @@ if __name__ == "__main__":
     test_http_chat_accepts_max_tool_calls_null_and_empty_string()
     test_http_chat_rejects_max_tool_calls_nonzero()
     test_http_chat_rejects_max_tool_calls_one()
-    test_http_chat_rejects_max_tool_calls_false_zero()
+    test_http_chat_accepts_max_tool_calls_zero_omit()
+    test_http_chat_rejects_max_tool_calls_bool()
     print("ok")

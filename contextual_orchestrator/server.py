@@ -982,14 +982,29 @@ def _validate_max_tool_calls(
     OpenAI may cap tool-call rounds via ``max_tool_calls`` (Responses-native;
     some chat SDKs also send it). This gateway proxies a single completion and
     does not run a tool loop, so any provided value fails closed with a named
-    error rather than opaque ``unknown_fields``. Explicit JSON null and empty
-    / whitespace strings are treat-as-omit (SDK optional defaults).
+    error rather than opaque ``unknown_fields``. Explicit JSON null, empty
+    / whitespace strings, and zero (int/float/digit string ``"0"``) are
+    treat-as-omit (SDK optional defaults / no tool rounds requested).
     """
     if "max_tool_calls" not in body:
         return
     value = body.get("max_tool_calls")
     # Explicit JSON null or empty/whitespace string is treat-as-omit.
     if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    # Zero is omit-equivalent (no tool-call rounds). Digit/"0"/0.0 coerce first.
+    if type(value) is int and value == 0:
+        return
+    if isinstance(value, float) and value == 0.0:
+        return
+    if isinstance(value, str) and value.strip() == "0":
+        return
+    coerced = _coerce_optional_int(
+        value,
+        error_code="invalid_max_tool_calls",
+        message="max_tool_calls must be an integer",
+    )
+    if coerced is None or coerced == 0:
         return
     raise RequestError(
         400,
