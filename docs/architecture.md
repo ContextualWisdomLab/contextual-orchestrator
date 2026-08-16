@@ -29,7 +29,7 @@ The Fugu report combines these ideas into production constraints:
 - The agent pool is swappable, allowing provider preference, model exclusion, and compliance controls.
 - Multi-agent tool/function-call workflows need memory discipline: isolate agents inside the current workflow, but keep useful shared memory across turns.
 - Tool-calling passthrough must be schema-honest: SDK JSON `null` on optional `tool.function` fields is popped before the provider hop so Fugu-style tool workflows do not fail on omit-vs-null mismatches (OpenAI, 2024; Bray, 2017).
-- Tool-calling passthrough must also be mode-honest: `mode=conduct` and `include_orchestration_trace=true` have no Conductor workflow or trusted-trace plane on that path, so they fail closed instead of billing a silent Fugu-style single-worker proxy. Whitespace-only `mode` uses the same `or` chain as orchestration and is `invalid_mode` (Nielsen et al., 2025; Xu et al., 2025).
+- Tool-calling passthrough must also be mode-honest: `mode=conduct` and `include_orchestration_trace=true` have no Conductor workflow or trusted-trace plane on that path, so they fail closed instead of billing a silent Fugu-style single-worker proxy. Each of `orchestration` / `orchestration_mode` / `mode` is checked on its own so mixed `orchestration=route` plus `mode=conduct` cannot hide conduct. Whitespace-only `mode` is `invalid_mode` (Nielsen et al., 2025; Xu et al., 2025).
 
 ## Implementation Mapping
 

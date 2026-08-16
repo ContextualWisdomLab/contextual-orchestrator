@@ -1720,19 +1720,19 @@ def _validate_chat_passthrough_orchestration_controls(body: dict[str, Any]) -> N
     must not bill a completion. ``mode=conduct`` and
     ``include_orchestration_trace=true`` have no Conductor workflow or
     trusted-trace plane on this path — fail closed instead of silently
-    dropping them (Nielsen et al., 2025; Xu et al., 2025). Mode aliases use
-    the same ``or`` chain as orchestration so whitespace-only ``mode`` is
-    ``invalid_mode``, not an omit no-op.
+    dropping them (Nielsen et al., 2025; Xu et al., 2025). Each of
+    ``orchestration``, ``orchestration_mode``, and ``mode`` is checked on
+    its own so a mixed ``orchestration=route`` plus ``mode=conduct`` body
+    cannot hide conduct. JSON null and ``""`` stay omit-equivalent;
+    whitespace-only mode is truthy on the orchestration ``or`` chain and
+    is ``invalid_mode``.
     """
-    # Same ``or`` chain as the orchestration path: JSON null and "" are
-    # omit-equivalent; whitespace-only strings are truthy and fail closed
-    # via ``_validate_mode`` (they are not in ALLOWED_MODES).
-    raw_mode = (
-        body.get("orchestration")
-        or body.get("orchestration_mode")
-        or body.get("mode")
-    )
-    if raw_mode is not None:
+    for key in ("orchestration", "orchestration_mode", "mode"):
+        if key not in body:
+            continue
+        raw_mode = body.get(key)
+        if raw_mode is None or raw_mode == "":
+            continue
         mode = _validate_mode(raw_mode)
         if mode == "conduct":
             raise RequestError(

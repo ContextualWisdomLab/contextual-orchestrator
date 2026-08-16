@@ -147,8 +147,10 @@ SDK-default nulls; replace `developer` with `system`; omit `stream` (or set
 `latency_tolerant=true`, `seed`, `stop`, `n>1`, `logprobs`, `mode=conduct`,
 and `include_orchestration_trace=true` on tool-calling requests. Use
 `mode=auto`, `mode=route`, or omit mode; omit the trace flag or set it
-`false`. Whitespace-only `mode` is `invalid_mode`, matching the
-orchestration `or` chain. When declaring tools, omit unused `description` /
+`false`. Do not send mixed `orchestration=route` plus `mode=conduct` —
+each alias is checked on its own. Whitespace-only `mode` is
+`invalid_mode` (same truthy rule as the orchestration `or` chain). When
+declaring tools, omit unused `description` /
 `parameters` / `strict` or leave the SDK default `null` — both become omit
 before the provider hop.
 

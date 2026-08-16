@@ -230,6 +230,56 @@ def test_http_chat_tools_rejects_mode_conduct() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tools_rejects_mixed_route_and_conduct_keys() -> None:
+    """``orchestration=route`` must not hide ``mode=conduct`` on passthrough.
+
+    An ``or`` chain that prefers the first truthy alias bills a single-agent
+    proxy while the buyer still asked for a Conductor workflow.
+    """
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "tools": _LOOKUP_TOOLS,
+                "orchestration": "route",
+                "mode": "conduct",
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_mode" in blob
+        assert "conduct" in blob
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_rejects_mixed_route_and_whitespace_mode() -> None:
+    """``orchestration=route`` must not hide whitespace-only ``mode``."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "tools": _LOOKUP_TOOLS,
+                "orchestration": "route",
+                "mode": "   ",
+            },
+        )
+        assert status == 400, body
+        assert "invalid_mode" in json.dumps(body)
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_response_format_rejects_invalid_mode() -> None:
     """``response_format`` uses the same early-return as ``tools``."""
     server, thread, port = _server()
@@ -293,6 +343,26 @@ def test_http_chat_tools_accepts_mode_auto_and_false_trace() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tools_accepts_empty_string_mode_as_omit() -> None:
+    """JSON empty-string mode stays omit-equivalent; spaces do not."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "tools": _LOOKUP_TOOLS,
+                "mode": "",
+            },
+        )
+        assert status == 200, body
+        assert "choices" in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_tools_accepts_mode_route() -> None:
     """``mode=route`` is an advertised omit-equivalent no-op on passthrough."""
     server, thread, port = _server()
@@ -341,9 +411,12 @@ if __name__ == "__main__":
     test_http_chat_tools_rejects_non_boolean_include_orchestration_trace()
     test_http_chat_tools_rejects_include_orchestration_trace_true()
     test_http_chat_tools_rejects_mode_conduct()
+    test_http_chat_tools_rejects_mixed_route_and_conduct_keys()
+    test_http_chat_tools_rejects_mixed_route_and_whitespace_mode()
     test_http_chat_response_format_rejects_invalid_mode()
     test_http_chat_response_format_rejects_mode_conduct()
     test_http_chat_tools_accepts_mode_auto_and_false_trace()
+    test_http_chat_tools_accepts_empty_string_mode_as_omit()
     test_http_chat_tools_accepts_mode_route()
     test_http_chat_tools_accepts_null_trace_as_omit()
     print("ok")
