@@ -124,6 +124,19 @@ def test_zero_price_is_a_known_price() -> None:
     assert selected == "a_zero_price"
 
 
+def test_free_channel_with_list_price_does_not_win_as_cost_zero() -> None:
+    """Served-free with a known list/original price competes at that list price."""
+    selected, row = _selected(
+        [
+            _agent("z_listed_free_channel", "listed-free-channel"),
+            _agent("a_cheap_listed", "cheap-listed-model"),
+        ],
+        {"listed-free-channel": 12.0, "cheap-listed-model": 1.0},
+    )
+    assert selected == "a_cheap_listed"
+    assert row["selection_reason"]["price_per_million_usd"] == 1.0
+
+
 def test_policy_snapshot_discloses_lexicographic_objective() -> None:
     policy = TaskOrchestrator([_agent("single_worker", "single-model")]).policy.as_dict()
     assert policy["routing_objective"] == "maximize_capability_then_minimize_known_cost"
@@ -136,5 +149,6 @@ if __name__ == "__main__":  # pragma: no cover
     test_auto_routing_minimizes_known_cost_within_maximum_capability()
     test_auto_routing_does_not_treat_unpriced_model_as_free()
     test_zero_price_is_a_known_price()
+    test_free_channel_with_list_price_does_not_win_as_cost_zero()
     test_policy_snapshot_discloses_lexicographic_objective()
     print("ok")

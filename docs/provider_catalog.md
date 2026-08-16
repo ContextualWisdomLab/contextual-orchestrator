@@ -37,5 +37,10 @@ block). Quality/Pareto selection is [issue #86](https://github.com/ContextualWis
 ## Selection after overlay
 
 Capability-first (existing role/domain tags), then known operator/catalog price.
-Unpriced ≠ free. Aligns with open PR #575. Do not use `cheapest_upstream` — it
-treats unknown price as 0.0.
+Unpriced ≠ free. A free **channel** with a known list/original price (catalog
+list field, published $/1M, or finite OpenRouter `pricing`, including a
+same-document paid sibling for `:free` variants) is compared at that list
+price — it is not ranked as cost 0.0. Explicit $0 with no list price may
+compete as 0. Missing or non-finite catalog prices stay unpriced; no list
+price is invented. Aligns with open PR #575. Do not use `cheapest_upstream` —
+it treats unknown price as 0.0.

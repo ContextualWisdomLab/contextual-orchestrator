@@ -380,6 +380,86 @@ def test_known_catalog_prices_skip_unpriced_and_do_not_treat_missing_as_zero() -
     assert "unpriced-model" not in prices
 
 
+def test_known_catalog_prices_use_list_price_when_channel_is_free() -> None:
+    """A $0 channel with a known list price is compared at the list price, not as free."""
+    store = InMemoryProviderCatalogStore()
+    openai = next(account for account in DEFAULT_PROVIDER_ACCOUNTS if account.credential_name == "OPENAI_API_KEY")
+    store.replace_catalog(
+        openai,
+        [
+            DiscoveredModel(
+                "free-channel-listed-model",
+                "Free Channel Listed",
+                channel_output_usd_per_million=0.0,
+                list_output_usd_per_million=12.0,
+                output_price_usd_per_million=0.0,
+            ),
+            DiscoveredModel(
+                "cheap-listed-model",
+                "Cheap Listed",
+                channel_output_usd_per_million=1.0,
+                list_output_usd_per_million=1.0,
+                output_price_usd_per_million=1.0,
+            ),
+        ],
+    )
+    prices = known_catalog_prices(store)
+    assert prices["free-channel-listed-model"] == 12.0
+    assert prices["cheap-listed-model"] == 1.0
+
+
+def test_known_catalog_prices_keep_explicit_zero_when_no_list_price_exists() -> None:
+    """Explicit channel $0 with no list/original price remains a known price of 0."""
+    store = InMemoryProviderCatalogStore()
+    openai = next(account for account in DEFAULT_PROVIDER_ACCOUNTS if account.credential_name == "OPENAI_API_KEY")
+    store.replace_catalog(
+        openai,
+        [
+            DiscoveredModel(
+                "explicit-zero-model",
+                "Explicit Zero",
+                channel_output_usd_per_million=0.0,
+                output_price_usd_per_million=0.0,
+            ),
+        ],
+    )
+    assert known_catalog_prices(store) == {"explicit-zero-model": 0.0}
+
+
+def test_catalog_selection_uses_list_price_not_free_channel_zero() -> None:
+    """Capability-equal workers: a free channel with list $12 loses to a $1 list price."""
+    store = InMemoryProviderCatalogStore()
+    account = next(account for account in DEFAULT_PROVIDER_ACCOUNTS if account.credential_name == "OPENROUTER_API_KEY")
+    models = normalize_models_document(
+        {
+            "data": [
+                {
+                    "id": "acme/general:free",
+                    "pricing": {"prompt": "0", "completion": "0"},
+                },
+                {
+                    "id": "acme/general",
+                    "pricing": {"prompt": "0.000012", "completion": "0.000012"},
+                },
+                {
+                    "id": "acme/thrifty",
+                    "pricing": {"prompt": "0.000001", "completion": "0.000001"},
+                },
+            ]
+        }
+    )
+    store.replace_catalog(account, models)
+    prices = known_catalog_prices(store)
+    assert prices["acme/general:free"] == pytest.approx(12.0)
+    assert prices["acme/thrifty"] == pytest.approx(1.0)
+    orchestrator = TaskOrchestrator(
+        ProviderCatalogService(store=store, accounts=(account,)).candidate_agents(),
+        price_per_million=prices,
+    )
+    selected = orchestrator._select_agent("Provide a concise status update.", "worker")
+    assert selected.model == "acme/thrifty"
+
+
 def test_catalog_orchestrator_keeps_capability_first_and_known_cost_tie_break() -> None:
     """Role/capability fit still wins; known catalog price is only a same-capability tie-break."""
     store = InMemoryProviderCatalogStore()
@@ -473,6 +553,103 @@ def test_models_document_rejects_malformed_root_and_unsafe_numeric_metadata() ->
     assert model.context_window is None
     assert model.input_price_usd_per_million is None
     assert model.output_price_usd_per_million is None
+    assert model.list_output_usd_per_million is None
+    assert model.channel_output_usd_per_million is None
+
+
+def test_models_document_uses_list_price_when_channel_is_explicit_zero() -> None:
+    """Published $/1M list fields are stored and used even when the current channel is $0."""
+    models = normalize_models_document(
+        {
+            "data": [
+                {
+                    "id": "listed-free-channel",
+                    "pricing": {"prompt": 0, "completion": 0},
+                    "list_input_usd_per_million": 6,
+                    "list_output_usd_per_million": 12,
+                }
+            ]
+        }
+    )
+    model = models[0]
+    assert model.channel_input_usd_per_million == 0.0
+    assert model.channel_output_usd_per_million == 0.0
+    assert model.list_input_usd_per_million == 6.0
+    assert model.list_output_usd_per_million == 12.0
+    assert model.input_price_usd_per_million == 6.0
+    assert model.output_price_usd_per_million == 12.0
+
+
+def test_models_document_copies_openrouter_sibling_list_price_onto_free_variant() -> None:
+    """A same-document paid sibling's finite OpenRouter pricing is the free variant's list price."""
+    models = {
+        model.model_name: model
+        for model in normalize_models_document(
+            {
+                "data": [
+                    {
+                        "id": "acme/reasoner:free",
+                        "pricing": {"prompt": "0", "completion": "0"},
+                    },
+                    {
+                        "id": "acme/reasoner",
+                        "pricing": {"prompt": "0.000001", "completion": "0.000012"},
+                    },
+                ]
+            }
+        )
+    }
+    free = models["acme/reasoner:free"]
+    paid = models["acme/reasoner"]
+    assert paid.list_output_usd_per_million == pytest.approx(12.0)
+    assert paid.output_price_usd_per_million == pytest.approx(12.0)
+    assert free.channel_output_usd_per_million == 0.0
+    assert free.list_output_usd_per_million == pytest.approx(12.0)
+    assert free.output_price_usd_per_million == pytest.approx(12.0)
+
+
+def test_models_document_does_not_invent_a_list_price_without_sibling_or_field() -> None:
+    """A lone free-channel row with explicit $0 stays known-zero; missing/non-finite stay unpriced."""
+    models = {
+        model.model_name: model
+        for model in normalize_models_document(
+            {
+                "data": [
+                    {"id": "solo-free-channel", "pricing": {"prompt": "0", "completion": 0.0}},
+                    {"id": "missing-price-model"},
+                    {
+                        "id": "nonfinite-price-model",
+                        "pricing": {"prompt": "inf", "completion": "nan"},
+                    },
+                ]
+            }
+        )
+    }
+    solo = models["solo-free-channel"]
+    assert solo.channel_output_usd_per_million == 0.0
+    assert solo.list_output_usd_per_million is None
+    assert solo.output_price_usd_per_million == 0.0
+    assert models["missing-price-model"].output_price_usd_per_million is None
+    assert models["nonfinite-price-model"].output_price_usd_per_million is None
+
+
+def test_models_document_keeps_already_per_million_list_fields_unscaled() -> None:
+    """Documented $/1M list fields must not be multiplied as if they were per-token prices."""
+    model = normalize_models_document(
+        {
+            "data": [
+                {
+                    "id": "published-list-model",
+                    "published_input_per_million": 3.5,
+                    "published_output_per_million": 7.25,
+                    "pricing": {"prompt": "0", "completion": "0"},
+                }
+            ]
+        }
+    )[0]
+    assert model.list_input_usd_per_million == 3.5
+    assert model.list_output_usd_per_million == 7.25
+    assert model.output_price_usd_per_million == 7.25
 
 
 def test_bytez_client_uses_native_key_transport_and_normalizes_output() -> None:

@@ -10,6 +10,8 @@ block). Bytez listings use native ``https://api.bytez.com/models/v2`` with
 Refresh is fail-closed: a failed account keeps last-known-good models and never
 invents replacements. Quality/Pareto selection is issue #86 and is not started
 here; pool members are ranked by existing capability tags, then known cost.
+A served-free channel with a documented list/original price is compared at
+that list price rather than ranked as cost ``0.0``.
 """
 
 from __future__ import annotations
@@ -59,6 +61,10 @@ CREATE TABLE IF NOT EXISTS provider_models (
     context_window integer,
     input_price_usd_per_million numeric(20, 8),
     output_price_usd_per_million numeric(20, 8),
+    channel_input_usd_per_million numeric(20, 8),
+    channel_output_usd_per_million numeric(20, 8),
+    list_input_usd_per_million numeric(20, 8),
+    list_output_usd_per_million numeric(20, 8),
     enabled_flag boolean NOT NULL DEFAULT true,
     first_discovered_at timestamptz NOT NULL,
     last_seen_at timestamptz NOT NULL,
@@ -124,6 +130,10 @@ class DiscoveredModel:
     context_window: int | None = None
     input_price_usd_per_million: float | None = None
     output_price_usd_per_million: float | None = None
+    channel_input_usd_per_million: float | None = None
+    channel_output_usd_per_million: float | None = None
+    list_input_usd_per_million: float | None = None
+    list_output_usd_per_million: float | None = None
 
 
 @dataclass(frozen=True)
@@ -582,7 +592,14 @@ def bootstrap_provider_credentials(
 
 
 def normalize_models_document(document: Mapping[str, Any]) -> list[DiscoveredModel]:
-    """Normalize common OpenAI/OpenRouter/Bytez listing shapes into model rows."""
+    """Normalize common OpenAI/OpenRouter/Bytez listing shapes into model rows.
+
+    Channel prices (including explicit ``0``) are stored separately from list /
+    original prices. Comparison prices prefer a known list price so a free
+    channel does not win as cost ``0.0``. A list price is never invented: only
+    documented per-million fields, finite OpenRouter ``pricing`` on the same
+    row, or a same-document paid sibling (``:free`` suffix stripped) are used.
+    """
     raw_rows: Any = document.get("data")
     if not isinstance(raw_rows, list):
         raw_rows = document.get("models")
@@ -590,7 +607,7 @@ def normalize_models_document(document: Mapping[str, Any]) -> list[DiscoveredMod
         raw_rows = list(raw_rows.values())
     if not isinstance(raw_rows, list):
         return []
-    models: dict[str, DiscoveredModel] = {}
+    parsed_rows: dict[str, _ParsedCatalogRow] = {}
     for raw in raw_rows:
         if isinstance(raw, str):
             raw = {"id": raw}
@@ -613,36 +630,96 @@ def normalize_models_document(document: Mapping[str, Any]) -> list[DiscoveredMod
             raw.get("context_length") or raw.get("context_window") or raw.get("max_context_length")
         )
         pricing = raw.get("pricing") if isinstance(raw.get("pricing"), Mapping) else {}
-        input_price = _per_token_price_to_million(
-            pricing.get("prompt") or raw.get("input_price_per_token")
+        channel_input = _first_known_usd(
+            pricing.get("prompt"),
+            raw.get("input_price_per_token"),
+            per_token=True,
         )
-        output_price = _per_token_price_to_million(
-            pricing.get("completion") or raw.get("output_price_per_token")
+        channel_output = _first_known_usd(
+            pricing.get("completion"),
+            raw.get("output_price_per_token"),
+            per_token=True,
         )
-        models[name] = DiscoveredModel(
+        list_input = _first_known_usd(
+            raw.get("list_input_usd_per_million"),
+            raw.get("published_input_per_million"),
+            raw.get("list_input_price_usd_per_million"),
+        )
+        list_output = _first_known_usd(
+            raw.get("list_output_usd_per_million"),
+            raw.get("published_output_per_million"),
+            raw.get("list_output_price_usd_per_million"),
+        )
+        if list_input is None:
+            list_input = _first_known_usd(
+                pricing.get("list_prompt"),
+                pricing.get("original_prompt"),
+                per_token=True,
+            )
+        if list_output is None:
+            list_output = _first_known_usd(
+                pricing.get("list_completion"),
+                pricing.get("original_completion"),
+                per_token=True,
+            )
+        if list_input is None and channel_input is not None and channel_input > 0:
+            list_input = channel_input
+        if list_output is None and channel_output is not None and channel_output > 0:
+            list_output = channel_output
+        parsed_rows[name] = _ParsedCatalogRow(
             model_name=name,
             display_name=display_name,
             capabilities=capabilities,
             modalities=modalities,
             context_window=context_window,
-            input_price_usd_per_million=input_price,
-            output_price_usd_per_million=output_price,
+            channel_input=channel_input,
+            channel_output=channel_output,
+            list_input=list_input,
+            list_output=list_output,
         )
-    return [models[name] for name in sorted(models)]
+    for row in parsed_rows.values():
+        sibling_name = _paid_sibling_name(row.model_name)
+        if sibling_name is None:
+            continue
+        sibling = parsed_rows.get(sibling_name)
+        if sibling is None:
+            continue
+        if row.list_input is None and sibling.list_input is not None:
+            row.list_input = sibling.list_input
+        if row.list_output is None and sibling.list_output is not None:
+            row.list_output = sibling.list_output
+    models = [
+        DiscoveredModel(
+            model_name=row.model_name,
+            display_name=row.display_name,
+            capabilities=row.capabilities,
+            modalities=row.modalities,
+            context_window=row.context_window,
+            input_price_usd_per_million=_comparison_catalog_price(row.list_input, row.channel_input),
+            output_price_usd_per_million=_comparison_catalog_price(row.list_output, row.channel_output),
+            channel_input_usd_per_million=row.channel_input,
+            channel_output_usd_per_million=row.channel_output,
+            list_input_usd_per_million=row.list_input,
+            list_output_usd_per_million=row.list_output,
+        )
+        for row in parsed_rows.values()
+    ]
+    return sorted(models, key=lambda model: model.model_name)
 
 
 def known_catalog_prices(store: ProviderCatalogStore) -> dict[str, float]:
     """Return finite nonnegative catalog prices keyed by model name.
 
-    Missing, negative, or non-finite catalog prices are omitted — they are not
-    converted to zero. Prefer output price, then input price.
+    Prefer a known list/original price over the current channel price so a
+    served-free listing does not win as cost ``0.0``. Explicit channel ``0``
+    with no list price remains a known price of ``0``. Missing, negative, or
+    non-finite catalog prices are omitted — they are not converted to zero.
     """
     prices: dict[str, float] = {}
     for row in store.enabled_models():
-        for candidate in (row.model.output_price_usd_per_million, row.model.input_price_usd_per_million):
-            if known_price_rank(candidate)[0]:
-                prices[row.model.model_name] = float(candidate)
-                break
+        price = _model_comparison_price(row.model)
+        if price is not None:
+            prices[row.model.model_name] = price
     return prices
 
 
@@ -798,8 +875,31 @@ def _optional_positive_int(value: Any) -> int | None:
     return parsed if 0 < parsed <= 10_000_000_000 else None
 
 
-def _per_token_price_to_million(value: Any) -> float | None:
-    """Convert a finite non-negative per-token USD price to per-million units."""
+@dataclass
+class _ParsedCatalogRow:
+    """Mutable first-pass catalog row used to attach same-document list prices."""
+
+    model_name: str
+    display_name: str
+    capabilities: tuple[str, ...]
+    modalities: tuple[str, ...]
+    context_window: int | None
+    channel_input: float | None
+    channel_output: float | None
+    list_input: float | None
+    list_output: float | None
+
+
+def _paid_sibling_name(model_name: str) -> str | None:
+    """Return the same-document paid id for an OpenRouter ``:free`` variant."""
+    suffix = ":free"
+    if model_name.endswith(suffix) and len(model_name) > len(suffix):
+        return model_name[: -len(suffix)]
+    return None
+
+
+def _known_usd_amount(value: Any) -> float | None:
+    """Return a finite nonnegative USD amount, or ``None`` when unpriced."""
     if isinstance(value, bool) or value is None:
         return None
     try:
@@ -808,7 +908,46 @@ def _per_token_price_to_million(value: Any) -> float | None:
         return None
     if not math.isfinite(parsed) or parsed < 0:
         return None
-    return parsed * 1_000_000
+    return parsed
+
+
+def _first_known_usd(*values: Any, per_token: bool = False) -> float | None:
+    """Return the first documented finite nonnegative price, optionally scaled."""
+    for value in values:
+        parsed = _known_usd_amount(value)
+        if parsed is None:
+            continue
+        return parsed * 1_000_000 if per_token else parsed
+    return None
+
+
+def _comparison_catalog_price(list_price: float | None, channel_price: float | None) -> float | None:
+    """Prefer a known list/original price; fall back to an explicit channel price."""
+    if known_price_rank(list_price)[0]:
+        return float(list_price)
+    if known_price_rank(channel_price)[0]:
+        return float(channel_price)
+    return None
+
+
+def _model_comparison_price(model: DiscoveredModel) -> float | None:
+    """Resolve the honest comparison price from list, then comparison, then channel."""
+    for candidate in (
+        model.list_output_usd_per_million,
+        model.list_input_usd_per_million,
+        model.output_price_usd_per_million,
+        model.input_price_usd_per_million,
+        model.channel_output_usd_per_million,
+        model.channel_input_usd_per_million,
+    ):
+        if known_price_rank(candidate)[0]:
+            return float(candidate)
+    return None
+
+
+def _per_token_price_to_million(value: Any) -> float | None:
+    """Convert a finite non-negative per-token USD price to per-million units."""
+    return _first_known_usd(value, per_token=True)
 
 
 def _utc_now() -> datetime:
