@@ -27,6 +27,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   production-default gate returns false on junk reports and on
   `measurement_status=estimated`. Access-list scope is a real ablation
   factor, not a duplicate label.
+- `run_equal_budget_ablation` now uses the same fail-closed true-θ
+  validator as `estimate_theta`, so boolean or string θ cannot be
+  laundered into an RMSE report. The Hypothesis/Atheris target pops
+  `true_theta` before parse and always exercises the ablation after a
+  valid profile. `stream_route` writes the run (and its
+  `reasoning_effort_snapshot`) through `--state-db` the same way `run`
+  and `batch_route` already do.
 
 ### References
 

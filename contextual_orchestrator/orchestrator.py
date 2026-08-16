@@ -944,8 +944,11 @@ class TaskOrchestrator:
     def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
-        True streaming for the route path. ponytail: no cross-agent failover here — bytes
-        already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
+        True streaming for the route path. When ``--state-db`` is set the finished
+        record (including an opt-in ``reasoning_effort_snapshot``) is written
+        through the same store as ``run`` and ``batch_route``. ponytail: no
+        cross-agent failover here — bytes already sent can't be recalled, so a
+        mid-stream provider failure surfaces to the caller.
         """
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
@@ -972,6 +975,8 @@ class TaskOrchestrator:
         )
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
             "workflow_run_created",
             {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},

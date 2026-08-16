@@ -9,8 +9,10 @@ Sampling temperature is not reasoning effort.
 from __future__ import annotations
 
 import math
+import os
 from pathlib import Path
 import sys
+import tempfile
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -189,8 +191,34 @@ def test_empty_true_theta_fails_closed() -> None:
     try:
         estimate_theta_rmse((), reasoning_effort="medium", extra_workflow_steps=0, temperature=0.2)
     except EffortProfileError:
+        pass
+    else:
+        raise AssertionError("empty true_theta must fail closed")
+    try:
+        run_equal_budget_ablation(())
+    except EffortProfileError:
         return
-    raise AssertionError("empty true_theta must fail closed")
+    raise AssertionError("empty ablation true_theta must fail closed")
+
+
+def test_ablation_rejects_boolean_and_string_true_theta() -> None:
+    for raw in ((True, False), ("1.5", "-0.5")):
+        try:
+            estimate_theta(
+                raw,
+                reasoning_effort="medium",
+                extra_workflow_steps=0,
+                temperature=0.2,
+            )
+        except EffortProfileError:
+            pass
+        else:
+            raise AssertionError(f"estimate_theta must reject {raw!r}")
+        try:
+            run_equal_budget_ablation(raw)
+        except EffortProfileError:
+            continue
+        raise AssertionError(f"ablation must reject non-numeric true_theta {raw!r}")
 
 
 def test_access_list_scope_changes_rmse() -> None:
@@ -303,6 +331,36 @@ def test_persisted_run_stream_and_batch_keep_snapshot() -> None:
     assert batched[0]["reasoning_effort_snapshot"]["snapshot_hash"] == expected
 
 
+def test_stream_route_snapshot_survives_state_db_restart() -> None:
+    catalog = default_role_effort_catalog()
+    expected = snapshot_role_effort_catalog(catalog).snapshot_hash
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "state.db")
+        first = TaskOrchestrator(
+            [ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning"))],
+            role_effort_catalog=catalog,
+            state_db=db,
+        )
+        stream_id = "run_effort_stream_restart"
+        list(
+            first.stream_route(
+                [{"role": "user", "content": "Write one sentence."}],
+                workflow_run_id=stream_id,
+            )
+        )
+        first.close()
+        second = TaskOrchestrator(
+            [ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning"))],
+            role_effort_catalog=catalog,
+            state_db=db,
+        )
+        try:
+            streamed = second.get_workflow_run(stream_id)
+            assert streamed["reasoning_effort_snapshot"]["snapshot_hash"] == expected
+        finally:
+            second.close()
+
+
 def test_doctoring_cites_fugu_trinity_conductor_apa7() -> None:
     root = Path(__file__).resolve().parents[1]
     architecture = (root / "docs" / "architecture.md").read_text(encoding="utf-8")
@@ -329,10 +387,12 @@ if __name__ == "__main__":  # pragma: no cover
     test_true_theta_rmse_improves_with_effort_not_temperature()
     test_true_theta_values_change_estimated_rmse()
     test_empty_true_theta_fails_closed()
+    test_ablation_rejects_boolean_and_string_true_theta()
     test_access_list_scope_changes_rmse()
     test_equal_budget_ablation_keeps_production_default_locked()
     test_production_gate_rejects_junk_and_estimated_status()
     test_opt_in_catalog_attaches_identical_snapshot_on_route_and_conduct()
     test_persisted_run_stream_and_batch_keep_snapshot()
+    test_stream_route_snapshot_survives_state_db_restart()
     test_doctoring_cites_fugu_trinity_conductor_apa7()
     print("ok")

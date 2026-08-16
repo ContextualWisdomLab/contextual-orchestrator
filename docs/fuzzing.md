@@ -31,10 +31,13 @@ deserialize request config validate untrusted input"`):
 4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
    `mock://` providers (fully offline). Arbitrary prompt text and mode must
    produce a JSON-serialisable record whose SSE framing round-trips.
-5. **Reasoning-effort profile** — `parse_reasoning_effort_profile` (issue #568).
-   Arbitrary decoded JSON must yield a finite `ReasoningEffortProfile` or raise
-   `EffortProfileError` / `TypeError` / `ValueError`. Never crash on NaN,
-   infinity, bool-as-number, or unknown keys.
+5. **Reasoning-effort profile** — `parse_reasoning_effort_profile` and
+   `run_equal_budget_ablation` (issue #568). Arbitrary decoded JSON must
+   yield a finite `ReasoningEffortProfile` or raise `EffortProfileError` /
+   `TypeError` / `ValueError`. `true_theta` is popped before parse so it
+   cannot poison the profile key set. After a valid parse the ablation
+   always runs and stays production-locked while `measurement_status` is
+   estimated. Never crash on NaN, infinity, bool-as-number, or unknown keys.
 
 ## Running locally
 

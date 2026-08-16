@@ -115,3 +115,13 @@ def test_orchestration_on_arbitrary_prompt(prompt: str, mode: str) -> None:
 @given(_json_values)
 def test_reasoning_effort_profile_never_crashes(value: object) -> None:
     exercise_reasoning_effort_profile(value)
+
+
+def test_reasoning_effort_profile_ablation_branch_is_live() -> None:
+    exercise_reasoning_effort_profile(
+        {"reasoning_effort": "high", "true_theta": [-1.5, 0.0, 1.5]}
+    )
+    exercise_reasoning_effort_profile({"reasoning_effort": "medium"})
+    exercise_reasoning_effort_profile(
+        {"reasoning_effort": "medium", "true_theta": [True, False]}
+    )

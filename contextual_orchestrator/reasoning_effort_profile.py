@@ -401,7 +401,13 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
     chain-of-thought. Buyer next action: read ``measurement_status`` and
     ``production_default_change_allowed`` before changing live defaults.
     """
-    theta = tuple(float(value) for value in true_theta)
+    theta_values: list[float] = []
+    for value in true_theta:
+        _reject_non_finite_number(value, "true_theta")
+        theta_values.append(float(value))
+    if not theta_values:
+        raise EffortProfileError("true_theta must contain at least one finite value")
+    theta = tuple(theta_values)
     budget_tokens = 1024
     baseline = _ablation_arm(
         theta,

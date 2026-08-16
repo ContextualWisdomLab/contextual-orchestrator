@@ -208,25 +208,30 @@ def exercise_reasoning_effort_profile(value: Any) -> None:
 
     Invariants: unknown keys, NaN, infinity, and bool-as-number fail as
     ``EffortProfileError`` / ``TypeError`` / ``ValueError``. A successful
-    parse is finite. An ablation against a supplied ``true_theta`` either
-    fails closed or stays production-locked while ``measurement_status`` is
-    estimated.
+    parse is finite. ``true_theta`` is popped before parse so it cannot
+    poison the profile key set. After a valid parse the ablation always
+    runs (supplied finite vector, or a fixed finite fallback) and either
+    fails closed or stays production-locked while ``measurement_status``
+    is estimated.
     """
     if not isinstance(value, dict):
         return
+    payload = dict(value)
+    supplied_theta = payload.pop("true_theta", None)
     try:
-        profile = parse_reasoning_effort_profile(value)
+        profile = parse_reasoning_effort_profile(payload)
     except (EffortProfileError, TypeError, ValueError):
         return
     assert profile.reasoning_effort in REASONING_EFFORT_LEVELS
     assert profile.access_list_scope in ACCESS_LIST_SCOPES
     assert math.isfinite(profile.temperature)
     assert math.isfinite(profile.top_p)
-    theta = value.get("true_theta")
-    if not isinstance(theta, list) or not theta:
-        return
+    if isinstance(supplied_theta, list) and supplied_theta:
+        ablation_theta = supplied_theta
+    else:
+        ablation_theta = [-1.5, 0.0, 1.5]
     try:
-        report = run_equal_budget_ablation(theta)
+        report = run_equal_budget_ablation(ablation_theta)
     except (EffortProfileError, TypeError, ValueError):
         return
     assert production_default_change_allowed(report) is False
