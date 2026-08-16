@@ -993,6 +993,7 @@ def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any]
     Mirrors OpenAI chat Completions: ``stream_options`` is only valid when streaming.
     This gateway rejects Completions streaming, so a well-formed ``stream_options``
     still fails closed once ``stream`` is checked (or here if ``stream`` is not true).
+    Explicit JSON null flag values are treat-as-omit (SDK optional defaults).
     """
     if "stream_options" not in body:
         return None
@@ -1002,6 +1003,10 @@ def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any]
         return None
     if not isinstance(opts, dict):
         raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    if not opts:
+        return None
+    # Drop null flag values (SDK optional defaults) before further checks.
+    opts = {key: value for key, value in opts.items() if value is not None}
     if not opts:
         return None
     # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
@@ -1046,6 +1051,7 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
     Shape matches OpenAI (include_usage / include_obfuscation booleans). This
     gateway's SSE route path does not emit a final usage chunk and does not
     apply stream obfuscation, so include_usage/include_obfuscation=true fail closed.
+    Explicit JSON null flag values are treat-as-omit (SDK optional defaults).
     """
     if "stream_options" not in body:
         return None
@@ -1055,6 +1061,10 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
         return None
     if not isinstance(opts, dict):
         raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    if not opts:
+        return None
+    # Drop null flag values (SDK optional defaults) before further checks.
+    opts = {key: value for key, value in opts.items() if value is not None}
     if not opts:
         return None
     # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
@@ -1184,7 +1194,8 @@ def _validate_responses_stream_options(body: dict[str, Any]) -> None:
 
     OpenAI pairs stream_options with stream=true. This gateway rejects
     stream=true on /v1/responses, so any present stream_options would be a
-    silent no-op; fail closed instead. Explicit JSON null is treat-as-omit.
+    silent no-op; fail closed instead. Explicit JSON null (object or flag
+    values) is treat-as-omit.
     """
     if "stream_options" not in body:
         return
@@ -1192,6 +1203,15 @@ def _validate_responses_stream_options(body: dict[str, Any]) -> None:
     # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
     if opts is None or (isinstance(opts, dict) and not opts):
         return
+    if isinstance(opts, dict):
+        # Null flag values alone are omit-equivalent (SDK optional defaults).
+        non_null = {key: value for key, value in opts.items() if value is not None}
+        if not non_null:
+            return
+        # All-false allowed flags are also omit-equivalent.
+        allowed_flags = {"include_usage", "include_obfuscation"}
+        if set(non_null) <= allowed_flags and all(v is False for v in non_null.values()):
+            return
     raise RequestError(
         400,
         "invalid_stream_options",

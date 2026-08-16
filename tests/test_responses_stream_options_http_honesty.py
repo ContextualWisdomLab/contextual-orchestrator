@@ -60,15 +60,33 @@ def test_http_responses_accepts_without_stream_options() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_stream_options_object() -> None:
+def test_http_responses_accepts_all_false_stream_options_as_omit() -> None:
+    """All-false flags match chat/Completions omit-equivalent SDK defaults."""
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "input": "hello stream_options",
+                "input": "hello stream_options false",
                 "stream_options": {"include_usage": False},
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_stream_options_true_flag() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "hello stream_options true",
+                "stream_options": {"include_usage": True},
             },
         )
         assert status == 400, body
@@ -101,6 +119,7 @@ def test_http_responses_rejects_stream_options_with_stream_false() -> None:
 
 if __name__ == "__main__":
     test_http_responses_accepts_without_stream_options()
-    test_http_responses_rejects_stream_options_object()
+    test_http_responses_accepts_all_false_stream_options_as_omit()
+    test_http_responses_rejects_stream_options_true_flag()
     test_http_responses_rejects_stream_options_with_stream_false()
     print("ok")
