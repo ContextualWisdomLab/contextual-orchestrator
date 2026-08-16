@@ -53,6 +53,19 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Meaning-unit embeddings chunking
+
+Researched before adding `contextual_orchestrator/meaning_unit_chunking.py`:
+
+| Library | Decision | Evidence |
+|---|---|---|
+| [LangChain RecursiveCharacterTextSplitter](https://python.langchain.com/docs/how_to/recursive_text_splitter/) | Skip | Adds a runtime dependency and splits on character separators, not source-offset meaning units. |
+| [LlamaIndex SentenceSplitter](https://docs.llamaindex.ai/en/stable/module_guides/supporting_modules/node_parser_modules/) | Skip | Pulls a document-index stack this gateway does not run. |
+| [Chonkie](https://github.com/chonkie-inc/chonkie) | Skip | Extra package for a scan this stdlib regex already covers. |
+| stdlib `re` + `HeuristicTokenCounter` | Select | Header/paragraph/sentence/image scan with source offsets, no new lockfile entry. |
+
+Skipped: a learned late-chunking encoder, OCR/object tags on `data:image` URIs, and a second embeddings store. Those wait for a naruon consumer that persists `meaning_units` and a licensed vision adapter.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

@@ -35,6 +35,27 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## Meaning-unit embeddings (searchable chunks)
+
+- **Dense Passage Retrieval for Open-Domain Question Answering** — Vladimir
+  Karpukhin, Barlas Oguz, Sewon Min, Patrick Lewis, Ledell Wu, Sergey Edunov,
+  Danqi Chen, Wen-tau Yih. (2020). *Proceedings of the 2020 Conference on
+  Empirical Methods in Natural Language Processing (EMNLP)*, 6769–6781.
+  https://doi.org/10.18653/v1/2020.emnlp-main.550
+  `dpr-passage-retrieval-2004.04906.pdf`
+  Grounds **passage-sized retrieval units**: a due-date sentence and a SKU
+  packing list must not share one vector if a buyer is going to search either
+  fact. arXiv:2004.04906; distributed under the arXiv non-exclusive license.
+
+- **Late Chunking: Contextual Chunk Embeddings Using Long-Context Embedding
+  Models** — Michael Günther, Isabelle Mohr, Daniel James Williams, Bo Wang,
+  Han Xiao. (2024). arXiv:2409.04701. https://doi.org/10.48550/arXiv.2409.04701
+  `late-chunking-2409.04701.pdf`
+  Grounds **chunk-then-embed with source spans**: keep header, paragraph,
+  sentence, and embedded-image units, then reduce only for the naruon
+  one-vector-per-input contract. Distributed under the arXiv non-exclusive
+  license.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including

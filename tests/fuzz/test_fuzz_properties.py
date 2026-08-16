@@ -18,6 +18,7 @@ from hypothesis import given, settings, strategies as st
 
 from fuzz.targets import (
     exercise_agent_config,
+    exercise_meaning_unit_chunking,
     exercise_orchestration,
     exercise_redaction,
     exercise_request_body,
@@ -108,3 +109,9 @@ def test_redaction_never_crashes_and_is_idempotent(text: str) -> None:
 )
 def test_orchestration_on_arbitrary_prompt(prompt: str, mode: str) -> None:
     exercise_orchestration(prompt, mode)
+
+
+@_SETTINGS
+@given(st.text(max_size=2048))
+def test_meaning_unit_chunking_never_crashes(text: str) -> None:
+    exercise_meaning_unit_chunking(text)

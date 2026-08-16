@@ -18,7 +18,6 @@ store, never ``os.getenv``.
 
 from __future__ import annotations
 
-import re
 from typing import Any, Dict, List, Optional
 
 from .batch_routing import (
@@ -36,12 +35,12 @@ from .batch_routing import (
 )
 from .cost_ledger import CostLedger, PriceBook
 from .kv_config import InMemoryConfigStore
+from .meaning_unit_chunking import MeaningUnitChunk, split_meaning_units
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 _EMBEDDING_CONFIG_CATEGORY = "routing"
 _DEFAULT_EMBEDDING_MAX_TOKENS_PER_REQUEST = 280_000
 _DEFAULT_EMBEDDING_MAX_CHARS_PER_PART = 240_000
-_EMBEDDING_UNIT_RE = re.compile(r"\S+\s*|\s+", re.UNICODE)
 
 
 class CostRoutingCoordinator:
@@ -301,7 +300,7 @@ class CostRoutingCoordinator:
         model: str,
         attribution: Dict[str, Any],
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
-        """Map original embedding inputs into token-budgeted provider parts."""
+        """Map original embedding inputs into meaning-unit provider parts."""
         max_tokens, max_chars = self._embedding_request_limits()
         requests: List[EmbeddingBatchRequest] = []
         part_counts: List[int] = []
@@ -312,16 +311,19 @@ class CostRoutingCoordinator:
             )
             part_count = len(parts)
             part_counts.append(part_count)
-            for part_index, (part_text, token_count) in enumerate(parts):
+            for part_index, chunk in enumerate(parts):
                 requests.append(
                     EmbeddingBatchRequest(
-                        input_text=part_text,
+                        input_text=chunk.chunk_text,
                         model=model,
                         attribution=dict(attribution),
                         source_index=source_index,
                         part_index=part_index,
                         part_count=part_count,
-                        token_count=token_count,
+                        token_count=chunk.token_count,
+                        source_start=chunk.source_start,
+                        source_end=chunk.source_end,
+                        unit_kind=chunk.unit_kind,
                     )
                 )
         return requests, part_counts, {
@@ -362,87 +364,14 @@ class CostRoutingCoordinator:
         model: str,
         max_tokens: int,
         max_chars: int,
-    ) -> List[tuple[str, int]]:
-        """Split one original embedding input into provider-safe map parts."""
-        if text == "":
-            return [("", 0)]
-        parts = self._force_token_safe_chunks(
-            text, model=model, max_tokens=max_tokens, max_chars=max_chars
-        )
-        return parts or [("", 0)]
-
-    def _force_token_safe_chunks(
-        self,
-        text: str,
-        *,
-        model: str,
-        max_tokens: int,
-        max_chars: int,
-    ) -> List[tuple[str, int]]:
-        """Recursively split text until each chunk fits token and char budgets."""
-        if text == "":
-            return [("", 0)]
-        if len(text) > max_chars:
-            chunks: List[tuple[str, int]] = []
-            for start in range(0, len(text), max_chars):
-                chunks.extend(
-                    self._force_token_safe_chunks(
-                        text[start : start + max_chars],
-                        model=model,
-                        max_tokens=max_tokens,
-                        max_chars=max_chars,
-                    )
-                )
-            return chunks
-
-        token_count = self._count_embedding_tokens(text, model)
-        if token_count <= max_tokens or len(text) <= 1:
-            return [(text, token_count)]
-
-        units = _EMBEDDING_UNIT_RE.findall(text)
-        if len(units) > 1:
-            chunks = []
-            current = ""
-            for unit in units:
-                candidate = f"{current}{unit}"
-                if current and (
-                    len(candidate) > max_chars
-                    or self._count_embedding_tokens(candidate, model) > max_tokens
-                ):
-                    chunks.extend(
-                        self._force_token_safe_chunks(
-                            current,
-                            model=model,
-                            max_tokens=max_tokens,
-                            max_chars=max_chars,
-                        )
-                    )
-                    current = unit
-                else:
-                    current = candidate
-            if current:
-                chunks.extend(
-                    self._force_token_safe_chunks(
-                        current,
-                        model=model,
-                        max_tokens=max_tokens,
-                        max_chars=max_chars,
-                    )
-                )
-            if len(chunks) > 1 or (chunks and chunks[0][0] != text):
-                return chunks
-
-        midpoint = max(1, len(text) // 2)
-        return self._force_token_safe_chunks(
-            text[:midpoint],
+    ) -> List[MeaningUnitChunk]:
+        """Split one original embedding input into meaning-unit map parts."""
+        return split_meaning_units(
+            text,
             model=model,
             max_tokens=max_tokens,
             max_chars=max_chars,
-        ) + self._force_token_safe_chunks(
-            text[midpoint:],
-            model=model,
-            max_tokens=max_tokens,
-            max_chars=max_chars,
+            count_tokens=self._count_embedding_tokens,
         )
 
     def _count_embedding_tokens(self, text: str, model: str) -> int:
@@ -501,10 +430,15 @@ class CostRoutingCoordinator:
                     "prompt_tokens": max(0, prompt_tokens),
                     "model": item.model,
                     "attribution": dict(request.attribution) if request else {},
+                    "chunk_text": request.input_text if request else "",
+                    "source_start": request.source_start if request else 0,
+                    "source_end": request.source_end if request else 0,
+                    "unit_kind": request.unit_kind if request else "paragraph_unit",
                 }
             )
 
         embeddings: List[Dict[str, Any]] = []
+        meaning_units: List[Dict[str, Any]] = []
         token_counts: List[int] = []
         total_cost_amount = 0.0
         currency_code = "USD"
@@ -542,6 +476,18 @@ class CostRoutingCoordinator:
                     ),
                 }
             )
+            for part in parts:
+                meaning_units.append(
+                    {
+                        "source_index": source_index,
+                        "part_index": part["part_index"],
+                        "unit_kind": part["unit_kind"],
+                        "source_start": part["source_start"],
+                        "source_end": part["source_end"],
+                        "chunk_text": part["chunk_text"],
+                        "embedding": part["embedding"],
+                    }
+                )
 
         document = {
             "batch_id": batch_id,
@@ -553,8 +499,10 @@ class CostRoutingCoordinator:
             "total_tokens": sum(token_counts),
             "part_count": len(requests),
             "input_part_counts": part_counts,
+            "meaning_units": meaning_units,
             "map_reduce": {
                 "strategy": "token_budgeted_embedding_parts_weighted_average",
+                "meaning_unit_strategy": "header_paragraph_sentence_image",
                 **part_limits,
             },
             "cost_amount": round(total_cost_amount, 6),

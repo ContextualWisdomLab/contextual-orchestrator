@@ -15,7 +15,7 @@
 |---|---|---|
 | `GET` | `/openapi.json` | API contract |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
-| `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
+| `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are split on header/paragraph/sentence/image meaning units before routing via pg-llm-batch. Next action: read `meaning_units` when you need SKU-level or sender-level search, and keep `embeddings` for the one-vector-per-input naruon reduce. |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |

@@ -416,7 +416,7 @@ OPENAPI_SPEC = {
         "/v1/batch/embeddings": {
             "post": {
                 "operationId": "create_batch_embeddings_job",
-                "summary": "Submit a bulk, latency-tolerant embeddings batch (token-split, routed via pg-llm-batch, cost-recorded)",
+                "summary": "Submit a bulk, latency-tolerant embeddings batch (meaning-unit split, routed via pg-llm-batch, cost-recorded)",
                 "security": [{"inference_bearer_auth": []}],
                 "requestBody": {
                     "required": True,

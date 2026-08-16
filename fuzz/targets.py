@@ -28,6 +28,7 @@ import json
 from typing import Any
 
 from contextual_orchestrator import server
+from contextual_orchestrator.meaning_unit_chunking import split_meaning_units
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
@@ -188,3 +189,33 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
             continue
         assert frame.startswith("data: ")
         json.loads(frame[len("data: "):])
+
+
+def exercise_meaning_unit_chunking(text: str) -> None:
+    """Drive meaning-unit splitting over arbitrary untrusted text.
+
+    Invariants: every successful result is a list of chunks whose source
+    spans are ordered, non-empty unless the input is empty, and reconstruct
+    to a substring of the original input.
+    """
+    chunks = split_meaning_units(
+        text,
+        model="fuzz-embed",
+        max_tokens=8,
+        max_chars=64,
+        count_tokens=lambda piece, _model: max(1, len(piece.split()) or (1 if piece else 0)),
+    )
+    assert isinstance(chunks, list)
+    previous_end = 0
+    for chunk in chunks:
+        assert isinstance(chunk.chunk_text, str)
+        assert isinstance(chunk.unit_kind, str) and chunk.unit_kind
+        assert chunk.source_start >= 0
+        assert chunk.source_end >= chunk.source_start
+        assert chunk.source_start >= previous_end or chunk.chunk_text == ""
+        assert text[chunk.source_start : chunk.source_end] == chunk.chunk_text
+        assert chunk.token_count >= 0
+        previous_end = chunk.source_end
+    if text == "":
+        assert len(chunks) == 1
+        assert chunks[0].chunk_text == ""
