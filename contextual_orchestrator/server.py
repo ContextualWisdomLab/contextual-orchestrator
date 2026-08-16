@@ -3697,6 +3697,24 @@ def build_server(
                             _validate_completions_temperature(body)
                         if "top_p" in body:
                             _validate_completions_top_p(body)
+                        _validate_attribution(body.get("attribution"))
+                        routing = _validate_routing(body.get("routing"))
+                        # Tools / response_format proxy is sync-only. Batch hints
+                        # must not bill a silent sync completion.
+                        if routing and routing.get("channel") == "batch":
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.channel=batch is not supported with tools or "
+                                "response_format; omit routing.channel or set channel=sync",
+                            )
+                        if routing and routing.get("latency_tolerant") is True:
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.latency_tolerant=true is not supported with tools "
+                                "or response_format; omit it or set false",
+                            )
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")

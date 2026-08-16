@@ -114,9 +114,16 @@ the tools passthrough path as on the orchestration path. `stream=true` with
 does not SSE-proxy tool calls yet. Missing `model` and out-of-range
 `temperature` / `top_p` also fail closed before passthrough.
 
+`attribution` and `routing` use the same named errors on the tools /
+`response_format` path as on the orchestration path. Unknown spend
+dimensions fail closed (`invalid_attribution`). Tools passthrough has no
+batch job plane: `routing.channel=batch` and `routing.latency_tolerant=true`
+fail closed (`invalid_routing`) instead of billing a silent sync
+completion. Send known sync dimensions only (`channel=sync` or omit).
+
 Next action: keep SDK-default nulls; replace `developer` with `system`; omit
 `stream` (or set `false`) on tool-calling requests; always send a pool
-`model`.
+`model`; omit batch routing hints on tool-calling requests.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
