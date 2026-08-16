@@ -535,8 +535,9 @@ def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None
     if "parallel_tool_calls" not in body:
         return None
     value = body.get("parallel_tool_calls")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if value is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit
+    # (SDK optional default / stringified empty control).
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if not isinstance(value, bool):
         raise RequestError(
@@ -1087,6 +1088,8 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
     yields opaque 400s; named unsupported errors let buyers migrate cleanly.
     Explicit JSON null or empty string for string fields is treat-as-omit
     (SDK optional default). Empty include/text structures remain omit no-ops.
+    ``truncation`` values ``auto`` and ``disabled`` are also omit-equivalent
+    no-ops: without conversation state there is nothing to truncate.
     """
     def _present_nonempty(value: Any) -> bool:
         if value is None:
@@ -1107,12 +1110,22 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
             "invalid_conversation",
             "conversation is not supported on /v1/responses",
         )
-    if "truncation" in body and _present_nonempty(body.get("truncation")):
-        raise RequestError(
-            400,
-            "invalid_truncation",
-            "truncation is not supported on /v1/responses",
-        )
+    if "truncation" in body:
+        truncation = body.get("truncation")
+        # Explicit JSON null / empty-whitespace string: omit no-op.
+        if truncation is None or (isinstance(truncation, str) and not truncation.strip()):
+            pass
+        elif isinstance(truncation, str) and truncation.strip() in {"auto", "disabled"}:
+            # OpenAI enum. Without previous_response_id/conversation there is no
+            # multi-turn context to truncate, so auto|disabled are honest
+            # omit-equivalent no-ops (SDK clients often send truncation=auto).
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_truncation",
+                "truncation must be auto or disabled on /v1/responses",
+            )
     if "include" in body:
         include = body.get("include")
         # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
@@ -1618,13 +1631,17 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
         parallel_present = False
     elif "parallel_tool_calls" in body:
         # true or non-boolean — surface as tools unsupported (or type error below).
-        if not isinstance(parallel, bool):
+        # Explicit JSON null or empty/whitespace string is treat-as-omit.
+        if parallel is None or (isinstance(parallel, str) and not parallel.strip()):
+            parallel_present = False
+        elif not isinstance(parallel, bool):
             raise RequestError(
                 400,
                 "invalid_parallel_tool_calls",
                 "parallel_tool_calls must be a boolean",
             )
-        parallel_present = True
+        else:
+            parallel_present = True
     else:
         parallel_present = False
 
@@ -3208,9 +3225,12 @@ def build_server(
                     if "parallel_tool_calls" in body:
                         # Always type-check. With tools, true/false both valid for
                         # provider passthrough; without tools, true fails closed.
-                        # Explicit JSON null is treat-as-omit (SDK optional default).
+                        # Explicit JSON null or empty/whitespace string is treat-as-omit
+                        # (SDK optional default / stringified empty control).
                         ptc = body.get("parallel_tool_calls")
-                        if ptc is not None:
+                        if ptc is not None and not (
+                            isinstance(ptc, str) and not ptc.strip()
+                        ):
                             if not isinstance(ptc, bool):
                                 raise RequestError(
                                     400,
