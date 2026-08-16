@@ -43,6 +43,14 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## Chat Completions honesty (model + stream)
+
+- OpenAI. (n.d.). *Chat Completions API*.
+  https://platform.openai.com/docs/api-reference/chat/create
+  Grounds the fail-closed `model` (required deployment id) and `stream`
+  (SSE vs JSON) contract on `/v1/chat/completions`. Official vendor
+  documentation; cited and linked, not vendored.
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.
