@@ -43,11 +43,13 @@ This repository implements the interface and control plane, not the trained coor
   `audio`, `function_call`), role membership (`developer` / `function` /
   unknown roles), content shape (empty user/system, multimodal parts),
   participant `name`, a non-empty `messages` array, `max_tool_calls`,
-  a pool `model`, and `stream` (SSE passthrough is a follow-up; `stream=true`
-  with tools/`response_format` is `invalid_stream`)
+  a pool `model`, `stream` (SSE passthrough is a follow-up; `stream=true`
+  with tools/`response_format` is `invalid_stream`), `stream_options`,
+  `attribution`, and `routing`
   are validated *before* the tools/response_format passthrough early-return
   so SDK tool-calling bodies cannot smuggle unsupported values, silent-select
-  a worker, or bill a JSON completion when the client asked for SSE.
+  a worker, request unused usage chunks, or bill a JSON completion when the
+  client asked for SSE.
   Omit-equivalent
   `max_tool_calls` (JSON null / empty string) is stripped, not forwarded.
   Request sampling knobs (`temperature`, `top_p`, penalties, `max_tokens`)

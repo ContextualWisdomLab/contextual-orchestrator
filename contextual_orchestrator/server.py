@@ -3659,7 +3659,10 @@ def build_server(
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
                         _validate_chat_passthrough_model(orchestrator, body)
-                        _validate_chat_passthrough_stream(body)
+                        stream = _validate_chat_passthrough_stream(body)
+                        _validate_chat_stream_options(body, stream)
+                        _validate_attribution(body.get("attribution"))
+                        _validate_routing(body.get("routing"))
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
