@@ -35,6 +35,24 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## API contract honesty (tool schema omit)
+
+Gateway buyers send official OpenAI SDK payloads. Optional
+`tools[].function.description`, `parameters`, and `strict` are often serialized
+as JSON `null` rather than omitted. Those nulls must be popped before the
+provider hop; accepting them in place is not omit-equivalent and several
+OpenAI-compatible backends reject a null JSON Schema object.
+
+- OpenAI. (2024). *Create chat completion*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/chat/create
+  Grounds the optional function-tool fields and the omit-vs-present contract
+  the gateway must preserve on passthrough.
+- Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data
+  interchange format* (RFC 8259). Internet Engineering Task Force.
+  https://doi.org/10.17487/RFC8259
+  Distinguishes a present `null` member from an omitted member. Redistribution
+  of the RFC text is not required here; the citation is the normative source.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including
