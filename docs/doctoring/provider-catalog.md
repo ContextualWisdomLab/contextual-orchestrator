@@ -18,6 +18,7 @@ every model a vendor sells.
 | OpenRouter | Host is `https://openrouter.ai/api/v1`. Static `anthropic/claude-sonnet-4` and `openai/gpt-4.1` are capability tags for coding/review and reasoning until `/v1/models` returns the caller's available set. |
 | Bytez | Official OpenAI-compatible base URL is `https://api.bytez.com/models/v2/openai/v1` (Bytez, n.d.). The static chat seed is `Qwen/Qwen3-4B` from that document. A public `/models` list is **not guaranteed**; discovery is best-effort and an empty list keeps this static seed. |
 | GitHub Models | **Out of catalog.** `models.github.ai`, Copilot tokens, `gpt-5.6-luna`, and `gpt-5.6-terra` are rejected at agent construction. There is no fallback to GitHub Models when every org secret is missing. |
+| Discovery egress | `GET {base_url}/models` uses the same public-HTTPS host/IP policy as chat (`provider_base_url_rejection`). Private, loopback, link-local, reserved, and unallowlisted hosts are refused before the KV Bearer token is sent. Redirects are refused. HTTP is opt-in via `allow_insecure_discovery` (loopback lab fixtures only). |
 
 Missing a secret disables that upstream only (`NotConfigured` per agent). The
 gateway keeps serving every worker whose credential is present. When no

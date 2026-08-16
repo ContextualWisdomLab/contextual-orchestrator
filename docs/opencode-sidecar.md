@@ -109,9 +109,10 @@ curl -sS http://127.0.0.1:8000/v1/chat/completions \
   -d '{"model":"contextual-orchestrator","messages":[{"role":"user","content":"Write one sentence."}]}'
 ```
 
-Expect HTTP 200 when at least one of the five secrets is registered. When every
-secret is missing the gateway fail-closes (`NotConfigured`) and does **not**
-fall back to GitHub Models.
+Expect HTTP 200 only when an available provider successfully completes the
+request. A registered secret that is expired, quota-limited, or unreachable is
+not enough. When every secret is missing the gateway fail-closes
+(`NotConfigured`) and does **not** fall back to GitHub Models.
 
 Reusable workflow: `.github/workflows/opencode-sidecar.yml` (`workflow_call`).
 The org OpenCode review pipeline in `ContextualWisdomLab/.github` should call

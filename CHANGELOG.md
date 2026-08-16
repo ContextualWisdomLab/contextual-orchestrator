@@ -32,3 +32,8 @@
   fall back to GitHub Models.
 - Malformed upstream chat.completion bodies raise `ProviderResponseError` so
   the gateway failovers or returns a JSON error instead of crashing.
+- Catalog `GET /v1/models` discovery uses the same public-HTTPS egress policy
+  as chat (no private/loopback/redirect leak of the KV Bearer token). HTTP is
+  opt-in via `allow_insecure_discovery`. Reseed replaces the sqlite agent pool
+  so stale discovered workers cannot linger. Sidecar CI fails when `/healthz`
+  never comes up.

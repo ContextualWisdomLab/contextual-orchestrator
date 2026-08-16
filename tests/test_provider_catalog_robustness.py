@@ -118,6 +118,16 @@ def test_one_missing_credential_disables_that_worker_and_others_still_route() ->
     assert client.calls == ["backup_openai_agent"]
 
 
+def test_empty_or_whitespace_credential_is_not_ready() -> None:
+    register_credential("NVIDIA_NIM_API_KEY", "   ")
+    register_credential("OPENAI_API_KEY", "")
+    client = _ScriptedClient({})
+    orchestrator = TaskOrchestrator(_https_workers(), client=client, price_per_million=WORKER_PRICES)
+    with pytest.raises(NotConfigured):
+        orchestrator.route_once([{"role": "user", "content": "Write a short status update."}])
+    assert client.calls == []
+
+
 def test_all_credentials_missing_fail_closed_without_github_models_fallback() -> None:
     client = _ScriptedClient({})
     orchestrator = TaskOrchestrator(_https_workers(), client=client, price_per_million=WORKER_PRICES)
