@@ -84,6 +84,7 @@ def test_seed_provider_egress_from_environ_copies_once() -> None:
         seed_provider_egress_from_environ()
         assert allowed_provider_hosts() == frozenset({"api.openai.com"})
         os.environ[_ENV_NAME] = "evil.example"
+        seed_provider_egress_from_environ()
         assert allowed_provider_hosts() == frozenset({"api.openai.com"})
         assert "evil.example" not in allowed_provider_hosts()
     finally:
@@ -116,10 +117,31 @@ def test_validate_provider_rejects_unlisted_host_from_kv() -> None:
         _restore_allowlist_env(previous)
 
 
+def test_validate_provider_ignores_process_environment_allowlist() -> None:
+    """Env-only allowlist must not reject a public host until bootstrap seeds KV."""
+    previous = os.environ.get(_ENV_NAME)
+    reset_runtime_config_store()
+    os.environ[_ENV_NAME] = "example.com"
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-host-check")
+    set_backend(backend)
+    client = ModelClient()
+    public_agent = ModelAgent(
+        "public_openai_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY"
+    )
+    try:
+        client._validate_provider(public_agent)
+    finally:
+        set_backend(None)
+        reset_runtime_config_store()
+        _restore_allowlist_env(previous)
+
+
 if __name__ == "__main__":
     test_allowed_provider_hosts_ignores_process_environment()
     test_allowed_provider_hosts_reads_kv_csv()
     test_allowed_provider_hosts_empty_kv_is_unrestricted()
     test_seed_provider_egress_from_environ_copies_once()
     test_validate_provider_rejects_unlisted_host_from_kv()
+    test_validate_provider_ignores_process_environment_allowlist()
     print("ok")
