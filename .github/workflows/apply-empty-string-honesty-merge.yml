@@ -126,6 +126,40 @@ jobs:
               ),
           )
           path.write_text(text, encoding="utf-8")
+
+          transform_path = Path(
+              ".github/bootstrap/empty-string-honesty-merge/transform.py"
+          )
+          transform_text = transform_path.read_text(encoding="utf-8")
+          helper_old = (
+              '    if new in text:\n'
+              '        return text\n'
+              '    count = text.count(old)\n'
+          )
+          helper_new = (
+              '    if new in text:\n'
+              '        return text\n'
+              '    if label == "chat parallel tool calls":\n'
+              '        implemented = (\n'
+              '            "                        # Explicit JSON null or empty/whitespace string is treat-as-omit\\n"\n'
+              '            "                        # (SDK optional default / stringified empty control).\\n"\n'
+              '            "                        ptc = body.get(\\\"parallel_tool_calls\\\")\\n"\n'
+              '            "                        if ptc is not None and not (\\n"\n'
+              '            "                            isinstance(ptc, str) and not ptc.strip()\\n"\n'
+              '            "                        ):\\n"\n'
+              '        )\n'
+              '        if implemented in text:\n'
+              '            return text\n'
+              '    count = text.count(old)\n'
+          )
+          if helper_new not in transform_text:
+              count = transform_text.count(helper_old)
+              if count != 1:
+                  raise RuntimeError(
+                      f"transform helper: expected one old fragment, found {count}"
+                  )
+              transform_text = transform_text.replace(helper_old, helper_new, 1)
+              transform_path.write_text(transform_text, encoding="utf-8")
           PY
           python .github/bootstrap/empty-string-honesty-merge/transform.py
           git add contextual_orchestrator/server.py
