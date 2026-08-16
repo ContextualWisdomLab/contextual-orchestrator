@@ -7,6 +7,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+- Trusted traces no longer replace requester email addresses with
+  `[REDACTED]`. Secret shapes (API keys, bearer tokens, password/token
+  assignments) are still destroyed. Confidentiality for operational PII is
+  bearer-scope access plus audit, not irreversible masking. Next action: use
+  an authorized token to read a failed-run trace and email the requester
+  shown in the step output.
+
 ### Fixed
 
 - Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is
@@ -42,3 +51,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - International Organization for Standardization. (2022). *Information
   security, cybersecurity and privacy protection — Information security
   controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
+- International Organization for Standardization. (2024). *Information
+  technology — Security techniques — Privacy framework* (ISO/IEC 29100:2024).
+  https://www.iso.org/standard/85938.html
+- McCallister, E., Grance, T., & Scarfone, K. (2010). *Guide to protecting
+  the confidentiality of personally identifiable information (PII)*
+  (NIST Special Publication 800-122). National Institute of Standards and
+  Technology. https://doi.org/10.6028/NIST.SP.800-122

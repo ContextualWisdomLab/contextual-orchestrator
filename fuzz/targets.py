@@ -14,7 +14,7 @@ consume untrusted bytes/JSON:
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
    ``_reject_unknown_keys`` -- the HTTP request-body parser and validators.
 2. ``orchestrator.ModelAgent.from_dict`` -- the agent-pool config parser.
-3. ``orchestrator.redact_text`` / ``redact_value`` -- secret/PII redaction run
+3. ``orchestrator.redact_text`` / ``redact_value`` -- secret redaction run
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
@@ -126,7 +126,7 @@ def exercise_agent_config(value: Any) -> None:
 
 
 def exercise_redaction(text: str) -> None:
-    """Drive secret/PII redaction over arbitrary text and structures.
+    """Drive secret redaction over arbitrary text and structures.
 
     Invariants: never crashes, always returns ``str``, and is idempotent on its
     own output (re-redacting redacted text yields the same string). Idempotence

@@ -80,6 +80,42 @@ publication; this repo cites it rather than vendoring the full PDF.
   Annex **A.8.20** (Network security) is the same allowlist expressed as an
   operator control. The standard text is not attached (copyright).
 
+## Operational PII versus secret destruction
+
+Irreversible email masking on trusted traces blocks incident follow-up.
+These sources ground the split: destroy secrets; keep operational
+identifiers; restrict who may read the trace.
+
+- Joint Task Force. (2020). *Security and privacy controls for information
+  systems and organizations* (NIST Special Publication 800-53 Rev. 5).
+  National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-53r5
+  **AC-6** (Least Privilege) and **AU-2** (Audit Events): only an authorized
+  bearer may read a trace, and that read is an auditable event. Buyer next
+  action: issue a scoped token and inspect the requester email on a failed
+  run.
+
+- International Organization for Standardization. (2022). *Information
+  security, cybersecurity and privacy protection — Information security
+  controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
+  Annex **A.8.3** (Information access restriction) is the confidentiality
+  control for operational PII. Annex **A.8.11** (Data masking) is applied
+  to secrets only. The standard text is not attached (copyright).
+
+- International Organization for Standardization. (2024). *Information
+  technology — Security techniques — Privacy framework* (ISO/IEC 29100:2024).
+  https://www.iso.org/standard/85938.html
+  Purpose specification: if the purpose of a trusted trace is contacting
+  the requester, destroying the email contradicts that purpose.
+
+- McCallister, E., Grance, T., & Scarfone, K. (2010). *Guide to protecting
+  the confidentiality of personally identifiable information (PII)*
+  (NIST Special Publication 800-122). National Institute of Standards and
+  Technology. https://doi.org/10.6028/NIST.SP.800-122
+  Confidentiality of PII is access restriction and audit, not mandatory
+  destruction of operational identifiers. US government publication; cited,
+  not vendored.
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

@@ -58,7 +58,6 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
-    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
 )
 
 DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
@@ -8322,7 +8321,15 @@ for _report_name, _report_method in list(TaskOrchestrator.__dict__.items()):
 
 
 def redact_text(text: str) -> str:
-    """Mask common secret and personal-data shapes from traces."""
+    """Destroy secrets in traces; keep operational identifiers such as email.
+
+    API keys, bearer tokens, and password/secret assignments are replaced with
+    ``[REDACTED]``. Requester emails stay visible so an authorized operator can
+    complete follow-up. Access control (bearer scope) and audit, not irreversible
+    PII masking, are the confidentiality controls (NIST SP 800-53 Rev. 5 AC-6 /
+    AU-2; ISO/IEC 27001:2022 A.8.3). ISO/IEC 27001:2022 A.8.11 masking is
+    applied to secrets only.
+    """
     redacted = text
     for pattern in SECRET_PATTERNS:
         if pattern.pattern.lower().startswith("(?i)(api"):

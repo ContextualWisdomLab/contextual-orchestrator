@@ -12,6 +12,8 @@ APA 7th citations (titles retained for paper-contract search):
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
 - Joint Task Force. (2020). *Security and privacy controls for information systems and organizations* (NIST Special Publication 800-53 Rev. 5). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-53r5
 - International Organization for Standardization. (2022). *Information security, cybersecurity and privacy protection — Information security controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
+- International Organization for Standardization. (2024). *Information technology — Security techniques — Privacy framework* (ISO/IEC 29100:2024). https://www.iso.org/standard/85938.html
+- McCallister, E., Grance, T., & Scarfone, K. (2010). *Guide to protecting the confidentiality of personally identifiable information (PII)* (NIST Special Publication 800-122). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-122
 
 ## What The Architecture Is
 
@@ -49,6 +51,9 @@ This repository implements the interface and control plane, not the trained coor
   is bootstrap transport into that KV key only — never `os.getenv` during
   `_validate_provider`.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `redact_text` / `redact_value`: destroy secrets in traces; keep requester
+  email so an authorized operator can follow up (NIST SP 800-53 Rev. 5 AC-6 /
+  AU-2; ISO/IEC 27001:2022 A.8.3 / A.8.11; ISO/IEC 29100:2024).
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

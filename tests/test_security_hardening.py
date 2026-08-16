@@ -219,7 +219,7 @@ def test_chat_completion_response_requires_explicit_trace() -> None:
 def test_redaction_masks_common_sensitive_values() -> None:
     text = "api_key='abcdefghijklmnopqrstuvwxyz' sent by alice@example.com"
 
-    assert redact_text(text) == "api_key='[REDACTED]' sent by [REDACTED]"
+    assert redact_text(text) == "api_key='[REDACTED]' sent by alice@example.com"
 
 
 def test_external_provider_requires_resolvable_credential_and_public_https() -> None:

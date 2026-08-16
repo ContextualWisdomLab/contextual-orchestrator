@@ -4,4 +4,5 @@
 |---|---|---|
 | 001-paper-grounded-orchestrator | active | Implement the source-backed orchestration contract with TDD, DDD, and CDD |
 | 002-enterprise-design-foundation | active | Add paper-grounded screen design, user stories, REST API, code/DB conventions, and i18n |
-| 003-chat-passthrough-honesty | active | Fail-closed OpenAI SDK fields before tools/response_format passthrough. Seed/stop/n/logprobs, omit-real null tool.function fields, and KV provider-host allowlist are on this tip. Next: SSE stream passthrough for tools (still `invalid_stream`), then remaining `__main__.py` bootstrap tokens. |
+| 003-chat-passthrough-honesty | active | Fail-closed OpenAI SDK fields before tools/response_format passthrough. Seed/stop/n/logprobs, omit-real null tool.function fields, and KV provider-host allowlist are on this tip. Next: SSE stream passthrough for tools (still `invalid_stream` on #606), then remaining `__main__.py` bootstrap tokens. |
+| 004-operational-pii-access | active | Destroy secrets in traces; keep requester email so operators can follow up. Confidentiality is bearer-scope + audit (NIST AC-6/AU-2, ISO 27001 A.8.3), not irreversible PII masking. |

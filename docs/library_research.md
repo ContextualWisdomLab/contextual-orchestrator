@@ -62,6 +62,15 @@ Request-time egress allowlisting is a KV config read, not a new dependency.
 | Runtime config | Existing `ConfigStore` / `InMemoryConfigStore` in `kv_config.py`; credential KV (`get_credential`) | Reuse `ConfigStore` as a process-wide request-time store (`provider_egress.allowed_provider_hosts`). Env `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` is bootstrap transport via `seed_provider_egress_from_environ` only. | New allowlist library, OS-level firewall helper, treating the host list as a secret in `get_credential`. |
 | Control baseline | NIST SP 800-53 Rev. 5 SC-7; ISO/IEC 27001:2022 A.8.20 | Document the allowlist as boundary protection. Empty KV set means "no extra hostname filter"; private/loopback/reserved addresses still fail closed. | Shipping a full NIST/ISO control catalog in this slice. |
 
+## Operational PII access (2026-08-16)
+
+Trusted-trace confidentiality is an access-control policy, not a new library.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Secret destruction | Existing `SECRET_PATTERNS` / `redact_text` in `orchestrator.py` | Keep masking API keys, bearer tokens, and password/token assignments. Remove the email regex so requester addresses stay in authorized traces. | A PII vault, reversible tokenization service, or a second redaction library. |
+| Confidentiality baseline | NIST SP 800-53 Rev. 5 AC-6 / AU-2; ISO/IEC 27001:2022 A.8.3 / A.8.11; ISO/IEC 29100:2024 purpose specification; NIST SP 800-122 | Bearer-scope + audit for operational PII; A.8.11 masking for secrets only. | Shipping a full privacy-program catalog or masking emails on the operator path. |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

@@ -2,7 +2,7 @@
 
 The orchestrator consumes untrusted input at a handful of well-defined seams:
 HTTP request bodies, agent-pool configuration, arbitrary prompt text, and trace
-payloads that pass through secret/PII redaction. Those seams are fuzzed with two
+payloads that pass through secret redaction. Those seams are fuzzed with two
 complementary, permissively licensed tools.
 
 | Tool | License | Role |
@@ -25,7 +25,8 @@ deserialize request config validate untrusted input"`):
 2. **Agent config** — `orchestrator.ModelAgent.from_dict`. Arbitrary decoded
    JSON must yield a well-typed `ModelAgent` or raise `KeyError`/`TypeError`/
    `ValueError`.
-3. **Secret/PII redaction** — `orchestrator.redact_text` / `redact_value`.
+3. **Secret redaction** — `orchestrator.redact_text` / `redact_value`.
+   Email addresses stay visible on authorized traces; secrets are destroyed.
    Never crashes, always returns `str`, is **idempotent** (re-redacting redacted
    text is a no-op), and preserves container shape.
 4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
