@@ -987,40 +987,24 @@ def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
     return best_of
 
 
-def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any] | None:
-    """Legacy Completions ``stream_options`` — object with boolean flags; requires stream=true.
+_STREAM_OPTION_FLAG_KEYS = frozenset({"include_usage", "include_obfuscation"})
 
-    Mirrors OpenAI chat Completions: ``stream_options`` is only valid when streaming.
-    This gateway rejects Completions streaming, so a well-formed ``stream_options``
-    still fails closed once ``stream`` is checked (or here if ``stream`` is not true).
-    Explicit JSON null flag values are treat-as-omit (SDK optional defaults).
+
+def _normalized_stream_option_flags(opts: Any) -> dict[str, Any] | None:
+    """Return remaining stream_options flags after omit-equivalent null/false.
+
+    Unknown keys fail closed even when their values are JSON ``null``. A
+    remaining non-boolean value fails closed as a type error. An empty
+    object, explicit JSON ``null``, or only-null / only-false allowed flags
+    are treat-as-omit (SDK optional defaults).
     """
-    if "stream_options" not in body:
-        return None
-    opts = body.get("stream_options")
-    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
     if opts is None:
         return None
     if not isinstance(opts, dict):
         raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
     if not opts:
         return None
-    # Drop null flag values (SDK optional defaults) before further checks.
-    opts = {key: value for key, value in opts.items() if value is not None}
-    if not opts:
-        return None
-    # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
-    allowed_flags = {"include_usage", "include_obfuscation"}
-    if set(opts) <= allowed_flags and all(v is False for v in opts.values()):
-        return None
-    if body.get("stream") is not True:
-        raise RequestError(
-            400,
-            "invalid_stream_options",
-            "stream_options requires stream=true",
-        )
-    allowed = {"include_usage", "include_obfuscation"}
-    unknown = sorted(set(opts) - allowed)
+    unknown = sorted(set(opts) - _STREAM_OPTION_FLAG_KEYS)
     if unknown:
         raise RequestError(
             400,
@@ -1028,21 +1012,43 @@ def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any]
             "stream_options contains unsupported fields",
             {"fields": unknown},
         )
-    if "include_usage" in opts and not isinstance(opts["include_usage"], bool):
+    kept: dict[str, Any] = {}
+    for key, value in opts.items():
+        if value is None:
+            continue
+        if not isinstance(value, bool):
+            raise RequestError(
+                400,
+                "invalid_stream_options",
+                f"stream_options.{key} must be a boolean",
+            )
+        kept[key] = value
+    if not kept or all(value is False for value in kept.values()):
+        return None
+    return kept
+
+
+def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Legacy Completions ``stream_options`` — object with boolean flags; requires stream=true.
+
+    Mirrors OpenAI chat Completions: ``stream_options`` is only valid when streaming.
+    This gateway rejects Completions streaming, so a well-formed ``stream_options``
+    still fails closed once ``stream`` is checked (or here if ``stream`` is not true).
+    Explicit JSON null flag values are treat-as-omit (SDK optional defaults).
+    Unknown keys fail closed even when null.
+    """
+    if "stream_options" not in body:
+        return None
+    kept = _normalized_stream_option_flags(body.get("stream_options"))
+    if kept is None:
+        return None
+    if body.get("stream") is not True:
         raise RequestError(
             400,
             "invalid_stream_options",
-            "stream_options.include_usage must be a boolean",
+            "stream_options requires stream=true",
         )
-    if "include_obfuscation" in opts and not isinstance(opts["include_obfuscation"], bool):
-        raise RequestError(
-            400,
-            "invalid_stream_options",
-            "stream_options.include_obfuscation must be a boolean",
-        )
-    return opts
-
-
+    return kept
 
 
 def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[str, Any] | None:
@@ -1052,24 +1058,12 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
     gateway's SSE route path does not emit a final usage chunk and does not
     apply stream obfuscation, so include_usage/include_obfuscation=true fail closed.
     Explicit JSON null flag values are treat-as-omit (SDK optional defaults).
+    Unknown keys fail closed even when null.
     """
     if "stream_options" not in body:
         return None
-    opts = body.get("stream_options")
-    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
-    if opts is None:
-        return None
-    if not isinstance(opts, dict):
-        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
-    if not opts:
-        return None
-    # Drop null flag values (SDK optional defaults) before further checks.
-    opts = {key: value for key, value in opts.items() if value is not None}
-    if not opts:
-        return None
-    # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
-    allowed_flags = {"include_usage", "include_obfuscation"}
-    if set(opts) <= allowed_flags and all(v is False for v in opts.values()):
+    kept = _normalized_stream_option_flags(body.get("stream_options"))
+    if kept is None:
         return None
     if stream is not True:
         raise RequestError(
@@ -1077,43 +1071,20 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
             "invalid_stream_options",
             "stream_options requires stream=true on /v1/chat/completions",
         )
-    allowed = {"include_usage", "include_obfuscation"}
-    unknown = sorted(set(opts) - allowed)
-    if unknown:
+    if kept.get("include_usage") is True:
         raise RequestError(
             400,
             "invalid_stream_options",
-            "stream_options contains unsupported fields",
-            {"fields": unknown},
+            "stream_options.include_usage=true is not supported on /v1/chat/completions",
         )
-    if "include_usage" in opts:
-        if not isinstance(opts["include_usage"], bool):
-            raise RequestError(
-                400,
-                "invalid_stream_options",
-                "stream_options.include_usage must be a boolean",
-            )
-        if opts["include_usage"] is True:
-            raise RequestError(
-                400,
-                "invalid_stream_options",
-                "stream_options.include_usage=true is not supported on /v1/chat/completions",
-            )
-    if "include_obfuscation" in opts:
-        if not isinstance(opts["include_obfuscation"], bool):
-            raise RequestError(
-                400,
-                "invalid_stream_options",
-                "stream_options.include_obfuscation must be a boolean",
-            )
-        if opts["include_obfuscation"] is True:
-            # SSE obfuscation is not applied by this gateway; fail closed.
-            raise RequestError(
-                400,
-                "invalid_stream_options",
-                "stream_options.include_obfuscation=true is not supported on /v1/chat/completions",
-            )
-    return opts
+    if kept.get("include_obfuscation") is True:
+        # SSE obfuscation is not applied by this gateway; fail closed.
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_obfuscation=true is not supported on /v1/chat/completions",
+        )
+    return kept
 
 
 def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
@@ -1195,23 +1166,13 @@ def _validate_responses_stream_options(body: dict[str, Any]) -> None:
     OpenAI pairs stream_options with stream=true. This gateway rejects
     stream=true on /v1/responses, so any present stream_options would be a
     silent no-op; fail closed instead. Explicit JSON null (object or flag
-    values) is treat-as-omit.
+    values) is treat-as-omit. Unknown keys fail closed even when null.
     """
     if "stream_options" not in body:
         return
-    opts = body.get("stream_options")
-    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
-    if opts is None or (isinstance(opts, dict) and not opts):
+    kept = _normalized_stream_option_flags(body.get("stream_options"))
+    if kept is None:
         return
-    if isinstance(opts, dict):
-        # Null flag values alone are omit-equivalent (SDK optional defaults).
-        non_null = {key: value for key, value in opts.items() if value is not None}
-        if not non_null:
-            return
-        # All-false allowed flags are also omit-equivalent.
-        allowed_flags = {"include_usage", "include_obfuscation"}
-        if set(non_null) <= allowed_flags and all(v is False for v in non_null.values()):
-            return
     raise RequestError(
         400,
         "invalid_stream_options",
@@ -1362,7 +1323,7 @@ def _reject_unknown_message_keys(message: dict[str, Any]) -> None:
 
 
 def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
-    """Reject unknown message keys and legacy function role before passthrough."""
+    """Reject unknown message keys and legacy function/developer roles before passthrough."""
     messages = body.get("messages")
     if not isinstance(messages, list):
         return
@@ -1375,6 +1336,12 @@ def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
                 400,
                 "invalid_message_role",
                 "function role is not supported on /v1/chat/completions; use tool instead",
+            )
+        if isinstance(role, str) and role == "developer":
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "developer role is not supported on /v1/chat/completions; use system instead",
             )
         _reject_unknown_message_keys(message)
 
@@ -1608,6 +1575,128 @@ def _validate_chat_message_audio_function_call(body: dict[str, Any]) -> None:
                     "invalid_message_function_call",
                     "non-empty message function_call is not supported on /v1/chat/completions; "
                     "use tool_calls instead",
+                )
+
+
+def _validate_chat_message_passthrough_honesty(body: dict[str, Any]) -> None:
+    """Fail-closed weight/prefix/refusal/annotations/content/name before tools proxy.
+
+    These checks otherwise live only in ``_validate_messages``, which runs after
+    the tools passthrough early return. SDK clients that send ``tools`` plus
+    fine-tune weight, prefix, refusal, annotations, empty user/system content,
+    or a participant name must get the same named error as the orchestration
+    path — never a silent smuggle to the provider.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        content = message.get("content")
+        if isinstance(content, list):
+            _validate_message_content_parts(content)
+        elif role in {"user", "system"} and (
+            content is None or (isinstance(content, str) and not content.strip())
+        ):
+            raise RequestError(
+                400,
+                "invalid_message_content",
+                "user and system message content must be a non-empty string",
+            )
+        if "name" in message:
+            msg_name = message.get("name")
+            if msg_name is None:
+                pass
+            else:
+                if role == "tool":
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "name is not valid on tool role messages",
+                    )
+                if not isinstance(msg_name, str) or not msg_name.strip():
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "message name must be a non-empty string",
+                    )
+                if len(msg_name) > 64:
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "message name must be at most 64 characters",
+                    )
+                if not all(ch.isalnum() or ch in "_-" for ch in msg_name):
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "message name must match [a-zA-Z0-9_-]",
+                    )
+        if "refusal" in message:
+            refusal = message.get("refusal")
+            if refusal is None or (isinstance(refusal, str) and not refusal.strip()):
+                pass
+            elif role != "assistant":
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "refusal is only valid on assistant messages",
+                )
+            elif not isinstance(refusal, str):
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "refusal must be a string",
+                )
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "non-empty refusal is not supported on /v1/chat/completions",
+                )
+        if "annotations" in message:
+            annotations = message.get("annotations")
+            if annotations is None or (isinstance(annotations, list) and not annotations):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_annotations",
+                    "non-empty annotations are not supported on /v1/chat/completions",
+                )
+        if "weight" in message:
+            weight = message.get("weight")
+            if weight is None:
+                pass
+            elif isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                raise RequestError(
+                    400,
+                    "invalid_message_weight",
+                    "message weight must be 0 or 1",
+                )
+            elif float(weight) not in (0.0, 1.0):
+                raise RequestError(
+                    400,
+                    "invalid_message_weight",
+                    "message weight must be 0 or 1",
+                )
+        if "prefix" in message:
+            prefix = message.get("prefix")
+            if prefix is None or prefix is False:
+                pass
+            elif prefix is True:
+                raise RequestError(
+                    400,
+                    "invalid_message_prefix",
+                    "message prefix=true is not supported on /v1/chat/completions",
+                )
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_prefix",
+                    "message prefix must be a boolean",
                 )
 
 
@@ -3540,6 +3629,7 @@ def build_server(
                     _validate_chat_tool_message_ids(body)
                     _validate_chat_assistant_tool_calls(body)
                     _validate_chat_message_audio_function_call(body)
+                    _validate_chat_message_passthrough_honesty(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "tools" in body:

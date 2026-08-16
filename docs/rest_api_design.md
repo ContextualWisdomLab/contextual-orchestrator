@@ -15,6 +15,9 @@
 |---|---|---|
 | `GET` | `/openapi.json` | API contract |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
+| `POST` | `/v1/completions` | Compatibility Completions endpoint (streaming rejected) |
+| `POST` | `/v1/responses` | Compatibility Responses endpoint (streaming rejected) |
+| `POST` | `/v1/embeddings` | Compatibility embeddings endpoint |
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |
@@ -92,6 +95,26 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_purchase_approval_packets/latest` | Produce the buyer purchase approval packet that ties proposal, close, procurement, contract, value, security, onboarding, operations, analytics, Figma, review-process policy, packaging decision, and buyer authority follow-ups into one runtime approval artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer finance, procurement, legal, security, and implementation approval. |
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
+
+## OpenAI compatibility honesty
+
+Buyers integrating official OpenAI SDKs should send optional `stream_options`
+flags as omitted, JSON `null`, or `false`. Those three shapes are
+omit-equivalent no-ops on `/v1/chat/completions`, `/v1/completions`, and
+`/v1/responses`. Do not set `include_usage=true` or `include_obfuscation=true`
+until this gateway emits a final usage chunk and applies SSE obfuscation —
+those values fail closed with `invalid_stream_options`. Unknown
+`stream_options` keys also fail closed even when their values are `null`, so a
+newer SDK field is never silently accepted.
+
+Message-level `weight`, `prefix`, `refusal`, `annotations`, `developer` role,
+empty user/system content, and participant `name` use the same named errors on
+the tools passthrough path as on the orchestration path. Next action: keep
+SDK-default nulls; replace `developer` with `system`; do not send prefix or
+non-empty refusal.
+
+OpenAI. (2024). *Create chat completion*. OpenAI API reference.
+https://platform.openai.com/docs/api-reference/chat/create
 
 ## Production Library Target
 
