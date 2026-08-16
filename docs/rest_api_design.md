@@ -119,12 +119,16 @@ and unknown `attribution` / `routing` keys also fail closed before
 passthrough. `routing.channel=batch` and `routing.latency_tolerant=true`
 fail closed on the tools path — this gateway has no batch job plane on
 passthrough, so those hints must not bill a silent sync completion.
+`seed`, `stop`, `n>1`, `logprobs`, `logit_bias`, out-of-range penalties,
+and unsupported `reasoning_effort` / `service_tier` also fail closed
+before passthrough, matching the orchestration path.
 
 Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; omit `stream` (or set
 `false`) on tool-calling requests; always send a pool `model`. Do not send
-`tools` with empty or omitted `messages`. Omit `routing.channel=batch` and
-`latency_tolerant=true` on tool-calling requests.
+`tools` with empty or omitted `messages`. Omit `routing.channel=batch`,
+`latency_tolerant=true`, `seed`, `stop`, `n>1`, and `logprobs` on
+tool-calling requests.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
