@@ -8,6 +8,7 @@
 - Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
 - OpenAI. (2024). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
+- Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The curious case of neural text degeneration. *International Conference on Learning Representations*. https://arxiv.org/abs/1904.09751
 
 ## What The Architecture Is
 
@@ -29,6 +30,7 @@ The Fugu report combines these ideas into production constraints:
 - The agent pool is swappable, allowing provider preference, model exclusion, and compliance controls.
 - Multi-agent tool/function-call workflows need memory discipline: isolate agents inside the current workflow, but keep useful shared memory across turns.
 - Tool-calling passthrough must be schema-honest: SDK JSON `null` on optional `tool.function` fields is popped before the provider hop so Fugu-style tool workflows do not fail on omit-vs-null mismatches (OpenAI, 2024; Bray, 2017).
+- Streamed route completions must apply the same request-scoped `temperature`, `top_p`, `presence_penalty`, and `frequency_penalty` as the non-stream path. Dropping nucleus sampling on `stream=true` bills a different decoding policy than the buyer sent (Holtzman et al., 2020).
 
 ## Implementation Mapping
 

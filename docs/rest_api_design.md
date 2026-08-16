@@ -122,8 +122,9 @@ passthrough, so those hints must not bill a silent sync completion.
 `seed`, `stop`, `n>1`, `logprobs`, `logit_bias`, out-of-range penalties,
 and unsupported `reasoning_effort` / `service_tier` also fail closed
 before passthrough, matching the orchestration path. A streamed
-`temperature` on the route path uses the same request-scoped default as
-the non-stream path — it is not reset to `0.2`.
+`temperature`, `top_p`, `presence_penalty`, and `frequency_penalty` on
+the route path use the same request-scoped defaults as the non-stream
+path — they are not reset to `0.2` or dropped (Holtzman et al., 2020).
 
 Optional `tools[].function.description`, `parameters`, and `strict` sent as
 JSON `null` are omit-real: the gateway pops those keys before
@@ -139,7 +140,8 @@ SDK-default nulls; replace `developer` with `system`; omit `stream` (or set
 `latency_tolerant=true`, `seed`, `stop`, `n>1`, and `logprobs` on
 tool-calling requests. When declaring tools, omit unused `description` /
 `parameters` / `strict` or leave the SDK default `null` — both become omit
-before the provider hop.
+before the provider hop. On streamed route bodies, send the `top_p` and
+penalty values you want — they are applied, not dropped.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
@@ -147,6 +149,10 @@ https://platform.openai.com/docs/api-reference/chat/create
 Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data
 interchange format* (RFC 8259). Internet Engineering Task Force.
 https://doi.org/10.17487/RFC8259
+
+Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The
+curious case of neural text degeneration. *International Conference on
+Learning Representations*. https://arxiv.org/abs/1904.09751
 
 ## Production Library Target
 

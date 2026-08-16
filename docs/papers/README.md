@@ -53,6 +53,28 @@ OpenAI-compatible backends reject a null JSON Schema object.
   Distinguishes a present `null` member from an omitted member. Redistribution
   of the RFC text is not required here; the citation is the normative source.
 
+## Streamed sampling honesty (nucleus and penalties)
+
+A streamed `/v1/chat/completions` route body that sets `top_p`,
+`presence_penalty`, or `frequency_penalty` must reach the provider payload.
+The HTTP adapter already writes those values onto `ModelClient` defaults;
+`chat()` copies them, and `stream_chat` must do the same. Otherwise a buyer
+who streams an invoice summary at `top_p=0.1` pays for a completion that
+used the provider nucleus default.
+
+- Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The
+  curious case of neural text degeneration. *International Conference on
+  Learning Representations*. https://arxiv.org/abs/1904.09751
+  `nucleus-sampling-1904.09751.pdf`
+  Grounds why `top_p` is a buyer-visible decoding contract, not an optional
+  hint this gateway may drop on the stream path. Distributed under the arXiv
+  non-exclusive distribution license.
+- OpenAI. (2024). *Create chat completion*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/chat/create
+  Grounds the Completions sampling fields (`temperature`, `top_p`,
+  `presence_penalty`, `frequency_penalty`) that must stay request-scoped on
+  both JSON and SSE route completions.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including

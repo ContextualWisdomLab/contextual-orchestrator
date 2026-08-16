@@ -21,6 +21,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Apply the request `temperature` on streamed route completions instead of
   silently using `0.2`. Next action: send the temperature you want; streaming
   no longer changes the sampling policy.
+- Apply request `top_p`, `presence_penalty`, and `frequency_penalty` on
+  streamed route completions. `stream_chat` now copies the same
+  request-scoped defaults `chat()` already used, so a streamed invoice
+  summary at `top_p=0.1` is not billed with the provider nucleus default.
+  Next action: send the nucleus and penalty values you want on `stream=true`
+  route bodies; they are no longer dropped.
 
 ### References
 
@@ -29,3 +35,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data
   interchange format* (RFC 8259). Internet Engineering Task Force.
   https://doi.org/10.17487/RFC8259
+- Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The
+  curious case of neural text degeneration. *International Conference on
+  Learning Representations*. https://arxiv.org/abs/1904.09751
