@@ -15,6 +15,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   schema. Non-null wrong types still fail closed with named `invalid_tools`.
   Next action: send those fields only when you have a real string, JSON Schema
   object, or boolean; SDK defaults of `null` are safe.
+- Fail closed on tools passthrough for `seed`, `stop`, `n>1`, `logprobs`,
+  `logit_bias`, and out-of-range penalties — the same named errors as the
+  orchestration path. Next action: omit those knobs on tool-calling requests.
+- Apply the request `temperature` on streamed route completions instead of
+  silently using `0.2`. Next action: send the temperature you want; streaming
+  no longer changes the sampling policy.
 
 ### References
 
