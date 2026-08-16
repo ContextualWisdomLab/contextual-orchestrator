@@ -116,6 +116,7 @@ One fused orchestration loop:
 - Each step has an access list, so workers see only the prior outputs intentionally exposed to them.
 - Agent definitions are data, so provider preference, exclusions, privacy constraints, and mock testing do not require code changes.
 - Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
+- Tool-calling and `response_format` bodies must send a non-empty `messages` array and a pool `model`; omit `stream` (or set `false`). `stream=true`, a missing/unknown model, or `stream_options.include_usage=true` return named 400s instead of a billed JSON completion.
 
 See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 

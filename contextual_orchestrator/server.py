@@ -1110,6 +1110,20 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
     return opts
 
 
+def _normalize_chat_stream_flag(body: dict[str, Any]) -> bool:
+    """Treat null/empty chat ``stream`` as omit; require a boolean otherwise.
+
+    The route path may stream. Tools/response_format passthrough cannot — that
+    branch must reject ``stream=true`` after this helper returns True.
+    """
+    stream = body.get("stream", False)
+    if stream is None or (isinstance(stream, str) and not stream.strip()):
+        return False
+    if not isinstance(stream, bool):
+        raise RequestError(400, "invalid_request", "stream must be a boolean")
+    return stream
+
+
 def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
@@ -3621,6 +3635,24 @@ def build_server(
                     ):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
+                        # SSE passthrough is a follow-up — stream=true would otherwise
+                        # return a JSON completion while the SDK waits for SSE.
+                        stream = _normalize_chat_stream_flag(body)
+                        if stream:
+                            raise RequestError(
+                                400,
+                                "invalid_stream",
+                                "stream=true is not supported with tools or response_format "
+                                "on this gateway; omit stream or set stream=false",
+                            )
+                        if "stream_options" in body:
+                            _validate_chat_stream_options(body, stream)
+                        model_name = _validate_completions_model(body)
+                        _require_pool_model(orchestrator, model_name)
+                        if "temperature" in body:
+                            _validate_completions_temperature(body)
+                        if "top_p" in body:
+                            _validate_completions_top_p(body)
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
