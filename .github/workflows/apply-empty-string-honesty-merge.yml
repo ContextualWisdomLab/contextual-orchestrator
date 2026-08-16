@@ -1,0 +1,115 @@
+name: Apply empty-string honesty merge
+
+on:
+  push:
+    branches:
+      - feat/empty-string-numeric-controls-noop-http-honesty-20260814115859
+    paths:
+      - .github/workflows/apply-empty-string-honesty-merge.yml
+      - .github/bootstrap/empty-string-honesty-merge/**
+
+concurrency:
+  group: apply-empty-string-honesty-merge
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact feature branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: feat/empty-string-numeric-controls-noop-http-honesty-20260814115859
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify immutable starting tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_feature=2a95772c8693fd11a3df436c28cceb492af0e9b0
+          git merge-base --is-ancestor "$expected_feature" HEAD
+          unexpected="$({ git diff --name-only "$expected_feature"...HEAD || true; } | grep -Ev '^\.github/(bootstrap/empty-string-honesty-merge/|workflows/apply-empty-string-honesty-merge\.yml$)' || true)"
+          if [ -n "$unexpected" ]; then
+            printf 'Unexpected files changed after reviewed feature head:\n%s\n' "$unexpected" >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Merge current cumulative base and resolve only server conflict
+        shell: bash
+        run: |
+          set -euo pipefail
+          base_ref=feat/reasoning-effort-none-store-stream-empty-noop-http-honesty-20260814114817
+          expected_base=718701c66399a56639b8c064c44253078246c2d9
+          git fetch origin "$base_ref"
+          actual_base="$(git rev-parse "origin/$base_ref")"
+          if [ "$actual_base" != "$expected_base" ]; then
+            echo "Base branch moved from expected $expected_base to $actual_base; refusing stale merge." >&2
+            exit 1
+          fi
+
+          set +e
+          git merge --no-commit --no-ff "$expected_base"
+          merge_status=$?
+          set -e
+          if ! git rev-parse -q --verify MERGE_HEAD >/dev/null; then
+            echo "Expected a merge in progress, got status $merge_status without MERGE_HEAD." >&2
+            exit 1
+          fi
+
+          unmerged="$(git diff --name-only --diff-filter=U)"
+          if [ "$unmerged" != "contextual_orchestrator/server.py" ]; then
+            printf 'Unexpected merge-conflict set:\n%s\n' "$unmerged" >&2
+            exit 1
+          fi
+          git checkout --theirs contextual_orchestrator/server.py
+          git add contextual_orchestrator/server.py
+          python .github/bootstrap/empty-string-honesty-merge/transform.py
+          git add contextual_orchestrator/server.py
+          git diff --check
+
+      - name: Install locked test dependencies
+        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Run focused conflict regressions
+        run: >-
+          python -m pytest -q
+          tests/test_empty_string_numeric_controls_noop_http_honesty.py
+          tests/test_responses_truncation_parallel_empty_noop_http_honesty.py
+          tests/test_request_sampling_concurrency.py
+
+      - name: Run full repository suite
+        run: python -m pytest -q
+
+      - name: Verify compilation and formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q contextual_orchestrator tests
+          git diff --check
+
+      - name: Publish verified merge and remove bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/bootstrap/empty-string-honesty-merge
+          rm -f .github/workflows/apply-empty-string-honesty-merge.yml
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No verified merge change was produced.' >&2
+            exit 1
+          fi
+          git config user.name 'contextual-orchestrator-maintainer[bot]'
+          git config user.email 'contextual-orchestrator-maintainer[bot]@users.noreply.github.com'
+          git commit -m 'merge: preserve request isolation with empty-string honesty'
+          git push origin HEAD:feat/empty-string-numeric-controls-noop-http-honesty-20260814115859
