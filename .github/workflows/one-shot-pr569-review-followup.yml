@@ -1,0 +1,216 @@
+name: One-shot PR 569 review follow-up
+
+on:
+  push:
+    branches:
+      - fix/tool-execution-fallbacks-567
+
+permissions:
+  contents: write
+
+concurrency:
+  group: one-shot-pr-569-review-followup
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    if: github.event.before == 'bd863014409192521bd85361d3d95be1bb61adb3'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout triggering commit without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # v7.0.0
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v6.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Apply deterministic review fixes
+        run: |
+          set -euo pipefail
+          python <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: Path, old: str, new: str) -> None:
+              text = path.read_text(encoding="utf-8")
+              if new in text:
+                  return
+              if old not in text:
+                  raise SystemExit(f"Expected marker missing in {path}: {old!r}")
+              path.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          tool_fallback = Path("contextual_orchestrator/tool_fallback.py")
+          replace_once(
+              tool_fallback,
+              "        observed_kind=observed_kind or kind,\n",
+              "        observed_kind=kind if observed_kind is None else observed_kind,\n",
+          )
+          replace_once(
+              tool_fallback,
+              "        observed_kind=decision.observed_kind or decision.kind,\n",
+              "        observed_kind=decision.observed_kind,\n",
+          )
+
+          orchestrator = Path("contextual_orchestrator/orchestrator.py")
+          replace_once(
+              orchestrator,
+              "        self.tool_retry_backoff_seconds = float(tool_retry_backoff_seconds)\n"
+              "        self.policy = OrchestrationPolicy()\n",
+              "        self.tool_retry_backoff_seconds = float(tool_retry_backoff_seconds)\n"
+              "        # Injectable seams keep retry timing deterministic in tests while\n"
+              "        # production uses full jitter to avoid synchronized retry bursts.\n"
+              "        self._tool_retry_sleep = time.sleep\n"
+              "        self._tool_retry_jitter = random.uniform\n"
+              "        self.policy = OrchestrationPolicy()\n",
+          )
+          replace_once(
+              orchestrator,
+              "                            retry_delay = min(\n"
+              "                                self.tool_retry_backoff_seconds\n"
+              "                                * (2.0 ** min(retry_attempt - 1, 16)),\n"
+              "                                30.0,\n"
+              "                            )\n"
+              "                            time.sleep(retry_delay)\n",
+              "                            retry_ceiling = min(\n"
+              "                                self.tool_retry_backoff_seconds\n"
+              "                                * (2.0 ** min(retry_attempt - 1, 16)),\n"
+              "                                30.0,\n"
+              "                            )\n"
+              "                            retry_delay = self._tool_retry_jitter(0.0, retry_ceiling)\n"
+              "                            self._tool_retry_sleep(retry_delay)\n",
+          )
+          replace_once(
+              orchestrator,
+              "        observed_kind = decision.observed_kind or decision.kind\n",
+              "        observed_kind = (\n"
+              "            decision.kind\n"
+              "            if decision.observed_kind is None\n"
+              "            else decision.observed_kind\n"
+              "        )\n",
+          )
+
+          tests = Path("tests/test_tool_execution_fallback.py")
+          replace_once(
+              tests,
+              "def test_idempotent_retries_wait_with_exponential_backoff(monkeypatch: pytest.MonkeyPatch) -> None:\n"
+              "    delays: list[float] = []\n"
+              "    monkeypatch.setattr(\n"
+              "        \"contextual_orchestrator.orchestrator.time.sleep\",\n"
+              "        delays.append,\n"
+              "    )\n",
+              "def test_idempotent_retries_wait_with_bounded_full_jitter() -> None:\n"
+              "    delays: list[float] = []\n",
+          )
+          replace_once(
+              tests,
+              "    result = orchestrator.route_once(\n"
+              "        [{\"role\": \"user\", \"content\": \"inspect repository\"}]\n"
+              "    )\n"
+              "    assert result[\"answer\"] == \"recovered\"\n"
+              "    assert delays == [0.25, 0.5]\n",
+              "    orchestrator._tool_retry_sleep = delays.append\n"
+              "    orchestrator._tool_retry_jitter = lambda lower, upper: upper\n"
+              "    result = orchestrator.route_once(\n"
+              "        [{\"role\": \"user\", \"content\": \"inspect repository\"}]\n"
+              "    )\n"
+              "    assert result[\"answer\"] == \"recovered\"\n"
+              "    assert delays == [0.25, 0.5]\n",
+          )
+          replace_once(
+              tests,
+              "    assert status == 200\n"
+              "    assert '\"code\": \"tool_execution_stopped\"' in body\n"
+              "    assert '\"failure_kind\": \"ambiguous_outcome\"' in body\n"
+              "    assert '\"observed_failure_kind\": \"transport_error\"' in body\n"
+              "    assert '\"finish_reason\": \"error\"' in body\n"
+              "    assert \"data: [DONE]\" in body\n"
+              "    assert \"must-not-leak\" not in body\n",
+              "    assert status == 200\n"
+              "    frames = [\n"
+              "        line[len(\"data: \") :]\n"
+              "        for line in body.splitlines()\n"
+              "        if line.startswith(\"data: \")\n"
+              "    ]\n"
+              "    assert frames[-1] == \"[DONE]\"\n"
+              "    parsed = [json.loads(frame) for frame in frames[:-1]]\n"
+              "    error_frames = [item for item in parsed if \"error\" in item]\n"
+              "    assert len(error_frames) == 1\n"
+              "    error_body = error_frames[0][\"error\"]\n"
+              "    assert error_body[\"code\"] == \"tool_execution_stopped\"\n"
+              "    assert error_body[\"detail\"][\"failure_kind\"] == \"ambiguous_outcome\"\n"
+              "    assert error_body[\"detail\"][\"observed_failure_kind\"] == \"transport_error\"\n"
+              "    assert parsed[-1][\"choices\"][0][\"finish_reason\"] == \"error\"\n"
+              "    assert \"must-not-leak\" not in body\n",
+          )
+
+          docs = Path("docs/tool_execution_fallbacks.md")
+          replace_once(
+              docs,
+              "| 409, 424, 500, 508 | execution failed | fail over only when explicitly idempotent |\n",
+              "| 409, 424, 500, 508 | execution failed | fail over only when explicitly idempotent; otherwise fail closed |\n",
+          )
+          replace_once(
+              docs,
+              "A non-idempotent timeout or transport error is reported as `ambiguous_outcome` and fails closed. HTTP status inference is compatibility behavior only; adapters should provide structured operation semantics whenever possible.\n",
+              "A non-idempotent timeout or transport error is reported as `ambiguous_outcome` and fails closed. A non-idempotent `execution_failed` decision also fails closed with action `fail_closed`, reason code `tool_failure.execution_failed.fail_closed`, and `ToolFallbackStoppedError`; the HTTP surface returns the documented `409 tool_execution_stopped` response. HTTP status inference is compatibility behavior only; adapters should provide structured operation semantics whenever possible.\n",
+          )
+          replace_once(
+              docs,
+              "`TaskOrchestrator(..., tool_retry_attempts=1, tool_retry_backoff_seconds=0.25)` permits one same-agent retry when the classifier marks the operation `retry_safe`. Retries wait with bounded exponential backoff, capped at 30 seconds. Set `tool_retry_attempts=0` to disable same-agent retries; tests may set the backoff to `0`. Invalid retry counts and negative, non-finite, boolean, or non-numeric backoff values are rejected.\n",
+              "`TaskOrchestrator(..., tool_retry_attempts=1, tool_retry_backoff_seconds=0.25)` permits one same-agent retry when the classifier marks the operation `retry_safe`. Retries use full-jitter exponential backoff with a 30-second ceiling for each delay. Set `tool_retry_attempts=0` to disable same-agent retries; tests may set the backoff to `0`. Invalid retry counts and negative, non-finite, boolean, or non-numeric backoff values are rejected. The HTTP server deliberately retains the request's concurrency slot during the bounded delay: releasing it would let an unbounded population of sleeping requests bypass `max_concurrent_runs` and later stampede while reacquiring. Workloads that need nonblocking, long-delay retry belong on the durable batch path.\n",
+          )
+          replace_once(
+              docs,
+              "`ToolFallbackStoppedError` is raised for ambiguous outcomes and authorization, policy, or argument failures. Its public message contains a stable reason code and agent id only. The original exception remains available as the Python cause for trusted internal diagnostics, but its text is not copied into audit events.\n",
+              "`ToolFallbackStoppedError` is raised for ambiguous outcomes, non-idempotent execution failures, and authorization, policy, or argument failures. Its public message contains a stable reason code and agent id only. The original exception remains available as the Python cause for trusted internal diagnostics, but its text is not copied into audit events.\n",
+          )
+          replace_once(
+              docs,
+              "When a timeout or transport failure is normalized to `ambiguous_outcome`, the event additionally records `observed_failure_kind` so operators can distinguish the original cause without retaining raw exception text.\n",
+              "`failure_kind` is the effective failure kind that determined the action and reason code. When normalization changes that effective kind to `ambiguous_outcome`, `observed_failure_kind` preserves the original normalized timeout or transport cause without retaining raw exception text. The latter field is omitted when it would equal `failure_kind`.\n",
+          )
+          PY
+
+      - name: Verify focused and full behavior
+        env:
+          PYTHONDONTWRITEBYTECODE: "1"
+          SEMGREP_SEND_METRICS: "off"
+        run: |
+          set -euo pipefail
+          python -m pytest tests/test_tool_execution_fallback.py -q
+          python -m pytest -q
+          python -m compileall -q contextual_orchestrator tests
+          docker run --rm \
+            -v "${GITHUB_WORKSPACE}:/src" \
+            -w /src \
+            -e SEMGREP_SEND_METRICS=off \
+            --entrypoint semgrep \
+            semgrep/semgrep@sha256:2b33f46ba66cf8cc2ad59ccfa7d22951fd00c632c38f1339e84ec8e6e641a942 \
+            scan --config=p/default --severity=WARNING --severity=ERROR \
+            --exclude=.github/workflows --exclude='docs/research/**/standards' \
+            --error --metrics=off
+          git diff --check
+
+      - name: Commit verified fixes and remove this one-shot workflow
+        env:
+          GITHUB_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          rm .github/workflows/one-shot-pr569-review-followup.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: address follow-up tool fallback review"
+          auth_header="AUTHORIZATION: basic $(printf 'x-access-token:%s' "$GITHUB_TOKEN" | base64 -w0)"
+          git -c "http.https://github.com/.extraheader=${auth_header}" \
+            push https://github.com/ContextualWisdomLab/contextual-orchestrator.git \
+            HEAD:fix/tool-execution-fallbacks-567
