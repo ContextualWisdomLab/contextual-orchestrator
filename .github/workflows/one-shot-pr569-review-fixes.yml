@@ -1,0 +1,103 @@
+name: Apply PR 569 review fixes
+
+on:
+  push:
+    branches:
+      - fix/tool-execution-fallbacks-567
+    paths:
+      - .github/workflows/one-shot-pr569-review-fixes.yml
+      - .github/bootstrap/pr569-review-fixes/**
+
+concurrency:
+  group: apply-pr569-review-fixes
+  cancel-in-progress: false
+
+permissions:
+  contents: write
+
+jobs:
+  apply:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 20
+    steps:
+      - name: Check out exact contributor branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0
+        with:
+          ref: fix/tool-execution-fallbacks-567
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Verify reviewed starting tree
+        shell: bash
+        run: |
+          set -euo pipefail
+          expected_head=7606df81ec650d5c8d1b86fb3bbc868228eb3b3c
+          git merge-base --is-ancestor "$expected_head" HEAD
+          unexpected="$({ git diff --name-only "$expected_head"...HEAD || true; } | grep -Ev '^\.github/(bootstrap/pr569-review-fixes/|workflows/one-shot-pr569-review-fixes\.yml$)' || true)"
+          if [ -n "$unexpected" ]; then
+            printf 'Unexpected files changed after reviewed head:\n%s\n' "$unexpected" >&2
+            exit 1
+          fi
+
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97
+        with:
+          python-version: "3.13"
+
+      - name: Install locked test dependencies
+        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Add RED policy tests
+        run: python .github/bootstrap/pr569-review-fixes/transform.py tests
+
+      - name: Prove new tests fail before implementation
+        shell: bash
+        run: |
+          set +e
+          python -m pytest -q \
+            tests/test_tool_retry_tls_policy.py \
+            tests/test_hourly_pr_maintenance_workflow.py
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "Expected the new policy tests to fail before implementation." >&2
+            exit 1
+          fi
+
+      - name: Apply bounded implementation and documentation
+        run: python .github/bootstrap/pr569-review-fixes/transform.py implementation
+
+      - name: Run focused TLS, retry, and scheduler regressions
+        run: >-
+          python -m pytest -q
+          tests/test_tool_retry_tls_policy.py
+          tests/test_provider_tls.py
+          tests/test_tool_execution_fallback.py
+          tests/test_hourly_pr_maintenance_workflow.py
+
+      - name: Run full repository suite
+        run: python -m pytest -q
+
+      - name: Verify compilation and formatting
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q contextual_orchestrator tests
+          git diff --check
+
+      - name: Publish verified review fixes and remove bootstrap
+        shell: bash
+        run: |
+          set -euo pipefail
+          rm -rf .github/bootstrap/pr569-review-fixes
+          rm -f .github/workflows/one-shot-pr569-review-fixes.yml
+          git add -A
+          git diff --cached --check
+          if git diff --cached --quiet; then
+            echo 'No verified review fix was produced.' >&2
+            exit 1
+          fi
+          git config user.name 'contextual-orchestrator-maintainer[bot]'
+          git config user.email 'contextual-orchestrator-maintainer[bot]@users.noreply.github.com'
+          git commit -m 'fix: bound tool retries and production TLS policy'
+          git push origin HEAD:fix/tool-execution-fallbacks-567
