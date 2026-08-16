@@ -2449,6 +2449,103 @@ def _normalize_optional_strict_flag(
         )
 
 
+_CHAT_TOOL_OBJECT_KEYS = frozenset({"type", "function"})
+_RESPONSES_NATIVE_TOOL_KEYS = frozenset(
+    {"type", "name", "description", "parameters", "strict"}
+)
+_RESPONSES_NATIVE_TOOL_CHOICE_KEYS = frozenset({"type", "name"})
+
+
+def _require_tool_function_name(name: Any, *, field_path: str) -> str:
+    """Require an OpenAI function name: ``[a-zA-Z0-9_-]{1,64}``."""
+    if not isinstance(name, str) or not name.strip():
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{field_path} must be a non-empty string",
+        )
+    if len(name) > 64:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{field_path} must be at most 64 characters",
+        )
+    if not all(ch.isalnum() or ch in "_-" for ch in name):
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{field_path} must match [a-zA-Z0-9_-]",
+        )
+    return name
+
+
+def _collect_declared_tool_names(tools: Any) -> set[str]:
+    """Collect function names from chat-shaped and Responses-native tools."""
+    names: set[str] = set()
+    if not isinstance(tools, list):
+        return names
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        function = item.get("function")
+        if isinstance(function, dict):
+            tool_name = function.get("name")
+            if isinstance(tool_name, str):
+                names.add(tool_name)
+        elif isinstance(item.get("name"), str):
+            names.add(item["name"])
+    return names
+
+
+def _validate_responses_native_tool(item: dict[str, Any]) -> None:
+    """Validate a Responses-native function tool and pop omit-equivalent nulls.
+
+    Official Responses SDKs send ``type``, ``name``, ``description``,
+    ``parameters``, and ``strict`` at the tool root (OpenAI, 2024c, 2024d).
+    JSON-null optional fields are stripped so passthrough matches omit.
+    """
+    unknown_tool = sorted(set(item) - _RESPONSES_NATIVE_TOOL_KEYS)
+    if unknown_tool:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            "each Responses tool accepts only type, name, description, parameters, and strict",
+            {"fields": unknown_tool},
+        )
+    if item.get("type") != "function":
+        raise RequestError(
+            400,
+            "invalid_tools",
+            "each tool type must be function",
+        )
+    _require_tool_function_name(item.get("name"), field_path="each tool.name")
+    if "parameters" in item:
+        parameters = item.get("parameters")
+        if parameters is None:
+            item.pop("parameters")
+        elif not isinstance(parameters, dict):
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.parameters must be an object",
+            )
+    if "description" in item:
+        description = item.get("description")
+        if description is None:
+            item.pop("description")
+        elif not isinstance(description, str):
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.description must be a string when provided",
+            )
+    _normalize_optional_strict_flag(
+        item,
+        error_code="invalid_tools",
+        field_path="each tool.strict",
+    )
+
+
 def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | None:
     """OpenAI chat ``response_format`` — object with type text/json_object/json_schema.
 
@@ -2537,13 +2634,19 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
 
 
 
-def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
-    """OpenAI chat ``tools`` — array of function tool objects (empty = honest no-op).
+def _validate_chat_tools(
+    body: dict[str, Any],
+    *,
+    allow_responses_native: bool = False,
+) -> list[dict[str, Any]] | None:
+    """OpenAI function ``tools`` — chat-shaped, or Responses-native when allowed.
 
     An empty array is treated as omit: many SDKs send ``tools: []`` when no tools
-    are configured. Non-empty entries must be objects with ``type`` == ``function``
-    and a ``function`` object that has a non-empty ``name``. Shape-only validation
-    before passthrough; provider schema depth is not re-checked here.
+    are configured. Chat entries must be ``type`` + ``function`` with a non-empty
+    name. On ``/v1/responses``, official SDKs send top-level ``name`` /
+    ``parameters`` / ``strict`` instead (OpenAI, 2024c). Chat stays fail-closed
+    on that shape. Shape-only validation before passthrough; provider schema
+    depth is not re-checked here.
     """
     if "tools" not in body:
         return None
@@ -2570,9 +2673,19 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
     for item in tools:
         if not isinstance(item, dict):
             raise RequestError(400, "invalid_tools", "each tool must be an object")
-        # OpenAI tool objects are type + function only; extra siblings fail closed
-        # so clients cannot smuggle uninterpreted fields through passthrough.
-        unknown_tool = sorted(set(item) - {"type", "function"})
+        if allow_responses_native and "function" in item and "name" in item:
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool must be chat-shaped or Responses-native, not both",
+            )
+        if allow_responses_native and "function" not in item:
+            _validate_responses_native_tool(item)
+            validated.append(item)
+            continue
+        # OpenAI chat tool objects are type + function only; extra siblings fail
+        # closed so clients cannot smuggle uninterpreted fields through passthrough.
+        unknown_tool = sorted(set(item) - _CHAT_TOOL_OBJECT_KEYS)
         if unknown_tool:
             raise RequestError(
                 400,
@@ -2606,26 +2719,10 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
             error_code="invalid_tools",
             field_path="each tool.function.strict",
         )
-        name = function.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.name must be a non-empty string",
-            )
-        # OpenAI function names: [a-zA-Z0-9_-]{1,64}
-        if len(name) > 64:
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.name must be at most 64 characters",
-            )
-        if not all(ch.isalnum() or ch in "_-" for ch in name):
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.name must match [a-zA-Z0-9_-]",
-            )
+        _require_tool_function_name(
+            function.get("name"),
+            field_path="each tool.function.name",
+        )
         # OpenAI function tools require parameters as a JSON Schema object when present.
         if "parameters" in function:
             parameters = function.get("parameters")
@@ -2645,11 +2742,17 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
     return validated
 
 
-def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | None:
-    """OpenAI chat ``tool_choice`` — none/auto/required or named function object.
+def _validate_chat_tool_choice(
+    body: dict[str, Any],
+    *,
+    allow_responses_native: bool = False,
+) -> str | dict[str, Any] | None:
+    """OpenAI ``tool_choice`` — none/auto/required or a named function object.
 
-    When ``type`` is ``function``, ``function.name`` must match a tools entry
-    so clients cannot force a tool the request did not declare.
+    Chat named choice is ``{type, function.name}``. On ``/v1/responses``,
+    official SDKs send ``{type, name}`` (OpenAI, 2024c). The declared name must
+    match a tools entry so clients cannot force a tool the request did not
+    declare.
     """
     if "tool_choice" not in body:
         return None
@@ -2673,7 +2776,42 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
             )
         return choice
     if isinstance(choice, dict):
-        # OpenAI named tool_choice is {type, function}; extra siblings fail closed.
+        if allow_responses_native and "function" in choice and "name" in choice:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice must be chat-shaped or Responses-native, not both",
+            )
+        if allow_responses_native and "function" not in choice:
+            unknown = sorted(set(choice) - _RESPONSES_NATIVE_TOOL_CHOICE_KEYS)
+            if unknown:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice object accepts only type and name fields",
+                    {"fields": unknown},
+                )
+            if choice.get("type") != "function":
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice object type must be function",
+                )
+            name = choice.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.name must be a non-empty string",
+                )
+            if name not in _collect_declared_tool_names(body.get("tools")):
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.name must match a tools entry",
+                )
+            return choice
+        # OpenAI chat named tool_choice is {type, function}; extra siblings fail closed.
         unknown = sorted(set(choice) - {"type", "function"})
         if unknown:
             raise RequestError(
@@ -2710,18 +2848,7 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
                 "invalid_tool_choice",
                 "tool_choice.function.name must be a non-empty string",
             )
-        tools = body.get("tools")
-        tool_names: set[str] = set()
-        if isinstance(tools, list):
-            for item in tools:
-                if not isinstance(item, dict):
-                    continue
-                fn = item.get("function")
-                if isinstance(fn, dict):
-                    tool_name = fn.get("name")
-                    if isinstance(tool_name, str):
-                        tool_names.add(tool_name)
-        if name not in tool_names:
+        if name not in _collect_declared_tool_names(body.get("tools")):
             raise RequestError(
                 400,
                 "invalid_tool_choice",
@@ -4096,7 +4223,7 @@ def build_server(
                     _validate_openai_background(body, endpoint_path="/v1/responses")
                     if "parallel_tool_calls" in body:
                         _validate_responses_parallel_tool_calls(body)
-                    # Tools surface: same OpenAI function-tool shape as chat; fail closed.
+                    # Tools surface: chat-shaped or official Responses-native; fail closed.
                     functions_raw = body.get("functions") if "functions" in body else None
                     function_call_raw = body.get("function_call") if "function_call" in body else None
                     functions_present = (
@@ -4145,9 +4272,9 @@ def build_server(
                                 "tool_choice requires tools on /v1/responses",
                             )
                     if "tools" in body:
-                        _validate_chat_tools(body)
+                        _validate_chat_tools(body, allow_responses_native=True)
                     if "tool_choice" in body:
-                        _validate_chat_tool_choice(body)
+                        _validate_chat_tool_choice(body, allow_responses_native=True)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "modalities" in body:

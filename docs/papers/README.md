@@ -58,6 +58,14 @@ is not permissible here; the contract is cited and summarized instead.
   https://platform.openai.com/docs/guides/structured-outputs
   Grounds `json_schema.strict` as an optional Structured Outputs flag, not a
   required boolean when SDKs send `null`.
+- OpenAI. (2024c). *Create a model response*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/responses/create
+  Grounds Responses function tools as top-level `{type, name, description,
+  parameters, strict}` objects and named `tool_choice` as `{type, name}`.
+- OpenAI. (2024d). *Function calling*. OpenAI API documentation.
+  https://platform.openai.com/docs/guides/function-calling
+  Grounds the Responses-native function-tool field list and `strict` as an
+  optional Structured Outputs flag on those objects.
 
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no

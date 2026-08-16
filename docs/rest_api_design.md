@@ -95,16 +95,21 @@ These product surfaces are now implemented in this prototype:
 
 ## OpenAI compatibility honesty
 
-Buyer next action: send SDK-default `null` for optional `strict` flags; do not set `parallel_tool_calls=true` on `/v1/responses` unless the request also carries a non-empty `tools` array.
+Buyer next action: send official Responses function tools as `{type, name, parameters, strict}` on `/v1/responses`; keep chat tools chat-shaped (`type` + `function`). Do not set `parallel_tool_calls=true` unless the request also carries a non-empty `tools` array.
 
 - `tools[].function.strict` and `response_format.json_schema.strict`: JSON `null` is omit-equivalent and is stripped before provider passthrough. `true` / `false` forward. Any other type returns `400` `invalid_tools` or `invalid_response_format` (OpenAI, 2024a, 2024b).
-- `/v1/responses` `parallel_tool_calls=true` requires a non-empty `tools` array (chat parity). `false`, omit, and `null` remain no-ops without tools. `tools: []` with `true` is `400` `invalid_parallel_tool_calls`.
+- `/v1/responses` accepts official Responses-native function tools (`type`, `name`, `description`, `parameters`, `strict` at the tool root) and named `tool_choice` `{type, name}` (OpenAI, 2024c, 2024d). Chat-shaped tools still work on Responses. Chat `/v1/chat/completions` rejects the native shape. A tool that mixes both shapes is `400` `invalid_tools`.
+- `/v1/responses` `parallel_tool_calls=true` requires a non-empty `tools` array in either shape. `false`, omit, and `null` remain no-ops without tools. `tools: []` with `true` is `400` `invalid_parallel_tool_calls`.
 
 ### References
 
 OpenAI. (2024a). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
 
 OpenAI. (2024b). *Structured model outputs*. OpenAI API documentation. https://platform.openai.com/docs/guides/structured-outputs
+
+OpenAI. (2024c). *Create a model response*. OpenAI API reference. https://platform.openai.com/docs/api-reference/responses/create
+
+OpenAI. (2024d). *Function calling*. OpenAI API documentation. https://platform.openai.com/docs/guides/function-calling
 
 ## Production Library Target
 

@@ -106,6 +106,25 @@ def exercise_request_body(raw: bytes) -> None:
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
 
+    # Tools validation: chat-shaped and Responses-native both fail closed.
+    if "tools" in body:
+        try:
+            server._validate_chat_tools(body)
+        except RequestError:
+            pass
+        try:
+            server._validate_chat_tools(body, allow_responses_native=True)
+        except RequestError:
+            pass
+        try:
+            server._validate_chat_tool_choice(body)
+        except RequestError:
+            pass
+        try:
+            server._validate_chat_tool_choice(body, allow_responses_native=True)
+        except RequestError:
+            pass
+
 
 def exercise_agent_config(value: Any) -> None:
     """Drive ``ModelAgent.from_dict`` over an arbitrary decoded JSON value."""
