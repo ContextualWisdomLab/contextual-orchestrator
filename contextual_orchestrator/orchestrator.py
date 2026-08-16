@@ -8702,3 +8702,74 @@ def sse_stream_body(chunks: list[dict[str, Any]]) -> str:
     frames = [f"data: {json.dumps(chunk, ensure_ascii=False)}\n\n" for chunk in chunks]
     frames.append("data: [DONE]\n\n")
     return "".join(frames)
+
+
+def response_output_text(payload: dict[str, Any]) -> str:
+    """Collect ``output_text`` parts from a completed Responses JSON body.
+
+    Official Responses objects store assistant text under
+    ``output[].content[].text`` when ``type`` is ``output_text`` (OpenAI, 2024c,
+    2024e). Callers use this to compare a non-stream JSON body with concatenated
+    ``response.output_text.delta`` events.
+    """
+    texts: list[str] = []
+    output = payload.get("output")
+    if not isinstance(output, list):
+        return ""
+    for item in output:
+        if not isinstance(item, dict):
+            continue
+        content = item.get("content")
+        if not isinstance(content, list):
+            continue
+        for part in content:
+            if isinstance(part, dict) and part.get("type") == "output_text":
+                texts.append(str(part.get("text") or ""))
+    return "".join(texts)
+
+
+def response_stream_events(payload: dict[str, Any]) -> list[dict[str, Any]]:
+    """Frame a completed Responses JSON body as official stream events.
+
+    ``/v1/responses`` passthrough finishes the upstream call first
+    (``proxy_completion`` forces ``stream=false``). This helper then emits
+    ``response.created``, ``response.output_text.delta``, and
+    ``response.completed`` so official SDKs that default to ``stream=True``
+    receive a legal event stream (OpenAI, 2024e). It is framed-from-complete,
+    like conduct-mode chat streaming — not live provider token SSE.
+    """
+    text = response_output_text(payload)
+    response_id = payload.get("id") or f"resp_{int(time.time() * 1000)}"
+    in_progress = dict(payload)
+    in_progress["status"] = "in_progress"
+    events: list[dict[str, Any]] = [
+        {"type": "response.created", "response": in_progress},
+    ]
+    for start in range(0, len(text), _STREAM_CHUNK_SIZE):
+        events.append(
+            {
+                "type": "response.output_text.delta",
+                "item_id": f"{response_id}_msg",
+                "output_index": 0,
+                "content_index": 0,
+                "delta": text[start : start + _STREAM_CHUNK_SIZE],
+            }
+        )
+    events.append({"type": "response.completed", "response": payload})
+    return events
+
+
+def responses_sse_body(events: list[dict[str, Any]]) -> str:
+    """Serialize Responses stream events as named SSE frames.
+
+    Each frame carries ``event: <type>`` plus a JSON ``data:`` line so official
+    Responses clients can dispatch on the event name (OpenAI, 2024e). There is
+    no ``[DONE]`` terminator — that marker belongs to chat Completions.
+    """
+    frames: list[str] = []
+    for event in events:
+        name = event.get("type") or "message"
+        frames.append(
+            f"event: {name}\ndata: {json.dumps(event, ensure_ascii=False)}\n\n"
+        )
+    return "".join(frames)

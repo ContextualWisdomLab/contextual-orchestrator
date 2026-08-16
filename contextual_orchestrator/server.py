@@ -24,6 +24,8 @@ from .orchestrator import (
     chat_completion_response,
     text_completion_response,
     redact_value,
+    response_stream_events,
+    responses_sse_body,
     sse_stream_body,
 )
 
@@ -1198,12 +1200,13 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
 
 
 def _validate_responses_stream_options(body: dict[str, Any]) -> None:
-    """Responses ``stream_options`` — not supported (Responses streaming is off).
+    """Responses ``stream_options`` — only omit-equivalent no-ops are accepted.
 
-    OpenAI pairs stream_options with stream=true. This gateway rejects
-    stream=true on /v1/responses, so any present stream_options would be a
-    silent no-op; fail closed instead. Explicit JSON null (object or flag
-    values) is treat-as-omit.
+    ``stream=true`` now frames completed passthrough JSON as official SSE
+    events. ``include_usage`` / ``include_obfuscation`` are not applied on
+    that framed path, so a true flag would be a silent no-op; fail closed.
+    Explicit JSON null, empty object, null flags, and all-false allowed
+    flags are treat-as-omit.
     """
     if "stream_options" not in body:
         return
@@ -4321,8 +4324,9 @@ def build_server(
                             "invalid_input",
                             "input must be a non-empty string or non-empty array on /v1/responses",
                         )
-                    # stream=false / omit → non-SSE JSON response (honest no-stream path).
-                    # stream=true is not implemented for Responses passthrough.
+                    # stream=false / omit → non-SSE JSON. stream=true frames the
+                    # completed passthrough as official Responses SSE events.
+                    want_stream = False
                     if "stream" in body:
                         stream = body.get("stream")
                         # Explicit JSON null / false / empty string are omit-equivalent no-ops.
@@ -4335,11 +4339,7 @@ def build_server(
                         elif not isinstance(stream, bool):
                             raise RequestError(400, "invalid_stream", "stream must be a boolean")
                         elif stream is True:
-                            raise RequestError(
-                                400,
-                                "invalid_stream",
-                                "stream is not supported on /v1/responses",
-                            )
+                            want_stream = True
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
@@ -4353,7 +4353,10 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    self._send(proxied)
+                    if want_stream:
+                        self._send_sse(responses_sse_body(response_stream_events(proxied)))
+                    else:
+                        self._send(proxied)
                     return
 
                 if path == "/admin/simulate":

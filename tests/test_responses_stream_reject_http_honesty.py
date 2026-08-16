@@ -81,22 +81,31 @@ def test_http_responses_accepts_stream_omit() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_stream_true() -> None:
-    """Responses passthrough has no SSE plane — stream=true fails closed."""
+def test_http_responses_accepts_stream_true_as_sse() -> None:
+    """Responses stream=true is framed SSE, not a 400."""
     server, thread, port = _server()
     try:
-        status, body = _post(
-            port,
-            {
-                "model": "mock-planner",
-                "input": "hello stream true",
-                "stream": True,
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/v1/responses",
+            data=json.dumps(
+                {
+                    "model": "mock-planner",
+                    "input": "hello stream true",
+                    "stream": True,
+                }
+            ).encode("utf-8"),
+            headers={
+                "content-type": "application/json",
+                "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+                "connection": "close",
             },
+            method="POST",
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_stream" in blob
-        assert "not supported" in blob
+        with urllib.request.urlopen(request, timeout=15) as response:
+            assert response.status == 200
+            assert "text/event-stream" in response.headers.get("content-type", "")
+            raw = response.read().decode("utf-8")
+        assert "response.completed" in raw
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -118,3 +127,11 @@ def test_http_responses_rejects_stream_non_boolean() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+if __name__ == "__main__":
+    test_http_responses_accepts_stream_false()
+    test_http_responses_accepts_stream_omit()
+    test_http_responses_accepts_stream_true_as_sse()
+    test_http_responses_rejects_stream_non_boolean()
+    print("ok")

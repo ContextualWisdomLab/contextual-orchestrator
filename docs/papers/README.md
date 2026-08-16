@@ -66,6 +66,12 @@ is not permissible here; the contract is cited and summarized instead.
   https://platform.openai.com/docs/guides/function-calling
   Grounds the Responses-native function-tool field list and `strict` as an
   optional Structured Outputs flag on those objects.
+- OpenAI. (2024e). *Streaming events*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/responses-streaming
+  Grounds `/v1/responses` `"stream": true` as named SSE events
+  (`response.created`, `response.output_text.delta`, `response.completed`)
+  whose concatenated deltas must equal the non-stream `output_text`. This
+  gateway frames those events from the completed passthrough JSON.
 
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
