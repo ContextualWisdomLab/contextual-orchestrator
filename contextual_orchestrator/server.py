@@ -2434,8 +2434,9 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
     Extra sibling keys fail closed so clients cannot smuggle unsupported fields
     into a provider-shaped object that this gateway never interpreted.
     Inside ``json_schema``, only ``name``, ``description``, ``schema``, and
-    ``strict`` are accepted. JSON-null or blank ``description`` / null
-    ``strict`` are popped in place so passthrough matches omit.
+    ``strict`` are accepted. ``name`` must match ``[a-zA-Z0-9_-]{1,64}``.
+    JSON-null or blank ``description`` / null ``strict`` are popped in
+    place so passthrough matches omit.
     """
     if "response_format" not in body:
         return None
@@ -2507,6 +2508,20 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 400,
                 "invalid_response_format",
                 "response_format.json_schema.name must be a non-empty string",
+            )
+        # OpenAI Structured Outputs: name is [a-zA-Z0-9_-]{1,64}. Fail closed
+        # so buyers get invalid_response_format instead of a provider 400.
+        if len(name) > 64:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must be at most 64 characters",
+            )
+        if not all(ch.isalnum() or ch in "_-" for ch in name):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must match [a-zA-Z0-9_-]",
             )
         # OpenAI requires json_schema.schema as the actual JSON Schema object.
         # Fail closed when missing or non-object so clients cannot silently

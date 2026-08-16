@@ -59,7 +59,7 @@ Researched before adding `_validate_chat_response_format` inner-field omit:
 
 | Option | Decision | Why |
 |---|---|---|
-| Official OpenAI Chat Completions + Structured Outputs docs | Cite (APA 7th) in `docs/papers/README.md`; do not vendor PDFs | Authoritative field list: `name`, `description`, `schema`, `strict` |
+| Official OpenAI Chat Completions + Structured Outputs docs | Cite (APA 7th) in `docs/papers/README.md`; do not vendor PDFs | Authoritative field list: `name`, `description`, `schema`, `strict`; `name` charset `[a-zA-Z0-9_-]{1,64}` |
 | IETF JSON Schema 2020-12 (Wright et al., 2022) | Cite; type-check object only | Full schema evaluation is a provider concern; this gateway only guarantees omit-real optionals and fail-closed unknown keys |
 | Pydantic / jsonschema library | Skip | Stdlib `dict.pop` + `isinstance` covers the honesty contract; Ponytail forbids a new runtime dependency |
 | Silent drop of unknown `json_schema` keys | Skip | Buyers cannot debug smuggled fields; named `invalid_response_format` is the next action |

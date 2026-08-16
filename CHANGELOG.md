@@ -17,6 +17,9 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   null optionals.
 - Pop empty or whitespace-only `tool.function.description` before proxy
   so SDK blank defaults match omit.
+- Fail closed on `response_format.json_schema.name` that is longer than
+  64 characters or outside `[a-zA-Z0-9_-]` so buyers get
+  `invalid_response_format` instead of an opaque provider rejection.
 
 ### Documentation
 
