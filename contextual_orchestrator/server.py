@@ -1229,6 +1229,40 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     )
 
 
+def _validate_chat_passthrough_model(orchestrator: Any, body: dict[str, Any]) -> str:
+    """Require a pool-served ``model`` before tools/response_format proxy.
+
+    ``_validate_completions_model`` and ``_require_pool_model`` live after the
+    passthrough early-return on the orchestration path. Without this hoist,
+    omitted/empty model silent-selects a worker and an out-of-pool id becomes
+    a raw ``ValueError`` instead of named ``invalid_model``.
+    """
+    model_name = _validate_completions_model(body)
+    _require_pool_model(orchestrator, model_name)
+    return model_name
+
+
+def _validate_chat_passthrough_stream(body: dict[str, Any]) -> None:
+    """Fail closed on ``stream=true`` before tools/response_format proxy.
+
+    ``proxy_completion`` forces ``stream=false`` and returns a JSON body. A
+    buyer who sent ``stream: true`` would otherwise receive 200 JSON and
+    believe SSE was applied. Null / false / empty-string remain omit no-ops.
+    """
+    if "stream" not in body:
+        return
+    stream = body.get("stream")
+    if stream is None or stream is False or (isinstance(stream, str) and not stream.strip()):
+        return
+    if not isinstance(stream, bool):
+        raise RequestError(400, "invalid_stream", "stream must be a boolean")
+    raise RequestError(
+        400,
+        "invalid_stream",
+        "stream is not supported on tools/response_format passthrough; "
+        "omit stream or send stream=false",
+    )
+
 
 def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
     """OpenAI multimodal content-parts array (text + image_url) for vision callers.
@@ -3612,6 +3646,10 @@ def build_server(
                     ):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
+                        # Model + stream must fail closed here: the orchestration
+                        # checks below never run on this return.
+                        _validate_chat_passthrough_model(orchestrator, body)
+                        _validate_chat_passthrough_stream(body)
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
