@@ -325,7 +325,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep -- dynamic-urllib-use-detected: request built from validated agent.base_url via _provider_url, not untrusted body fields
             request,
             timeout=self.timeout,
             context=self._ssl_context,
@@ -357,7 +357,7 @@ class ModelClient:
     def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
         api_key = get_credential(agent.credential_name) or ""
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # nosemgrep -- dynamic-urllib-use-detected: URL is built from configured agent.base_url, not request body user input
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
             headers={
@@ -418,7 +418,7 @@ class ModelClient:
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
         api_key = get_credential(agent.credential_name) or ""
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # nosemgrep -- dynamic-urllib-use-detected: URL is built from configured agent.base_url, not request body user input
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
             headers={
@@ -605,7 +605,7 @@ class ModelClient:
             f"--{boundary}\r\ncontent-disposition: form-data; name=\"file\"; filename=\"batch.jsonl\"\r\n"
             "content-type: application/jsonl\r\n\r\n"
         ).encode("utf-8") + payload + f"\r\n--{boundary}--\r\n".encode("utf-8")
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # nosemgrep -- dynamic-urllib-use-detected: URL is built from configured agent.base_url, not request body user input
             self._provider_url(agent, "/files"),
             data=body,
             headers={
@@ -619,7 +619,7 @@ class ModelClient:
 
     def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
         api_key = get_credential(agent.credential_name) or ""
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # nosemgrep -- dynamic-urllib-use-detected: URL is built from configured agent.base_url, not request body user input
             self._provider_url(agent, path),
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             headers={
@@ -633,7 +633,7 @@ class ModelClient:
 
     def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
         api_key = get_credential(agent.credential_name) or ""
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # nosemgrep -- dynamic-urllib-use-detected: URL is built from configured agent.base_url, not request body user input
             self._provider_url(agent, path),
             headers={"authorization": f"Bearer {api_key}"},
             method="GET",
