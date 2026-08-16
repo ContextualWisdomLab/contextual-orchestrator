@@ -15,7 +15,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Production route/conduct defaults stay locked until
   `production_default_change_allowed` is true.
   Next action: run `python tests/test_reasoning_effort_profile.py` and keep
-  live defaults unchanged while the gate is false.
+  live defaults unchanged while the gate is false. Pass
+  `role_effort_catalog=default_role_effort_catalog()` to attach the same
+  `reasoning_effort_snapshot` on route and conduct; omit it to keep today's
+  payload.
 
 ### References
 
