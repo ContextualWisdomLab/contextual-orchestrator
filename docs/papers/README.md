@@ -35,6 +35,16 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## HTTP API honesty (request-scoped sampling)
+
+- **OpenAI. (n.d.). *Chat Completions API*.** OpenAI Platform.
+  https://platform.openai.com/docs/api-reference/chat/create
+  Grounds per-request `temperature`, `top_p`, penalties, `max_tokens`, and
+  `max_tool_calls` as body fields of a single completion — not process-global
+  client defaults. This gateway binds those knobs on `ModelClient` thread-local
+  state so concurrent Completions/chat requests on `ThreadingHTTPServer` cannot
+  cross sampling. Official vendor documentation; cited, not vendored.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including
