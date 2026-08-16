@@ -17,6 +17,7 @@ from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
 from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
+from .kv_config import seed_provider_egress_from_environ
 from .orchestrator import (
     BudgetExceededError,
     TaskOrchestrator,
@@ -4683,6 +4684,7 @@ def serve(
     clearfolio_url: str | None = None,
 ) -> None:
     """Serve the admin console and resource-oriented orchestration API."""
+    seed_provider_egress_from_environ()
     server = build_server(orchestrator, host=host, port=port, security=security, clearfolio_url=clearfolio_url)
     print(f"listening on http://{host}:{port}")
     server.serve_forever()
