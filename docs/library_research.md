@@ -88,6 +88,15 @@ Sqlite / Clearfolio / provider-CA process settings are a KV config read, not a n
 | Process config | Existing `ConfigStore` / `InMemoryConfigStore`; argparse env defaults in `__main__.py` | Reuse `ConfigStore` as `process_bootstrap.*`. Env is bootstrap transport via `seed_process_bootstrap_from_environ` only. CLI flags win. | New settings library, dotenv loader, treating paths as secrets in `get_credential`. |
 | Control baseline | NIST SP 800-53 Rev. 5 CM-6; ISO/IEC 27001:2022 A.8.9 | Document authorized configuration settings. Empty KV keeps the in-memory / viewer-disabled / system-trust defaults. `--insecure-skip-tls-verify` stays explicit CLI only. | Seeding TLS verification opt-out from env. Gateway Bearer tokens (owned by #621). |
 
+## Runtime config persist on the credential KV (2026-08-16)
+
+`provider_egress` and `process_bootstrap` must survive process restart without a second KV product.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Durable store | Existing `CredentialBackend` (`InMemoryCredentialBackend`, `PostgresCredentialBackend`); `get_config_store(postgres_dsn=...)` / `pg_llm_batch.PostgresConfigStore` (`com_config`); dotenv / new settings library | Reuse the credential backend. Add `runtime_config_entries` (3NF: `config_category` + `config_key` PK, `config_value`, `updated_at`) and matching in-memory methods. `set_runtime_config` write-through; `seed_*` hydrates then persists. | New ConfigStore backend, treating config as `get_credential` secrets, installing a detached `com_config` as the request-time store, gateway Bearer tokens (#621). |
+| Control baseline | NIST SP 800-53 Rev. 5 CM-2 / CM-6; ISO/IEC 27001:2022 A.8.9 | Document the credential backend as the baseline configuration store. Ephemeral in-memory backends drop rows on `reset_runtime_config_store`; `retain_runtime_settings=True` and Postgres keep them. | Shipping a full CM catalog. |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

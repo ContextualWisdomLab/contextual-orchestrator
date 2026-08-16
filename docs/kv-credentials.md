@@ -168,13 +168,16 @@ process store. `build_server()` does not seed — embedders that skip
 
 Buyer next action: call `set_runtime_config("provider_egress",
 "allowed_provider_hosts", "api.example.com")` (or start the process with
-the env var set so bootstrap can copy it), then send traffic. Do not write
-the key only into a new Postgres `ConfigStore` and expect egress to honor
-it. Do not expect a later env edit to change egress policy on a running
-process.
+the env var set so bootstrap can copy it), then send traffic. The write
+also lands on the credential backend (`runtime_config_entries` on
+Postgres; the in-memory map on `InMemoryCredentialBackend`). After a
+process restart, `seed_provider_egress_from_environ()` hydrates that row
+back into the process store. Do not write the key only into a new
+Postgres `ConfigStore` and expect egress to honor it. Do not expect a
+later env edit to change egress policy on a running process.
 
-Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 SC-7; ISO/IEC
-27001:2022 A.8.20.
+Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 SC-7 / CM-2;
+ISO/IEC 27001:2022 A.8.20.
 
 ## Process bootstrap paths (config, not secrets)
 
@@ -204,12 +207,54 @@ Buyer next action: call
 `set_runtime_config("process_bootstrap", "state_database_path", "state.db")`
 (and the matching keys for the agent pool, Clearfolio URL, or CA bundle),
 or start the process with the env var set so bootstrap can copy it, then
-send traffic. Do not write the key only into a new Postgres `ConfigStore`
-and expect init to honor it. Do not expect a later env edit to change the
-sqlite file, viewer URL, or CA bundle on a running process.
+send traffic. Those keys persist on the same credential backend as
+provider secrets (`runtime_config_entries`, not `provider_credentials`).
+After a process restart, `seed_process_bootstrap_from_environ()` hydrates
+them. Do not write the key only into a new Postgres `ConfigStore` and
+expect init to honor it. Do not expect a later env edit to change the
+sqlite file, viewer URL, or CA bundle on a running process. Gateway
+Bearer tokens stay on the #621 slice.
 
-Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 CM-6; ISO/IEC
-27001:2022 A.8.9.
+Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 CM-2 / CM-6;
+ISO/IEC 27001:2022 A.8.9.
+
+## Runtime config persist (credential backend, not a second KV)
+
+`provider_egress` and `process_bootstrap` are **config**. They share the
+credential **backend** so a buyer who already opened Postgres for
+`get_credential` does not stand up a second product. They do **not**
+share the secret table:
+
+```sql
+CREATE TABLE IF NOT EXISTS runtime_config_entries (
+    config_category text NOT NULL,
+    config_key text NOT NULL,
+    config_value text NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (config_category, config_key)
+);
+```
+
+Third normal form: one atomic value per (`config_category`,
+`config_key`); `updated_at` depends only on that key. `set_runtime_config`
+write-through and `seed_*` persist only the allowlist and process-bootstrap
+keys. `get_credential("process_bootstrap.state_database_path")` stays
+`None`. Whitespace-only durable rows count as empty so they cannot freeze
+fail-open egress.
+
+Buyer next action: keep using `set_runtime_config` (or start once with
+the env var). Restart the process; `seed_*` at `__main__` / `serve()`
+reloads the last authorized hosts and paths. Do not register those keys
+as secrets. Do not fold `CONTEXTUAL_ORCHESTRATOR_TOKEN` into this table.
+
+```mermaid
+flowchart LR
+  operator["set_runtime_config / env seed"] --> processStore["process ConfigStore"]
+  processStore --> requestTime["allowed_provider_hosts / resolve_process_bootstrap"]
+  processStore --> credentialBackend["credential backend runtime_config_entries"]
+  credentialBackend -->|"seed_* hydrate after restart"| processStore
+  secrets["get_credential / provider_credentials"] -.->|"separate table"| credentialBackend
+```
 
 ## Gateway direction
 

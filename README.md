@@ -40,7 +40,7 @@ HTTP serving is hardened for local lab use:
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
-- State is in-memory by default. Pass `--state-db PATH`, seed `process_bootstrap.state_database_path` on the process KV, or set `CONTEXTUAL_ORCHESTRATOR_STATE_DB` at process start so bootstrap can copy it once. That sqlite file keeps workflow runs, evaluation runs, audit, and analytics across a restart; without it, behavior is unchanged. Changing the env var on a running process does not switch files.
+- State is in-memory by default. Pass `--state-db PATH`, seed `process_bootstrap.state_database_path` on the process KV, or set `CONTEXTUAL_ORCHESTRATOR_STATE_DB` at process start so bootstrap can copy it once. That key also persists on the credential backend so a process restart rehydrates the path. The sqlite file keeps workflow runs, evaluation runs, audit, and analytics across a restart; without it, behavior is unchanged. Changing the env var on a running process does not switch files.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
 - `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
 
@@ -68,7 +68,7 @@ Seed the credential into the KV once at bootstrap:
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
 ```
 
-Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Seed `provider_egress.allowed_provider_hosts` on the **process-wide runtime ConfigStore** with `set_runtime_config` (or set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` at process start so bootstrap can copy it once) when only approved model gateways should be reachable. A write to a separately constructed Postgres `get_config_store()` is ignored unless that store was installed with `set_runtime_config_store()` at bootstrap. External calls use a timeout and default output token cap.
+Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Seed `provider_egress.allowed_provider_hosts` on the **process-wide runtime ConfigStore** with `set_runtime_config` (or set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` at process start so bootstrap can copy it once) when only approved model gateways should be reachable. That write also persists on the credential backend and rehydrates after restart. A write to a separately constructed Postgres `get_config_store()` is ignored unless that store was installed with `set_runtime_config_store()` at bootstrap. External calls use a timeout and default output token cap.
 
 > The legacy `api_key_env` field is still accepted for back-compat, but its value is now treated as the **credential name** in the KV, not as an environment variable to read. This supersedes the old `api_key_env` env pattern.
 
@@ -258,6 +258,7 @@ python tests/test_api_contract.py
 python tests/test_security_hardening.py
 python tests/test_provider_host_allowlist_kv.py
 python tests/test_process_bootstrap_kv.py
+python tests/test_runtime_config_persist.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py

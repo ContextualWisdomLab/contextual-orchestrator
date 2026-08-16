@@ -89,8 +89,11 @@ publication; this repo cites it rather than vendoring the full PDF.
   Control **CM-6** (Configuration Settings) is the process-bootstrap KV:
   sqlite paths, the Clearfolio viewer URL, and the provider CA bundle are
   read from `process_bootstrap.*` at init, not from a live `os.getenv`.
-  Buyer next action: seed `process_bootstrap.state_database_path` (and the
-  matching keys) or start once with the env var set.
+  Control **CM-2** (Baseline Configuration) is the credential-backend copy
+  (`runtime_config_entries`): those keys survive process restart and
+  rehydrate on `seed_*`. Buyer next action: call `set_runtime_config` (or
+  start once with the env var) against the credential backend, then
+  restart and send traffic.
 
 - International Organization for Standardization. (2022). *Information
   security, cybersecurity and privacy protection — Information security

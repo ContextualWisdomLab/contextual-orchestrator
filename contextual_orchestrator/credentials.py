@@ -52,11 +52,20 @@ class CredentialBackend(Protocol):
 
 
 class InMemoryCredentialBackend:
-    """Process-local credential registry for dev and tests (no Postgres needed)."""
+    """Process-local credential registry for dev and tests (no Postgres needed).
 
-    def __init__(self) -> None:
+    Runtime config categories (``provider_egress``, ``process_bootstrap``) live
+    in a separate in-memory map so they are never confused with provider
+    secrets. Set ``retain_runtime_settings=True`` to keep that map across
+    ``reset_runtime_config_store`` — tests use this to simulate the durable
+    Postgres ``runtime_config_entries`` table without a second backend.
+    """
+
+    def __init__(self, *, retain_runtime_settings: bool = False) -> None:
         self._store: dict[str, str] = {}
+        self._runtime_settings: dict[tuple[str, str], str] = {}
         self._lock = threading.Lock()
+        self.retain_runtime_settings = retain_runtime_settings
 
     def get(self, name: str) -> str | None:
         """Return the in-memory secret for ``name`` or ``None``."""
@@ -67,6 +76,33 @@ class InMemoryCredentialBackend:
         """Store ``value`` under ``name`` in the in-memory registry."""
         with self._lock:
             self._store[name] = value
+
+    def get_runtime_setting(self, category: str, key: str) -> str | None:
+        """Return one persisted config value, or ``None`` when unset."""
+        with self._lock:
+            return self._runtime_settings.get((category, key))
+
+    def set_runtime_setting(self, category: str, key: str, value: str) -> None:
+        """Persist one config value. Never used for provider secrets."""
+        with self._lock:
+            self._runtime_settings[(category, key)] = value
+
+    def clear_runtime_settings(self) -> None:
+        """Drop every persisted config row (ephemeral in-memory backends)."""
+        with self._lock:
+            self._runtime_settings.clear()
+
+    def list_runtime_settings(
+        self, category: str | None = None
+    ) -> list[tuple[str, str, str]]:
+        """Return ``(category, key, value)`` rows, optionally filtered."""
+        with self._lock:
+            rows = [
+                (stored_category, stored_key, stored_value)
+                for (stored_category, stored_key), stored_value in self._runtime_settings.items()
+                if category is None or stored_category == category
+            ]
+        return sorted(rows)
 
 
 # --- Postgres pgcrypto-encrypted credential registry ------------------------
@@ -84,6 +120,7 @@ class InMemoryCredentialBackend:
 # with pgp_sym_decrypt using a passphrase supplied at bootstrap.
 
 PROVIDER_CREDENTIALS_TABLE = "provider_credentials"
+RUNTIME_CONFIG_ENTRIES_TABLE = "runtime_config_entries"
 
 CREATE_PROVIDER_CREDENTIALS_SQL = """
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
@@ -91,6 +128,16 @@ CREATE TABLE IF NOT EXISTS provider_credentials (
     credential_name text PRIMARY KEY,
     encrypted_value bytea NOT NULL,
     updated_at timestamptz NOT NULL DEFAULT now()
+);
+"""
+
+CREATE_RUNTIME_CONFIG_ENTRIES_SQL = """
+CREATE TABLE IF NOT EXISTS runtime_config_entries (
+    config_category text NOT NULL,
+    config_key text NOT NULL,
+    config_value text NOT NULL,
+    updated_at timestamptz NOT NULL DEFAULT now(),
+    PRIMARY KEY (config_category, config_key)
 );
 """
 
@@ -140,6 +187,7 @@ class PostgresCredentialBackend:
             return
         with conn.cursor() as cur:
             cur.execute(CREATE_PROVIDER_CREDENTIALS_SQL)
+            cur.execute(CREATE_RUNTIME_CONFIG_ENTRIES_SQL)
         conn.commit()
         self._ensured = True
 
@@ -173,6 +221,64 @@ class PostgresCredentialBackend:
                 )
             conn.commit()
 
+    def get_runtime_setting(self, category: str, key: str) -> str | None:  # pragma: no cover
+        """Return one durable config row, or ``None`` when unset."""
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "SELECT config_value FROM runtime_config_entries "
+                    "WHERE config_category = %s AND config_key = %s",
+                    (category, key),
+                )
+                row = cur.fetchone()
+        if row is None:
+            return None
+        value = row[0]
+        return value.decode("utf-8") if isinstance(value, (bytes, bytearray)) else value
+
+    def set_runtime_setting(self, category: str, key: str, value: str) -> None:  # pragma: no cover
+        """Upsert one durable config row. Never writes ``provider_credentials``."""
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "INSERT INTO runtime_config_entries "
+                    "(config_category, config_key, config_value, updated_at) "
+                    "VALUES (%s, %s, %s, now()) "
+                    "ON CONFLICT (config_category, config_key) DO UPDATE SET "
+                    "config_value = EXCLUDED.config_value, updated_at = now()",
+                    (category, key, value),
+                )
+            conn.commit()
+
+    def list_runtime_settings(
+        self, category: str | None = None
+    ) -> list[tuple[str, str, str]]:  # pragma: no cover
+        """Return durable ``(category, key, value)`` rows, optionally filtered."""
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            with conn.cursor() as cur:
+                if category is None:
+                    cur.execute(
+                        "SELECT config_category, config_key, config_value "
+                        "FROM runtime_config_entries ORDER BY config_category, config_key"
+                    )
+                else:
+                    cur.execute(
+                        "SELECT config_category, config_key, config_value "
+                        "FROM runtime_config_entries WHERE config_category = %s "
+                        "ORDER BY config_key",
+                        (category,),
+                    )
+                rows = cur.fetchall()
+        result: list[tuple[str, str, str]] = []
+        for stored_category, stored_key, stored_value in rows:
+            if isinstance(stored_value, (bytes, bytearray)):
+                stored_value = stored_value.decode("utf-8")
+            result.append((stored_category, stored_key, stored_value))
+        return result
+
 
 _backend: CredentialBackend | None = None
 _backend_lock = threading.Lock()
@@ -195,6 +301,11 @@ def get_backend() -> CredentialBackend:
         with _backend_lock:
             if _backend is None:
                 _backend = _select_backend()
+    return _backend
+
+
+def peek_backend() -> CredentialBackend | None:
+    """Return the installed backend, or ``None`` without creating one."""
     return _backend
 
 

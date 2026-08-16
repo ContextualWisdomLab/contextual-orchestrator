@@ -61,7 +61,9 @@ push or open a PR.
   **process bootstrap**. Provider API keys, the provider-host allowlist,
   sqlite/Clearfolio/CA paths (`process_bootstrap.*`), and request-time
   egress are KV-backed (`get_credential`, `allowed_provider_hosts`,
-  `resolve_process_bootstrap`). Do not reintroduce `os.getenv` inside
+  `resolve_process_bootstrap`). Those two config categories persist on
+  the credential backend (`runtime_config_entries`), not as secrets.
+  Do not reintroduce `os.getenv` inside
   `ModelClient._validate_provider`, `ModelClient.chat`, or
   `TaskOrchestrator.__init__`. Gateway Bearer tokens are the #621 slice.
 

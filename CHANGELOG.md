@@ -19,6 +19,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- `provider_egress.allowed_provider_hosts` and `process_bootstrap.*` now
+  persist on the existing credential KV backend (Postgres table
+  `runtime_config_entries`; in-memory map when the backend is memory).
+  `set_runtime_config` write-through; `seed_provider_egress_from_environ`
+  and `seed_process_bootstrap_from_environ` hydrate empty process keys
+  from that backend, then persist. A process restart keeps the last
+  authorized hosts and sqlite/Clearfolio/CA paths. Provider secrets stay
+  in `provider_credentials`. Gateway Bearer tokens stay on the #621
+  slice. Buyer next action: call `set_runtime_config` (or start once with
+  the env var) and restart; do not register those keys as secrets.
 - Process sqlite paths, the Clearfolio viewer URL, and the provider CA
   bundle (`process_bootstrap.state_database_path`,
   `agents_database_path`, `clearfolio_viewer_url`, `provider_ca_bundle`)
@@ -83,6 +93,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   systems and organizations* (NIST Special Publication 800-53 Rev. 5).
   National Institute of Standards and Technology.
   https://doi.org/10.6028/NIST.SP.800-53r5
+  (SC-7 boundary protection; CM-6 configuration settings; CM-2 baseline
+  configuration)
 - International Organization for Standardization. (2022). *Information
   security, cybersecurity and privacy protection — Information security
   controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
