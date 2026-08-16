@@ -344,13 +344,19 @@ class ModelClient:
             context=self._ssl_context,
         )
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
+
+        When ``temperature`` is omitted, ``default_temperature`` is used so a
+        streamed ``/v1/chat/completions`` request applies the same sampling
+        the buyer sent on the non-stream path.
         """
+        effective_temperature = self.default_temperature if temperature is None else temperature
+        self._local.last_temperature = effective_temperature
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -361,7 +367,7 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": effective_temperature,
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }

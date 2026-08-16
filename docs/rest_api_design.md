@@ -126,12 +126,21 @@ dimensions fail closed (`invalid_attribution`). Tools passthrough has no
 batch job plane: `routing.channel=batch` and `routing.latency_tolerant=true`
 fail closed (`invalid_routing`) instead of billing a silent sync
 completion. Send known sync dimensions only (`channel=sync` or omit).
+A streamed `temperature` on the route path uses the same request-scoped
+default as the non-stream path — it is not reset to `0.2`.
+
+Optional `tools[].function.description`, `parameters`, and `strict` sent as
+JSON `null` are omit-real: the gateway pops those keys before
+`proxy_completion` so upstream providers see an omitted field, not a null
+schema. Non-null wrong types stay fail-closed with named `invalid_tools`.
 
 Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when
 the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
 pool `model`; omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
-and `stream_options.include_usage` on tool-calling requests.
+and `stream_options.include_usage` on tool-calling requests. When declaring
+tools, omit unused `description` / `parameters` / `strict` or leave the SDK
+default `null` — both become omit before the provider hop.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
@@ -141,6 +150,10 @@ https://platform.openai.com/docs/guides/streaming-responses
 
 WHATWG. (n.d.). *Server-sent events*. HTML Living Standard.
 https://html.spec.whatwg.org/multipage/server-sent-events.html
+
+Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data
+interchange format* (RFC 8259). Internet Engineering Task Force.
+https://doi.org/10.17487/RFC8259
 
 ## Production Library Target
 
