@@ -1355,6 +1355,10 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
             "use official text.format only",
         )
     fmt_type = fmt.get("type")
+    # Strip + casefold so " JSON_OBJECT " / "Text" match official types; write back.
+    if isinstance(fmt_type, str):
+        fmt_type = fmt_type.strip().lower()
+        fmt["type"] = fmt_type
     if fmt_type not in ("text", "json_object", "json_schema"):
         raise RequestError(
             400,
@@ -2438,14 +2442,20 @@ def _validate_completions_chat_era_fields_surface(body: dict[str, Any]) -> None:
             continue
         # Text-only modalities ["text"] is an honest no-op on this text gateway
         # (parity with chat Completions allowing modalities ["text"]).
+        # Strip + casefold so [" TEXT "] matches text-only.
         if key == "modalities" and isinstance(value, list):
             stripped_items = [
-                item.strip() if isinstance(item, str) else item for item in value
+                item.strip().lower() if isinstance(item, str) else item for item in value
             ]
             if stripped_items == ["text"]:
                 continue
         # reasoning_effort "none" disables extra reasoning — omit-equivalent no-op.
-        if key == "reasoning_effort" and isinstance(value, str) and value.strip() == "none":
+        # Strip + casefold so " NONE " / "None" match none.
+        if (
+            key == "reasoning_effort"
+            and isinstance(value, str)
+            and value.strip().lower() == "none"
+        ):
             continue
         raise RequestError(
             400,
@@ -2514,9 +2524,9 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     path, so non-default present values fail closed rather than silently ignoring
     a buyer-visible reasoning control.
 
-    Explicit JSON null, empty/whitespace string, or ``none`` (whitespace-padded)
-    is treat-as-omit — ``none`` disables extra reasoning and is an honest no-op
-    here.
+    Explicit JSON null, empty/whitespace string, or ``none`` (whitespace-padded
+    and case-insensitive) is treat-as-omit — ``none`` disables extra reasoning
+    and is an honest no-op here.
     """
     if "reasoning_effort" not in body:
         return
@@ -2524,7 +2534,8 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     if effort is None:
         return
     if isinstance(effort, str):
-        stripped = effort.strip()
+        # Strip + casefold so " NONE " / "None" match none omit-equivalent.
+        stripped = effort.strip().lower()
         if not stripped or stripped == "none":
             return
     raise RequestError(
@@ -2754,14 +2765,15 @@ def _validate_responses_modalities(body: dict[str, Any]) -> list[str] | None:
             "invalid_modalities",
             "modalities must be a non-empty array of strings",
         )
-    # Strip incidental whitespace on items so [" text "] matches text-only.
-    modalities = [item.strip() for item in modalities]
+    # Strip + casefold so [" TEXT "] matches text-only; write back lowercased.
+    modalities = [item.strip().lower() for item in modalities]
     if modalities != ["text"]:
         raise RequestError(
             400,
             "invalid_modalities",
             'only modalities ["text"] is supported on /v1/responses',
         )
+    body["modalities"] = modalities
     return modalities
 
 
@@ -2814,14 +2826,15 @@ def _validate_chat_modalities(body: dict[str, Any]) -> list[str] | None:
             "invalid_modalities",
             "modalities must be a non-empty array of strings",
         )
-    # Strip incidental whitespace on items so [" text "] matches text-only.
-    modalities = [item.strip() for item in modalities]
+    # Strip + casefold so [" TEXT "] matches text-only; write back lowercased.
+    modalities = [item.strip().lower() for item in modalities]
     if modalities != ["text"]:
         raise RequestError(
             400,
             "invalid_modalities",
             'only modalities ["text"] is supported on /v1/chat/completions',
         )
+    body["modalities"] = modalities
     return modalities
 
 
@@ -2884,6 +2897,10 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
             "response_format must be an object",
         )
     fmt_type = fmt.get("type")
+    # Strip + casefold so " JSON_OBJECT " / "Text" match official types; write back.
+    if isinstance(fmt_type, str):
+        fmt_type = fmt_type.strip().lower()
+        fmt["type"] = fmt_type
     if fmt_type not in ("text", "json_object", "json_schema"):
         raise RequestError(
             400,
