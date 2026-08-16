@@ -43,6 +43,20 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## API contract sources (omit honesty)
+
+OpenAI Chat Completions, Completions, and Responses request fields are the
+buyer-facing contract for SDK optional defaults (`null` / empty string /
+whitespace = omit). Cite the live API reference; PDFs are not redistributable.
+
+OpenAI. (2024a). *Create chat completion*. https://platform.openai.com/docs/api-reference/chat/create
+
+OpenAI. (2024b). *Create completion*. https://platform.openai.com/docs/api-reference/completions/create
+
+OpenAI. (2024c). *Create a model response*. https://platform.openai.com/docs/api-reference/responses/create
+
+OpenAPI Initiative. (2021). *OpenAPI specification v3.1.0*. https://spec.openapis.org/oas/v3.1.0.html
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.
