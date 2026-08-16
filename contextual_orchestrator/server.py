@@ -3679,6 +3679,18 @@ def build_server(
                     ):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
+                        # Same message / spend / routing contract as orchestration —
+                        # never bill a completion with no prompt, a non-object
+                        # entry, or silently dropped attribution.
+                        _validate_messages(body.get("messages"))
+                        if "max_tokens" in body:
+                            _validate_completions_max_tokens(body)
+                        if "max_completion_tokens" in body:
+                            _validate_chat_max_completion_tokens(body)
+                        if "attribution" in body:
+                            _validate_attribution(body.get("attribution"))
+                        if "routing" in body:
+                            _validate_routing(body.get("routing"))
                         # SSE passthrough is a follow-up — stream=true would otherwise
                         # return a JSON completion while the SDK waits for SSE.
                         stream = _normalize_chat_stream_flag(body)
