@@ -56,11 +56,12 @@ push or open a PR.
 - The reference implementation is xtrmLLMBatchPython's pgcrypto-encrypted
   Postgres credential registry (`get_credential(name)`); reuse that pattern (a
   DB-backed KV is fine) unless a dedicated KV is adopted.
-- **Known deviation to migrate:** this repo currently resolves provider API
-  keys from env — `ModelClient` reads `os.environ.get(agent.api_key_env)` in
-  `contextual_orchestrator/orchestrator.py` (and `CONTEXTUAL_ORCHESTRATOR_*`
-  tokens in `__main__.py`). Move these to KV-backed reads; keep env only as the
-  bootstrap path that seeds the KV.
+- **Known deviation to migrate:** `__main__.py` still accepts
+  `CONTEXTUAL_ORCHESTRATOR_*` tokens and bind/TLS flags from env as
+  **process bootstrap**. Provider API keys and the provider-host allowlist
+  are KV-backed at request time (`get_credential`,
+  `allowed_provider_hosts`). Do not reintroduce `os.getenv` inside
+  `ModelClient._validate_provider` or `ModelClient.chat`.
 
 ### This repo: the org LLM gateway
 
@@ -68,9 +69,9 @@ push or open a PR.
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
-- Its `ModelClient` currently reads `os.environ.get(agent.api_key_env)` — this
-  is the KV-principle deviation above. Resolve the API key (including the org
-  `OPENAI_API_KEY`) from the **KV / credential registry**, not env.
+- Provider API keys resolve through `get_credential`. The provider-host
+  allowlist resolves through `allowed_provider_hosts()` (KV category
+  `provider_egress`). Env remains bootstrap transport only.
 - The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
   do not change it.
 
