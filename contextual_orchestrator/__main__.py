@@ -9,6 +9,12 @@ import sys
 
 from .credentials import register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
+from .provider_catalog import (
+    PostgresProviderCatalogStore,
+    ProviderAwareModelClient,
+    ProviderCatalogService,
+    ProviderCatalogUnavailable,
+)
 from .server import SecurityConfig, serve
 
 
@@ -55,6 +61,23 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+def _runtime_agents(parser: argparse.ArgumentParser, args: argparse.Namespace):
+    """Load either the durable discovered pool or the explicit seed-file pool."""
+    if not args.provider_catalog_dsn:
+        return load_agents(args.agents)
+    try:
+        store = PostgresProviderCatalogStore(args.provider_catalog_dsn)
+        agents = ProviderCatalogService(store=store).candidate_agents()
+    except ProviderCatalogUnavailable as exc:
+        parser.error(str(exc))
+    if not agents:
+        parser.error(
+            "provider catalog contains no enabled chat-capable candidates; "
+            "run the trusted provider-catalog sync first"
+        )
+    return agents
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
@@ -64,6 +87,14 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
+    parser.add_argument(
+        "--provider-catalog-dsn",
+        default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_CATALOG_DSN") or None,
+        help=(
+            "Optional PostgreSQL provider-catalog DSN. When set, discovered enabled "
+            "chat models replace the seed agent file and credentials resolve from KV."
+        ),
+    )
     parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
@@ -94,9 +125,19 @@ def main() -> None:
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
-    client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
+    agents = _runtime_agents(parser, args)
+    if args.provider_catalog_dsn:
+        client = ProviderAwareModelClient(
+            ca_bundle=args.provider_ca_bundle,
+            verify_tls=not args.insecure_skip_tls_verify,
+        )
+    else:
+        client = ModelClient(
+            ca_bundle=args.provider_ca_bundle,
+            verify_tls=not args.insecure_skip_tls_verify,
+        )
     orchestrator = TaskOrchestrator(
-        load_agents(args.agents),
+        agents,
         client=client,
         state_db=args.state_db,
         agents_db=args.agents_db,
