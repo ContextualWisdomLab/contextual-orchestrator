@@ -141,6 +141,33 @@ def _server():
     return server, thread, server.server_address[1]
 
 
+def test_http_chat_tools_stream_binds_bare_invoice_number() -> None:
+    """Buyer accuracy: ``invoice 4419`` binds ``INV-4419`` on JSON and SSE."""
+    server, thread, port = _server()
+    payload = {
+        "model": "mock-planner",
+        "messages": [{"role": "user", "content": "What is the outstanding balance on invoice 4419?"}],
+        "tools": _LOOKUP_TOOLS,
+    }
+    try:
+        json_status, _, json_raw = _post_raw(port, payload)
+        sse_status, content_type, sse = _post_raw(port, {**payload, "stream": True})
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert json_status == 200, json_raw
+    assert sse_status == 200, sse
+    assert content_type.startswith("text/event-stream"), content_type
+    reference = json.loads(json_raw)["choices"][0]
+    assert reference["finish_reason"] == "tool_calls"
+    assert json.loads(reference["message"]["tool_calls"][0]["function"]["arguments"]) == {
+        "invoice_id": "INV-4419"
+    }
+    streamed, finish_reason = _reconstruct_tool_calls(sse)
+    assert finish_reason == "tool_calls"
+    assert streamed == reference["message"]["tool_calls"]
+
+
 def test_http_chat_tools_stream_matches_non_stream_tool_calls() -> None:
     """Buyer accuracy: streamed tool-calling deltas equal the JSON completion."""
     server, thread, port = _server()
@@ -472,6 +499,7 @@ def test_stream_raw_pipes_tool_call_deltas_verbatim() -> None:
 
 
 if __name__ == "__main__":
+    test_http_chat_tools_stream_binds_bare_invoice_number()
     test_http_chat_tools_stream_matches_non_stream_tool_calls()
     test_http_chat_response_format_stream_is_sse()
     test_http_chat_tools_stream_still_rejects_empty_messages()
