@@ -2373,7 +2373,7 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
         if value is None:
             return False
         if isinstance(value, str):
-            stripped = value.strip()
+            stripped = value.strip().lower()
             if not stripped or stripped in ("none", "auto"):
                 return False
         if isinstance(value, dict) and not value:
@@ -3160,8 +3160,8 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
     ):
         return None
     if isinstance(choice, str):
-        # Strip incidental whitespace so " none " / " auto " match honest no-ops.
-        choice = choice.strip()
+        # Strip + casefold so " REQUIRED " / " Auto " match honest controls.
+        choice = choice.strip().lower()
         if choice not in ("none", "auto", "required"):
             raise RequestError(
                 400,
@@ -4042,7 +4042,7 @@ def build_server(
                             isinstance(function_call_raw, str)
                             and (
                                 not function_call_raw.strip()
-                                or function_call_raw.strip() in ("none", "auto")
+                                or function_call_raw.strip().lower() in ("none", "auto")
                             )
                         )
                     )
@@ -4064,7 +4064,7 @@ def build_server(
                         and not tools_list
                     ):
                         tc = body.get("tool_choice")
-                        tc_norm = tc.strip() if isinstance(tc, str) else tc
+                        tc_norm = tc.strip().lower() if isinstance(tc, str) else tc
                         # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
                         if (
                             tc_norm not in ("none", "auto")
@@ -4602,7 +4602,7 @@ def build_server(
                             isinstance(function_call_raw, str)
                             and (
                                 not function_call_raw.strip()
-                                or function_call_raw.strip() in ("none", "auto")
+                                or function_call_raw.strip().lower() in ("none", "auto")
                             )
                         )
                     )
@@ -4621,7 +4621,7 @@ def build_server(
                         and not tools_list
                     ):
                         tc = body.get("tool_choice")
-                        tc_norm = tc.strip() if isinstance(tc, str) else tc
+                        tc_norm = tc.strip().lower() if isinstance(tc, str) else tc
                         # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
                         if (
                             tc_norm not in ("none", "auto")
