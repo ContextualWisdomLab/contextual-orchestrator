@@ -1546,9 +1546,9 @@ def _validate_responses_stream_options(body: dict[str, Any]) -> None:
 
 
 def _validate_mode(mode: Any) -> str:
-    # Strip incidental whitespace so SDK padded aliases still match.
+    # Strip + casefold so " ROUTE " / "Conduct" match official aliases.
     if isinstance(mode, str):
-        mode = mode.strip()
+        mode = mode.strip().lower()
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
     return mode
@@ -3433,13 +3433,23 @@ def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
 def _validate_embeddings_dimensions(body: dict[str, Any]) -> None:
     """OpenAI ``dimensions`` — not applied; non-null values fail closed.
 
-    Explicit JSON ``null`` or empty/whitespace string is treat-as-omit. Any other
-    value fails closed so clients cannot believe reduced dimensionality was applied.
+    Explicit JSON ``null`` or empty/whitespace string is treat-as-omit. Digit
+    strings and whole floats coerce to int for type honesty, then still fail
+    closed so clients cannot believe reduced dimensionality was applied.
     """
     if "dimensions" not in body:
         return
     value = body.get("dimensions")
     if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    # Coerce digit/float forms so type errors surface as invalid_dimensions with
+    # the same unsupported message (not a silent string-vs-int split).
+    coerced = _coerce_optional_int(
+        value,
+        error_code="invalid_dimensions",
+        message="dimensions must be an integer",
+    )
+    if coerced is None:
         return
     raise RequestError(
         400,
