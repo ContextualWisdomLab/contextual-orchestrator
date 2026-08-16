@@ -923,8 +923,8 @@ def _validate_completions_top_logprobs(body: dict[str, Any]) -> None:
     if "top_logprobs" not in body:
         return
     value = body.get("top_logprobs")
-    # Explicit JSON null or zero is treat-as-omit (SDK optional default).
-    if value is None or value == 0:
+    # Explicit JSON null, empty/whitespace string, or zero is treat-as-omit.
+    if value is None or value == 0 or (isinstance(value, str) and not value.strip()):
         return
     raise RequestError(
         400,
@@ -948,15 +948,16 @@ def _validate_completions_suffix(body: dict[str, Any]) -> str | None:
         return None
     if not isinstance(suffix, str):
         raise RequestError(400, "invalid_suffix", "suffix must be a string")
+    # Empty/whitespace-only is treat-as-omit (SDK optional blank).
+    if not suffix.strip():
+        return None
     if len(suffix) > 8_000:
         raise RequestError(400, "invalid_suffix", "suffix must be at most 8000 characters")
-    if suffix:
-        raise RequestError(
-            400,
-            "invalid_suffix",
-            "non-empty suffix is not supported on /v1/completions",
-        )
-    return suffix
+    raise RequestError(
+        400,
+        "invalid_suffix",
+        "non-empty suffix is not supported on /v1/completions",
+    )
 
 
 def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
@@ -1242,6 +1243,9 @@ def _validate_responses_stream_options(body: dict[str, Any]) -> None:
 
 
 def _validate_mode(mode: Any) -> str:
+    # Strip incidental whitespace so SDK padded aliases still match.
+    if isinstance(mode, str):
+        mode = mode.strip()
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
     return mode
@@ -1755,6 +1759,9 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "each tool_calls function.name must match [a-zA-Z0-9_-]",
                 )
             arguments = function.get("arguments")
+            # Explicit JSON null is treat-as-omit → empty JSON-text arguments.
+            if arguments is None:
+                arguments = ""
             if not isinstance(arguments, str):
                 raise RequestError(
                     400,
@@ -1786,6 +1793,9 @@ def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
             raise RequestError(400, "invalid_metadata", "metadata keys must be strings")
         if len(key) > 64:
             raise RequestError(400, "invalid_metadata", "metadata keys must be at most 64 characters")
+        # Explicit JSON null value is treat-as-omit for that key (SDK optional).
+        if value is None:
+            continue
         if not isinstance(value, str):
             raise RequestError(400, "invalid_metadata", "metadata values must be strings")
         if len(value) > 512:
@@ -1795,7 +1805,7 @@ def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
                 "metadata values must be at most 512 characters",
             )
         validated[key] = value
-    return validated
+    return validated if validated else None
 
 
 def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
@@ -2796,17 +2806,11 @@ def _validate_responses_instructions(body: dict[str, Any]) -> str | None:
     if "instructions" not in body:
         return None
     value = body.get("instructions")
-    # Explicit JSON null is treat-as-omit (SDK optional default).
-    if value is None:
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if not isinstance(value, str):
         raise RequestError(400, "invalid_instructions", "instructions must be a string")
-    if not value.strip():
-        raise RequestError(
-            400,
-            "invalid_instructions",
-            "instructions must be a non-empty string on /v1/responses",
-        )
     if len(value) > 32_000:
         raise RequestError(
             400,
@@ -3808,8 +3812,10 @@ def build_server(
                                         "logprobs=true is not supported on /v1/chat/completions",
                                     )
                         if "top_logprobs" in body:
-                            # Explicit JSON null or 0 is treat-as-omit (SDK optional default).
+                            # Explicit JSON null, empty/whitespace string, or 0 is treat-as-omit.
                             tlp = body.get("top_logprobs")
+                            if isinstance(tlp, str) and not tlp.strip():
+                                tlp = None
                             if tlp is not None and tlp != 0:
                                 raise RequestError(
                                     400,
