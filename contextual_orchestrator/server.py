@@ -1453,8 +1453,9 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
         if "name" in message:
             # OpenAI optional participant name on system/user/assistant (not tool).
             msg_name = message.get("name")
-            # Explicit JSON null is treat-as-omit (SDK optional default).
-            if msg_name is None:
+            # Explicit JSON null or empty/whitespace string is treat-as-omit
+            # (SDK optional default / blank participant).
+            if msg_name is None or (isinstance(msg_name, str) and not msg_name.strip()):
                 pass
             else:
                 if role == "tool":
@@ -1463,7 +1464,7 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                         "invalid_message_name",
                         "name is not valid on tool role messages",
                     )
-                if not isinstance(msg_name, str) or not msg_name.strip():
+                if not isinstance(msg_name, str):
                     raise RequestError(
                         400,
                         "invalid_message_name",
