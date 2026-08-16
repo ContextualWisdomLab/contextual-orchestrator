@@ -997,11 +997,12 @@ def _validate_responses_max_tool_calls(body: dict[str, Any]) -> None:
 
 
 def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
-    """Legacy Completions ``logprobs`` — only ``false``/omit; token logprobs unsupported.
+    """Legacy Completions ``logprobs`` — token logprobs are not supported.
 
-    OpenAI accepts ``false`` or an integer 0–5 for top logprob counts. This gateway
-    always returns ``logprobs: null`` on text completions, so integer logprobs
-    (including 0–5) and boolean ``true`` fail closed. ``false`` and omit remain valid.
+    This gateway always returns ``logprobs: null`` on text completions, so
+    boolean ``true`` and nonzero integer logprobs fail closed. ``false``, omit,
+    integer ``0``, and string ``false``/``0`` (JS form defaults) are
+    omit-equivalent no-ops.
     """
     if "logprobs" not in body:
         return None
@@ -1009,20 +1010,19 @@ def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
     # Explicit JSON null is treat-as-omit (SDK optional default).
     if logprobs is None:
         return None
-    if logprobs is False:
-        return False
-    if isinstance(logprobs, bool):  # True
-        raise RequestError(
-            400,
-            "invalid_logprobs",
-            "logprobs must be false; token logprobs are not supported on /v1/completions",
-        )
-    if isinstance(logprobs, int) and not isinstance(logprobs, bool):
-        raise RequestError(
-            400,
-            "invalid_logprobs",
-            "token logprobs are not supported on /v1/completions; pass false or omit",
-        )
+    # Integer 0 is historical OpenAI "no logprobs" — omit-equivalent.
+    if type(logprobs) is int and logprobs == 0:
+        return None
+    # Whole-float 0.0 (JS) is omit-equivalent.
+    if isinstance(logprobs, float) and logprobs == 0.0:
+        return None
+    coerced = _coerce_optional_bool(
+        logprobs,
+        error_code="invalid_logprobs",
+        message="logprobs must be false; token logprobs are not supported on /v1/completions",
+    )
+    if coerced is None or coerced is False:
+        return None if coerced is None else False
     raise RequestError(
         400,
         "invalid_logprobs",
@@ -3366,7 +3366,8 @@ def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
     This gateway returns float vectors on the OpenAI list shape. ``base64`` is
     not produced, so requesting it fails closed rather than silently returning
     floats. Explicit JSON ``null`` or empty/whitespace string is treated as omit
-    (SDK optional default / stringified empty control).
+    (SDK optional default / stringified empty control). Case-insensitive
+    ``float`` (e.g. ``FLOAT``) is accepted and written back lowercased.
     """
     if "encoding_format" not in body:
         return None
@@ -3375,14 +3376,15 @@ def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
         return None
     if not isinstance(value, str):
         raise RequestError(400, "invalid_encoding_format", "encoding_format must be a string")
-    # Strip incidental whitespace so " float " matches float.
-    value = value.strip()
+    # Strip incidental whitespace and casefold so " FLOAT " matches float.
+    value = value.strip().lower()
     if value != "float":
         raise RequestError(
             400,
             "invalid_encoding_format",
             'only encoding_format "float" is supported on embeddings endpoints',
         )
+    body["encoding_format"] = value
     return value
 
 
@@ -4683,18 +4685,14 @@ def build_server(
                         )
                     # stream=false / omit → non-SSE JSON response (honest no-stream path).
                     # stream=true is not implemented for Responses passthrough.
+                    # String/0-1 forms coerce via shared bool helper (parity with chat).
                     if "stream" in body:
-                        stream = body.get("stream")
-                        # Explicit JSON null / false / empty string are omit-equivalent no-ops.
-                        if (
-                            stream is None
-                            or stream is False
-                            or (isinstance(stream, str) and not stream.strip())
-                        ):
-                            pass
-                        elif not isinstance(stream, bool):
-                            raise RequestError(400, "invalid_stream", "stream must be a boolean")
-                        elif stream is True:
+                        stream = _coerce_optional_bool(
+                            body.get("stream"),
+                            error_code="invalid_stream",
+                            message="stream must be a boolean",
+                        )
+                        if stream is True:
                             raise RequestError(
                                 400,
                                 "invalid_stream",
