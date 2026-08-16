@@ -125,15 +125,28 @@ before passthrough, matching the orchestration path. A streamed
 `temperature` on the route path uses the same request-scoped default as
 the non-stream path — it is not reset to `0.2`.
 
+Optional `tools[].function.description`, `parameters`, and `strict` sent as
+JSON `null` are omit-real: the gateway pops those keys before
+`proxy_completion` so upstream providers see an omitted field, not a null
+schema. Non-null wrong types stay fail-closed with named `invalid_tools`.
+Do not send `parameters: null` and expect the provider hop to accept it —
+send the key only when you have a JSON Schema object.
+
 Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; omit `stream` (or set
 `false`) on tool-calling requests; always send a pool `model`. Do not send
 `tools` with empty or omitted `messages`. Omit `routing.channel=batch`,
 `latency_tolerant=true`, `seed`, `stop`, `n>1`, and `logprobs` on
-tool-calling requests.
+tool-calling requests. When declaring tools, omit unused `description` /
+`parameters` / `strict` or leave the SDK default `null` — both become omit
+before the provider hop.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
+
+Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data
+interchange format* (RFC 8259). Internet Engineering Task Force.
+https://doi.org/10.17487/RFC8259
 
 ## Production Library Target
 
