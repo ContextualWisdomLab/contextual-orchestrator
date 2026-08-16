@@ -60,7 +60,7 @@ This is a parsing and 3NF identity problem, not a new vision library.
 
 | Area | Researched | Decision | Skipped |
 |---|---|---|---|
-| Inline image parse | RFC 2397 `data:` URLs; OpenAI `image_url` content parts; stdlib `base64` + `hashlib` | Keep identity as SHA-256 of decoded bytes. Never persist the raw payload on the catalog. | Pillow, pypdfium, Tesseract, ColPali runtime, a second OCR service. |
+| Inline image parse | RFC 2397 `data:` URLs (case-insensitive scheme; ignore whitespace in the data portion); OpenAI `image_url` content parts; stdlib `base64` + `hashlib` | Keep identity as SHA-256 of decoded bytes. Accept `DATA:` / wrapped base64. Never persist the raw payload on the catalog. | Pillow, pypdfium, Tesseract, ColPali runtime, a second OCR service. |
 | Layout-aware retrieval | Faysse et al. (2024) ColPali; Xu et al. (2020) LayoutLM | Record `image_placement.message_index` / `part_index` / `adjacent_text` so a later embedder can retrieve the figure with the pay line. | Shipping a VLM retriever in this slice. |
 | Temporal recognition | Separate `image_recognition_event` rows | OCR/object tags arrive later and must not be attributes of `image_payload`. | Writing fake OCR text in the first catalog pass. |
 

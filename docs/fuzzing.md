@@ -33,7 +33,8 @@ deserialize request config validate untrusted input"`):
    produce a JSON-serialisable record whose SSE framing round-trips.
 5. **Image content catalog** — `orchestrator.collect_image_catalog`. Arbitrary
    multimodal message lists must yield the 3NF catalog and never echo raw
-   `data:image` payloads.
+   `data:image` payloads. Seeds include uppercase `DATA:` and RFC 2397
+   whitespace so those client shapes stay in the corpus.
 
 ## Running locally
 

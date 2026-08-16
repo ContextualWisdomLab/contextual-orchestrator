@@ -257,6 +257,7 @@ python tests/test_conventions.py
 python tests/test_api_contract.py
 python tests/test_security_hardening.py
 python tests/test_image_placement_catalog.py
+python tests/test_image_catalog_honesty.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py

@@ -69,7 +69,7 @@ erDiagram
     }
 ```
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
-- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server. Buyer next action: send OpenAI `text` + `image_url` parts; read `orchestration.image_content_catalog` to find the figure.
+- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server. Buyer next action: send OpenAI `text` + `image_url` parts (`DATA:` and wrapped base64 are accepted); read `orchestration.image_content_catalog` on the JSON body or the SSE stop chunk. Each `image_placement` has a `placement_id` that matches `docs/database_design.sql`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

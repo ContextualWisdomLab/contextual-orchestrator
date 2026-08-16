@@ -15,6 +15,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `Please pay invoice 1042`. Raw base64 is hashed, not stored. Next action:
   send the figure as `data:image/png;base64,...` or `https://...` and read
   `orchestration.image_content_catalog` to find it.
+- Catalog honesty: `DATA:` / `HTTPS:` schemes and RFC 2397 whitespace in
+  base64 stay searchable; each placement carries `placement_id`; streamed
+  completions and `--state-db` restarts keep the catalog; credential shapes
+  in `adjacent_text` are redacted while invoice numbers and AP emails stay.
+  Next action: POST `stream: true` with a wrapped `DATA:image/png;base64,`
+  invoice and read the stop-chunk catalog.
 
 ### References
 

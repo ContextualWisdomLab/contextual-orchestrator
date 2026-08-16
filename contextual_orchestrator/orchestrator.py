@@ -60,25 +60,32 @@ def flatten_message_text(content: Any) -> str:
 
 
 def _parse_image_source(url: str) -> tuple[str, str, int, str] | None:
-    """Return ``(payload_digest, mime_type, byte_length, source_kind)`` or None."""
-    if url.startswith("data:"):
-        header, separator, payload = url.partition(",")
+    """Return ``(payload_digest, mime_type, byte_length, source_kind)`` or None.
+
+    RFC 2397 treats the ``data:`` scheme as case-insensitive and says
+    whitespace in the data portion should be ignored. Real invoice clients
+    emit ``DATA:IMAGE/PNG;BASE64,`` and wrap long payloads.
+    """
+    stripped = url.strip()
+    if stripped.lower().startswith("data:"):
+        header, separator, payload = stripped.partition(",")
         if not separator or ";base64" not in header.lower():
             return None
-        media = header[5:].split(";", 1)[0].strip().lower()
+        media = header.split(":", 1)[-1].split(";", 1)[0].strip().lower()
         if not media.startswith("image/"):
             return None
+        compact = "".join(payload.split())
         try:
-            raw = base64.b64decode(payload, validate=True)
+            raw = base64.b64decode(compact, validate=True)
         except (ValueError, binascii.Error):
             return None
         if not raw:
             return None
         return hashlib.sha256(raw).hexdigest(), media, len(raw), "inline_data_uri"
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.hostname:
+    parsed = urlparse(stripped)
+    if parsed.scheme.lower() != "https" or not parsed.hostname:
         return None
-    return hashlib.sha256(url.encode("utf-8")).hexdigest(), "image/remote", 0, "remote_https"
+    return hashlib.sha256(stripped.encode("utf-8")).hexdigest(), "image/remote", 0, "remote_https"
 
 
 def collect_image_catalog(messages: list[Any]) -> dict[str, Any]:
@@ -127,6 +134,7 @@ def collect_image_catalog(messages: list[Any]) -> dict[str, Any]:
             }
             placements.append(
                 {
+                    "placement_id": f"image_placement_{message_index}_{part_index}",
                     "payload_digest": payload_digest,
                     "message_index": message_index,
                     "part_index": part_index,
@@ -1067,9 +1075,12 @@ class TaskOrchestrator:
             ],
             "policy_snapshot": self.policy.as_dict(),
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+            "image_content_catalog": _emit_image_catalog(collect_image_catalog(messages)),
         }
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
+        if self._store is not None:
+            self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
             "workflow_run_created",
             {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
@@ -1102,8 +1113,9 @@ class TaskOrchestrator:
             "trace": result["trace"],
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
-            "image_content_catalog": result.get("image_content_catalog")
-            or collect_image_catalog(messages),
+            "image_content_catalog": _emit_image_catalog(
+                result.get("image_content_catalog") or collect_image_catalog(messages)
+            ),
         }
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
@@ -8327,6 +8339,36 @@ def redact_text(text: str) -> str:
     return redacted
 
 
+def redact_credential_text(text: str) -> str:
+    """Mask API keys, tokens, and bearer secrets. Keep operational emails.
+
+    Invoice and AP retrieval need the mailbox next to the figure. Full PII
+    masking would hide ``ap@acme.com`` and paralyze search; credential
+    shapes are the only values that must not leave the catalog.
+    """
+    redacted = text
+    for pattern in SECRET_PATTERNS:
+        marker = pattern.pattern.lower()
+        if marker.startswith("(?i)(api"):
+            redacted = pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted)
+        elif marker.startswith("(?i)(bearer"):
+            redacted = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
+    return redacted
+
+
+def _emit_image_catalog(catalog: Any) -> dict[str, Any] | None:
+    """Copy a catalog and redact credential shapes in adjacent text."""
+    if not isinstance(catalog, dict):
+        return None
+    emitted = copy.deepcopy(catalog)
+    placements = emitted.get("image_placements")
+    if isinstance(placements, list):
+        for placement in placements:
+            if isinstance(placement, dict) and isinstance(placement.get("adjacent_text"), str):
+                placement["adjacent_text"] = redact_credential_text(placement["adjacent_text"])
+    return emitted
+
+
 def redact_value(value: Any) -> Any:
     """Recursively redact string values while preserving response shape."""
     if isinstance(value, str):
@@ -8614,7 +8656,7 @@ def chat_completion_response(
     }
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
-    catalog = result.get("image_content_catalog")
+    catalog = _emit_image_catalog(result.get("image_content_catalog"))
     if catalog:
         orchestration["image_content_catalog"] = catalog
     return {
@@ -8667,6 +8709,9 @@ def chat_completion_chunks(
     }
     if include_trace and "trace" in result:
         orchestration["trace"] = redact_value(result["trace"])
+    catalog = _emit_image_catalog(result.get("image_content_catalog"))
+    if catalog:
+        orchestration["image_content_catalog"] = catalog
     final = {**base, "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}]}
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)

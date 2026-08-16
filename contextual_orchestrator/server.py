@@ -209,9 +209,8 @@ def _validate_content_parts(content: list[Any]) -> list[dict[str, Any]]:
             if not isinstance(url, str) or not url.strip():
                 raise RequestError(400, "invalid_message_content", "image_url content part requires a non-empty url")
             url = url.strip()
-            if url.startswith("javascript:") or url.startswith("data:text/"):
-                raise RequestError(400, "invalid_message_content", "image_url must be https or data:image")
-            if not (url.startswith("https://") or url.lower().startswith("data:image/")):
+            lowered = url.lower()
+            if not (lowered.startswith("https://") or lowered.startswith("data:image/")):
                 raise RequestError(400, "invalid_message_content", "image_url must be https or data:image")
             cleaned.append({"type": "image_url", "image_url": {"url": url}})
             continue
@@ -1082,7 +1081,23 @@ def build_server(
                 try:
                     for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
                         self._write_sse(frame({"content": delta}))
-                    self._write_sse(frame({}, finish="stop"))
+                    stop = {
+                        "id": completion_id,
+                        "object": "chat.completion.chunk",
+                        "created": created,
+                        "model": model_name,
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "stop"}],
+                    }
+                    try:
+                        record = orchestrator.get_workflow_run(run_id)
+                    except KeyError:
+                        record = {}
+                    orchestration = {"workflow_run_id": run_id, "mode": "route"}
+                    catalog = record.get("image_content_catalog")
+                    if catalog:
+                        orchestration["image_content_catalog"] = catalog
+                    stop["orchestration"] = orchestration
+                    self._write_sse(f"data: {json.dumps(stop, ensure_ascii=False)}\n\n")
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
                     self._write_sse(frame({}, finish="error"))
                 self._write_sse("data: [DONE]\n\n")
