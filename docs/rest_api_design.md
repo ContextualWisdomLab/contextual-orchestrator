@@ -114,12 +114,25 @@ the tools passthrough path as on the orchestration path. `stream=true` with
 does not SSE-proxy tool calls yet. Missing `model` and out-of-range
 `temperature` / `top_p` also fail closed before passthrough.
 
+Optional `tools[].function.description`, `parameters`, and `strict` sent as
+JSON `null` are omit-real: the gateway pops those keys before
+`proxy_completion` so upstream providers see an omitted field, not a null
+schema. Non-null wrong types stay fail-closed with named `invalid_tools`.
+Do not send `parameters: null` and expect the provider hop to accept it —
+send the key only when you have a JSON Schema object.
+
 Next action: keep SDK-default nulls; replace `developer` with `system`; omit
 `stream` (or set `false`) on tool-calling requests; always send a pool
-`model`.
+`model`. When declaring tools, omit unused `description` / `parameters` /
+`strict` or leave the SDK default `null` — both become omit before the
+provider hop.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
+
+Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data
+interchange format* (RFC 8259). Internet Engineering Task Force.
+https://doi.org/10.17487/RFC8259
 
 ## Production Library Target
 
