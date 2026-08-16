@@ -995,6 +995,36 @@ def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
     return best_of
 
 
+_ALLOWED_STREAM_OPTION_FLAGS = frozenset({"include_usage", "include_obfuscation"})
+
+
+def _normalized_stream_option_flags(opts: dict[str, Any]) -> dict[str, Any] | None:
+    """Fail closed on unknown ``stream_options`` keys, then drop omit-equivalent flags.
+
+    Unknown keys are rejected *before* null-drop so ``{unknown_flag: null}`` cannot
+    look like an empty object and silently omit. Allowed-key JSON nulls and
+    remaining all-false booleans are omit-equivalent SDK defaults.
+
+    Returns the remaining allowed flags, or ``None`` when the object is omit.
+    """
+    unknown = sorted(set(opts) - _ALLOWED_STREAM_OPTION_FLAGS)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported fields",
+            {"fields": unknown},
+        )
+    remaining = {key: value for key, value in opts.items() if value is not None}
+    if not remaining:
+        return None
+    if set(remaining) <= _ALLOWED_STREAM_OPTION_FLAGS and all(
+        value is False for value in remaining.values()
+    ):
+        return None
+    return remaining
+
+
 def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any] | None:
     """Legacy Completions ``stream_options`` — object with boolean flags; requires stream=true.
 
@@ -1015,22 +1045,8 @@ def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any]
         raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
     if not opts:
         return None
-    allowed = {"include_usage", "include_obfuscation"}
-    # Reject unknown keys before dropping nulls (null is not a free pass for unknowns).
-    unknown = sorted(set(opts) - allowed)
-    if unknown:
-        raise RequestError(
-            400,
-            "invalid_stream_options",
-            "stream_options contains unsupported fields",
-            {"fields": unknown},
-        )
-    # Drop null flag values (SDK optional defaults) before further checks.
-    opts = {key: value for key, value in opts.items() if value is not None}
-    if not opts:
-        return None
-    # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
-    if set(opts) <= allowed and all(v is False for v in opts.values()):
+    opts = _normalized_stream_option_flags(opts)
+    if opts is None:
         return None
     if body.get("stream") is not True:
         raise RequestError(
@@ -1053,8 +1069,6 @@ def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any]
     return opts
 
 
-
-
 def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[str, Any] | None:
     """Chat Completions ``stream_options`` — requires stream=true; include_usage unsupported.
 
@@ -1063,7 +1077,9 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
     apply stream obfuscation, so include_usage/include_obfuscation=true fail closed.
     Explicit JSON null on *allowed* flag keys is treat-as-omit (SDK optional defaults).
     Unknown keys fail closed even when their value is null so clients cannot smuggle
-    unsupported flags past the allow-list via null serialization.
+    unsupported flags past the allow-list via null serialization. Call this
+    *before* tools / ``response_format`` ``proxy_completion`` so the same
+    allow-list applies on the passthrough path.
     """
     if "stream_options" not in body:
         return None
@@ -1075,22 +1091,8 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
         raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
     if not opts:
         return None
-    allowed = {"include_usage", "include_obfuscation"}
-    # Reject unknown keys before dropping nulls (null is not a free pass for unknowns).
-    unknown = sorted(set(opts) - allowed)
-    if unknown:
-        raise RequestError(
-            400,
-            "invalid_stream_options",
-            "stream_options contains unsupported fields",
-            {"fields": unknown},
-        )
-    # Drop null flag values (SDK optional defaults) before further checks.
-    opts = {key: value for key, value in opts.items() if value is not None}
-    if not opts:
-        return None
-    # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
-    if set(opts) <= allowed and all(v is False for v in opts.values()):
+    opts = _normalized_stream_option_flags(opts)
+    if opts is None:
         return None
     if stream is not True:
         raise RequestError(
@@ -1217,22 +1219,10 @@ def _validate_responses_stream_options(body: dict[str, Any]) -> None:
     if opts is None or (isinstance(opts, dict) and not opts):
         return
     if isinstance(opts, dict):
-        allowed_flags = {"include_usage", "include_obfuscation"}
-        # Reject unknown keys before treating null flags as omit.
-        unknown = sorted(set(opts) - allowed_flags)
-        if unknown:
-            raise RequestError(
-                400,
-                "invalid_stream_options",
-                "stream_options contains unsupported fields",
-                {"fields": unknown},
-            )
-        # Null flag values alone are omit-equivalent (SDK optional defaults).
-        non_null = {key: value for key, value in opts.items() if value is not None}
-        if not non_null:
-            return
-        # All-false allowed flags are also omit-equivalent.
-        if set(non_null) <= allowed_flags and all(v is False for v in non_null.values()):
+        # Shared unknown-first + null/all-false omit. Remaining flags still fail
+        # closed because Responses streaming is off.
+        remaining = _normalized_stream_option_flags(opts)
+        if remaining is None:
             return
     raise RequestError(
         400,
@@ -3629,6 +3619,18 @@ def build_server(
                                     "invalid_parallel_tool_calls",
                                     "parallel_tool_calls=true requires tools on /v1/chat/completions",
                                 )
+                    # stream + stream_options must run before tools/response_format
+                    # passthrough. Otherwise unknown-null flags bill 200 on the
+                    # buyer-facing chat path this helper claims to close.
+                    stream = body.get("stream", False)
+                    # Explicit JSON null or empty/whitespace string is treat-as-omit
+                    # (SDK optional default → non-stream).
+                    if stream is None or (isinstance(stream, str) and not stream.strip()):
+                        stream = False
+                    if not isinstance(stream, bool):
+                        raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    if "stream_options" in body:
+                        _validate_chat_stream_options(body, stream)
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if any(
@@ -3671,15 +3673,6 @@ def build_server(
                             include_trace = include_trace_raw
                     else:
                         include_trace = bool(security.expose_trace_by_default)
-                    stream = body.get("stream", False)
-                    # Explicit JSON null or empty/whitespace string is treat-as-omit
-                    # (SDK optional default → non-stream).
-                    if stream is None or (isinstance(stream, str) and not stream.strip()):
-                        stream = False
-                    if not isinstance(stream, bool):
-                        raise RequestError(400, "invalid_request", "stream must be a boolean")
-                    if "stream_options" in body:
-                        _validate_chat_stream_options(body, stream)
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
                     # Require model — silent default to contextual-orchestrator hid

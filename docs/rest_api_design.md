@@ -9,6 +9,15 @@
 - Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
 - OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
 
+## Compatibility honesty (`stream_options`)
+
+Buyers sending OpenAI SDK defaults must get a named reject, not a billed no-op.
+
+- Allowed flags on `/v1/chat/completions`, `/v1/completions`, and `/v1/responses`: `include_usage`, `include_obfuscation`.
+- JSON null on an allowed flag is omit-equivalent (SDK optional default).
+- Unknown keys fail closed with `invalid_stream_options` **even when the value is null**. Dropping nulls before the allow-list would make `{unknown_flag: null}` look empty.
+- Chat `tools` / `response_format` passthrough runs this check **before** `proxy_completion`. Next action: if you see `invalid_stream_options`, remove the unknown flag or stop sending `include_usage`/`include_obfuscation=true` on this gateway.
+
 ## Current Endpoints
 
 | Method | Path | Purpose |

@@ -117,7 +117,110 @@ def test_http_chat_rejects_mixed_allowed_null_and_unknown() -> None:
             },
         )
         assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_stream_options" in blob
+        assert "extra_flag" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def _function_tool() -> dict:
+    return {
+        "type": "function",
+        "function": {
+            "name": "lookup_balance",
+            "description": "Fetch account balance",
+            "parameters": {
+                "type": "object",
+                "properties": {"account_id": {"type": "string"}},
+            },
+        },
+    }
+
+
+def test_http_chat_tools_passthrough_rejects_stream_options_unknown_null_key() -> None:
+    """tools passthrough must not bill 200 for unknown-null stream_options."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "unknown null with tools"}],
+                "tools": [_function_tool()],
+                "stream_options": {"include_logprobs": None},
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_stream_options" in blob
+        assert "include_logprobs" in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_passthrough_rejects_include_usage_true() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "usage true with tools"}],
+                "tools": [_function_tool()],
+                "stream_options": {"include_usage": True},
+            },
+        )
+        assert status == 400, body
         assert "invalid_stream_options" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_passthrough_accepts_allowed_stream_options_null_flags() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "allowed null with tools"}],
+                "tools": [_function_tool()],
+                "stream_options": {
+                    "include_usage": None,
+                    "include_obfuscation": None,
+                },
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_response_format_passthrough_rejects_stream_options_unknown_null() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "unknown null with json"}],
+                "response_format": {"type": "json_object"},
+                "stream_options": {"extra_flag": None},
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_stream_options" in blob
+        assert "extra_flag" in blob
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -205,6 +308,10 @@ if __name__ == "__main__":
     test_http_chat_rejects_stream_options_unknown_null_key()
     test_http_chat_accepts_allowed_stream_options_null_flags()
     test_http_chat_rejects_mixed_allowed_null_and_unknown()
+    test_http_chat_tools_passthrough_rejects_stream_options_unknown_null_key()
+    test_http_chat_tools_passthrough_rejects_include_usage_true()
+    test_http_chat_tools_passthrough_accepts_allowed_stream_options_null_flags()
+    test_http_chat_response_format_passthrough_rejects_stream_options_unknown_null()
     test_http_completions_rejects_stream_options_unknown_null_key()
     test_http_completions_accepts_allowed_stream_options_null_flags()
     test_http_responses_rejects_stream_options_unknown_null_key()
