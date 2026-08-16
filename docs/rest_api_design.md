@@ -8,6 +8,8 @@
 - Error shape: `{"error_code": "...", "error_message": "...", "error_detail": {...}}` in production.
 - Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
 - OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
+- Sampling controls are isolated per HTTP request; omitted controls resolve to
+  the client defaults even while another request is using overrides.
 
 ## Current Endpoints
 

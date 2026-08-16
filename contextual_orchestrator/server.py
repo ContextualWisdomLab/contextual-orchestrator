@@ -19,6 +19,7 @@ from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
+    GenerationOptions,
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
@@ -534,7 +535,8 @@ def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None
     if "parallel_tool_calls" not in body:
         return None
     value = body.get("parallel_tool_calls")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    # Explicit JSON null or empty/whitespace string is treat-as-omit
+    # (SDK optional default / stringified empty control).
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if not isinstance(value, bool):
@@ -1090,6 +1092,8 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
     yields opaque 400s; named unsupported errors let buyers migrate cleanly.
     Explicit JSON null or empty string for string fields is treat-as-omit
     (SDK optional default). Empty include/text structures remain omit no-ops.
+    ``truncation`` values ``auto`` and ``disabled`` are also omit-equivalent
+    no-ops: without conversation state there is nothing to truncate.
     """
     def _present_nonempty(value: Any) -> bool:
         if value is None:
@@ -1110,12 +1114,22 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
             "invalid_conversation",
             "conversation is not supported on /v1/responses",
         )
-    if "truncation" in body and _present_nonempty(body.get("truncation")):
-        raise RequestError(
-            400,
-            "invalid_truncation",
-            "truncation is not supported on /v1/responses",
-        )
+    if "truncation" in body:
+        truncation = body.get("truncation")
+        # Explicit JSON null / empty-whitespace string: omit no-op.
+        if truncation is None or (isinstance(truncation, str) and not truncation.strip()):
+            pass
+        elif isinstance(truncation, str) and truncation.strip() in {"auto", "disabled"}:
+            # OpenAI enum. Without previous_response_id/conversation there is no
+            # multi-turn context to truncate, so auto|disabled are honest
+            # omit-equivalent no-ops (SDK clients often send truncation=auto).
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_truncation",
+                "truncation must be auto or disabled on /v1/responses",
+            )
     if "include" in body:
         include = body.get("include")
         # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
@@ -1621,13 +1635,17 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
         parallel_present = False
     elif "parallel_tool_calls" in body:
         # true or non-boolean — surface as tools unsupported (or type error below).
-        if not isinstance(parallel, bool):
+        # Explicit JSON null or empty/whitespace string is treat-as-omit.
+        if parallel is None or (isinstance(parallel, str) and not parallel.strip()):
+            parallel_present = False
+        elif not isinstance(parallel, bool):
             raise RequestError(
                 400,
                 "invalid_parallel_tool_calls",
                 "parallel_tool_calls must be a boolean",
             )
-        parallel_present = True
+        else:
+            parallel_present = True
     else:
         parallel_present = False
 
@@ -3090,24 +3108,17 @@ def build_server(
                         attribution["service"] = "completions_api"
                     routing = _validate_routing(body.get("routing"))
                     started_at = time.perf_counter()
-                    # Apply request sampling knobs to the provider client for this call.
+                    # Bind sampling knobs to this request context; shared client defaults stay immutable.
                     model_client = orchestrator.client
-                    previous_max_tokens = model_client.max_output_tokens
-                    previous_temperature = model_client.default_temperature
-                    previous_top_p = model_client.default_top_p
-                    previous_presence = model_client.default_presence_penalty
-                    previous_frequency = model_client.default_frequency_penalty
-                    if max_tokens is not None:
-                        model_client.max_output_tokens = max_tokens
-                    if temperature is not None:
-                        model_client.default_temperature = temperature
-                    if top_p is not None:
-                        model_client.default_top_p = top_p
-                    if presence_penalty is not None:
-                        model_client.default_presence_penalty = presence_penalty
-                    if frequency_penalty is not None:
-                        model_client.default_frequency_penalty = frequency_penalty
-                    try:
+                    with model_client.request_options(
+                        GenerationOptions(
+                            max_output_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            presence_penalty=presence_penalty,
+                            frequency_penalty=frequency_penalty,
+                        )
+                    ):
                         result = self._run(lambda: coordinator.complete(
                             messages,
                             mode="route",
@@ -3116,12 +3127,6 @@ def build_server(
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                         ))
-                    finally:
-                        model_client.max_output_tokens = previous_max_tokens
-                        model_client.default_temperature = previous_temperature
-                        model_client.default_top_p = previous_top_p
-                        model_client.default_presence_penalty = previous_presence
-                        model_client.default_frequency_penalty = previous_frequency
                     # Batch-channel Completions return a job handle (202), not a
                     # text_completion body — match chat Completions honesty so
                     # clients never receive a 500 on a valid batch routing hint.
@@ -3225,12 +3230,12 @@ def build_server(
                     if "parallel_tool_calls" in body:
                         # Always type-check. With tools, true/false both valid for
                         # provider passthrough; without tools, true fails closed.
-                        # Explicit JSON null is treat-as-omit (SDK optional default).
+                        # Explicit JSON null or empty/whitespace string is treat-as-omit
+                        # (SDK optional default / stringified empty control).
                         ptc = body.get("parallel_tool_calls")
-                        # Empty/whitespace string is treat-as-omit (SDK optional default).
-                        if isinstance(ptc, str) and not ptc.strip():
-                            ptc = None
-                        if ptc is not None:
+                        if ptc is not None and not (
+                            isinstance(ptc, str) and not ptc.strip()
+                        ):
                             if not isinstance(ptc, bool):
                                 raise RequestError(
                                     400,
@@ -3270,7 +3275,7 @@ def build_server(
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
                     if "include_orchestration_trace" in body:
                         include_trace_raw = body.get("include_orchestration_trace")
-                        # Explicit JSON null is treat-as-omit (SDK optional default).
+                        # Explicit JSON null or empty/whitespace string is treat-as-omit.
                         if include_trace_raw is None or (
                             isinstance(include_trace_raw, str) and not include_trace_raw.strip()
                         ):
@@ -3372,9 +3377,11 @@ def build_server(
                         # array items is treat-as-omit (SDK optional default).
                         stop_val = body.get("stop")
                         if isinstance(stop_val, list):
-                            stop_val = [s for s in stop_val if not (isinstance(s, str) and not s.strip())]
-                            if not stop_val:
-                                stop_val = []
+                            stop_val = [
+                                item
+                                for item in stop_val
+                                if not (isinstance(item, str) and not item.strip())
+                            ]
                         if stop_val is not None and stop_val != [] and stop_val != "":
                             try:
                                 _validate_completions_stop(body)
@@ -3444,22 +3451,15 @@ def build_server(
                         _validate_openai_metadata(body)
                     started_at = time.perf_counter()
                     model_client = orchestrator.client
-                    previous_max_tokens = model_client.max_output_tokens
-                    previous_temperature = model_client.default_temperature
-                    previous_top_p = model_client.default_top_p
-                    previous_presence = model_client.default_presence_penalty
-                    previous_frequency = model_client.default_frequency_penalty
-                    if max_tokens is not None:
-                        model_client.max_output_tokens = max_tokens
-                    if temperature is not None:
-                        model_client.default_temperature = temperature
-                    if top_p is not None:
-                        model_client.default_top_p = top_p
-                    if presence_penalty is not None:
-                        model_client.default_presence_penalty = presence_penalty
-                    if frequency_penalty is not None:
-                        model_client.default_frequency_penalty = frequency_penalty
-                    try:
+                    with model_client.request_options(
+                        GenerationOptions(
+                            max_output_tokens=max_tokens,
+                            temperature=temperature,
+                            top_p=top_p,
+                            presence_penalty=presence_penalty,
+                            frequency_penalty=frequency_penalty,
+                        )
+                    ):
                         if stream and orchestrator.would_route(messages, mode):
                             self._stream_route_completion(orchestrator, security, messages, model_name)
                             orchestrator.record_analytics_event(
@@ -3482,12 +3482,6 @@ def build_server(
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                         ))
-                    finally:
-                        model_client.max_output_tokens = previous_max_tokens
-                        model_client.default_temperature = previous_temperature
-                        model_client.default_top_p = previous_top_p
-                        model_client.default_presence_penalty = previous_presence
-                        model_client.default_frequency_penalty = previous_frequency
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(
