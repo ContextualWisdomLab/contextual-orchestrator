@@ -1200,7 +1200,9 @@ def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
 
     Parts are shape-checked and returned for provider passthrough. Unsupported
     part types fail closed with a named error so clients never believe audio or
-    other modalities were processed.
+    other modalities were processed. Empty/whitespace text and image URLs fail
+    closed; bare-string ``image_url`` is normalized to ``{"url": ...}``; optional
+    ``detail`` must be auto/low/high when present.
     """
     if not content:
         raise RequestError(
@@ -1218,27 +1220,77 @@ def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
             )
         part_type = part.get("type")
         if part_type == "text":
-            if not isinstance(part.get("text"), str):
+            text = part.get("text")
+            if not isinstance(text, str):
                 raise RequestError(
                     400,
                     "invalid_message_content",
                     "text content part requires a string text field",
                 )
+            if not text.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "text content part text must be a non-empty string",
+                )
+            parts.append(part)
         elif part_type == "image_url":
             image_url = part.get("image_url")
-            if not isinstance(image_url, dict) or not isinstance(image_url.get("url"), str):
+            # OpenAI SDKs occasionally send image_url as a bare URL string.
+            if isinstance(image_url, str):
+                if not image_url.strip():
+                    raise RequestError(
+                        400,
+                        "invalid_message_content",
+                        "image_url content part requires a non-empty url string",
+                    )
+                image_url = {"url": image_url}
+                part = {**part, "image_url": image_url}
+            if not isinstance(image_url, dict):
                 raise RequestError(
                     400,
                     "invalid_message_content",
                     "image_url content part requires image_url.url as a string",
                 )
+            url = image_url.get("url")
+            if not isinstance(url, str) or not url.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "image_url content part requires image_url.url as a non-empty string",
+                )
+            if "detail" in image_url:
+                detail = image_url.get("detail")
+                # Explicit null / empty string: treat as omit (SDK optional default).
+                if detail is None or (isinstance(detail, str) and not detail.strip()):
+                    cleaned = {key: value for key, value in image_url.items() if key != "detail"}
+                    part = {**part, "image_url": cleaned}
+                else:
+                    if not isinstance(detail, str):
+                        raise RequestError(
+                            400,
+                            "invalid_message_content",
+                            "image_url.detail must be a string",
+                        )
+                    detail_normalized = detail.strip().lower()
+                    if detail_normalized not in {"auto", "low", "high"}:
+                        raise RequestError(
+                            400,
+                            "invalid_message_content",
+                            "image_url.detail must be one of auto, low, high",
+                        )
+                    if detail != detail_normalized:
+                        part = {
+                            **part,
+                            "image_url": {**image_url, "detail": detail_normalized},
+                        }
+            parts.append(part)
         else:
             raise RequestError(
                 400,
                 "invalid_message_content",
                 "content part type must be text or image_url",
             )
-        parts.append(part)
     return parts
 
 
