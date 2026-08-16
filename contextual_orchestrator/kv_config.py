@@ -19,7 +19,16 @@ drop-in interchangeable.
 
 from __future__ import annotations
 
+import os
+import threading
 from typing import Any, Dict, Iterable, Optional, Protocol, Tuple
+
+PROVIDER_EGRESS_CATEGORY = "provider_egress"
+ALLOWED_PROVIDER_HOSTS_KEY = "allowed_provider_hosts"
+_ALLOWED_HOSTS_ENV = "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"
+
+_runtime_store: ConfigStore | None = None
+_runtime_lock = threading.Lock()
 
 
 class ConfigStore(Protocol):
@@ -147,3 +156,70 @@ def get_config_store(
         return adapter
     except Exception:  # pragma: no cover - fall back when deps/DB unavailable
         return InMemoryConfigStore(seed=seed)
+
+
+def get_runtime_config_store() -> ConfigStore:
+    """Return the process-wide KV used at request time (created on first use)."""
+    global _runtime_store
+    if _runtime_store is None:
+        with _runtime_lock:
+            if _runtime_store is None:
+                _runtime_store = InMemoryConfigStore()
+    return _runtime_store
+
+
+def set_runtime_config_store(store: ConfigStore | None) -> None:
+    """Install (or, with ``None``, reset) the process-wide request-time KV."""
+    global _runtime_store
+    with _runtime_lock:
+        _runtime_store = store
+
+
+def reset_runtime_config_store() -> None:
+    """Drop the process-wide KV so the next read starts empty (tests)."""
+    set_runtime_config_store(None)
+
+
+def get_runtime_config(category: str, key: str, default: Any = None) -> Any:
+    """Read one request-time config value from the process KV. Never os.getenv."""
+    return get_runtime_config_store().get(category, key, default)
+
+
+def set_runtime_config(category: str, key: str, value: Any) -> None:
+    """Write one request-time config value into the process KV."""
+    get_runtime_config_store().set(category, key, value)
+
+
+def _parse_host_allowlist(raw: Any) -> frozenset[str]:
+    """Split a CSV or sequence of hosts into a lower-cased frozenset."""
+    if raw is None:
+        return frozenset()
+    if isinstance(raw, (list, tuple, set, frozenset)):
+        tokens = [str(item) for item in raw]
+    else:
+        tokens = str(raw).split(",")
+    return frozenset(token.strip().lower() for token in tokens if str(token).strip())
+
+
+def allowed_provider_hosts() -> frozenset[str]:
+    """Return the request-time provider host allowlist from the KV only.
+
+    An empty set means "no extra hostname filter" — public HTTPS hosts still
+    pass the private/loopback/reserved address checks in ``ModelClient``.
+    """
+    raw = get_runtime_config(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, "")
+    return _parse_host_allowlist(raw)
+
+
+def seed_provider_egress_from_environ() -> None:
+    """Bootstrap: copy the env allowlist into KV when that KV key is still empty.
+
+    This is the only allowed ``os.environ`` read for the host allowlist.
+    Request-time validation must call :func:`allowed_provider_hosts`.
+    """
+    existing = get_runtime_config(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, None)
+    if existing not in (None, ""):
+        return
+    raw = os.environ.get(_ALLOWED_HOSTS_ENV, "")
+    if raw.strip():
+        set_runtime_config(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, raw)

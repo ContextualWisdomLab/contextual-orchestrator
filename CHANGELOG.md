@@ -19,6 +19,18 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is
+  read from the **process-wide runtime ConfigStore** at request time, not from
+  `os.getenv` and not from a separately constructed Postgres `com_config`
+  unless that store was installed with `set_runtime_config_store()` at
+  bootstrap. `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` is copied into
+  that KV key once at process start (`seed_provider_egress_from_environ`).
+  Changing the env var on a running process no longer changes egress policy.
+  Buyer next action: call `set_runtime_config("provider_egress",
+  "allowed_provider_hosts", "api.example.com")` (or start the process with
+  the env var set so bootstrap can copy it). Do not write the key only into
+  a new `get_config_store(postgres_dsn=...)` instance and expect egress to
+  honor it.
 - Fail closed on unknown assistant `tool_calls` entry and `function` keys
   (`unknown_tool_call_fields` / `unknown_tool_call_function_fields`) on both
   the orchestration path and the tools / `response_format` SSE proxy.
@@ -48,6 +60,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### References
 
+- Joint Task Force. (2020). *Security and privacy controls for information
+  systems and organizations* (NIST Special Publication 800-53 Rev. 5).
+  National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-53r5
+- International Organization for Standardization. (2022). *Information
+  security, cybersecurity and privacy protection — Information security
+  controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
 - OpenAI. (2024). *Create chat completion*. OpenAI API reference.
   https://platform.openai.com/docs/api-reference/chat/create
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data

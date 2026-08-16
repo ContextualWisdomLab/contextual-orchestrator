@@ -68,7 +68,7 @@ Seed the credential into the KV once at bootstrap:
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
 ```
 
-Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
+Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Seed `provider_egress.allowed_provider_hosts` in the KV (or set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` at process start so bootstrap can copy it once) when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
 
 > The legacy `api_key_env` field is still accepted for back-compat, but its value is now treated as the **credential name** in the KV, not as an environment variable to read. This supersedes the old `api_key_env` env pattern.
 
@@ -256,6 +256,7 @@ python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
 python tests/test_security_hardening.py
+python tests/test_provider_host_allowlist_kv.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py

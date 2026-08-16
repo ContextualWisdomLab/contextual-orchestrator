@@ -70,6 +70,15 @@ OpenAI. (2024). *Streaming API responses*. OpenAI API documentation. https://pla
 
 WHATWG. (n.d.). *Server-sent events*. HTML Living Standard. https://html.spec.whatwg.org/multipage/server-sent-events.html
 
+## Provider host allowlist (2026-08-16)
+
+Request-time egress allowlisting is a KV config read, not a new dependency.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Runtime config | Existing `ConfigStore` / `InMemoryConfigStore` in `kv_config.py`; credential KV (`get_credential`) | Reuse `ConfigStore` as a process-wide request-time store (`provider_egress.allowed_provider_hosts`). Env `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` is bootstrap transport via `seed_provider_egress_from_environ` only. | New allowlist library, OS-level firewall helper, treating the host list as a secret in `get_credential`. |
+| Control baseline | NIST SP 800-53 Rev. 5 SC-7; ISO/IEC 27001:2022 A.8.20 | Document the allowlist as boundary protection. Empty KV set means "no extra hostname filter"; private/loopback/reserved addresses still fail closed. | Shipping a full NIST/ISO control catalog in this slice. |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

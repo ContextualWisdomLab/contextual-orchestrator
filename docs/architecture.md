@@ -8,6 +8,8 @@
 - Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
 - OpenAI. (2024). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
+- Joint Task Force. (2020). *Security and privacy controls for information systems and organizations* (NIST Special Publication 800-53 Rev. 5). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-53r5
+- International Organization for Standardization. (2022). *Information security, cybersecurity and privacy protection — Information security controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
 
 ## What The Architecture Is
 
@@ -38,7 +40,7 @@ This repository implements the interface and control plane, not the trained coor
 - `TaskOrchestrator.route_once`: the low-latency routing path.
 - `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
-- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks. `proxy_completion` returns JSON; `proxy_completion_stream` pipes SSE so tool-calling `stream=true` clients receive `chat.completion.chunk` frames (including `delta.tool_calls`) instead of a billed JSON body. Mock function tools emit the same `tool_calls` shape offline so SDK stream parsers can be exercised without a live provider.
+- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks. `proxy_completion` returns JSON; `proxy_completion_stream` pipes SSE so tool-calling `stream=true` clients receive `chat.completion.chunk` frames (including `delta.tool_calls`) instead of a billed JSON body. Mock function tools emit the same `tool_calls` shape offline so SDK stream parsers can be exercised without a live provider. Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is read from the process KV at request time (NIST SP 800-53 Rev. 5 SC-7; ISO/IEC 27001:2022 A.8.20). `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` is bootstrap transport into that KV key only — never `os.getenv` during `_validate_provider`.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server. Tools and `response_format` take the single-agent passthrough path; `stream=true` on that path is an SSE proxy, not a `400`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.

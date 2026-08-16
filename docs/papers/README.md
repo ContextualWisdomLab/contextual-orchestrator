@@ -61,6 +61,25 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## Boundary protection (provider host allowlist)
+
+ISO/IEC 27001 cannot be redistributed here. NIST SP 800-53 is a US government
+publication; this repo cites it rather than vendoring the full PDF.
+
+- Joint Task Force. (2020). *Security and privacy controls for information
+  systems and organizations* (NIST Special Publication 800-53 Rev. 5).
+  National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-53r5
+  Control **SC-7** (Boundary Protection) is the request-time hostname
+  allowlist: only approved provider hosts may receive a credentialed egress
+  call. Buyer next action: seed `provider_egress.allowed_provider_hosts`.
+
+- International Organization for Standardization. (2022). *Information
+  security, cybersecurity and privacy protection — Information security
+  controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
+  Annex **A.8.20** (Network security) is the same allowlist expressed as an
+  operator control. The standard text is not attached (copyright).
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.
