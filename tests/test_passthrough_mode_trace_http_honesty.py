@@ -104,6 +104,27 @@ def test_http_chat_tools_rejects_invalid_mode() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tools_rejects_whitespace_only_mode() -> None:
+    """Whitespace-only mode is truthy on the orchestration ``or`` chain."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "tools": _LOOKUP_TOOLS,
+                "mode": "   ",
+            },
+        )
+        assert status == 400, body
+        assert "invalid_mode" in json.dumps(body)
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_tools_rejects_invalid_orchestration_alias() -> None:
     """``orchestration=explode`` must use the same named error as ``mode``."""
     server, thread, port = _server()
@@ -115,6 +136,27 @@ def test_http_chat_tools_rejects_invalid_orchestration_alias() -> None:
                 "messages": [{"role": "user", "content": "look up invoice 4419"}],
                 "tools": _LOOKUP_TOOLS,
                 "orchestration": "explode",
+            },
+        )
+        assert status == 400, body
+        assert "invalid_mode" in json.dumps(body)
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_rejects_invalid_orchestration_mode_alias() -> None:
+    """``orchestration_mode=explode`` must use the same named error as ``mode``."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "tools": _LOOKUP_TOOLS,
+                "orchestration_mode": "explode",
             },
         )
         assert status == 400, body
@@ -209,6 +251,27 @@ def test_http_chat_response_format_rejects_invalid_mode() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_response_format_rejects_mode_conduct() -> None:
+    """``response_format`` plus ``mode=conduct`` must not bill a proxy."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "response_format": {"type": "json_object"},
+                "mode": "conduct",
+            },
+        )
+        assert status == 400, body
+        assert "invalid_mode" in json.dumps(body)
+        assert "choices" not in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_tools_accepts_mode_auto_and_false_trace() -> None:
     """Honest no-ops: ``mode=auto`` and ``include_orchestration_trace=false``."""
     server, thread, port = _server()
@@ -221,6 +284,26 @@ def test_http_chat_tools_accepts_mode_auto_and_false_trace() -> None:
                 "tools": _LOOKUP_TOOLS,
                 "mode": "auto",
                 "include_orchestration_trace": False,
+            },
+        )
+        assert status == 200, body
+        assert "choices" in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_accepts_mode_route() -> None:
+    """``mode=route`` is an advertised omit-equivalent no-op on passthrough."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "tools": _LOOKUP_TOOLS,
+                "mode": "route",
             },
         )
         assert status == 200, body
@@ -252,11 +335,15 @@ def test_http_chat_tools_accepts_null_trace_as_omit() -> None:
 
 if __name__ == "__main__":
     test_http_chat_tools_rejects_invalid_mode()
+    test_http_chat_tools_rejects_whitespace_only_mode()
     test_http_chat_tools_rejects_invalid_orchestration_alias()
+    test_http_chat_tools_rejects_invalid_orchestration_mode_alias()
     test_http_chat_tools_rejects_non_boolean_include_orchestration_trace()
     test_http_chat_tools_rejects_include_orchestration_trace_true()
     test_http_chat_tools_rejects_mode_conduct()
     test_http_chat_response_format_rejects_invalid_mode()
+    test_http_chat_response_format_rejects_mode_conduct()
     test_http_chat_tools_accepts_mode_auto_and_false_trace()
+    test_http_chat_tools_accepts_mode_route()
     test_http_chat_tools_accepts_null_trace_as_omit()
     print("ok")

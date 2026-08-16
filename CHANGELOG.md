@@ -19,7 +19,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `logit_bias`, and out-of-range penalties — the same named errors as the
   orchestration path. Next action: omit those knobs on tool-calling requests.
 - Fail closed on tools passthrough for invalid `mode` / `orchestration`,
-  `mode=conduct`, non-boolean `include_orchestration_trace`, and
+  whitespace-only `mode` (same `or` chain as orchestration), `mode=conduct`,
+  non-boolean `include_orchestration_trace`, and
   `include_orchestration_trace=true`. This path has no Conductor workflow or
   trusted-trace plane. Next action: omit `mode` or send `auto`/`route`; omit
   the trace flag or set it `false`.
