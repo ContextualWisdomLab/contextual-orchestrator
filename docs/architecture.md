@@ -38,7 +38,7 @@ This repository implements the interface and control plane, not the trained coor
 - `TaskOrchestrator.route_once`: the low-latency routing path.
 - `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
-- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks. `proxy_completion` returns JSON; `proxy_completion_stream` pipes SSE so tool-calling `stream=true` clients receive `chat.completion.chunk` frames (including `delta.tool_calls`) instead of a billed JSON body. Mock function tools emit the same `tool_calls` shape offline so SDK stream parsers can be exercised without a live provider.
+- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks. `proxy_completion` returns JSON; `proxy_completion_stream` pipes SSE so tool-calling `stream=true` clients receive `chat.completion.chunk` frames (including `delta.tool_calls`) instead of a billed JSON body. Mock function tools emit the same `tool_calls` shape offline so SDK stream parsers can be exercised without a live provider. After a `role=tool` observation the mock answers with content — there is no multi-step tool loop (Yao et al., 2023; OpenAI, 2024).
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server. Tools and `response_format` take the single-agent passthrough path; `stream=true` on that path is an SSE proxy, not a `400`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.

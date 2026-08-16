@@ -137,6 +137,9 @@ Whitespace-padded `tool_choice` strings (`" none "`, `"\\tnone\\n"`) are
 the same omit-equivalent `none` as the exact token: the gateway writes
 the stripped value back and mock `lookup_balance` stays `content` /
 `stop`. Send `none` when you want no tool call; do not rely on padding.
+After you post a `role=tool` observation (the OpenAI function-calling
+continuation), mock `lookup_balance` also stays `content` / `stop` —
+this gateway has no multi-step tool loop (Yao et al., 2023).
 
 Optional `tools[].function.description`, `parameters`, and `strict` sent as
 JSON `null` are omit-real: the gateway pops those keys before
@@ -157,7 +160,8 @@ Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when
 the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
 pool `model`; put the invoice number in the user text (`INV-4419` or
-`invoice 4419`); omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
+`invoice 4419`); send the tool result as `role=tool` with `tool_call_id`
+to receive the answer (do not expect a second mock tool call); omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
 and `stream_options.include_usage` on tool-calling requests. When declaring
 tools, omit unused `description` / `parameters` / `strict` or leave the SDK
 default `null` — both become omit before the provider hop. On assistant

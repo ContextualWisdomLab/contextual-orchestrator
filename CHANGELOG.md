@@ -54,6 +54,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `INV-4419`) instead of defaulting to `INV-9` when the buyer omits the
   `INV-` prefix. Next action: put the invoice number in the user text;
   prefixed and bare forms both bind.
+- Stop the mock tool loop after a `role=tool` observation: JSON and SSE
+  `lookup_balance` stay `content` / `stop` instead of emitting another
+  `tool_calls` turn. Next action: post the tool result with
+  `tool_call_id` and read the answer; this gateway has no multi-step
+  tool loop.
 
 ### References
 

@@ -5,8 +5,10 @@ Until this path existed, the gateway returned ``400 invalid_stream`` (honest,
 but a buyer-visible gap: every streaming tool client failed). The transport
 must now emit ``text/event-stream`` ``chat.completion.chunk`` frames. Function
 tools reconstruct to the same ``message.tool_calls`` as the non-stream JSON
-body (including ``lookup_balance`` / ``INV-9``); content-only
-``response_format`` streams still match ``message.content``. Empty messages,
+body (including ``lookup_balance`` / ``INV-9`` or a bare ``invoice 4419``);
+a ``role=tool`` observation stays ``content`` / ``stop`` (no second mock
+tool call). Content-only ``response_format`` streams still match
+``message.content``. Empty messages,
 unsupported knobs, and ``stream_options.include_usage=true`` still fail
 closed (this gateway does not emit a final usage chunk).
 
@@ -251,6 +253,7 @@ def test_http_chat_tools_stream_tool_choice_none_keeps_content() -> None:
             reference = json.loads(json_raw)["choices"][0]
             assert reference["finish_reason"] == "stop", choice
             assert "tool_calls" not in reference["message"], choice
+            assert json.loads(json_raw)["echo"]["tool_choice"] == "none", choice
             streamed, finish_reason = _reconstruct_tool_calls(sse)
             assert finish_reason == "stop", choice
             assert streamed == []
@@ -353,6 +356,97 @@ def test_proxy_completion_padded_tool_choice_none_keeps_content() -> None:
         assert result["choices"][0]["finish_reason"] == "stop", choice
         assert "tool_calls" not in result["choices"][0]["message"], choice
         assert result["choices"][0]["message"]["content"] == "[general_agent] chat-mock"
+        assert result["echo"]["tool_choice"] == "none", choice
+
+
+def test_http_chat_tools_stream_binds_bare_invoice_number() -> None:
+    """Buyer accuracy: 'invoice 4419' must bind INV-4419 on JSON and SSE, not INV-9."""
+    server, thread, port = _server()
+    payload = {
+        "model": "mock-planner",
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the outstanding balance on invoice 4419?",
+            }
+        ],
+        "tools": _LOOKUP_TOOLS,
+    }
+    try:
+        json_status, _, json_raw = _post_raw(port, payload)
+        sse_status, content_type, sse = _post_raw(port, {**payload, "stream": True})
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert json_status == 200, json_raw
+    assert sse_status == 200, sse
+    assert content_type.startswith("text/event-stream"), content_type
+    reference = json.loads(json_raw)["choices"][0]
+    assert reference["finish_reason"] == "tool_calls"
+    assert json.loads(reference["message"]["tool_calls"][0]["function"]["arguments"]) == {
+        "invoice_id": "INV-4419"
+    }
+    streamed, finish_reason = _reconstruct_tool_calls(sse)
+    assert finish_reason == "tool_calls"
+    assert streamed == reference["message"]["tool_calls"]
+    assert json.loads(streamed[0]["function"]["arguments"]) == {"invoice_id": "INV-4419"}
+
+
+def test_http_chat_tools_stream_tool_observation_keeps_content() -> None:
+    """After a role=tool observation the mock must answer, not loop lookup_balance.
+
+    This gateway has no multi-step tool loop. A buyer who posts the OpenAI
+    function-calling continuation (user → assistant tool_calls → tool result)
+    must get content/stop on JSON and SSE. Re-emitting tool_calls would
+    spin the official SDK forever on mock:// (Yao et al., 2023; OpenAI, 2024).
+    """
+    server, thread, port = _server()
+    payload = {
+        "model": "mock-planner",
+        "messages": [
+            {
+                "role": "user",
+                "content": "What is the outstanding balance on invoice 4419?",
+            },
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_mock_lookup_balance",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_balance",
+                            "arguments": '{"invoice_id":"INV-4419"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_mock_lookup_balance",
+                "content": "INV-4419 balance is 128.50 USD",
+            },
+        ],
+        "tools": _LOOKUP_TOOLS,
+    }
+    try:
+        json_status, _, json_raw = _post_raw(port, payload)
+        sse_status, content_type, sse = _post_raw(port, {**payload, "stream": True})
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert json_status == 200, json_raw
+    assert sse_status == 200, sse
+    assert content_type.startswith("text/event-stream"), content_type
+    reference = json.loads(json_raw)["choices"][0]
+    assert reference["finish_reason"] == "stop", json_raw
+    assert "tool_calls" not in reference["message"], json_raw
+    assert reference["message"]["content"], json_raw
+    streamed, finish_reason = _reconstruct_tool_calls(sse)
+    assert finish_reason == "stop"
+    assert streamed == []
+    assert _reconstruct_content(sse) == reference["message"]["content"]
 
 
 def test_proxy_completion_binds_bare_invoice_number_from_buyer_prompt() -> None:
@@ -370,6 +464,44 @@ def test_proxy_completion_binds_bare_invoice_number_from_buyer_prompt() -> None:
     assert json.loads(message["tool_calls"][0]["function"]["arguments"]) == {
         "invoice_id": "INV-4419"
     }
+
+
+def test_proxy_completion_tool_observation_keeps_content() -> None:
+    """A posted tool result must complete the mock turn, not loop lookup_balance."""
+    result = build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": "What is the outstanding balance on invoice 4419?",
+                },
+                {
+                    "role": "assistant",
+                    "content": None,
+                    "tool_calls": [
+                        {
+                            "id": "call_mock_lookup_balance",
+                            "type": "function",
+                            "function": {
+                                "name": "lookup_balance",
+                                "arguments": '{"invoice_id":"INV-4419"}',
+                            },
+                        }
+                    ],
+                },
+                {
+                    "role": "tool",
+                    "tool_call_id": "call_mock_lookup_balance",
+                    "content": "INV-4419 balance is 128.50 USD",
+                },
+            ],
+            "tools": _LOOKUP_TOOLS,
+        }
+    )
+    assert result["choices"][0]["finish_reason"] == "stop"
+    assert "tool_calls" not in result["choices"][0]["message"]
+    assert result["choices"][0]["message"]["content"] == "[general_agent] chat-mock"
 
 
 def test_proxy_completion_defaults_invoice_identifier_when_prompt_omits_it() -> None:
@@ -478,11 +610,14 @@ if __name__ == "__main__":
     test_http_chat_tools_stream_still_rejects_seed()
     test_http_chat_tools_stream_rejects_include_usage()
     test_http_chat_tools_stream_tool_choice_none_keeps_content()
+    test_http_chat_tools_stream_binds_bare_invoice_number()
+    test_http_chat_tools_stream_tool_observation_keeps_content()
     test_proxy_completion_named_tool_choice_binds_invoice_from_content_parts()
     test_proxy_completion_generic_function_uses_query_argument()
     test_proxy_completion_tool_choice_none_keeps_content()
     test_proxy_completion_padded_tool_choice_none_keeps_content()
     test_proxy_completion_binds_bare_invoice_number_from_buyer_prompt()
+    test_proxy_completion_tool_observation_keeps_content()
     test_proxy_completion_defaults_invoice_identifier_when_prompt_omits_it()
     test_proxy_completion_stream_yields_mock_tool_calls()
     test_stream_raw_pipes_tool_call_deltas_verbatim()

@@ -486,14 +486,30 @@ class ModelClient:
                     pieces.append(str(part.get("text") or ""))
         return " ".join(pieces)
 
+    def _tool_observation_present(self, payload: dict[str, Any]) -> bool:
+        """Return True when the buyer already posted a ``role=tool`` observation.
+
+        This gateway has no multi-step tool loop. After the OpenAI
+        function-calling continuation, ``mock://`` must answer with
+        ``content`` / ``stop`` instead of another ``lookup_balance`` call
+        (Yao et al., 2023; OpenAI, 2024).
+        """
+        for message in payload.get("messages") or []:
+            if isinstance(message, dict) and message.get("role") == "tool":
+                return True
+        return False
+
     def _selected_function_name(self, payload: dict[str, Any]) -> str | None:
         """Return the function a mock agent should call, or None for ``tool_choice=none``.
 
         Incidental whitespace around ``none`` matches the HTTP validator so a
-        padded SDK string does not emit ``tool_calls``.
+        padded SDK string does not emit ``tool_calls``. A prior ``role=tool``
+        observation also returns None so the mock does not loop.
         """
         tools = payload.get("tools")
         if not isinstance(tools, list) or not tools:
+            return None
+        if self._tool_observation_present(payload):
             return None
         tool_choice = payload.get("tool_choice")
         if isinstance(tool_choice, str) and tool_choice.strip() == "none":
@@ -1183,6 +1199,8 @@ class TaskOrchestrator:
         body cannot smuggle ``mode`` / ``attribution`` to the provider.
         ``stream`` is set explicitly: JSON proxy forces ``false``; SSE proxy
         forces ``true`` so the provider emits ``chat.completion.chunk`` frames.
+        Whitespace-padded ``tool_choice`` tokens are written back so live
+        providers and mock echo see ``none`` / ``auto`` / ``required``.
         """
         messages = body.get("messages")
         if isinstance(messages, list):
@@ -1213,6 +1231,11 @@ class TaskOrchestrator:
         }
         upstream["model"] = agent.model
         upstream["stream"] = stream
+        tool_choice = upstream.get("tool_choice")
+        if isinstance(tool_choice, str):
+            stripped_choice = tool_choice.strip()
+            if stripped_choice in ("none", "auto", "required"):
+                upstream["tool_choice"] = stripped_choice
         return agent, upstream
 
     def proxy_completion(
