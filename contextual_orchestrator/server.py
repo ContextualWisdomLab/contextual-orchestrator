@@ -918,13 +918,14 @@ def _validate_completions_top_logprobs(body: dict[str, Any]) -> None:
     chat uses boolean ``logprobs`` + ``top_logprobs``. This gateway never returns
     token logprobs on /v1/completions, so non-zero ``top_logprobs`` fails closed
     with ``invalid_top_logprobs`` rather than opaque ``unknown_fields``.
-    Explicit JSON null or ``0`` is treat-as-omit (SDK optional default / no top alts).
+    Explicit JSON null, empty/whitespace string, or ``0`` is treat-as-omit
+    (SDK optional default / no top alts).
     """
     if "top_logprobs" not in body:
         return
     value = body.get("top_logprobs")
-    # Explicit JSON null or zero is treat-as-omit (SDK optional default).
-    if value is None or value == 0:
+    # Explicit JSON null, empty/whitespace string, or zero is treat-as-omit.
+    if value is None or value == 0 or (isinstance(value, str) and not value.strip()):
         return
     raise RequestError(
         400,
@@ -1741,6 +1742,10 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "each tool_calls function.name must match [a-zA-Z0-9_-]",
                 )
             arguments = function.get("arguments")
+            # Explicit JSON null is treat-as-omit → empty JSON-text arguments
+            # (SDK optional default); non-string non-null remains fail-closed.
+            if arguments is None:
+                arguments = ""
             if not isinstance(arguments, str):
                 raise RequestError(
                     400,
@@ -3774,8 +3779,11 @@ def build_server(
                                         "logprobs=true is not supported on /v1/chat/completions",
                                     )
                         if "top_logprobs" in body:
-                            # Explicit JSON null or 0 is treat-as-omit (SDK optional default).
+                            # Explicit JSON null, empty/whitespace string, or 0 is
+                            # treat-as-omit (SDK optional default / no top alts).
                             tlp = body.get("top_logprobs")
+                            if isinstance(tlp, str) and not tlp.strip():
+                                tlp = None
                             if tlp is not None and tlp != 0:
                                 raise RequestError(
                                     400,
