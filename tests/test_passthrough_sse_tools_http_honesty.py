@@ -3,14 +3,28 @@
 OpenAI SDKs and LangChain-style tool callers default to ``stream=true``.
 Until this path existed, the gateway returned ``400 invalid_stream`` (honest,
 but a buyer-visible gap: every streaming tool client failed). The transport
-must now emit ``text/event-stream`` ``chat.completion.chunk`` frames whose
-concatenated content equals the non-stream JSON ``message.content``, and must
-still fail closed on empty messages, unsupported knobs, and
-``stream_options.include_usage=true`` (this gateway does not emit a final
-usage chunk).
+must now emit ``text/event-stream`` ``chat.completion.chunk`` frames. Function
+tools reconstruct to the same ``message.tool_calls`` as the non-stream JSON
+body (including ``lookup_balance`` / ``INV-9``); content-only
+``response_format`` streams still match ``message.content``. Empty messages,
+unsupported knobs, and ``stream_options.include_usage=true`` still fail
+closed (this gateway does not emit a final usage chunk).
 
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
 https://platform.openai.com/docs/guides/streaming-responses
+
+OpenAI. (2024). *Function calling*. OpenAI API documentation.
+https://platform.openai.com/docs/guides/function-calling
+
+Schick, T., Dwivedi-Yu, J., Dessì, R., Raileanu, R., Lomeli, M., Hambro, E.,
+Zettlemoyer, L., Cancedda, N., & Scialom, T. (2023). Toolformer: Language
+models can teach themselves to use tools. *Advances in Neural Information
+Processing Systems, 36*. https://arxiv.org/abs/2302.04761
+
+Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., & Cao, Y.
+(2023). ReAct: Synergizing reasoning and acting in language models.
+*International Conference on Learning Representations*.
+https://arxiv.org/abs/2210.03629
 
 WHATWG. (n.d.). *Server-sent events*. HTML Living Standard.
 https://html.spec.whatwg.org/multipage/server-sent-events.html
@@ -85,6 +99,37 @@ def _reconstruct_content(sse: str) -> str:
     return "".join(pieces)
 
 
+def _reconstruct_tool_calls(sse: str) -> tuple[list[dict], str | None]:
+    """Rebuild OpenAI streamed ``delta.tool_calls`` the way the official SDK does."""
+    calls: dict[int, dict] = {}
+    finish_reason: str | None = None
+    for block in sse.split("\n\n"):
+        line = block.strip()
+        if not line.startswith("data: ") or line == "data: [DONE]":
+            continue
+        chunk = json.loads(line[len("data: ") :])
+        assert chunk["object"] == "chat.completion.chunk"
+        choice = chunk["choices"][0]
+        if choice.get("finish_reason"):
+            finish_reason = choice["finish_reason"]
+        for item in (choice.get("delta") or {}).get("tool_calls") or []:
+            index = int(item.get("index") or 0)
+            slot = calls.setdefault(
+                index,
+                {"id": "", "type": "function", "function": {"name": "", "arguments": ""}},
+            )
+            if item.get("id"):
+                slot["id"] = item["id"]
+            if item.get("type"):
+                slot["type"] = item["type"]
+            function = item.get("function") or {}
+            if function.get("name"):
+                slot["function"]["name"] += function["name"]
+            if function.get("arguments"):
+                slot["function"]["arguments"] += function["arguments"]
+    return [calls[index] for index in sorted(calls)], finish_reason
+
+
 def _server():
     server = build_server(
         build(),
@@ -96,12 +141,12 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_chat_tools_stream_matches_non_stream_content() -> None:
+def test_http_chat_tools_stream_matches_non_stream_tool_calls() -> None:
     """Buyer accuracy: streamed tool-calling deltas equal the JSON completion."""
     server, thread, port = _server()
     payload = {
         "model": "mock-planner",
-        "messages": [{"role": "user", "content": "look up the invoice"}],
+        "messages": [{"role": "user", "content": "What is the outstanding balance on invoice INV-9?"}],
         "tools": _LOOKUP_TOOLS,
     }
     try:
@@ -116,8 +161,15 @@ def test_http_chat_tools_stream_matches_non_stream_content() -> None:
     assert sse.endswith("data: [DONE]\n\n")
     assert "chat.completion.chunk" in sse
     assert "orchestration" not in sse
-    reference = json.loads(json_raw)["choices"][0]["message"]["content"]
-    assert _reconstruct_content(sse) == reference
+    reference = json.loads(json_raw)["choices"][0]
+    assert reference["finish_reason"] == "tool_calls"
+    assert reference["message"]["content"] is None
+    streamed, finish_reason = _reconstruct_tool_calls(sse)
+    assert finish_reason == "tool_calls"
+    assert streamed == reference["message"]["tool_calls"]
+    assert streamed[0]["function"]["name"] == "lookup_balance"
+    assert json.loads(streamed[0]["function"]["arguments"]) == {"invoice_id": "INV-9"}
+    assert _reconstruct_content(sse) == ""
 
 
 def test_http_chat_response_format_stream_is_sse() -> None:
@@ -201,13 +253,82 @@ def test_http_chat_tools_stream_rejects_include_usage() -> None:
     assert "invalid_stream_options" in raw
 
 
-def test_proxy_completion_stream_yields_mock_chunks() -> None:
+def test_proxy_completion_named_tool_choice_binds_invoice_from_content_parts() -> None:
+    result = build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "call the other tool for INV-42"},
+                        {"type": "image_url", "image_url": {"url": "https://example.test/x"}},
+                    ],
+                }
+            ],
+            "tools": [
+                {"type": "function", "function": {"name": "lookup_balance"}},
+                {"type": "function", "function": {"name": "other_tool"}},
+            ],
+            "tool_choice": {"type": "function", "function": {"name": "other_tool"}},
+        }
+    )
+    call = result["choices"][0]["message"]["tool_calls"][0]
+    assert call["function"]["name"] == "other_tool"
+    assert json.loads(call["function"]["arguments"]) == {"invoice_id": "INV-42"}
+
+
+def test_proxy_completion_generic_function_uses_query_argument() -> None:
+    result = build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [{"role": "user", "content": "summarize the ledger"}],
+            "tools": [{"type": "function", "function": {"name": "lookup"}}],
+        }
+    )
+    call = result["choices"][0]["message"]["tool_calls"][0]
+    assert call["function"]["name"] == "lookup"
+    assert json.loads(call["function"]["arguments"]) == {"query": "summarize the ledger"}
+
+
+def test_proxy_completion_tool_choice_none_keeps_content() -> None:
+    result = build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [{"role": "user", "content": "look up the invoice"}],
+            "tools": _LOOKUP_TOOLS,
+            "tool_choice": "none",
+        }
+    )
+    assert result["choices"][0]["finish_reason"] == "stop"
+    assert "tool_calls" not in result["choices"][0]["message"]
+    assert result["choices"][0]["message"]["content"] == "[general_agent] chat-mock"
+
+
+def test_proxy_completion_defaults_invoice_identifier_when_prompt_omits_it() -> None:
+    """Realistic invoice prompt without an id still binds lookup_balance to INV-9."""
+    result = build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [{"role": "user", "content": "look up the invoice"}],
+            "tools": _LOOKUP_TOOLS,
+        }
+    )
+    message = result["choices"][0]["message"]
+    assert result["choices"][0]["finish_reason"] == "tool_calls"
+    assert message["tool_calls"][0]["function"]["name"] == "lookup_balance"
+    assert json.loads(message["tool_calls"][0]["function"]["arguments"]) == {
+        "invoice_id": "INV-9"
+    }
+
+
+def test_proxy_completion_stream_yields_mock_tool_calls() -> None:
     orch = build()
     frames = list(
         orch.proxy_completion_stream(
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "look up the invoice"}],
+                "messages": [{"role": "user", "content": "look up invoice INV-9"}],
                 "tools": _LOOKUP_TOOLS,
                 "mode": "auto",
             }
@@ -217,7 +338,10 @@ def test_proxy_completion_stream_yields_mock_chunks() -> None:
     assert "chat.completion.chunk" in body
     assert body.endswith("data: [DONE]\n\n")
     assert '"mode"' not in body
-    assert _reconstruct_content(body)
+    streamed, finish_reason = _reconstruct_tool_calls(body)
+    assert finish_reason == "tool_calls"
+    assert streamed[0]["function"]["name"] == "lookup_balance"
+    assert json.loads(streamed[0]["function"]["arguments"]) == {"invoice_id": "INV-9"}
 
 
 def test_stream_raw_pipes_tool_call_deltas_verbatim() -> None:
@@ -281,11 +405,15 @@ def test_stream_raw_pipes_tool_call_deltas_verbatim() -> None:
 
 
 if __name__ == "__main__":
-    test_http_chat_tools_stream_matches_non_stream_content()
+    test_http_chat_tools_stream_matches_non_stream_tool_calls()
     test_http_chat_response_format_stream_is_sse()
     test_http_chat_tools_stream_still_rejects_empty_messages()
     test_http_chat_tools_stream_still_rejects_seed()
     test_http_chat_tools_stream_rejects_include_usage()
-    test_proxy_completion_stream_yields_mock_chunks()
+    test_proxy_completion_named_tool_choice_binds_invoice_from_content_parts()
+    test_proxy_completion_generic_function_uses_query_argument()
+    test_proxy_completion_tool_choice_none_keeps_content()
+    test_proxy_completion_defaults_invoice_identifier_when_prompt_omits_it()
+    test_proxy_completion_stream_yields_mock_tool_calls()
     test_stream_raw_pipes_tool_call_deltas_verbatim()
     print("ok")

@@ -10,9 +10,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Added
 
 - SSE-proxy `tools` and `response_format` on `/v1/chat/completions` when
-  `stream=true`. Concatenated mock content matches the non-stream JSON body;
-  live providers are piped verbatim so `delta.tool_calls` survive. Next
-  action: send `stream=true` when the client reads SSE; omit
+  `stream=true`. Function-tool mocks emit `delta.tool_calls` and finish as
+  `tool_calls` (invoice `lookup_balance` binds `INV-9` from the prompt);
+  content-only `response_format` streams still match the JSON body; live
+  providers are piped verbatim. Next action: send `stream=true` when the
+  client reads SSE; include the invoice id in the user text; omit
   `stream_options.include_usage`.
 
 ### Fixed
@@ -51,3 +53,14 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   https://platform.openai.com/docs/guides/streaming-responses
 - WHATWG. (n.d.). *Server-sent events*. HTML Living Standard.
   https://html.spec.whatwg.org/multipage/server-sent-events.html
+- OpenAI. (2024). *Function calling*. OpenAI API documentation.
+  https://platform.openai.com/docs/guides/function-calling
+- Schick, T., Dwivedi-Yu, J., Dessì, R., Raileanu, R., Lomeli, M.,
+  Hambro, E., Zettlemoyer, L., Cancedda, N., & Scialom, T. (2023).
+  Toolformer: Language models can teach themselves to use tools.
+  *Advances in Neural Information Processing Systems, 36*.
+  https://arxiv.org/abs/2302.04761
+- Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., &
+  Cao, Y. (2023). ReAct: Synergizing reasoning and acting in language
+  models. *International Conference on Learning Representations*.
+  https://arxiv.org/abs/2210.03629

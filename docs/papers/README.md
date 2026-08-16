@@ -35,6 +35,35 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## Tool calling / streamed function calls
+
+Offline `mock://` must emit the same OpenAI `tool_calls` JSON and
+`delta.tool_calls` SSE shape as a live provider so SDK clients can be
+exercised without a billed hop. The papers below ground *why* a gateway
+exposes tools as first-class actions rather than free text.
+
+- Schick, T., Dwivedi-Yu, J., Dessì, R., Raileanu, R., Lomeli, M.,
+  Hambro, E., Zettlemoyer, L., Cancedda, N., & Scialom, T. (2023).
+  Toolformer: Language models can teach themselves to use tools.
+  *Advances in Neural Information Processing Systems, 36*.
+  https://arxiv.org/abs/2302.04761
+  Grounds treating API calls as structured tool invocations (name +
+  arguments) instead of natural-language side effects. arXiv preprint
+  under the arXiv non-exclusive distribution license; PDF not vendored
+  here because the gateway cites the contract, not the training method.
+- Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., &
+  Cao, Y. (2023). ReAct: Synergizing reasoning and acting in language
+  models. *International Conference on Learning Representations*.
+  https://arxiv.org/abs/2210.03629
+  Grounds interleaving a thought/action/observation loop: the gateway
+  must surface `finish_reason=tool_calls` so the buyer can run the tool
+  and send the observation back. arXiv preprint; cite + link only.
+- OpenAI. (2024). *Function calling*. OpenAI API documentation.
+  https://platform.openai.com/docs/guides/function-calling
+  Normative stream shape: `delta.tool_calls` then
+  `finish_reason=tool_calls`. Redistribution of the vendor docs is not
+  permitted; the citation is the contract source.
+
 ## API contract honesty (tool schema omit)
 
 Gateway buyers send official OpenAI SDK payloads. Optional

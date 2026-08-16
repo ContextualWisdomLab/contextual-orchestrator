@@ -111,8 +111,10 @@ Message-level `weight`, `prefix`, `refusal`, `annotations`, `developer` role,
 empty user/system content, non-string user content, and participant `name` use the same named errors on
 the tools passthrough path as on the orchestration path. `stream=true` with
 `tools` or `response_format` SSE-proxies a single pool agent as
-`chat.completion.chunk` frames (concatenated content matches the non-stream
-JSON body). Do not send `stream_options.include_usage=true` or
+`chat.completion.chunk` frames. Function tools reconstruct to the same
+`message.tool_calls` as the non-stream JSON body (`lookup_balance` binds
+`INV-` identifiers, defaulting to `INV-9`); content-only `response_format`
+streams still match `message.content`. Do not send `stream_options.include_usage=true` or
 `include_obfuscation=true` — this gateway does not emit a final usage chunk
 or apply SSE obfuscation. Missing `model` and out-of-range
 `temperature` / `top_p` also fail closed before passthrough. `seed`, `stop`,
@@ -155,6 +157,19 @@ default `null` — both become omit before the provider hop. On assistant
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
+
+OpenAI. (2024). *Function calling*. OpenAI API documentation.
+https://platform.openai.com/docs/guides/function-calling
+
+Schick, T., Dwivedi-Yu, J., Dessì, R., Raileanu, R., Lomeli, M., Hambro, E.,
+Zettlemoyer, L., Cancedda, N., & Scialom, T. (2023). Toolformer: Language
+models can teach themselves to use tools. *Advances in Neural Information
+Processing Systems, 36*. https://arxiv.org/abs/2302.04761
+
+Yao, S., Zhao, J., Yu, D., Du, N., Shafran, I., Narasimhan, K., & Cao, Y.
+(2023). ReAct: Synergizing reasoning and acting in language models.
+*International Conference on Learning Representations*.
+https://arxiv.org/abs/2210.03629
 
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
 https://platform.openai.com/docs/guides/streaming-responses

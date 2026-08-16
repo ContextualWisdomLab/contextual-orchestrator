@@ -456,14 +456,91 @@ class ModelClient:
             for raw in response:
                 yield raw.decode("utf-8")
 
+    def _user_prompt_text(self, payload: dict[str, Any]) -> str:
+        """Join user message text so mock tool arguments can bind invoice ids."""
+        pieces: list[str] = []
+        for message in payload.get("messages") or []:
+            if not isinstance(message, dict) or message.get("role") != "user":
+                continue
+            content = message.get("content")
+            if isinstance(content, str):
+                pieces.append(content)
+                continue
+            if not isinstance(content, list):
+                continue
+            for part in content:
+                if isinstance(part, dict) and part.get("type") == "text":
+                    pieces.append(str(part.get("text") or ""))
+        return " ".join(pieces)
+
+    def _selected_function_name(self, payload: dict[str, Any]) -> str | None:
+        """Return the function a mock agent should call, or None for ``tool_choice=none``."""
+        tools = payload.get("tools")
+        if not isinstance(tools, list) or not tools:
+            return None
+        tool_choice = payload.get("tool_choice")
+        if tool_choice == "none":
+            return None
+        if isinstance(tool_choice, dict):
+            named = str(((tool_choice.get("function") or {}).get("name") or "")).strip()
+            if named:
+                return named
+        for tool in tools:
+            if not isinstance(tool, dict) or tool.get("type") != "function":
+                continue
+            function = tool.get("function")
+            if not isinstance(function, dict):
+                continue
+            name = str(function.get("name") or "").strip()
+            if name:
+                return name
+        return None
+
+    def _mock_function_arguments(self, function_name: str, prompt_text: str) -> str:
+        """Build OpenAI ``function.arguments`` JSON from the buyer prompt.
+
+        Invoice lookups bind ``INV-`` identifiers from the user text so a
+        streamed ``lookup_balance`` call matches the live provider shape
+        (OpenAI, 2024). A missing identifier defaults to ``INV-9``.
+        """
+        match = re.search(r"INV[-_ ]?\d+", prompt_text, flags=re.IGNORECASE)
+        digits = re.sub(r"\D", "", match.group(0)) if match else ""
+        invoice_id = f"INV-{digits}" if digits else "INV-9"
+        if match or function_name == "lookup_balance" or "invoice" in prompt_text.lower():
+            return json.dumps({"invoice_id": invoice_id}, separators=(",", ":"))
+        if prompt_text.strip():
+            return json.dumps({"query": prompt_text}, separators=(",", ":"))
+        return "{}"
+
+    def _mock_tool_call_message(self, payload: dict[str, Any]) -> dict[str, Any] | None:
+        """Return an assistant ``tool_calls`` message when mock tools should fire."""
+        function_name = self._selected_function_name(payload)
+        if function_name is None:
+            return None
+        arguments = self._mock_function_arguments(function_name, self._user_prompt_text(payload))
+        return {
+            "role": "assistant",
+            "content": None,
+            "tool_calls": [
+                {
+                    "id": f"call_mock_{function_name}",
+                    "type": "function",
+                    "function": {"name": function_name, "arguments": arguments},
+                }
+            ],
+        }
+
     def _mock_raw_sse(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ):
         """Frame the mock JSON completion as OpenAI ``chat.completion.chunk`` SSE.
 
-        Content is chunked so tests can assert live deltas. The final frame has
-        no orchestration object — this is a provider passthrough, not a conduct
-        workflow. Responses endpoint streaming is not implemented here.
+        Content completions are chunked as ``delta.content``. Function-tool
+        completions emit ``delta.tool_calls`` and finish as ``tool_calls`` so
+        ``mock://`` matches the OpenAI SDK stream the live ``_stream_raw`` path
+        already preserves. The final frame has no orchestration object — this
+        is a provider passthrough, not a conduct workflow. Responses endpoint
+        streaming is not implemented here.
         """
         if endpoint.strip("/") == "responses":
             raise RuntimeError("SSE passthrough is not implemented for /v1/responses")
@@ -471,9 +548,14 @@ class ModelClient:
         snapshot["stream"] = False
         raw = self._mock_raw(agent, endpoint, snapshot)
         content = ""
+        tool_calls: list[Any] = []
         choices = raw.get("choices") or []
         if choices:
-            content = str((choices[0].get("message") or {}).get("content") or "")
+            message = choices[0].get("message") or {}
+            content = str(message.get("content") or "")
+            raw_calls = message.get("tool_calls") or []
+            if isinstance(raw_calls, list):
+                tool_calls = raw_calls
         completion_id = str(raw.get("id") or f"chatcmpl_mock_{agent.id}")
         created = int(time.time())
         model_name = str(raw.get("model") or agent.model)
@@ -489,10 +571,41 @@ class ModelClient:
             return f"data: {json.dumps(payload_out, ensure_ascii=False)}\n\n"
 
         yield _frame({"role": "assistant"})
-        if content:
-            for start in range(0, len(content), 24):
-                yield _frame({"content": content[start : start + 24]})
-        yield _frame({}, finish="stop")
+        if tool_calls:
+            for index, call in enumerate(tool_calls):
+                if not isinstance(call, dict):
+                    continue
+                function = call.get("function") if isinstance(call.get("function"), dict) else {}
+                yield _frame(
+                    {
+                        "tool_calls": [
+                            {
+                                "index": index,
+                                "id": call.get("id"),
+                                "type": call.get("type") or "function",
+                                "function": {"name": function.get("name") or "", "arguments": ""},
+                            }
+                        ]
+                    }
+                )
+                arguments = str(function.get("arguments") or "")
+                for start in range(0, len(arguments), 24):
+                    yield _frame(
+                        {
+                            "tool_calls": [
+                                {
+                                    "index": index,
+                                    "function": {"arguments": arguments[start : start + 24]},
+                                }
+                            ]
+                        }
+                    )
+            yield _frame({}, finish="tool_calls")
+        else:
+            if content:
+                for start in range(0, len(content), 24):
+                    yield _frame({"content": content[start : start + 24]})
+            yield _frame({}, finish="stop")
         yield "data: [DONE]\n\n"
 
     def _send_raw_with_retry(
@@ -530,7 +643,12 @@ class ModelClient:
     def _mock_raw(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
-        """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
+        """Mock full provider response for tests; echoes forwarded params so passthrough is assertable.
+
+        Function tools return an assistant ``tool_calls`` message so JSON and
+        SSE buyers see the same OpenAI shape. ``tool_choice=none`` and
+        non-tool requests keep the content completion.
+        """
         echoed = {
             key: payload[key]
             for key in ("model", "response_format", "tools", "tool_choice", "temperature", "max_tokens")
@@ -548,6 +666,22 @@ class ModelClient:
                         "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
                     }
                 ],
+                "echo": echoed,
+            }
+        tool_message = self._mock_tool_call_message(payload)
+        if tool_message is not None:
+            return {
+                "id": f"chatcmpl_mock_{agent.id}",
+                "object": "chat.completion",
+                "model": agent.model,
+                "choices": [
+                    {
+                        "index": 0,
+                        "message": tool_message,
+                        "finish_reason": "tool_calls",
+                    }
+                ],
+                "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                 "echo": echoed,
             }
         return {
@@ -1077,8 +1211,9 @@ class TaskOrchestrator:
 
         Bytes already sent cannot be recalled, so this path does not fail over
         to another agent mid-stream. Mock agents emit ``chat.completion.chunk``
-        frames whose content matches ``proxy_completion``; live providers are
-        piped verbatim so ``tool_calls`` deltas survive.
+        frames that match ``proxy_completion`` (``delta.tool_calls`` for
+        function tools, content otherwise); live providers are piped verbatim
+        so ``tool_calls`` deltas survive.
         """
         agent, upstream = self._passthrough_upstream(body, endpoint=endpoint, stream=True)
         yield from self.client.proxy_stream_send(agent, endpoint, upstream)
