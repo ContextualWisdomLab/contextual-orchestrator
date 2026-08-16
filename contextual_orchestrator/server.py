@@ -2665,7 +2665,10 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
     Extra sibling keys fail closed so clients cannot smuggle unsupported fields
     into a provider-shaped object that this gateway never interpreted.
     Inside ``json_schema``, ``name`` must match ``[a-zA-Z0-9_-]{1,64}``
-    (ASCII only — ``str.isalnum()`` is not sufficient).
+    (ASCII only — ``str.isalnum()`` is not sufficient). Nested keys are
+    limited to ``name`` / ``schema`` / ``description`` / ``strict``;
+    JSON-null or blank ``description`` and JSON-null ``strict`` are popped
+    omit-real before passthrough (parity with Responses ``text.format``).
     """
     if "response_format" not in body:
         return None
@@ -2740,6 +2743,20 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.name must match [a-zA-Z0-9_-]",
             )
+        # Nested json_schema accepts only the official Structured Outputs keys.
+        # Unknown siblings fail closed so clients cannot smuggle unsupported
+        # fields into a provider-shaped object this gateway never interpreted.
+        unknown_schema = sorted(
+            set(schema) - {"name", "schema", "description", "strict"}
+        )
+        if unknown_schema:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema accepts only name, schema, "
+                "description, and strict",
+                {"fields": unknown_schema},
+            )
         # OpenAI requires json_schema.schema as the actual JSON Schema object.
         # Fail closed when missing or non-object so clients cannot silently
         # believe structured-output enforcement applied without a schema body.
@@ -2750,6 +2767,21 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.schema must be an object",
             )
+        # Explicit JSON null / blank description is omit-equivalent: pop so
+        # passthrough matches omit (parity with Responses text.format).
+        if "description" in schema:
+            description_value = schema.get("description")
+            if description_value is None or (
+                isinstance(description_value, str) and not description_value.strip()
+            ):
+                schema.pop("description")
+            elif not isinstance(description_value, str):
+                raise RequestError(
+                    400,
+                    "invalid_response_format",
+                    "response_format.json_schema.description must be a string "
+                    "when provided",
+                )
         # Explicit JSON null is omit-equivalent: pop so passthrough matches omit.
         if "strict" in schema:
             strict_value = schema.get("strict")
