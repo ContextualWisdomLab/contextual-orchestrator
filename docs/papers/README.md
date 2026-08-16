@@ -35,6 +35,21 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## Nucleus sampling on streamed route
+
+Streamed `/v1/chat/completions` must apply the same `top_p` /
+`presence_penalty` / `frequency_penalty` as the JSON `chat()` path.
+Otherwise a buyer who sends `stream=true` silently changes the sampling
+policy.
+
+- Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The
+  curious case of neural text degeneration. *International Conference on
+  Learning Representations*. https://arxiv.org/abs/1904.09751
+  Grounds `top_p` (nucleus) as the mass-truncated sampling control the
+  gateway must honor on both JSON and SSE route completions. arXiv
+  preprint (1904.09751) under the arXiv non-exclusive distribution
+  license; PDF not vendored in this slice.
+
 ## Tool calling / streamed function calls
 
 Offline `mock://` must emit the same OpenAI `tool_calls` JSON and

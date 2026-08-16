@@ -68,3 +68,6 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   Cao, Y. (2023). ReAct: Synergizing reasoning and acting in language
   models. *International Conference on Learning Representations*.
   https://arxiv.org/abs/2210.03629
+- Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The
+  curious case of neural text degeneration. *International Conference on
+  Learning Representations*. https://arxiv.org/abs/1904.09751
