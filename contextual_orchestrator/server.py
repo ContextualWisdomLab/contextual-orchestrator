@@ -17,6 +17,7 @@ from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
 from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
+from .semantic_chunking import expand_embedding_inputs
 from .orchestrator import (
     BudgetExceededError,
     TaskOrchestrator,
@@ -45,7 +46,15 @@ ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
-ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {
+    "model",
+    "input",
+    "inputs",
+    "endpoint",
+    "metadata",
+    "attribution",
+    "chunking_strategy",
+}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
@@ -245,6 +254,33 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
             mode=mode,
         ))
     return batch
+
+
+def _validate_chunking_strategy(body: dict[str, Any]) -> str | None:
+    """Return ``meaning_units`` or omit-equivalent ``None``.
+
+    Unknown values fail closed so a buyer cannot believe the gateway split a
+    document when it actually embedded the whole string. JSON null and
+    empty/whitespace strings are treat-as-omit.
+    """
+    if "chunking_strategy" not in body:
+        return None
+    value = body.get("chunking_strategy")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise RequestError(
+            400,
+            "invalid_chunking_strategy",
+            "chunking_strategy must be a string",
+        )
+    if value == "meaning_units":
+        return value
+    raise RequestError(
+        400,
+        "invalid_chunking_strategy",
+        "chunking_strategy must be omitted or meaning_units; send meaning_units to embed email, HTML, and paragraph units separately",
+    )
 
 
 def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
@@ -800,12 +836,18 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
+                    chunking_strategy = _validate_chunking_strategy(body)
+                    inputs, chunk_units = expand_embedding_inputs(
+                        inputs, chunking_strategy=chunking_strategy
+                    )
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     attribution = _embeddings_attribution(body)
                     submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
                     endpoint_alias = body.get("endpoint")
                     if endpoint_alias:
                         submit_metadata["endpoint_alias"] = str(endpoint_alias)
+                    if chunking_strategy == "meaning_units":
+                        submit_metadata["chunk_units"] = [unit.to_dict() for unit in chunk_units]
                     document = self._run(lambda: coordinator.complete_embeddings_batch(
                         inputs,
                         model=model_name,

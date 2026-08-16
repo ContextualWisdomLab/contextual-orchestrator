@@ -29,6 +29,7 @@ These stories are derived from the product planning reboot, not from generic adm
 ## API Consumer
 
 - As an API consumer, I want a single chat-completion compatible endpoint so that I can adopt orchestration without rewriting client code.
+- As an API consumer, I want `/v1/batch/embeddings` to optionally embed email, HTML, image, and paragraph meaning units so that a search for an invoice number returns the balance line instead of the greeting.
 - As an API consumer, I want resource-oriented REST endpoints so that enterprise integrations can manage pools, policies, workflow runs, and locales.
 
 ## Localization Manager

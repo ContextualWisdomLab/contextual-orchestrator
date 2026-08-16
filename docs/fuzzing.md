@@ -31,6 +31,9 @@ deserialize request config validate untrusted input"`):
 4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
    `mock://` providers (fully offline). Arbitrary prompt text and mode must
    produce a JSON-serialisable record whose SSE framing round-trips.
+5. **Meaning-unit chunking** — `semantic_chunking.meaning_unit_chunks`.
+   Arbitrary email/HTML/image text must yield non-overlapping source spans
+   whose `chunk_text` equals the original slice.
 
 ## Running locally
 

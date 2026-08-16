@@ -28,6 +28,7 @@ import json
 from typing import Any
 
 from contextual_orchestrator import server
+from contextual_orchestrator.semantic_chunking import meaning_unit_chunks
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
@@ -188,3 +189,26 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
             continue
         assert frame.startswith("data: ")
         json.loads(frame[len("data: "):])
+
+
+def exercise_meaning_unit_chunks(text: str) -> None:
+    """Meaning-unit parser must keep exact source spans and never overlap.
+
+    Arbitrary prompt/email/HTML text is a retrieval input. Units are either a
+    well-formed non-overlapping cover of slices or a single source_document
+    fallback — never a crash or a span that does not match the source.
+    """
+    units = meaning_unit_chunks(text)
+    assert isinstance(units, list)
+    seen: list[tuple[int, int]] = []
+    for unit in units:
+        start = unit.source_offset
+        end = start + unit.source_length
+        assert unit.chunk_text == text[start:end]
+        assert unit.source_length == len(unit.chunk_text)
+        assert start >= 0
+        assert end <= len(text)
+        for other_start, other_end in seen:
+            assert end <= other_start or start >= other_end
+        seen.append((start, end))
+    meaning_unit_chunks(text, unit_grain="body_sentence")

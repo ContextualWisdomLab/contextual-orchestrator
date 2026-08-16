@@ -53,6 +53,19 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Meaning-unit embedding chunking
+
+Researched before adding `contextual_orchestrator/semantic_chunking.py`:
+
+| Library / standard | Decision | Evidence |
+|---|---|---|
+| [Unicode Standard Annex #29](https://www.unicode.org/reports/tr29/) | Cite as the sentence/word boundary authority; implement a stdlib subset (`.?!。！？` + capital/Hangul continuation, abbreviation merge). | UAX #29 is the current international text-segmentation standard. A full UCD dependency is not justified for email/HTML retrieval grain. |
+| [LangChain RecursiveCharacterTextSplitter](https://python.langchain.com/docs/how_to/recursive_text_splitter/) | Skip. | Adds a runtime dependency and splits on character budgets, then the coordinator already token-splits and averages parts back to one vector. |
+| [LlamaIndex SentenceSplitter](https://docs.llamaindex.ai/) | Skip. | Same dependency and token-window grain. Does not isolate email parties or `data:image` offsets. |
+| Similarity-breakpoint “semantic chunking” (LangChain / LlamaIndex) | Skip. | Qu et al. (2025) found computational cost is not justified by consistent retrieval gains. |
+
+Selected: stdlib regular expressions plus paragraph/email/HTML/image detectors. Custom code that was deliberately skipped: LLM-as-chunker, perplexity chunking, and any new pip dependency.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

@@ -36,6 +36,7 @@ This repository implements the interface and control plane, not the trained coor
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
+- `contextual_orchestrator.semantic_chunking`: meaning-unit cuts for `/v1/batch/embeddings` when `chunking_strategy=meaning_units` (email parties, HTML blocks, embedded-image offsets, paragraphs). Token-budget map/reduce stays the provider-safety path and still averages parts of *one* unit.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
@@ -53,3 +54,14 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## References
+
+Zhao, J., Ji, Z., Ye, Y., Feng, X., Zhang, X., & Rong, C. (2024). *Meta-chunking: Learning text segmentation and semantic completion via logical perception*. arXiv. https://doi.org/10.48550/arXiv.2410.12788
+
+Qu, R., Tu, R., & Bao, F. (2025). Is semantic chunking worth the computational cost? In *Findings of the Association for Computational Linguistics: NAACL 2025* (pp. 2012–2027). Association for Computational Linguistics. https://aclanthology.org/2025.findings-naacl.114/
+
+Unicode Consortium. (2024). *Unicode Standard Annex #29: Unicode text segmentation*. https://www.unicode.org/reports/tr29/
+
+Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N., Küttler, H., Lewis, M., Yih, W., Rocktäschel, T., Riedel, S., & Kiela, D. (2020). Retrieval-augmented generation for knowledge-intensive NLP tasks. In *Advances in Neural Information Processing Systems, 33*. https://doi.org/10.48550/arXiv.2005.11401
+

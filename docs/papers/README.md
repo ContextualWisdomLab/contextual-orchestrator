@@ -43,6 +43,37 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## Meaning-unit retrieval chunking
+
+Embedding search is only useful when each vector is a meaning unit a buyer can
+ask for (invoice line, sender, HTML block), not a token-budget fragment that is
+later averaged away.
+
+- Zhao, J., Ji, Z., Ye, Y., Feng, X., Zhang, X., & Rong, C. (2024). *Meta-chunking: Learning text segmentation and semantic completion via logical perception*. arXiv. https://doi.org/10.48550/arXiv.2410.12788
+  `meta-chunking-2410.12788.pdf` when the arXiv PDF is vendored. Grounds
+  paragraph-level meta-chunks: sequential sentences inside a paragraph that
+  share a logical relation (here, invoice identifier + balance due) stay
+  together, while the greeting is a separate unit.
+- Qu, R., Tu, R., & Bao, F. (2025). Is semantic chunking worth the computational
+  cost? In *Findings of the Association for Computational Linguistics: NAACL
+  2025* (pp. 2012–2027). Association for Computational Linguistics.
+  https://aclanthology.org/2025.findings-naacl.114/
+  Cite + link + summary only (ACL anthology HTML/PDF redistribution is not
+  assumed). Similarity-breakpoint chunking did not consistently beat fixed-size
+  splits; this gateway therefore uses linguistic meaning units, not embedding
+  distance cuts.
+- Unicode Consortium. (2024). *Unicode Standard Annex #29: Unicode text
+  segmentation*. https://www.unicode.org/reports/tr29/
+  Cite + link (Unicode copyright). Sentence cuts in leftover prose follow UAX
+  #29 intent (terminator + continuation) without vendoring the Unicode database.
+- Lewis, P., Perez, E., Piktus, A., Petroni, F., Karpukhin, V., Goyal, N.,
+  Küttler, H., Lewis, M., Yih, W., Rocktäschel, T., Riedel, S., & Kiela, D.
+  (2020). Retrieval-augmented generation for knowledge-intensive NLP tasks. In
+  *Advances in Neural Information Processing Systems, 33*.
+  https://doi.org/10.48550/arXiv.2005.11401
+  Grounds why the retrieved *chunk*, not the whole document, is the generation
+  context. `rag-2005.11401.pdf` when vendored.
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

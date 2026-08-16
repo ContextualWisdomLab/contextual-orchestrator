@@ -440,6 +440,16 @@ OPENAPI_SPEC = {
                                         "description": "observability + attribution dims (service, team, group, company, provider)",
                                     },
                                     "attribution": {"type": "object"},
+                                    "chunking_strategy": {
+                                        "type": "string",
+                                        "enum": ["meaning_units"],
+                                        "description": (
+                                            "Omit to keep one vector per input (naruon contract). "
+                                            "meaning_units embeds email parties, HTML blocks, "
+                                            "embedded images, and paragraphs separately and "
+                                            "returns chunk_units with source offsets."
+                                        ),
+                                    },
                                 },
                             }
                         }
@@ -451,7 +461,7 @@ OPENAPI_SPEC = {
                             "Batch completed synchronously: "
                             "{batch_id, status, embeddings:[{index, embedding}], "
                             "cost_micro_usd, token_counts, total_tokens, part_count, "
-                            "input_part_counts, map_reduce}"
+                            "input_part_counts, map_reduce, optional chunk_units}"
                         )
                     },
                     "202": {"description": "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}"},

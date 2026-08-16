@@ -85,6 +85,7 @@ class CostRoutingCoordinator:
         self._embedding_part_counts: Dict[str, List[int]] = {}
         self._embedding_part_limits: Dict[str, Dict[str, int]] = {}
         self._embedding_documents: Dict[str, Dict[str, Any]] = {}
+        self._embedding_chunk_units: Dict[str, List[Dict[str, Any]]] = {}
 
     # ------------------------------------------------------------------
     # Provider / model resolution
@@ -286,12 +287,16 @@ class CostRoutingCoordinator:
         requests, part_counts, part_limits = self._build_embedding_requests(
             inputs, model=model, attribution=shared_attribution
         )
-        job = self.embedding_batch_backend.submit(requests, metadata=metadata)
+        submit_metadata = dict(metadata or {})
+        chunk_units = submit_metadata.pop("chunk_units", None)
+        job = self.embedding_batch_backend.submit(requests, metadata=submit_metadata or None)
         self._embedding_jobs[job.job_id] = job
         self._embedding_requests[job.job_id] = requests
         self._embedding_input_counts[job.job_id] = len(inputs)
         self._embedding_part_counts[job.job_id] = part_counts
         self._embedding_part_limits[job.job_id] = part_limits
+        if chunk_units:
+            self._embedding_chunk_units[job.job_id] = list(chunk_units)
         return job
 
     def _build_embedding_requests(
@@ -471,12 +476,16 @@ class CostRoutingCoordinator:
         job = self._require_embedding_job(batch_id)
         status = self.embedding_batch_backend.poll(job)
         if not status.get("is_complete"):
-            return {
+            pending = {
                 "batch_id": batch_id,
                 "status": status.get("status") or job.status,
                 "backend": job.backend,
                 "embeddings": None,
             }
+            pending_units = self._embedding_chunk_units.get(batch_id)
+            if pending_units:
+                pending["chunk_units"] = pending_units
+            return pending
 
         items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
         requests = self._embedding_requests.get(batch_id, [])
@@ -561,6 +570,9 @@ class CostRoutingCoordinator:
             "currency_code": currency_code,
             "cost_micro_usd": int(round(total_cost_amount * 1_000_000)),
         }
+        chunk_units = self._embedding_chunk_units.get(batch_id)
+        if chunk_units:
+            document["chunk_units"] = chunk_units
         self._embedding_documents[batch_id] = document
         return document
 

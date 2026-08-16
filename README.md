@@ -187,7 +187,10 @@ is read from a **KV config store**, never `os.getenv`.
   embedding parts (`routing.embedding_max_tokens_per_request`, default 280,000;
   `routing.embedding_max_chars_per_part`, default 240,000) and reduces part
   vectors with a token-weighted average, so Azure/LiteLLM over-limit embedding
-  requests are split internally instead of surfacing as caller errors. It routes
+  requests are split internally instead of surfacing as caller errors. Send
+  `chunking_strategy=meaning_units` to embed email, HTML, image, and paragraph
+  units separately and read `chunk_units` for source offsets; omit it to keep
+  one vector per submitted string. It routes
   through the same RoutingPolicy/cost optimiser and `pg-llm-batch` embeddings
   backend (local in-process backend standalone), and records one usage-ledger row
   per original vector with the full attribution dimensions (service, team,
@@ -204,6 +207,7 @@ Grounding papers (LLM cost, routing, load balancing) live in
 
 ## Design Artifacts
 
+- [Meaning-unit chunking](docs/meaning_unit_chunking.md)
 - [Library research](docs/library_research.md)
 - [Product planning](docs/product_planning.md)
 - [Screen design](docs/screen_design.md)
@@ -284,4 +288,6 @@ python tests/test_commercial_proposal_packet.py
 python tests/test_commercial_purchase_approval_packet.py
 python tests/test_commercial_due_diligence_room.py
 python tests/test_commercial_investment_committee_memo.py
+python tests/test_meaning_unit_chunking.py
+python tests/test_embeddings_meaning_units_http_honesty.py
 ```
