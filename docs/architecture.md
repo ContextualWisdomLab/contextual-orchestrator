@@ -42,7 +42,7 @@ The deliberate simplification is the policy. The paper systems learn routing and
 
 `TaskOrchestrator._ranked_agents` is lexicographic: capability (role tags + domain hints + operator priority) first, then trustworthy known price from `price_per_million`. Unpriced, boolean, nonnumeric, negative, NaN, and infinite prices are not free. A served-free channel that still has a known list/original catalog price is compared at that list price, not as cost 0.0; explicit $0 with no list price may compete as 0. Failover and the circuit breaker remain resilience after the chosen primary errors; they are not the optimizer. Quality/Pareto selection is issue #86 and is not claimed here.
 
-Provider catalogs (PR #574 inventory on main) overlay discovered models after a KV credential is registered under one of the five organization names. Refresh is fail-closed and keeps last-known-good rows; a failed catalog does not invent workers. Bytez uses native `https://api.bytez.com/models/v2`, not OpenAI `GET /v1/models`. `cheapest_upstream` is not wired — it treats unknown price as 0.0.
+Provider catalogs (PR #574 inventory on main) overlay discovered models after a KV credential is registered under one of the five organization names. Refresh is fail-closed and keeps last-known-good rows; a failed catalog does not invent workers. A later successful shrink evicts withdrawn catalog ids. Catalog HTTP rejects 3xx, verifies TLS, and bounds response bytes. Bytez uses native `https://api.bytez.com/models/v2`, not OpenAI `GET /v1/models`. `cheapest_upstream` is not wired — it treats unknown price as 0.0.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 

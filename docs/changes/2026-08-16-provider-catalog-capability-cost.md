@@ -7,3 +7,6 @@
 - Served-free with a known list/original price competes at that list price, not as cost 0.0.
 - Explicit $0 with no list price remains a known price of 0. Missing/non-finite stay unpriced.
 - Failover remains post-error resilience. Issue #86 quality/Pareto is out of this slice.
+- Catalog HTTP rejects redirects, verifies TLS, and bounds Bytez/catalog bodies.
+- Successful catalog shrinks evict withdrawn overlay ids; seed agents stay.
+- Known cost beats catalog tag inflation. `force_refresh` is the two-word API/CLI flag.

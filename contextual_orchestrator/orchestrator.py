@@ -875,6 +875,7 @@ class TaskOrchestrator:
         # (zero behavior change). When set, runs/audit/analytics survive restart.
         self._store = _StateStore(state_db) if state_db else None
         self._commercial_report_cache_local = threading.local()
+        self._catalog_overlay_ids: set[str] = set()
         if self._store is not None:
             self._reload_state()
 
@@ -1341,10 +1342,22 @@ class TaskOrchestrator:
         """Merge catalog-derived workers onto the live pool without inventing models.
 
         Seed / operator agents are kept. Discovered rows overlay by agent id.
+        A later successful catalog drops previously overlaid ids that are no
+        longer present so a withdrawn or injected model cannot persist.
         Only finite nonnegative prices enter ``price_per_million``; missing
         catalog prices stay unpriced rather than becoming free.
         """
+        incoming_ids = {agent.id for agent in agents if not agent.disabled}
+        withdrawn_ids = self._catalog_overlay_ids - incoming_ids
         existing = {agent.id: agent for agent in self.agents}
+        withdrawn_count = 0
+        for agent_id in withdrawn_ids:
+            removed = existing.pop(agent_id, None)
+            if removed is None:
+                continue
+            withdrawn_count += 1
+            if self._pool_store is not None:
+                self._pool_store.save(replace(removed, disabled=True))
         added_ids: list[str] = []
         for agent in agents:
             if agent.disabled:
@@ -1355,6 +1368,9 @@ class TaskOrchestrator:
             if self._pool_store is not None:
                 self._pool_store.save(agent)
         self.agents = [agent for agent in existing.values() if not agent.disabled]
+        if not self.agents:
+            raise ValueError("catalog overlay cannot remove the last enabled agent")
+        self._catalog_overlay_ids = incoming_ids
         ingested = 0
         for model_name, price in (prices or {}).items():
             if known_price_rank(price)[0]:
@@ -1364,6 +1380,7 @@ class TaskOrchestrator:
             "added_agent_count": len(added_ids),
             "catalog_agent_count": len(agents),
             "priced_model_count": ingested,
+            "withdrawn_agent_count": withdrawn_count,
         }
         self._append_audit_event("catalog_overlay_applied", detail)
         return detail
@@ -1585,14 +1602,16 @@ class TaskOrchestrator:
 
         Failover still walks this list after the chosen primary errors. Price is
         never the first key: a cheap summarizer cannot beat a coding worker on a
-        coding task. Unpriced models lose a cost comparison; they are not free.
+        coding task. Extra catalog tags are not a capability score; they sort
+        after known cost. Unpriced models lose a cost comparison; they are not
+        free.
         """
         lowered = text.lower()
 
-        def selection_key(agent: ModelAgent) -> tuple[int, int, int, float, str]:
+        def selection_key(agent: ModelAgent) -> tuple[int, int, float, int, str]:
             capability_score, tag_count, agent_id = self._score_agent(agent, role, lowered)
             price_known, inverse_price = known_price_rank(self.price_per_million.get(agent.model))
-            return (capability_score, tag_count, price_known, inverse_price, agent_id)
+            return (capability_score, price_known, inverse_price, tag_count, agent_id)
 
         return sorted(self.agents, key=selection_key, reverse=True)
 

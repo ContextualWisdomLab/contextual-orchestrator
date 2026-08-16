@@ -28,11 +28,15 @@ Or at serve time: `--refresh-provider-catalog`. Admin:
 Failures (timeout, 429, 5xx, malformed, empty, revoked key, missing catalog)
 are isolated per account, recorded in audit, and **do not invent models**.
 Last-known-good rows stay. A second refresh inside 60s is throttled unless
-`force` is set.
+`force_refresh` is set. Successful shrinks evict withdrawn catalog agent ids;
+seed / operator agents stay. Catalog HTTP rejects 3xx (no credential
+forwarding), verifies TLS, and bounds response bytes. Full DNS-pin / original-host
+TLS from PR #96 remains an issue #86 follow-up.
 
-This slice does **not** copy the PR #96 DNS-pinned egress stack. Catalog HTTP
-reuses `ModelClient._validate_provider` (https, host allowlist env, private-address
-block). Quality/Pareto selection is [issue #86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) and is a follow-up.
+Admin refresh uses `POST /api/v1/provider_catalogs/refresh` with
+`{"force_refresh": true}` when you need to bypass the throttle. An empty
+discovery keeps the seed pool and reports `catalog_authority: seed_fallback`
+instead of inventing workers.
 
 ## Selection after overlay
 

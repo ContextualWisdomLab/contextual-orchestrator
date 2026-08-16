@@ -551,7 +551,7 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "properties": {"force": {"type": "boolean"}},
+                                "properties": {"force_refresh": {"type": "boolean"}},
                             },
                         },
                     },

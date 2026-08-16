@@ -137,6 +137,23 @@ def test_free_channel_with_list_price_does_not_win_as_cost_zero() -> None:
     assert row["selection_reason"]["price_per_million_usd"] == 1.0
 
 
+def test_extra_catalog_tags_do_not_beat_known_price() -> None:
+    """Tag inflation is not a capability score. Known cost is the same-score tie-break."""
+    selected, row = _selected(
+        [
+            _agent(
+                "z_inflated_catalog_worker",
+                "inflated-catalog-model",
+                tags=("reasoning", "writing", "summarization", "classification", "image"),
+            ),
+            _agent("a_lean_priced_worker", "lean-priced-model", tags=("reasoning",)),
+        ],
+        {"inflated-catalog-model": 20.0, "lean-priced-model": 1.0},
+    )
+    assert selected == "a_lean_priced_worker"
+    assert row["selection_reason"]["price_per_million_usd"] == 1.0
+
+
 def test_policy_snapshot_discloses_lexicographic_objective() -> None:
     policy = TaskOrchestrator([_agent("single_worker", "single-model")]).policy.as_dict()
     assert policy["routing_objective"] == "maximize_capability_then_minimize_known_cost"
@@ -150,5 +167,6 @@ if __name__ == "__main__":  # pragma: no cover
     test_auto_routing_does_not_treat_unpriced_model_as_free()
     test_zero_price_is_a_known_price()
     test_free_channel_with_list_price_does_not_win_as_cost_zero()
+    test_extra_catalog_tags_do_not_beat_known_price()
     test_policy_snapshot_discloses_lexicographic_objective()
     print("ok")

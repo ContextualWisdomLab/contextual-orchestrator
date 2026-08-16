@@ -68,11 +68,11 @@ def _refresh_provider_catalog_command(argv: list[str]) -> None:
         description="Discover provider catalogs for registered KV credentials and overlay the worker pool.",
     )
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Seed agent config JSON.")
-    parser.add_argument("--force", action="store_true", help="Bypass the refresh throttle.")
+    parser.add_argument("--force-refresh", action="store_true", help="Bypass the refresh throttle.")
     args = parser.parse_args(argv)
     orchestrator = TaskOrchestrator(load_agents(args.agents), client=ProviderAwareModelClient())
     service = ProviderCatalogService(store=InMemoryProviderCatalogStore())
-    summary = refresh_and_overlay(orchestrator, service, force=args.force)
+    summary = refresh_and_overlay(orchestrator, service, force_refresh=args.force_refresh)
     print(json.dumps(summary, ensure_ascii=False, indent=2))
 
 

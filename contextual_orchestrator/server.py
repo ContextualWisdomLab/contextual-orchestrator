@@ -723,10 +723,12 @@ def build_server(
                 body = self._read_json()
 
                 if path == "/api/v1/provider_catalogs/refresh":
-                    _reject_unknown_keys(body, {"force"})
-                    force = bool(body.get("force", False))
+                    _reject_unknown_keys(body, {"force_refresh"})
+                    force_refresh = bool(body.get("force_refresh", False))
                     try:
-                        summary = refresh_and_overlay(orchestrator, require_candidates=False, force=force)
+                        summary = refresh_and_overlay(
+                            orchestrator, require_candidates=False, force_refresh=force_refresh
+                        )
                     except ProviderCatalogUnavailable as exc:
                         self._send_error(503, "provider_catalog_unavailable", str(exc))
                         return

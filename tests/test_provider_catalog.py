@@ -12,6 +12,8 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import sys
+import urllib.error
+import urllib.request
 
 import pytest
 
@@ -28,12 +30,15 @@ from contextual_orchestrator.provider_catalog import (  # noqa: E402
     DEFAULT_PROVIDER_ACCOUNTS,
     PROVIDER_CATALOG_SCHEMA_SQL,
     CatalogHttpError,
+    CatalogRedirectHandler,
     DiscoveredModel,
     InMemoryProviderCatalogStore,
     ProviderAwareModelClient,
     ProviderCatalogHttpClient,
     ProviderCatalogService,
     ProviderCatalogUnavailable,
+    _agent_id,
+    _infer_capabilities,
     bootstrap_provider_credentials,
     known_catalog_prices,
     normalize_models_document,
@@ -321,7 +326,7 @@ def test_refresh_raises_only_when_no_fresh_or_last_known_good_candidate_exists()
 
 
 def test_refresh_is_throttled_so_providers_are_not_hammered() -> None:
-    """A second refresh inside the interval is skipped unless force=True."""
+    """A second refresh inside the interval is skipped unless force_refresh=True."""
     account = DEFAULT_PROVIDER_ACCOUNTS[-1]
     register_credential(account.credential_name, "sk-test-not-a-real-key")
     calls: list[str] = []
@@ -338,7 +343,7 @@ def test_refresh_is_throttled_so_providers_are_not_hammered() -> None:
     )
     first = service.refresh_all()
     second = service.refresh_all()
-    forced = service.refresh_all(force=True)
+    forced = service.refresh_all(force_refresh=True)
     assert first["provider_accounts"][account.provider_account_id]["status"] == "refreshed"
     assert second.get("refresh_status") == "throttled"
     assert forced["provider_accounts"][account.provider_account_id]["status"] == "refreshed"
@@ -708,6 +713,149 @@ def test_non_bytez_client_delegates_to_existing_model_client_mock_path() -> None
     client = ProviderAwareModelClient()
     agent = ModelAgent("general_agent", "mock-generalist", "mock://local")
     assert client.chat(agent, [{"role": "user", "content": "hello"}])
+
+
+def test_catalog_redirect_is_rejected_without_following() -> None:
+    """Credential-bearing catalog GET/POST must not follow 3xx to a new host."""
+    handler = CatalogRedirectHandler()
+    request = urllib.request.Request("https://integrate.api.nvidia.com/v1/models")
+    with pytest.raises(CatalogHttpError, match="catalog_redirect_rejected"):
+        handler.redirect_request(
+            request,
+            None,
+            302,
+            "Found",
+            {},
+            "https://evil.example/steal",
+        )
+
+
+def test_catalog_http_client_rejects_http_redirect_status(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A 302 from the catalog origin is a fail-closed transport error, not a follow."""
+    openai = next(account for account in DEFAULT_PROVIDER_ACCOUNTS if account.credential_name == "OPENAI_API_KEY")
+    register_credential("OPENAI_API_KEY", "sk-test-not-a-real-key")
+
+    def fake_open(_request, timeout=None, ssl_context=None):
+        raise urllib.error.HTTPError(
+            openai.models_url,
+            302,
+            "Found",
+            {},
+            None,
+        )
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.provider_catalog.open_catalog_request",
+        fake_open,
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.ModelClient._validate_provider",
+        lambda self, agent: None,
+    )
+    client = ProviderCatalogHttpClient(timeout_seconds=1.0, max_attempts=1)
+    with pytest.raises(CatalogHttpError, match="catalog_redirect_rejected"):
+        client.discover(openai, "sk-test-not-a-real-key")
+
+
+def test_bytez_response_read_is_bounded(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Native Bytez POST must not consume an unbounded provider body."""
+    seen: list[int] = []
+
+    class _BoundedResponse:
+        def read(self, size: int = -1) -> bytes:
+            seen.append(size)
+            return b'{"output":"ok"}'
+
+        def __enter__(self) -> "_BoundedResponse":
+            return self
+
+        def __exit__(self, *_exc: object) -> bool:
+            return False
+
+    monkeypatch.setattr(
+        "contextual_orchestrator.provider_catalog.open_catalog_request",
+        lambda *_args, **_kwargs: _BoundedResponse(),
+    )
+    monkeypatch.setattr(
+        "contextual_orchestrator.orchestrator.ModelClient._validate_provider",
+        lambda self, agent: None,
+    )
+    register_credential("BYTEZ_API_KEY", "key-test-not-a-real-key")
+    agent = ModelAgent(
+        id="bytez_primary_bounded_read",
+        model="bytez-test-model",
+        base_url="https://api.bytez.com",
+        credential_key="BYTEZ_API_KEY",
+        provider_name="bytez",
+    )
+    document = ProviderAwareModelClient()._request_bytez(
+        agent,
+        [{"role": "user", "content": "hello"}],
+        "key-test-not-a-real-key",
+    )
+    assert document == {"output": "ok"}
+    assert seen == [8 * 1024 * 1024 + 1]
+
+
+def test_successful_shrink_evicts_withdrawn_catalog_agent_and_keeps_seed() -> None:
+    """A later successful catalog must drop withdrawn ids instead of persisting injected workers."""
+    openai = next(account for account in DEFAULT_PROVIDER_ACCOUNTS if account.credential_name == "OPENAI_API_KEY")
+    register_credential("OPENAI_API_KEY", "sk-test-not-a-real-key")
+    store = InMemoryProviderCatalogStore()
+    discovered = {"names": ["keep-model", "withdraw-model"]}
+
+    def discover(_account, _credential):
+        return _models(*discovered["names"])
+
+    service = ProviderCatalogService(store=store, accounts=(openai,), discover=discover)
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "mock-generalist", "mock://local")],
+    )
+    first = refresh_and_overlay(orchestrator, service, force_refresh=True)
+    assert first["added_agent_count"] == 2
+    assert {agent.model for agent in orchestrator.agents} >= {"keep-model", "withdraw-model", "mock-generalist"}
+
+    discovered["names"] = ["keep-model"]
+    second = refresh_and_overlay(orchestrator, service, force_refresh=True)
+    models = {agent.model for agent in orchestrator.agents}
+    assert "withdraw-model" not in models
+    assert "keep-model" in models
+    assert "mock-generalist" in models
+    assert second["withdrawn_agent_count"] == 1
+    assert second["catalog_authority"] == "catalog_overlay"
+
+
+def test_substring_model_names_do_not_invent_vision_or_coding_tags() -> None:
+    """`eval` / `available` / `decode` are not vision or coding oracles."""
+    assert "vision" not in _infer_capabilities("eval-available-model", {}, ("text",))
+    assert "vision" not in _infer_capabilities("available-checkpoint", {}, ("text",))
+    assert "coding" not in _infer_capabilities("decode-helper", {}, ("text",))
+    assert "vision" in _infer_capabilities("qwen2-vl-7b", {}, ("text",))
+    assert "coding" in _infer_capabilities("codestral-latest", {}, ("text",))
+
+
+def test_provider_capability_injection_is_allowlisted() -> None:
+    """Untrusted catalog capability strings cannot stamp arbitrary ranking tags."""
+    capabilities = _infer_capabilities(
+        "plain-chat-model",
+        {"capabilities": ["admin_override", "summarization", "chat"]},
+        ("text",),
+    )
+    assert "admin_override" not in capabilities
+    assert "summarization" not in capabilities
+    assert "chat" in capabilities
+
+
+def test_agent_ids_stay_unique_after_truncation() -> None:
+    """Long model names must not collapse to the same 120-character agent id."""
+    account_id = "openrouter_primary"
+    first = _agent_id(account_id, "x" * 400 + "-alpha")
+    second = _agent_id(account_id, "x" * 400 + "-beta")
+    assert first != second
+    assert len(first) <= 120
+    assert len(second) <= 120
+    assert first.startswith("openrouter_primary_")
+    assert second.startswith("openrouter_primary_")
 
 
 def test_schema_is_normalized_and_never_stores_provider_secret_values() -> None:

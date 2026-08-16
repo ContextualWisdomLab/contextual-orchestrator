@@ -46,6 +46,20 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## APA 7th references
+
+Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large language
+models while reducing cost and improving performance*. arXiv.
+https://doi.org/10.48550/arXiv.2305.05176
+
+Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Rühle, V., Lakshmanan,
+L. V. S., & Awadallah, A. H. (2024). *Hybrid LLM: Cost-efficient and
+quality-aware query routing*. arXiv. https://doi.org/10.48550/arXiv.2404.14618
+
+Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous,
+M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with preference
+data*. arXiv. https://doi.org/10.48550/arXiv.2406.18665
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

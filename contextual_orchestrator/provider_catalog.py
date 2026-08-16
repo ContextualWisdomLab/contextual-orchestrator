@@ -1,11 +1,13 @@
 """Provider catalog inventory, fail-closed refresh, and agent-pool overlay.
 
-Reuses the PR #574 account inventory and refresh contracts on main without the
-PR #96 DNS-pinned egress stack. Runtime secrets resolve through
-:func:`get_credential` only. Catalog HTTP reuses
+Reuses the PR #574 account inventory and refresh contracts on main. Runtime
+secrets resolve through :func:`get_credential` only. Catalog HTTP reuses
 :meth:`ModelClient._validate_provider` (https, host allowlist, private-address
-block). Bytez listings use native ``https://api.bytez.com/models/v2`` with
-``Authorization: Key`` — not OpenAI ``GET /v1/models``.
+block), rejects credential-bearing redirects, verifies TLS, and bounds
+response bodies. Full DNS-pin / original-host TLS from PR #96 remains an
+issue #86 follow-up. Bytez listings use native
+``https://api.bytez.com/models/v2`` with ``Authorization: Key`` — not OpenAI
+``GET /v1/models``.
 
 Refresh is fail-closed: a failed account keeps last-known-good models and never
 invents replacements. Quality/Pareto selection is issue #86 and is not started
@@ -24,6 +26,7 @@ import math
 import random
 import re
 import socket
+import ssl
 import time
 from typing import Any, Callable, Iterable, Mapping, Protocol, Sequence
 from urllib.parse import quote
@@ -36,6 +39,29 @@ from .orchestrator import ModelAgent, ModelClient, TaskOrchestrator, known_price
 
 CATALOG_RESPONSE_MAX_BYTES = 8 * 1024 * 1024
 """Maximum accepted bytes in one provider model-catalog response."""
+
+ALLOWED_CATALOG_CAPABILITIES = frozenset(
+    {
+        "audio",
+        "chat",
+        "coding",
+        "completion",
+        "embeddings",
+        "image",
+        "moderation",
+        "reasoning",
+        "reranking",
+        "responses",
+        "speech",
+        "transcription",
+        "video",
+        "vision",
+    }
+)
+"""Provider-supplied capability strings that may enter ranking tags."""
+
+_SHORT_NAME_TOKENS = frozenset({"o1", "o3", "r1", "vl"})
+"""Exact model-name tokens only; substring match would tag `eval` as vision."""
 
 PROVIDER_CATALOG_SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS provider_accounts (
@@ -155,6 +181,29 @@ class CatalogHttpError(RuntimeError):
         super().__init__(code)
         self.code = code
         self.transient = transient
+
+
+class CatalogRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Reject credential-bearing catalog redirects instead of following them."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        """Fail closed when a catalog origin tries to move the Authorization header."""
+        raise CatalogHttpError("catalog_redirect_rejected")
+
+
+def open_catalog_request(
+    request: urllib.request.Request,
+    *,
+    timeout: float,
+    ssl_context: ssl.SSLContext | None = None,
+) -> Any:
+    """Open one catalog URL without following redirects and with TLS verification."""
+    context = ssl_context if ssl_context is not None else ModelClient()._ssl_context
+    opener = urllib.request.build_opener(
+        CatalogRedirectHandler(),
+        urllib.request.HTTPSHandler(context=context),
+    )
+    return opener.open(request, timeout=timeout)
 
 
 class ProviderCatalogStore(Protocol):
@@ -357,9 +406,11 @@ class ProviderCatalogHttpClient:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:  # nosec B310
+            with open_catalog_request(request, timeout=self.timeout_seconds) as response:
                 raw_payload = response.read(CATALOG_RESPONSE_MAX_BYTES + 1)
         except urllib.error.HTTPError as exc:
+            if exc.code in {301, 302, 303, 307, 308}:
+                raise CatalogHttpError("catalog_redirect_rejected") from exc
             if exc.code in {401, 403}:
                 raise CatalogHttpError("catalog_authentication_failed") from exc
             raise CatalogHttpError(
@@ -446,8 +497,14 @@ class ProviderAwareModelClient(ModelClient):
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:  # nosec B310
-            document = json.loads(response.read().decode("utf-8"))
+        with open_catalog_request(request, timeout=self.timeout, ssl_context=self._ssl_context) as response:
+            raw_payload = response.read(CATALOG_RESPONSE_MAX_BYTES + 1)
+        if len(raw_payload) > CATALOG_RESPONSE_MAX_BYTES:
+            raise ProviderCatalogUnavailable("Bytez response exceeded the catalog size bound")
+        try:
+            document = json.loads(raw_payload.decode("utf-8"))
+        except (UnicodeDecodeError, json.JSONDecodeError, RecursionError) as exc:
+            raise ProviderCatalogUnavailable("Bytez response shape is unsupported") from exc
         if not isinstance(document, dict):
             raise ProviderCatalogUnavailable("Bytez response shape is unsupported")
         return document
@@ -478,11 +535,11 @@ class ProviderCatalogService:
             "measurement_status": "provider_catalog_snapshot",
         }
 
-    def refresh_all(self, *, require_candidates: bool = True, force: bool = False) -> dict[str, Any]:
+    def refresh_all(self, *, require_candidates: bool = True, force_refresh: bool = False) -> dict[str, Any]:
         """Refresh each account independently and preserve stale usable catalogs."""
         now = self._clock()
         if (
-            not force
+            not force_refresh
             and self._last_refresh_at > 0
             and (now - self._last_refresh_at) < self.min_refresh_interval_seconds
             and self.last_refresh_summary.get("provider_accounts")
@@ -535,10 +592,12 @@ class ProviderCatalogService:
     def _failed_refresh(self, account: ProviderAccount, code: str) -> dict[str, Any]:
         """Record failure and classify whether last-known-good service remains available."""
         self.store.record_failure(account, code)
-        stale_available = self.store.has_models(account.provider_account_id)
+        stale_count = sum(
+            1 for row in self.store.enabled_models() if row.provider_account_id == account.provider_account_id
+        )
         return {
-            "status": "stale_available" if stale_available else "failed",
-            "model_count": 0,
+            "status": "stale_available" if stale_count else "failed",
+            "model_count": stale_count,
             "error_code": code,
         }
 
@@ -728,20 +787,23 @@ def refresh_and_overlay(
     service: ProviderCatalogService | None = None,
     *,
     require_candidates: bool = False,
-    force: bool = False,
+    force_refresh: bool = False,
 ) -> dict[str, Any]:
     """Refresh the catalog and overlay discovered workers onto ``orchestrator``.
 
     Overlay mode (default) records failures in audit and keeps the seed pool
     when discovery yields nothing. Catalog-only callers pass
     ``require_candidates=True`` to fail closed on an empty first refresh.
+    A successful refresh with candidates reports ``catalog_authority`` as
+    ``catalog_overlay``; an empty overlay keeps the seed and says
+    ``seed_fallback``. That is last-known-good honesty, not invented workers.
     """
     active = service or getattr(orchestrator, "catalog_service", None) or ProviderCatalogService(
         store=InMemoryProviderCatalogStore()
     )
     orchestrator.catalog_service = active
     try:
-        summary = active.refresh_all(require_candidates=require_candidates, force=force)
+        summary = active.refresh_all(require_candidates=require_candidates, force_refresh=force_refresh)
     except ProviderCatalogUnavailable as exc:
         orchestrator._append_audit_event(
             "catalog_refresh_failed",
@@ -750,11 +812,10 @@ def refresh_and_overlay(
         raise
     agents = active.candidate_agents()
     overlay = orchestrator.overlay_discovered_agents(agents, known_catalog_prices(active.store))
-    orchestrator._append_audit_event(
-        "catalog_refresh_completed",
-        {**summary, **overlay},
-    )
-    return {**summary, **overlay}
+    authority = "catalog_overlay" if agents else "seed_fallback"
+    completed = {**summary, **overlay, "catalog_authority": authority}
+    orchestrator._append_audit_event("catalog_refresh_completed", completed)
+    return completed
 
 
 def build_catalog_orchestrator(
@@ -789,31 +850,48 @@ def _normalize_bytez_output(document: Mapping[str, Any]) -> str:
     raise ProviderCatalogUnavailable("Bytez response shape is unsupported")
 
 
+def _name_tokens(model_name: str) -> set[str]:
+    """Split a model id into alphanumeric tokens for exact/prefix matching."""
+    return set(re.findall(r"[a-z0-9]+", model_name.lower()))
+
+
+def _token_hit(tokens: set[str], *needles: str) -> bool:
+    """Return whether any needle is an exact token or a long prefix of a token."""
+    for needle in needles:
+        if needle in tokens:
+            return True
+        if len(needle) >= 3 and any(token.startswith(needle) for token in tokens):
+            return True
+    return False
+
+
 def _infer_capabilities(
     model_name: str,
     raw: Mapping[str, Any],
     modalities: Sequence[str],
 ) -> tuple[str, ...]:
     """Infer conservative routing tags from provider metadata and model naming."""
-    lowered = model_name.lower()
-    capabilities = {value.lower() for value in _string_values(raw.get("capabilities"))}
-    if any(token in lowered for token in ("embed", "embedding")):
+    tokens = _name_tokens(model_name)
+    capabilities = {
+        value for value in _string_values(raw.get("capabilities")) if value in ALLOWED_CATALOG_CAPABILITIES
+    }
+    if _token_hit(tokens, "embed", "embedding"):
         capabilities.add("embeddings")
-    elif "rerank" in lowered:
+    elif _token_hit(tokens, "rerank"):
         capabilities.add("reranking")
-    elif "moderation" in lowered:
+    elif _token_hit(tokens, "moderation"):
         capabilities.add("moderation")
     else:
         capabilities.add("chat")
-    if any(token in lowered for token in ("reason", "o1", "o3", "r1", "thinking")):
+    if _token_hit(tokens, "reason", "thinking") or bool(tokens & _SHORT_NAME_TOKENS - {"vl"}):
         capabilities.add("reasoning")
-    if any(token in lowered for token in ("code", "coder", "codestral", "devstral")):
+    if _token_hit(tokens, "code", "coder", "codestral", "devstral"):
         capabilities.add("coding")
-    if "image" in modalities or "vision" in lowered or "vl" in lowered:
+    if "image" in modalities or _token_hit(tokens, "vision", "vlm") or "vl" in tokens:
         capabilities.add("vision")
-    if "audio" in modalities or any(token in lowered for token in ("audio", "whisper", "speech")):
+    if "audio" in modalities or _token_hit(tokens, "audio", "whisper", "speech"):
         capabilities.add("audio")
-    if "guard" in lowered:
+    if _token_hit(tokens, "guard"):
         capabilities.add("moderation")
     return tuple(sorted(capabilities))
 
@@ -835,10 +913,17 @@ def _agent_tags(model: DiscoveredModel) -> tuple[str, ...]:
 
 
 def _agent_id(provider_account_id: str, model_name: str) -> str:
-    """Create a bounded two-or-more-word snake-case agent identifier."""
+    """Create a bounded two-or-more-word snake-case agent identifier.
+
+    The digest includes the account id so truncation cannot collide two
+    long names from the same or different accounts.
+    """
     slug = re.sub(r"[^a-z0-9]+", "_", model_name.lower()).strip("_") or "model_worker"
-    digest = hashlib.sha256(model_name.encode("utf-8")).hexdigest()[:8]
-    return f"{provider_account_id}_{slug}_{digest}"[:120].rstrip("_")
+    digest = hashlib.sha256(f"{provider_account_id}\0{model_name}".encode("utf-8")).hexdigest()[:12]
+    candidate = f"{provider_account_id}_{slug}_{digest}"
+    if len(candidate) <= 120:
+        return candidate.rstrip("_")
+    return f"{provider_account_id}_{digest}"
 
 
 def _refresh_id(account_id: str, timestamp: str) -> str:
