@@ -160,7 +160,7 @@ default store is `InMemoryConfigStore`. It is not a credential, and it is
 At process start (`python -m contextual_orchestrator` or `serve()`),
 `seed_provider_egress_from_environ()` may copy
 `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` into that KV key **once**,
-when the key is still empty. After that, changing the env var does nothing
+when the key is still empty (`None`, `""`, or whitespace-only). After that, changing the env var does nothing
 until the next bootstrap. Request-time `_validate_provider` reads only the
 process store. `build_server()` does not seed — embedders that skip
 `serve()` / `__main__` must call `seed_provider_egress_from_environ()` or

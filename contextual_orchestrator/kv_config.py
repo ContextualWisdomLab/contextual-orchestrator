@@ -218,11 +218,13 @@ def seed_provider_egress_from_environ() -> None:
     Request-time validation must call :func:`allowed_provider_hosts`.
     The empty-check and write share ``_runtime_lock`` so concurrent
     ``main()`` + ``serve()`` seeds cannot both observe an empty key.
+    ``None``, ``""``, and whitespace-only values count as empty so a
+    stored ``" "`` cannot freeze fail-open public HTTPS.
     """
     store = get_runtime_config_store()
     with _runtime_lock:
         existing = store.get(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, None)
-        if existing not in (None, ""):
+        if existing is not None and str(existing).strip():
             return
         raw = os.environ.get(_ALLOWED_HOSTS_ENV, "")
         if raw.strip():

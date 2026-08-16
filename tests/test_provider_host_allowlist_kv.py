@@ -11,8 +11,10 @@ bootstrap transport into the KV only — operators seed once, then
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -31,6 +33,9 @@ from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from fuzz.targets import exercise_host_allowlist  # noqa: E402
 
 _ENV_NAME = "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"
+_PUBLIC_ADDRINFO = [
+    (socket.AF_INET, socket.SOCK_STREAM, 6, "", ("1.1.1.1", 443)),
+]
 
 
 def _clear_allowlist_env() -> str | None:
@@ -96,6 +101,20 @@ def test_seed_provider_egress_from_environ_copies_once() -> None:
         _restore_allowlist_env(previous)
 
 
+def test_seed_treats_whitespace_only_kv_as_empty() -> None:
+    """A stored '   ' must not freeze fail-open; bootstrap may still copy env."""
+    previous = os.environ.get(_ENV_NAME)
+    reset_runtime_config_store()
+    set_runtime_config("provider_egress", "allowed_provider_hosts", "   ")
+    os.environ[_ENV_NAME] = "api.openai.com"
+    try:
+        seed_provider_egress_from_environ()
+        assert allowed_provider_hosts() == frozenset({"api.openai.com"})
+    finally:
+        reset_runtime_config_store()
+        _restore_allowlist_env(previous)
+
+
 def test_validate_provider_rejects_unlisted_host_from_kv() -> None:
     """https://api.openai.com is public, but must fail when KV allowlists only example.com."""
     previous = _clear_allowlist_env()
@@ -138,13 +157,11 @@ def test_validate_provider_ignores_env_only_allowlist() -> None:
         "public_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY"
     )
     try:
-        try:
+        with patch(
+            "contextual_orchestrator.orchestrator.socket.getaddrinfo",
+            return_value=_PUBLIC_ADDRINFO,
+        ):
             client._validate_provider(public_agent)
-        except RuntimeError as exc:
-            assert "allowlisted" not in str(exc), (
-                "empty process KV must ignore env; allowlist must not reject "
-                f"api.openai.com: {exc}"
-            )
     finally:
         set_backend(None)
         reset_runtime_config_store()
@@ -164,10 +181,11 @@ def test_validate_provider_accepts_kv_listed_public_host() -> None:
         "listed_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY"
     )
     try:
-        try:
+        with patch(
+            "contextual_orchestrator.orchestrator.socket.getaddrinfo",
+            return_value=_PUBLIC_ADDRINFO,
+        ):
             client._validate_provider(listed_agent)
-        except RuntimeError as exc:
-            assert "allowlisted" not in str(exc), exc
     finally:
         set_backend(None)
         reset_runtime_config_store()
@@ -219,6 +237,7 @@ if __name__ == "__main__":
     test_allowed_provider_hosts_reads_kv_csv()
     test_allowed_provider_hosts_empty_kv_is_unrestricted()
     test_seed_provider_egress_from_environ_copies_once()
+    test_seed_treats_whitespace_only_kv_as_empty()
     test_validate_provider_rejects_unlisted_host_from_kv()
     test_validate_provider_ignores_env_only_allowlist()
     test_validate_provider_accepts_kv_listed_public_host()

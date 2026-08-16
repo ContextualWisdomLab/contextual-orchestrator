@@ -30,7 +30,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   "allowed_provider_hosts", "api.example.com")` (or start the process with
   the env var set so bootstrap can copy it). Do not write the key only into
   a new `get_config_store(postgres_dsn=...)` instance and expect egress to
-  honor it.
+  honor it. A whitespace-only stored value is treated as empty so bootstrap
+  can still copy env.
 - Fail closed on unknown assistant `tool_calls` entry and `function` keys
   (`unknown_tool_call_fields` / `unknown_tool_call_function_fields`) on both
   the orchestration path and the tools / `response_format` SSE proxy.
