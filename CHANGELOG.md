@@ -6,8 +6,16 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ## [Unreleased]
 
+### Added
+
+- Add a durable third-normal-form provider catalog for the organization `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `BYTEZ_API_KEY`, `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` accounts. Trusted bootstrap writes values only to the encrypted credential registry, discovers each provider independently, preserves last-known-good catalogs on failure, and converts only eligible chat/reasoning/coding rows into role-tagged runtime agents.
+- Add `--provider-catalog-dsn` startup authority and a provider-aware client that preserves the hardened OpenAI-compatible transport for OpenAI, OpenRouter, and NVIDIA NIM while using a narrow native Bytez Key/input adapter and failing closed on unsupported Bytez passthrough or response shapes.
+- Add a trust-separated Provider Catalog Sync workflow: pull requests run offline secret-free contracts, while protected-main scheduled/manual runs require the complete five-key inventory plus durable KV DSN/passphrase, verify generated evidence contains no exact secret value, and never downgrade a configured database to process memory.
+
 ### Security
 
+- Apply HTTPS-only public-address-pinned catalog discovery with hostname TLS verification, redirect and ambient-proxy avoidance, bounded strict JSON-object responses, duplicate/non-finite rejection, bounded attempts, full-jitter backoff, deadlines, and capped delta/date `Retry-After` handling.
+- Exclude specialized and unknown inventory from the chat agent pool unless provider metadata or conservative family evidence establishes chat/reasoning/coding capability, preventing embedding, image, speech, moderation, reranking, and unrelated Bytez models from being invoked as chat workers.
 - Fail closed with a stable redacted error when an explicitly configured Postgres KV backend cannot be imported, initialized, or seeded, and route `CostRoutingCoordinator(postgres_dsn=...)` through that authoritative factory, preventing a silent downgrade of configuration, routing, price, and credential authority to process-local memory.
 - Restrict the private plain-HTTP provider seam to `localhost` or literal loopback IP addresses, reject URL userinfo before connection, dial directly without ambient proxy lookup, reject all redirect responses, and close failed resources deterministically.
 - Pin each HTTPS provider connection to the exact public addresses approved during validation, preserve the original hostname for TLS verification, bypass environment proxy resolution, and reject redirects to close DNS-rebinding and credential-forwarding SSRF paths.
@@ -31,6 +39,7 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/), and
 
 ### Documentation
 
+- Add the durable provider-catalog design, implementation plan, operator guide, and APA 7 doctoring covering credential/catalog separation, normalized data, conservative capability eligibility, account-isolated refresh, route/conduct pool construction, native Bytez handling, trusted Actions bootstrap, rotation, incident response, evidence interpretation, and rollback.
 - Add APA 7 doctoring for Python environment-marker semantics, Atheris artifact availability and hashes, and the supported-platform uncertainty boundary.
 - Add provider-response resource-bound doctoring covering the 8 MiB fail-closed limit, HTTP framing preflight, `text/event-stream` media-type enforcement, bounded SSE reads, OpenAI-compatible `[DONE]` completion evidence, malformed-event and premature-EOF handling, batch-output partitioning, incident handling, and operational rollback.
 - Add provider-stream UTF-8 doctoring grounding strict SSE/JSON decoding and redacted malformed-input handling in the WHATWG HTML Standard and RFC 8259, with verification, failure, rollback, and authority boundaries.
