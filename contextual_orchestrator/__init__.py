@@ -39,7 +39,7 @@ from .cost_ledger import (
     dimension_catalog,
 )
 from .cost_router import CostRoutingCoordinator
-from .credentials import NotConfigured, get_credential, register_credential
+from .credentials import NotConfigured, get_credential, register_credential, register_credentials
 from .kv_config import (
     ConfigBackendUnavailableError,
     InMemoryConfigStore,
@@ -55,6 +55,7 @@ __all__ = [
     "load_agents",
     "get_credential",
     "register_credential",
+    "register_credentials",
     "NotConfigured",
     # cost review
     "ATTRIBUTION_DIMENSIONS",
