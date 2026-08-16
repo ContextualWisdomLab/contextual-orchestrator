@@ -1,0 +1,63 @@
+name: Hourly PR Maintenance
+
+on:
+  schedule:
+    - cron: "11 * * * *"
+  workflow_dispatch:
+
+concurrency:
+  group: contextual-orchestrator-hourly-pr-maintenance
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  dispatch-central-review-repair:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Dispatch one bounded central review repair
+        env:
+          PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+          OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
+        run: |
+          set -euo pipefail
+          token="${PR_REVIEW_MERGE_TOKEN:-${OPENCODE_APPROVE_TOKEN:-}}"
+          if [ -z "$token" ]; then
+            echo "::error::No established central scheduler dispatch credential is configured."
+            exit 1
+          fi
+
+          payload="$(jq -n \
+            --arg event_type "pr-review-fix-scheduler" \
+            '{
+              "event_type": $event_type,
+              "client_payload": {
+                "target_repository": "ContextualWisdomLab/contextual-orchestrator",
+                "base_branch": "main",
+                "max_prs": "100",
+                "max_dispatches": "1",
+                "retry_hours": "1",
+                "dry_run": false
+              }
+            }')"
+          response_file="$(mktemp)"
+          status_code="$(curl \
+            --silent \
+            --show-error \
+            --location \
+            --output "$response_file" \
+            --write-out '%{http_code}' \
+            --request POST \
+            --header 'Accept: application/vnd.github+json' \
+            --header "Authorization: Bearer ${token}" \
+            --header 'X-GitHub-Api-Version: 2022-11-28' \
+            --data "$payload" \
+            https://api.github.com/repos/ContextualWisdomLab/.github/dispatches)"
+          if [ "$status_code" != "204" ]; then
+            echo "::error::Central review-repair dispatch failed with HTTP ${status_code}."
+            cat "$response_file"
+            exit 1
+          fi
+          echo "Dispatched one bounded Contextual Orchestrator review-repair opportunity."
