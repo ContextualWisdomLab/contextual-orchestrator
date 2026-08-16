@@ -2947,6 +2947,8 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
 def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | None:
     """OpenAI chat ``tool_choice`` — none/auto/required or named function object.
 
+    ``none`` / ``auto`` without tools remain honest no-ops. ``required`` demands
+    a non-empty ``tools`` array (parity with ``parallel_tool_calls=true``).
     When ``type`` is ``function``, ``function.name`` must match a tools entry
     so clients cannot force a tool the request did not declare.
     """
@@ -2970,6 +2972,17 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
                 "invalid_tool_choice",
                 "tool_choice string must be one of none, auto, required",
             )
+        # required forces at least one tool call — meaningless without tools.
+        # Fail closed (parity with parallel_tool_calls=true) so clients cannot
+        # believe tool use was mandated when no tools were declared.
+        if choice == "required":
+            tools = body.get("tools") if "tools" in body else None
+            if not isinstance(tools, list) or not tools:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice=required requires a non-empty tools array",
+                )
         return choice
     if isinstance(choice, dict):
         # OpenAI named tool_choice is {type, function}; extra siblings fail closed.
