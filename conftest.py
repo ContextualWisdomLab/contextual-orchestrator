@@ -6,4 +6,4 @@ directory during normal collection so the suite runs without the native
 toolchain. The Hypothesis property tests under ``tests/fuzz/`` are unaffected.
 """
 
-collect_ignore = ["fuzz"]
+collect_ignore = ["fuzz", "scripts"]
