@@ -22,7 +22,8 @@ deserialize request config validate untrusted input"`):
    `_validate_mode` / `_validate_messages` / `_validate_chat_response_format`.
    Arbitrary bytes must normalise to a validated structure or raise
    `RequestError` / a JSON decode error — never an unhandled crash.
-   Successful `json_schema` names match `[a-zA-Z0-9_-]{1,64}`.
+   Successful `json_schema` names match `[a-zA-Z0-9_-]{1,64}` (ASCII
+   `isascii()` plus alnum/`_`/`-`; Unicode letters and digits fail closed).
 2. **Agent config** — `orchestrator.ModelAgent.from_dict`. Arbitrary decoded
    JSON must yield a well-typed `ModelAgent` or raise `KeyError`/`TypeError`/
    `ValueError`.

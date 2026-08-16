@@ -49,8 +49,9 @@ redistribution; each is cited below with its arXiv identifier.
   https://platform.openai.com/docs/guides/structured-outputs
   Grounds fail-closed unknown keys on the `json_schema` object, the
   requirement that `schema` is a JSON Schema object when structured output
-  is requested, and the `name` charset `[a-zA-Z0-9_-]{1,64}`. Copyrighted
-  vendor docs — cite + link only.
+  is requested, and the `name` charset `[a-zA-Z0-9_-]{1,64}` (ASCII only;
+  `str.isalnum()` is not the regex). Copyrighted vendor docs — cite +
+  link only.
 
 - Wright, A., Andrews, H., Hutton, B., & Dennis, G. (2022). *JSON Schema: A
   media type for describing JSON documents* (Internet-Draft

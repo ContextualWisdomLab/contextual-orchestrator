@@ -121,7 +121,9 @@ def exercise_request_body(raw: bytes) -> None:
                     assert isinstance(schema, dict)
                     name = schema.get("name")
                     assert isinstance(name, str) and 1 <= len(name) <= 64
-                    assert all(ch.isalnum() or ch in "_-" for ch in name)
+                    assert name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in name
+                    )
                     description = schema.get("description")
                     if description is not None:
                         assert isinstance(description, str) and description.strip()

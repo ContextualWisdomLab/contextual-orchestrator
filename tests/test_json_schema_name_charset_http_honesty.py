@@ -10,6 +10,7 @@ buyer sees an opaque provider rejection instead of a named
 These cases assert the buyer-visible contract:
 
 * chat and Responses return 400 ``invalid_response_format`` for illegal names
+* Unicode letters/digits (``café``, ``名前``, Arabic-Indic digits) fail closed
 * a 64-character legal name is kept on mock ``echo.response_format``
 * a legal short name is unchanged
 """
@@ -176,6 +177,101 @@ def test_http_responses_rejects_overlong_json_schema_name() -> None:
         thread.join(timeout=5)
 
 
+def test_validate_chat_response_format_rejects_unicode_json_schema_name() -> None:
+    """Python str.isalnum() accepts café/名前/١٢٣; OpenAI does not."""
+    for illegal_name in ("café", "名前", "schema_١٢٣"):
+        body = {
+            "response_format": _json_schema_payload(
+                {
+                    "name": illegal_name,
+                    "schema": _SCHEMA_BODY,
+                }
+            )
+        }
+        try:
+            _validate_chat_response_format(body)
+        except Exception as exc:
+            assert getattr(exc, "code", None) == "invalid_response_format"
+            assert "must match [a-zA-Z0-9_-]" in str(exc)
+            continue
+        raise AssertionError(f"{illegal_name!r} json_schema.name must fail closed")
+
+
+def test_http_chat_rejects_unicode_json_schema_name() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "name unicode"}],
+                "response_format": _json_schema_payload(
+                    {
+                        "name": "café",
+                        "schema": _SCHEMA_BODY,
+                    }
+                ),
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_response_format" in blob
+        assert "unknown_fields" not in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_unicode_json_schema_name() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/responses",
+            {
+                "model": "mock-planner",
+                "input": "responses name unicode",
+                "response_format": _json_schema_payload(
+                    {
+                        "name": "名前",
+                        "schema": _SCHEMA_BODY,
+                    }
+                ),
+            },
+        )
+        assert status == 400, body
+        assert "invalid_response_format" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_keeps_legal_json_schema_name() -> None:
+    server, thread, port = _server()
+    try:
+        max_name = "B" * 64
+        status, body = _post(
+            port,
+            "/v1/responses",
+            {
+                "model": "mock-planner",
+                "input": "responses name max",
+                "response_format": _json_schema_payload(
+                    {
+                        "name": max_name,
+                        "schema": _SCHEMA_BODY,
+                    }
+                ),
+            },
+        )
+        assert status == 200, body
+        assert _echo_schema(body).get("name") == max_name
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_keeps_legal_json_schema_name() -> None:
     server, thread, port = _server()
     try:
@@ -222,7 +318,11 @@ def test_http_chat_keeps_legal_json_schema_name() -> None:
 if __name__ == "__main__":
     test_validate_chat_response_format_rejects_spaced_json_schema_name()
     test_validate_chat_response_format_rejects_overlong_json_schema_name()
+    test_validate_chat_response_format_rejects_unicode_json_schema_name()
     test_http_chat_rejects_punctuated_json_schema_name()
     test_http_responses_rejects_overlong_json_schema_name()
+    test_http_chat_rejects_unicode_json_schema_name()
+    test_http_responses_rejects_unicode_json_schema_name()
+    test_http_responses_keeps_legal_json_schema_name()
     test_http_chat_keeps_legal_json_schema_name()
     print("ok")
