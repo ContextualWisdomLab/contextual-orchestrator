@@ -35,6 +35,31 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## Role reasoning-effort profiles
+
+Issue #568 needs a provider-neutral `reasoning_effort_profile` so Fugu-style
+route versus Fugu-Ultra conduct, TRINITY roles, and Conductor steps can share
+one replayable compute snapshot. PDFs are cited rather than vendored when
+redistribution is unclear.
+
+- Sakana AI. (2026). *Sakana Fugu Technical Report*.
+  https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+  Grounds the latency-quality frontier: route is the low-compute path,
+  conduct is the high-quality path. Do not proxy that split with temperature.
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
+  *Trinity: An evolved LLM coordinator* (arXiv:2512.04695).
+  https://arxiv.org/abs/2512.04695
+  Grounds thinker / worker / verifier (plus synthesizer, planner, judge)
+  role bindings on the catalog.
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).
+  *Learning to orchestrate agents in natural language with the Conductor*
+  (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
+  Grounds workflow steps, recursion depth, decomposition, and access-list
+  scope as first-class ablation factors.
+
+Buyer next action: call `run_equal_budget_ablation` and read
+`production_default_change_allowed` before changing live defaults.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including
