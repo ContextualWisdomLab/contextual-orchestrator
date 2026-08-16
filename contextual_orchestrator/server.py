@@ -1381,6 +1381,41 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                         "message name must match [a-zA-Z0-9_-]",
                     )
                 entry["name"] = msg_name
+        if "refusal" in message:
+            # OpenAI assistant refusal plane — null/empty omit; non-empty fails closed
+            # (this gateway does not surface or apply refusal content).
+            refusal = message.get("refusal")
+            if refusal is None or (isinstance(refusal, str) and not refusal.strip()):
+                pass
+            elif role != "assistant":
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "refusal is only valid on assistant messages",
+                )
+            elif not isinstance(refusal, str):
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "refusal must be a string",
+                )
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "non-empty refusal is not supported on /v1/chat/completions",
+                )
+        if "annotations" in message:
+            # OpenAI message annotations — null/empty omit; non-empty fails closed.
+            annotations = message.get("annotations")
+            if annotations is None or (isinstance(annotations, list) and not annotations):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_annotations",
+                    "non-empty annotations are not supported on /v1/chat/completions",
+                )
         validated.append(entry)
     return validated
 
