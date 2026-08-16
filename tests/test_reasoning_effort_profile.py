@@ -14,6 +14,7 @@ import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
     PROFILE_VERSION,
     PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD,
@@ -132,6 +133,31 @@ def test_equal_budget_ablation_keeps_production_default_locked() -> None:
     assert PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD > 0
 
 
+def test_opt_in_catalog_attaches_identical_snapshot_on_route_and_conduct() -> None:
+    catalog = default_role_effort_catalog()
+    expected = snapshot_role_effort_catalog(catalog).snapshot_hash
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+            ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation"), priority=1),
+            ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "security", "review"), priority=2),
+        ],
+        role_effort_catalog=catalog,
+    )
+    routed = orchestrator.complete([{"role": "user", "content": "Write one sentence."}], mode="route")
+    conducted = orchestrator.complete(
+        [{"role": "user", "content": "Analyze the architecture, implement the code, and verify risks."}],
+        mode="conduct",
+    )
+    assert routed["reasoning_effort_snapshot"]["snapshot_hash"] == expected
+    assert conducted["reasoning_effort_snapshot"]["snapshot_hash"] == expected
+    assert routed["reasoning_effort_snapshot"]["profile_version"] == PROFILE_VERSION
+    defaulted = TaskOrchestrator(
+        [ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning"))]
+    ).complete([{"role": "user", "content": "Write one sentence."}], mode="route")
+    assert "reasoning_effort_snapshot" not in defaulted
+
+
 def test_doctoring_cites_fugu_trinity_conductor_apa7() -> None:
     root = Path(__file__).resolve().parents[1]
     architecture = (root / "docs" / "architecture.md").read_text(encoding="utf-8")
@@ -153,5 +179,6 @@ if __name__ == "__main__":  # pragma: no cover
     test_catalog_snapshot_is_stable_and_replayable()
     test_true_theta_rmse_improves_with_effort_not_temperature()
     test_equal_budget_ablation_keeps_production_default_locked()
+    test_opt_in_catalog_attaches_identical_snapshot_on_route_and_conduct()
     test_doctoring_cites_fugu_trinity_conductor_apa7()
     print("ok")
