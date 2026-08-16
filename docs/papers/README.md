@@ -43,6 +43,12 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+The 2026-08 production catalog (NIM + OpenAI + OpenRouter + Bytez, no GitHub
+Models) reuses these three papers as the routing/cascade evidence pack and
+adds Fugu / TRINITY / Conductor (cited in `docs/architecture.md` and
+`docs/doctoring/provider-catalog.md`) for how tagged workers are composed.
+Vendor model cards are cited by URL only; they are not vendored.
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

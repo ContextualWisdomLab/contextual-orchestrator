@@ -82,6 +82,10 @@ class ModelAgent:
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+        if not catalog_allows_fields(self.base_url, self.model, self.api_key_env or self.credential_key):
+            raise ValueError(
+                "GitHub Models and Copilot tokens are not permitted in the agent catalog"
+            )
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -188,6 +192,38 @@ class OrchestrationPolicy:
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+
+# GitHub Models is retired for this org. These markers fail-closed at agent
+# construction so a catalog or runtime add cannot silently reintroduce them.
+FORBIDDEN_HOST_MARKERS = frozenset(
+    {
+        "models.github.ai",
+        "models.inference.ai.azure.com",
+        "api.githubcopilot.com",
+        "models.github.com",
+    }
+)
+FORBIDDEN_MODEL_MARKERS = frozenset({"gpt-5.6-luna", "gpt-5.6-terra"})
+FORBIDDEN_CREDENTIAL_NAMES = frozenset({"COPILOT_GITHUB_TOKEN"})
+
+
+def catalog_allows_fields(base_url: str, model: str, credential_name: str) -> bool:
+    """Return True when an agent record is not a retired GitHub Models/Copilot target."""
+    host = (urlparse(base_url).hostname or "").lower()
+    if any(marker in host for marker in FORBIDDEN_HOST_MARKERS):
+        return False
+    if "github" in host and "model" in host:
+        return False
+    lowered_model = (model or "").lower()
+    if any(marker in lowered_model for marker in FORBIDDEN_MODEL_MARKERS):
+        return False
+    if (credential_name or "") in FORBIDDEN_CREDENTIAL_NAMES:
+        return False
+    return True
+
+
+class ProviderResponseError(RuntimeError):
+    """Raised when an upstream returns a non-parseable chat.completion body."""
 
 
 def is_transient_error(exc: BaseException) -> bool:
@@ -299,11 +335,22 @@ class ModelClient:
             method="POST",
         )
         with self._open_provider(request) as response:
-            data = json.loads(response.read().decode("utf-8"))
-        usage = data.get("usage")
-        if isinstance(usage, dict):
-            self._local.usage = usage
-        return data["choices"][0]["message"]["content"]
+            raw = response.read().decode("utf-8")
+        try:
+            data = json.loads(raw)
+            usage = data.get("usage")
+            if isinstance(usage, dict):
+                self._local.usage = usage
+            content = data["choices"][0]["message"]["content"]
+        except (json.JSONDecodeError, KeyError, IndexError, TypeError, AttributeError) as exc:
+            raise ProviderResponseError(
+                f"provider {agent.id} returned a malformed chat completion"
+            ) from exc
+        if not isinstance(content, str):
+            raise ProviderResponseError(
+                f"provider {agent.id} returned a malformed chat completion"
+            )
+        return content
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
@@ -1529,13 +1576,29 @@ class TaskOrchestrator:
         lowered = text.lower()
         return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
 
+    def _agent_ready(self, agent: ModelAgent) -> bool:
+        """True when the agent is enabled and (if remote) has a resolvable KV credential."""
+        if agent.disabled:
+            return False
+        if agent.base_url.startswith("mock://"):
+            return True
+        return get_credential(agent.credential_name) is not None
+
     def _select_agent(self, text: str, role: str) -> ModelAgent:
-        selected = self._ranked_agents(text, role)[0]
-        if selected.disabled:  # pragma: no cover
+        ready = [
+            agent
+            for agent in self._ranked_agents(text, role)
+            if self._agent_ready(agent) and role not in agent.provider_exclusions
+        ]
+        if not ready:
+            remote = [agent for agent in self.agents if not agent.base_url.startswith("mock://")]
+            if remote and not any(self._agent_ready(agent) for agent in remote):
+                raise NotConfigured(
+                    "no configured provider credential is resolvable; refuse to route "
+                    "(no GitHub Models fallback)"
+                )
             raise RuntimeError(f"no enabled agent available for role={role}")
-        if role in selected.provider_exclusions:  # pragma: no cover
-            raise RuntimeError(f"no eligible agent available for role={role}")
-        return selected
+        return ready[0]
 
     def _invoke(
         self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
@@ -1564,10 +1627,19 @@ class TaskOrchestrator:
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
         ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
-        eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
+        eligible = [
+            agent
+            for agent in ordered
+            if self._agent_ready(agent) and role not in agent.provider_exclusions
+        ]
+        if not eligible:
+            raise NotConfigured(
+                "no configured provider credential is resolvable; refuse to route "
+                "(no GitHub Models fallback)"
+            )
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible or [primary]
+        return healthy or eligible
 
     def _circuit_open(self, agent_id: str) -> bool:
         state = self._circuit.get(agent_id)

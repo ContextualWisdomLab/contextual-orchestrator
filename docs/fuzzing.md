@@ -31,6 +31,9 @@ deserialize request config validate untrusted input"`):
 4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
    `mock://` providers (fully offline). Arbitrary prompt text and mode must
    produce a JSON-serialisable record whose SSE framing round-trips.
+5. **Provider `/v1/models` list** — `provider_catalog.parse_models_list`.
+   Arbitrary decoded JSON must return a list of non-empty chat model ids and
+   never raise (static seed remains the claim boundary on junk).
 
 ## Running locally
 

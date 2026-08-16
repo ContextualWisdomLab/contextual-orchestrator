@@ -39,5 +39,7 @@ Provide one API and one domain model:
 - Training a learned coordinator.
 - Claiming compatibility with or ownership of any vendor model.
 - Adding provider SDKs before stdlib HTTP proves insufficient.
+- Reintroducing GitHub Models (`COPILOT_GITHUB_TOKEN`, `gpt-5.6-luna` / `terra`).
+  OpenCode and Strix call this process as one OpenAI-compatible provider.
 
 See `docs/product_planning.md` for the paper-grounded product plan.

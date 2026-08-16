@@ -56,23 +56,30 @@ push or open a PR.
 - The reference implementation is xtrmLLMBatchPython's pgcrypto-encrypted
   Postgres credential registry (`get_credential(name)`); reuse that pattern (a
   DB-backed KV is fine) unless a dedicated KV is adopted.
-- **Known deviation to migrate:** this repo currently resolves provider API
-  keys from env — `ModelClient` reads `os.environ.get(agent.api_key_env)` in
-  `contextual_orchestrator/orchestrator.py` (and `CONTEXTUAL_ORCHESTRATOR_*`
-  tokens in `__main__.py`). Move these to KV-backed reads; keep env only as the
-  bootstrap path that seeds the KV.
+- Runtime provider keys resolve through `get_credential` / the KV registry.
+  Env is bootstrap transport only (`register-credential --from-env` /
+  `seed-provider-catalog --from-env` / `--seed-from-env` on serve). The five
+  org Actions secrets are `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+  `OPENAI_API_KEY`, `OPENROUTER_API_KEY`, and `BYTEZ_API_KEY`. A missing secret
+  skips that upstream; it must not crash the pool.
+- ContextualWisdomLab **no longer uses GitHub Models**. Do not add
+  `COPILOT_GITHUB_TOKEN`, `models.github.ai`, `gpt-5.6-luna`, or `gpt-5.6-terra`.
 
 ### This repo: the org LLM gateway
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
-  OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
+  OpenAI-compatible front door consumed by **gyeot**, **scopeweave**,
+  **OpenCode**, and **Strix**.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
-- Its `ModelClient` currently reads `os.environ.get(agent.api_key_env)` — this
-  is the KV-principle deviation above. Resolve the API key (including the org
-  `OPENAI_API_KEY`) from the **KV / credential registry**, not env.
-- The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
-  do not change it.
+- `ModelClient` resolves the API key from the **KV / credential registry** via
+  `get_credential` (including the org `OPENAI_API_KEY` and NIM / OpenRouter /
+  Bytez keys). Env is never the request-time source.
+- OpenCode/Strix should call this process as **one** OpenAI-compatible
+  provider: `baseURL http://127.0.0.1:8000/v1`, model `contextual-orchestrator`
+  (see `docs/opencode-sidecar.md`). The org-central review workflow lives in
+  `ContextualWisdomLab/.github` and should consume this sidecar — do not
+  reintroduce GitHub Models there from this repo.
 
 ### This repo's role in the ecosystem
 

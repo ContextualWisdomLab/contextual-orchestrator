@@ -37,6 +37,9 @@ This repository implements the interface and control plane, not the trained coor
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `examples/agents.production.json` + `provider_catalog`: org NIM / OpenAI /
+  OpenRouter / Bytez seed so OpenCode/Strix call one gateway URL. GitHub Models
+  are out of catalog. See `docs/doctoring/provider-catalog.md`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

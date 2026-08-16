@@ -17,11 +17,11 @@ def test_two_word_snake_case_rule() -> None:
 
 
 def test_example_agent_ids_follow_object_name_rule() -> None:
-    config_path = Path(__file__).resolve().parents[1] / "examples" / "agents.mock.json"
-    config = json.loads(config_path.read_text(encoding="utf-8"))
-
-    for agent in config["agents"]:
-        require_object_name(agent["id"], "agent.id")
+    examples = Path(__file__).resolve().parents[1] / "examples"
+    for config_path in examples.glob("agents.*.json"):
+        config = json.loads(config_path.read_text(encoding="utf-8"))
+        for agent in config["agents"]:
+            require_object_name(agent["id"], "agent.id")
 
 
 def test_library_research_is_required_design_gate() -> None:

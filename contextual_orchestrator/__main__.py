@@ -9,6 +9,7 @@ import sys
 
 from .credentials import register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
+from .provider_catalog import seed_provider_catalog
 from .server import SecurityConfig, serve
 
 
@@ -55,10 +56,53 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+def _seed_provider_catalog_command(argv: list[str]) -> None:
+    """Register the five org secrets (skip missing) and compose the production catalog."""
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator seed-provider-catalog",
+        description="Bootstrap org provider credentials and the production agent catalog.",
+    )
+    parser.add_argument(
+        "--agents",
+        default="examples/agents.production.json",
+        help="Production seed JSON (default: examples/agents.production.json).",
+    )
+    parser.add_argument("--agents-db", default=None, help="Optional sqlite path to persist the ready pool.")
+    parser.add_argument(
+        "--from-env",
+        action="store_true",
+        help="Bootstrap transport: read NVIDIA_NIM_API_KEY, NVIDIA_NIM_API_KEY_SUB, "
+        "OPENAI_API_KEY, OPENROUTER_API_KEY, and BYTEZ_API_KEY from the process env.",
+    )
+    parser.add_argument(
+        "--skip-missing",
+        action="store_true",
+        default=True,
+        help="Skip a secret that is unset and keep serving the remaining providers (default).",
+    )
+    parser.add_argument(
+        "--discover-models",
+        action="store_true",
+        help="GET /v1/models for each registered credential and append discovered chat models.",
+    )
+    args = parser.parse_args(argv)
+    if not args.from_env:
+        parser.error("--from-env is required so secrets enter the KV only as bootstrap transport")
+    report = seed_provider_catalog(
+        seed_path=args.agents,
+        agents_db=args.agents_db,
+        discover=args.discover_models,
+    )
+    print(json.dumps(report, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
         _register_credential_command(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "seed-provider-catalog":
+        _seed_provider_catalog_command(sys.argv[2:])
         return
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
@@ -80,6 +124,17 @@ def main() -> None:
                         help="Base URL of a Clearfolio deployment to use as the admin document viewer (default: disabled).")
     parser.add_argument("--agents-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None,
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
+    parser.add_argument(
+        "--seed-from-env",
+        action="store_true",
+        help="Before serving, register the five org secrets from env into this process KV "
+        "(CI/memory backend; postgres deploys should run seed-provider-catalog instead).",
+    )
+    parser.add_argument(
+        "--discover-models",
+        action="store_true",
+        help="With --seed-from-env, also GET /v1/models for each registered credential.",
+    )
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
     parser.add_argument("--insecure-skip-tls-verify", action="store_true",
@@ -93,6 +148,13 @@ def main() -> None:
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
+
+    if args.seed_from_env:
+        seed_provider_catalog(
+            seed_path=args.agents,
+            agents_db=args.agents_db,
+            discover=args.discover_models,
+        )
 
     client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
     orchestrator = TaskOrchestrator(

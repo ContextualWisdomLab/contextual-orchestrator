@@ -1,0 +1,85 @@
+{
+  "agents": [
+    {
+      "id": "nim_primary_nemotron_super_49b",
+      "model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "credential_key": "NVIDIA_NIM_API_KEY",
+      "provider_name": "nvidia_nim",
+      "tags": ["reasoning", "coding", "planning", "implementation"],
+      "priority": 10
+    },
+    {
+      "id": "nim_primary_nemotron_super_120b",
+      "model": "nvidia/nemotron-3-super-120b-a12b",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "credential_key": "NVIDIA_NIM_API_KEY",
+      "provider_name": "nvidia_nim",
+      "tags": ["reasoning", "planning", "research", "coding"],
+      "priority": 9
+    },
+    {
+      "id": "nim_secondary_nemotron_super_49b",
+      "model": "nvidia/llama-3.3-nemotron-super-49b-v1.5",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "credential_key": "NVIDIA_NIM_API_KEY_SUB",
+      "provider_name": "nvidia_nim",
+      "tags": ["reasoning", "coding", "planning"],
+      "priority": 6
+    },
+    {
+      "id": "nim_secondary_nemotron_super_120b",
+      "model": "nvidia/nemotron-3-super-120b-a12b",
+      "base_url": "https://integrate.api.nvidia.com/v1",
+      "credential_key": "NVIDIA_NIM_API_KEY_SUB",
+      "provider_name": "nvidia_nim",
+      "tags": ["reasoning", "planning", "research"],
+      "priority": 5
+    },
+    {
+      "id": "openai_primary_general",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "credential_key": "OPENAI_API_KEY",
+      "provider_name": "openai",
+      "tags": ["reasoning", "writing", "planning", "analysis"],
+      "priority": 8
+    },
+    {
+      "id": "openai_review_worker",
+      "model": "gpt-5.5",
+      "base_url": "https://api.openai.com/v1",
+      "credential_key": "OPENAI_API_KEY",
+      "provider_name": "openai",
+      "tags": ["verification", "review", "security"],
+      "priority": 7
+    },
+    {
+      "id": "openrouter_coding_worker",
+      "model": "anthropic/claude-sonnet-4",
+      "base_url": "https://openrouter.ai/api/v1",
+      "credential_key": "OPENROUTER_API_KEY",
+      "provider_name": "openrouter",
+      "tags": ["coding", "review", "implementation"],
+      "priority": 4
+    },
+    {
+      "id": "openrouter_reasoning_worker",
+      "model": "openai/gpt-4.1",
+      "base_url": "https://openrouter.ai/api/v1",
+      "credential_key": "OPENROUTER_API_KEY",
+      "provider_name": "openrouter",
+      "tags": ["reasoning", "writing", "planning"],
+      "priority": 3
+    },
+    {
+      "id": "bytez_primary_qwen",
+      "model": "Qwen/Qwen3-4B",
+      "base_url": "https://api.bytez.com/models/v2/openai/v1",
+      "credential_key": "BYTEZ_API_KEY",
+      "provider_name": "bytez",
+      "tags": ["coding", "writing"],
+      "priority": 2
+    }
+  ]
+}

@@ -44,6 +44,13 @@ HTTP serving is hardened for local lab use:
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
 - `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
 
+Production (not mock-only) seed: [examples/agents.production.json](examples/agents.production.json) — NVIDIA NIM primary/secondary (Nemotron Super 49B / 120B), OpenAI, OpenRouter, and Bytez. OpenCode/Strix should call `http://127.0.0.1:8000/v1` with model `contextual-orchestrator` ([docs/opencode-sidecar.md](docs/opencode-sidecar.md)). GitHub Models are not in the catalog.
+
+```bash
+python -m contextual_orchestrator seed-provider-catalog --from-env --skip-missing \
+  --agents examples/agents.production.json --agents-db /tmp/agents.db
+```
+
 Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints. Provider secrets are resolved from a KV credential registry via `get_credential`, never from `os.getenv` at request time (see [docs/kv-credentials.md](docs/kv-credentials.md)):
 
 ```json
@@ -252,6 +259,10 @@ python -m pip install --require-hashes -r requirements.lock
 python -m pip install --no-deps -e .
 python tests/test_self_check.py
 python tests/test_paper_contracts.py
+python tests/test_provider_catalog.py
+python tests/test_catalog_bootstrap.py
+python tests/test_provider_catalog_robustness.py
+python tests/test_opencode_sidecar_contract.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py

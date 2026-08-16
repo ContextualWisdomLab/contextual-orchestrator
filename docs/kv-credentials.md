@@ -131,8 +131,27 @@ environment:
           --name OPENAI_API_KEY --value-stdin
 ```
 
-The application test workflow must **not** receive `OPENAI_API_KEY`: tests run on
-the mock pool and the in-memory backend and stay green without any secret.
+Register all five org Actions secrets in one shot (skip any that are unset):
+
+```bash
+python -m contextual_orchestrator seed-provider-catalog \
+  --from-env --skip-missing \
+  --agents examples/agents.production.json \
+  --agents-db /var/lib/contextual-orchestrator/agents.db \
+  --discover-models
+```
+
+Names: `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `OPENAI_API_KEY`,
+`OPENROUTER_API_KEY`, `BYTEZ_API_KEY`. A missing secret skips that upstream
+and keeps the rest of the pool serving.
+
+The in-memory KV does not survive process exit. CI therefore seeds **inside**
+the serve process (`--seed-from-env`); postgres deploys run
+`seed-provider-catalog` first. See `docs/opencode-sidecar.md`.
+
+The application test workflow must **not** receive these provider secrets:
+tests run on the mock pool and the in-memory backend and stay green without
+any secret. The OpenCode sidecar workflow is the only job that may see them.
 
 ## Why this supersedes `api_key_env`
 

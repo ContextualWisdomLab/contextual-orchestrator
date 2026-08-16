@@ -1,0 +1,97 @@
+name: OpenCode sidecar
+
+# Deploy/CI sidecar only. Does not run on pull_request so app tests and the
+# required Security workflow stay secret-free (see tests.yml / security.yml).
+on:
+  workflow_dispatch:
+  workflow_call:
+    secrets:
+      NVIDIA_NIM_API_KEY:
+        required: false
+      NVIDIA_NIM_API_KEY_SUB:
+        required: false
+      OPENAI_API_KEY:
+        required: false
+      OPENROUTER_API_KEY:
+        required: false
+      BYTEZ_API_KEY:
+        required: false
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: opencode-sidecar-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  seed_and_serve:
+    name: Seed KV and serve loopback sidecar
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install package
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --no-deps -e .
+
+      - name: Seed org credentials into this-job report
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+        run: |
+          python -m contextual_orchestrator seed-provider-catalog \
+            --from-env --skip-missing \
+            --agents examples/agents.production.json \
+            --agents-db "$RUNNER_TEMP/agents.db" \
+            --discover-models | tee "$RUNNER_TEMP/seed-report.json"
+
+      - name: Serve loopback OpenAI-compatible API and smoke curl
+        env:
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+        run: |
+          set -euo pipefail
+          CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+          export CONTEXTUAL_ORCHESTRATOR_TOKEN
+          python -m contextual_orchestrator --serve \
+            --seed-from-env \
+            --agents examples/agents.production.json \
+            --agents-db "$RUNNER_TEMP/agents.db" \
+            --host 127.0.0.1 \
+            --port 8000 \
+            --auth-token "$CONTEXTUAL_ORCHESTRATOR_TOKEN" &
+          server_pid=$!
+          trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          for _ in 1 2 3 4 5 6 7 8 9 10; do
+            if curl -sf http://127.0.0.1:8000/healthz >/dev/null; then
+              break
+            fi
+            sleep 1
+          done
+          registered="$(python -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["registered_credentials"]))' "$RUNNER_TEMP/seed-report.json")"
+          if [ "$registered" = "0" ]; then
+            echo "no provider secrets in this job; skip live chat smoke (fail-closed, no GitHub Models fallback)"
+            exit 0
+          fi
+          curl -sS --fail http://127.0.0.1:8000/v1/chat/completions \
+            -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+            -H "content-type: application/json" \
+            -d '{"model":"contextual-orchestrator","messages":[{"role":"user","content":"Write one sentence."}]}'

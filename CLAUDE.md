@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Security gate**: every PR to `main` runs the required Security workflow. A failing Trivy or pip-audit job is a real finding — remediate by bumping the dependency and regenerating `requirements.lock`; never weaken, `continue-on-error`, or disable the gate.
 - **KV, not env**: runtime config and provider secrets are resolved from the KV credential registry (`get_credential`), never `os.getenv` at request time. Env is only bootstrap transport into the KV (see `docs/kv-credentials.md`).
-- **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot` and `scopeweave`. The OpenCode review pipeline is separate, stays on GitHub Models, and must not be changed.
+- **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot`, `scopeweave`, OpenCode, and Strix. ContextualWisdomLab no longer uses GitHub Models; OpenCode should call `http://127.0.0.1:8000/v1` model `contextual-orchestrator` (see `docs/opencode-sidecar.md`).
 - **Research grounding**: substantive feature/process PRs should attach the relevant papers (PDF when redistribution is permissible, otherwise cite + link + summary) under `docs/papers/` with full citations.
 
 This file complements AGENTS.md with commands and architecture; where they differ, AGENTS.md wins.
@@ -55,6 +55,8 @@ python -m contextual_orchestrator --eval "prompt one" "prompt two"
 
 # Seed a provider credential into the KV at bootstrap
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
+python -m contextual_orchestrator seed-provider-catalog --from-env --skip-missing \
+  --agents examples/agents.production.json --agents-db /tmp/agents.db
 
 # Reproduce the Trivy security gate locally (against the merge result)
 trivy --download-db-only
@@ -91,7 +93,7 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 - `credentials.py` / `kv_config.py` — the KV seam: `get_credential`/`register_credential` over pluggable backends (`InMemoryCredentialBackend` default; pgcrypto-encrypted `PostgresCredentialBackend`, selected via `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`).
 - `cost_ledger.py` / `cost_router.py` / `batch_routing.py` / `token_counting.py` — the cost-review + routing hub: prompt-safe usage ledger with seven attribution dimensions, `RoutingPolicy` (sync vs batch from request hints + KV thresholds), and the [pg-llm-batch](https://github.com/ContextualWisdomLab/pg-llm-batch) batch/embeddings backends (a local in-process backend keeps the standalone path working with no external service).
 - `api_contract.py` / `conventions.py` — API-shape and naming-rule enforcement helpers.
-- `__main__.py` — the single entry point: CLI completion, `--serve`, `--eval`, and the `register-credential` bootstrap subcommand.
+- `__main__.py` — the single entry point: CLI completion, `--serve`, `--eval`, `register-credential`, and `seed-provider-catalog` / `--seed-from-env`.
 
 Agent pools are **data, not code**: `examples/agents.mock.json` and `examples/agents.openai.json`. State is in-memory by default; `--state-db PATH` persists runs/audit/analytics to sqlite.
 

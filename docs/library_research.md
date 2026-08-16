@@ -53,6 +53,16 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Provider catalog + model discovery (2026-08)
+
+| Area | Library considered | Decision | Evidence |
+|---|---|---|---|
+| Multi-provider catalog | [LiteLLM](https://github.com/BerriAI/litellm) model list / router | **Do not add LiteLLM.** Keep the seed as JSON data and discover via stdlib `urllib` `GET /v1/models`. | LiteLLM is the product direction, not a current dependency. Ponytail: stdlib HTTP already speaks OpenAI-compatible `/v1/models` (OpenAI, NVIDIA NIM, OpenRouter). Bytez documents chat completions but not a guaranteed list API — static seed is the claim boundary (`docs/doctoring/provider-catalog.md`). Context7/docs: OpenAI Models API; NVIDIA `integrate.api.nvidia.com/v1`; Bytez `https://api.bytez.com/models/v2/openai/v1`. |
+| Secret bootstrap | GitHub Actions `secrets.*` + env | **Bootstrap-only env** into `register_credential` / `seed-provider-catalog --from-env`. Runtime stays on `get_credential`. | Matches `docs/kv-credentials.md`. App test job (`tests.yml`) and Security stay secret-free. |
+| GitHub Models | GitHub Models inference (`models.github.ai`) | **Rejected.** Org no longer uses GitHub Models. | Fail-closed markers in `catalog_allows_fields`; no `COPILOT_GITHUB_TOKEN`. |
+
+Skipped: LiteLLM as a runtime dependency, provider SDKs (openai, nvidia-nim), a second catalog store besides `--agents-db` + the KV.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

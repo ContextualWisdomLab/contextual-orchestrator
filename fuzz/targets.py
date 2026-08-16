@@ -8,7 +8,7 @@ and asserts the invariants that must hold *for arbitrary input*:
   ``AttributeError``, ``RecursionError``, ``SystemError`` or a hang; and
 * structural invariants on any successful result (shape, types, idempotence).
 
-CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
+CodeGraph (``codegraph explore``) surfaced these surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
@@ -36,6 +36,7 @@ from contextual_orchestrator.orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from contextual_orchestrator.provider_catalog import parse_models_list
 
 # ``RequestError`` is the only *domain* exception the request layer is allowed to
 # raise; everything else below is a legitimate stdlib decode/parse failure.
@@ -105,6 +106,16 @@ def exercise_request_body(raw: bytes) -> None:
                 assert set(message) == {"role", "content"}
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
+
+
+def exercise_models_list(value: Any) -> None:
+    """Drive ``parse_models_list`` over arbitrary decoded JSON.
+
+    Invariant: always returns a list of non-empty strings; never raises.
+    """
+    models = parse_models_list(value)
+    assert isinstance(models, list)
+    assert all(isinstance(item, str) and item for item in models)
 
 
 def exercise_agent_config(value: Any) -> None:
