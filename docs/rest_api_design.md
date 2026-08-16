@@ -93,6 +93,14 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
 
+## Chat Completions honesty (buyer next action)
+
+`POST /v1/chat/completions` fail-closes before tools/`response_format` passthrough.
+Send a pool `model`, a non-empty `messages` array, and omit `stream` (or set
+`false`) on tool-calling bodies. `stream=true` with tools is `invalid_stream`
+until SSE passthrough ships. OpenAI. (n.d.). *Chat Completions API*.
+https://platform.openai.com/docs/api-reference/chat/create
+
 ## Production Library Target
 
 FastAPI should replace the current stdlib HTTP adapter when the API needs authentication, richer OpenAPI schema generation, dependency injection, and typed request/response models.

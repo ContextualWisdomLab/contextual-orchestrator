@@ -1445,6 +1445,43 @@ def _require_chat_messages_array(messages: Any) -> list[Any]:
     return messages
 
 
+def _validate_chat_passthrough_model(orchestrator: Any, body: dict[str, Any]) -> str:
+    """Require a pool ``model`` before tools/response_format passthrough.
+
+    The orchestration path already calls ``_validate_completions_model`` and
+    ``_require_pool_model``. Passthrough skipped those, so an omitted model
+    silent-selected a worker and an unknown model raised inside
+    ``proxy_completion``. Same named ``invalid_model`` as Completions.
+    """
+    model_name = _validate_completions_model(body)
+    _require_pool_model(orchestrator, model_name)
+    return model_name
+
+
+def _validate_chat_passthrough_stream(body: dict[str, Any]) -> bool:
+    """Reject ``stream=true`` before tools/response_format passthrough.
+
+    Route-path SSE without tools stays available. ``proxy_completion`` forces
+    ``stream=false`` and returns JSON, so ``stream=true`` on a tools body
+    would lie. Omit, JSON null, empty string, and ``false`` remain no-ops.
+    """
+    if "stream" not in body:
+        return False
+    stream = body.get("stream")
+    if stream is None or (isinstance(stream, str) and not stream.strip()):
+        return False
+    if not isinstance(stream, bool):
+        raise RequestError(400, "invalid_stream", "stream must be a boolean")
+    if stream is True:
+        raise RequestError(
+            400,
+            "invalid_stream",
+            "stream=true is not supported with tools or response_format; "
+            "omit stream or set stream=false",
+        )
+    return False
+
+
 def _validate_chat_message_content_and_name(body: dict[str, Any]) -> None:
     """Content shape and participant name — must run before tools passthrough.
 
@@ -3621,6 +3658,8 @@ def build_server(
                     ):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
+                        _validate_chat_passthrough_model(orchestrator, body)
+                        _validate_chat_passthrough_stream(body)
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
