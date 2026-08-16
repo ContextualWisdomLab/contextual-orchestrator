@@ -3663,6 +3663,8 @@ def build_server(
                         _validate_chat_stream_options(body, stream)
                         _validate_attribution(body.get("attribution"))
                         _validate_routing(body.get("routing"))
+                        _validate_completions_temperature(body)
+                        _validate_completions_top_p(body)
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")

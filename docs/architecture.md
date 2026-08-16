@@ -45,7 +45,7 @@ This repository implements the interface and control plane, not the trained coor
   participant `name`, a non-empty `messages` array, `max_tool_calls`,
   a pool `model`, `stream` (SSE passthrough is a follow-up; `stream=true`
   with tools/`response_format` is `invalid_stream`), `stream_options`,
-  `attribution`, and `routing`
+  `attribution`, `routing`, and in-range `temperature` / `top_p`
   are validated *before* the tools/response_format passthrough early-return
   so SDK tool-calling bodies cannot smuggle unsupported values, silent-select
   a worker, request unused usage chunks, or bill a JSON completion when the

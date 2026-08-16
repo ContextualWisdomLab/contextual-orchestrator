@@ -142,6 +142,44 @@ def test_http_chat_rejects_non_object_routing_with_tools() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_out_of_range_temperature_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up the invoice"}],
+                "tools": _LOOKUP_TOOLS,
+                "temperature": 9,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_temperature" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_out_of_range_top_p_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up the invoice"}],
+                "tools": _LOOKUP_TOOLS,
+                "top_p": 2,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_top_p" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_accepts_all_false_stream_options_with_tools() -> None:
     """All-false stream_options remains an omit-equivalent no-op on tools."""
     server, thread, port = _server()
@@ -167,5 +205,7 @@ if __name__ == "__main__":
     test_http_chat_rejects_non_object_stream_options_with_tools()
     test_http_chat_rejects_non_object_attribution_with_tools()
     test_http_chat_rejects_non_object_routing_with_tools()
+    test_http_chat_rejects_out_of_range_temperature_with_tools()
+    test_http_chat_rejects_out_of_range_top_p_with_tools()
     test_http_chat_accepts_all_false_stream_options_with_tools()
     print("ok")
