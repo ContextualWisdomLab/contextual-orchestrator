@@ -44,7 +44,11 @@ This repository implements the interface and control plane, not the trained coor
   are validated *before* the tools/response_format passthrough early-return
   so SDK tool-calling bodies cannot smuggle unsupported values upstream. Omit-equivalent
   `max_tool_calls` (JSON null / empty string) is stripped, not forwarded.
-  Request sampling knobs (`temperature`, `top_p`, penalties, `max_tokens`)
+  The same early-return also fail-closes `stream=true` (SSE passthrough is a
+  follow-up; set `stream=false`), requires a pool `model`, runs
+  `stream_options` honesty, and range-checks `temperature` / `top_p` so a
+  tool-calling SDK never receives a silent JSON completion or a rewritten
+  model. Request sampling knobs (`temperature`, `top_p`, penalties, `max_tokens`)
   are applied via `ModelClient.request_sampling` on the calling thread only
   so concurrent Completions/chat requests cannot observe each other's knobs.
 
