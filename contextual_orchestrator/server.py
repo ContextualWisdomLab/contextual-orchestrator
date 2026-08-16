@@ -808,6 +808,24 @@ def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
     return max_completion_tokens
 
 
+def _resolve_chat_output_token_budget(body: dict[str, Any]) -> int | None:
+    """Prefer ``max_completion_tokens``; fall back to ``max_tokens`` when omit.
+
+    OpenAI chat prefers ``max_completion_tokens`` when both keys are present.
+    JSON null or empty on the preferred key is omit-equivalent, so a sibling
+    ``max_tokens=0`` must still fail closed instead of billing a completion
+    with no output budget.
+    """
+    preferred = None
+    if "max_completion_tokens" in body:
+        preferred = _validate_chat_max_completion_tokens(body)
+    if preferred is not None:
+        return preferred
+    if "max_tokens" in body:
+        return _validate_completions_max_tokens(body)
+    return None
+
+
 def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
     """Responses ``max_output_tokens`` — OpenAI-native output budget (positive int).
 
@@ -919,8 +937,17 @@ def _validate_completions_top_logprobs(body: dict[str, Any]) -> None:
     if "top_logprobs" not in body:
         return
     value = body.get("top_logprobs")
-    # Explicit JSON null or zero is treat-as-omit (SDK optional default).
-    if value is None or value == 0:
+    # Explicit JSON null, empty string, or integer 0 is treat-as-omit.
+    # JSON false is a bool, not 0 — fail closed instead of billing.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    if isinstance(value, bool) or not isinstance(value, int):
+        raise RequestError(
+            400,
+            "invalid_top_logprobs",
+            "top_logprobs must be an integer",
+        )
+    if value == 0:
         return
     raise RequestError(
         400,
@@ -1541,10 +1568,7 @@ def _validate_chat_passthrough_spend_knobs(body: dict[str, Any]) -> None:
     those, so an SDK tool-calling body could bill a seeded, over-range, or
     multi-choice completion the gateway cannot honor.
     """
-    if "max_completion_tokens" in body:
-        _validate_chat_max_completion_tokens(body)
-    elif "max_tokens" in body:
-        _validate_completions_max_tokens(body)
+    _resolve_chat_output_token_budget(body)
     _validate_completions_presence_penalty(body)
     _validate_completions_frequency_penalty(body)
     _validate_chat_seed(body)
@@ -1628,7 +1652,15 @@ def _validate_chat_logprobs(body: dict[str, Any]) -> None:
                 )
     if "top_logprobs" in body:
         tlp = body.get("top_logprobs")
-        if tlp is not None and tlp != 0:
+        if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
+            return
+        if isinstance(tlp, bool) or not isinstance(tlp, int):
+            raise RequestError(
+                400,
+                "invalid_top_logprobs",
+                "top_logprobs must be an integer",
+            )
+        if tlp != 0:
             raise RequestError(
                 400,
                 "invalid_top_logprobs",
@@ -3651,10 +3683,8 @@ def build_server(
                     _validate_completions_top_logprobs(body)
                     # OpenAI chat-era clients sometimes send max_completion_tokens
                     # on Completions; prefer it over legacy max_tokens when both set.
-                    if "max_completion_tokens" in body:
-                        max_tokens = _validate_chat_max_completion_tokens(body)
-                    else:
-                        max_tokens = _validate_completions_max_tokens(body)
+                    # Omit-equivalent preferred still validates sibling max_tokens.
+                    max_tokens = _resolve_chat_output_token_budget(body)
                     model_name = _validate_completions_model(body)
                     _require_pool_model(orchestrator, model_name)
                     if "store" in body:
@@ -3918,10 +3948,8 @@ def build_server(
                     if "top_p" in body:
                         top_p = _validate_completions_top_p(body)
                     # OpenAI: max_completion_tokens takes precedence over max_tokens.
-                    if "max_completion_tokens" in body:
-                        max_tokens = _validate_chat_max_completion_tokens(body)
-                    elif "max_tokens" in body:
-                        max_tokens = _validate_completions_max_tokens(body)
+                    # Omit-equivalent preferred still validates sibling max_tokens.
+                    max_tokens = _resolve_chat_output_token_budget(body)
                     if "presence_penalty" in body:
                         presence_penalty = _validate_completions_presence_penalty(body)
                     if "frequency_penalty" in body:

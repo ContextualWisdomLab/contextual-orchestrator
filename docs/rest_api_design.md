@@ -100,8 +100,9 @@ Send a pool `model`, a non-empty `messages` array, and omit `stream` (or set
 `false`) on tool-calling bodies. Do not send `stream_options.include_usage=true`,
 non-object `attribution` / `routing`, `routing.channel=batch`,
 `routing.latency_tolerant=true`, `seed`, `n>1`, `stop`, blank `user`,
-`logprobs=true`, nonzero `top_logprobs` / `logit_bias`, or out-of-range
-penalties / `max_tokens`. `stream=true` with tools is `invalid_stream`
+`logprobs=true`, boolean or nonzero `top_logprobs` / `logit_bias`, or
+out-of-range penalties / `max_tokens`. A null `max_completion_tokens`
+does not hide `max_tokens=0`. `stream=true` with tools is `invalid_stream`
 until SSE passthrough ships. OpenAI. (n.d.). *Chat Completions API*.
 https://platform.openai.com/docs/api-reference/chat/create
 

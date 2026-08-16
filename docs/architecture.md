@@ -47,9 +47,12 @@ This repository implements the interface and control plane, not the trained coor
   with tools/`response_format` is `invalid_stream`), `stream_options`,
   `attribution`, `routing` (batch / `latency_tolerant=true` fail closed —
   passthrough is sync-only), in-range `temperature` / `top_p` / penalties,
-  `max_tokens` / `max_completion_tokens`, `n` (only omit or `1`),
+  `max_tokens` / `max_completion_tokens` (omit-equivalent preferred key
+  still validates sibling `max_tokens`, so `max_tokens=0` cannot bill),
+  `n` (only omit or `1`),
   `seed` (not applied; non-omit is `invalid_seed`), `stop`, `user`,
-  `logprobs` / `top_logprobs`, and `logit_bias`
+  `logprobs` / `top_logprobs` (`top_logprobs` must be an integer; JSON
+  `false` is `invalid_top_logprobs`, not omit-as-zero), and `logit_bias`
   are validated *before* the tools/response_format passthrough early-return
   so SDK tool-calling bodies cannot smuggle unsupported values, silent-select
   a worker, request unused usage chunks, or bill a JSON completion when the

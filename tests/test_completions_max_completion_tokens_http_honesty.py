@@ -121,6 +121,26 @@ def test_http_completions_rejects_non_integer_max_completion_tokens() -> None:
         thread.join(timeout=5)
 
 
+def test_http_completions_rejects_zero_max_tokens_when_preferred_budget_is_omit() -> None:
+    """Null max_completion_tokens is omit; sibling max_tokens=0 must still 400."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "prompt": "hello omit preferred zero legacy",
+                "max_completion_tokens": None,
+                "max_tokens": 0,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_max_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_completions_still_accepts_legacy_max_tokens() -> None:
     server, thread, port = _server()
     try:
@@ -143,5 +163,6 @@ if __name__ == "__main__":
     test_http_completions_prefers_max_completion_tokens_over_max_tokens()
     test_http_completions_rejects_zero_max_completion_tokens()
     test_http_completions_rejects_non_integer_max_completion_tokens()
+    test_http_completions_rejects_zero_max_tokens_when_preferred_budget_is_omit()
     test_http_completions_still_accepts_legacy_max_tokens()
     print("ok")

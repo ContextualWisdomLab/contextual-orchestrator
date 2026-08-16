@@ -179,6 +179,41 @@ def test_http_chat_accepts_positive_max_tokens_with_tools() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_zero_max_tokens_when_preferred_budget_is_omit_with_tools() -> None:
+    """SDK null max_completion_tokens must not hide a zero legacy budget.
+
+    Invoice-lookup clients often send both keys; the preferred key as JSON
+    null is omit-equivalent. max_tokens=0 must still fail closed so the
+    tools path cannot bill a completion with no output budget.
+    """
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            _tools_body(max_completion_tokens=None, max_tokens=0),
+        )
+        assert status == 400, body
+        assert "invalid_max_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_accepts_positive_max_tokens_when_preferred_budget_is_omit_with_tools() -> None:
+    """Null preferred budget falls back to a valid legacy max_tokens."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            _tools_body(max_completion_tokens=None, max_tokens=16),
+        )
+        assert status == 200, body
+        assert body.get("object") == "chat.completion"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_n_gt1_with_tools() -> None:
     """Buyer asked for three choices; tools path must not return one billed choice."""
     server, thread, port = _server()
@@ -330,6 +365,18 @@ def test_http_chat_rejects_nonzero_top_logprobs_with_tools() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_boolean_top_logprobs_with_tools() -> None:
+    """JSON false is not integer 0; do not treat it as omit and bill."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _tools_body(top_logprobs=False))
+        assert status == 400, body
+        assert "invalid_top_logprobs" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_nonzero_logit_bias_with_tools() -> None:
     server, thread, port = _server()
     try:
@@ -364,6 +411,8 @@ if __name__ == "__main__":
     test_http_chat_rejects_zero_max_tokens_with_tools()
     test_http_chat_rejects_zero_max_completion_tokens_with_tools()
     test_http_chat_accepts_positive_max_tokens_with_tools()
+    test_http_chat_rejects_zero_max_tokens_when_preferred_budget_is_omit_with_tools()
+    test_http_chat_accepts_positive_max_tokens_when_preferred_budget_is_omit_with_tools()
     test_http_chat_rejects_n_gt1_with_tools()
     test_http_chat_accepts_n_one_with_tools()
     test_http_chat_rejects_batch_channel_with_tools()
@@ -376,6 +425,7 @@ if __name__ == "__main__":
     test_http_chat_rejects_logprobs_true_with_tools()
     test_http_chat_accepts_logprobs_false_with_tools()
     test_http_chat_rejects_nonzero_top_logprobs_with_tools()
+    test_http_chat_rejects_boolean_top_logprobs_with_tools()
     test_http_chat_rejects_nonzero_logit_bias_with_tools()
     test_http_chat_accepts_empty_logit_bias_with_tools()
     print("ok")
