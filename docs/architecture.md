@@ -38,7 +38,9 @@ This repository implements the interface and control plane, not the trained coor
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
   Message honesty fields (`weight`, `prefix`, `refusal`, `annotations`,
-  `audio`, `function_call`) and `max_tool_calls` are validated *before* the
+  `audio`, `function_call`), role membership (`developer` / `function` /
+  unknown roles), content shape (empty user/system, multimodal parts),
+  participant `name`, and `max_tool_calls` are validated *before* the
   tools/response_format passthrough early-return so SDK tool-calling bodies
   cannot smuggle unsupported values upstream. Omit-equivalent
   `max_tool_calls` (JSON null / empty string) is stripped, not forwarded.
