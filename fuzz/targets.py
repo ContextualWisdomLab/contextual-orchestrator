@@ -18,6 +18,8 @@ consume untrusted bytes/JSON:
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
+5. ``composed_catalog.parse_models_list`` -- untrusted upstream ``/v1/models``
+   JSON must yield a list of chat model ids or an empty list, never a crash.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -28,6 +30,7 @@ import json
 from typing import Any
 
 from contextual_orchestrator import server
+from contextual_orchestrator.composed_catalog import parse_models_list
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
@@ -105,6 +108,16 @@ def exercise_request_body(raw: bytes) -> None:
                 assert set(message) == {"role", "content"}
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
+
+
+def exercise_models_list(value: Any) -> None:
+    """Drive ``parse_models_list`` over arbitrary decoded JSON.
+
+    Invariants: never raises; always returns a list of non-empty strings.
+    """
+    models = parse_models_list(value)
+    assert isinstance(models, list)
+    assert all(isinstance(model, str) and model.strip() for model in models)
 
 
 def exercise_agent_config(value: Any) -> None:

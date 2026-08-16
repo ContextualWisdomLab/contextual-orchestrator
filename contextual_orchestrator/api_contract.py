@@ -413,6 +413,14 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Batch results with recorded usage"}},
             }
         },
+        "/v1/models": {
+            "get": {
+                "operationId": "list_gateway_models",
+                "summary": "List the composed catalog (facade + discovered/fallback upstream models)",
+                "security": [{"inference_bearer_auth": []}],
+                "responses": {"200": {"description": "OpenAI-shaped model list for Noema and other /v1 consumers"}},
+            }
+        },
         "/v1/batch/embeddings": {
             "post": {
                 "operationId": "create_batch_embeddings_job",

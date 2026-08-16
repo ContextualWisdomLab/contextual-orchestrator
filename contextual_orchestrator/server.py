@@ -14,6 +14,7 @@ import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
 from .api_contract import OPENAPI_SPEC
+from .composed_catalog import models_list_payload
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
 from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
@@ -345,6 +346,12 @@ def build_server(
                         "embedding_batch_backend": coordinator.embedding_batch_backend.name,
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
+                    return
+                if path == "/v1/models":
+                    # OpenAI-compatible catalog of the composed pool. Inference
+                    # scope so Noema and other /v1 consumers can list models.
+                    self._authorize("inference")
+                    self._send(models_list_payload(orchestrator.agents))
                     return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so

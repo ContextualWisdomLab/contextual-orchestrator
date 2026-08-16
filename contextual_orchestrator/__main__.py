@@ -7,6 +7,7 @@ import json
 import os
 import sys
 
+from .composed_catalog import compose_default_catalog, merge_agent_pools, present_org_credentials
 from .credentials import register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
@@ -95,8 +96,14 @@ def main() -> None:
     args = parser.parse_args()
 
     client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
+    agents = load_agents(args.agents)
+    # Default discovery when a KV credential is already present. Static
+    # fallback applies only if GET /v1/models fails. No --discover-models flag.
+    if present_org_credentials():
+        composed = compose_default_catalog()
+        agents = merge_agent_pools(agents, composed.agents)
     orchestrator = TaskOrchestrator(
-        load_agents(args.agents),
+        agents,
         client=client,
         state_db=args.state_db,
         agents_db=args.agents_db,

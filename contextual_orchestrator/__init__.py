@@ -34,8 +34,15 @@ from .cost_ledger import (
     UsageRecord,
     dimension_catalog,
 )
+from .composed_catalog import (
+    compose_default_catalog,
+    merge_agent_pools,
+    models_list_payload,
+    present_org_credentials,
+)
 from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
+from .priced_selection import billed_selection_cost, select_min_cost_max_performance
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .token_counting import HeuristicTokenCounter, build_token_counter
@@ -87,4 +94,10 @@ __all__ = [
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
+    "compose_default_catalog",
+    "merge_agent_pools",
+    "models_list_payload",
+    "present_org_credentials",
+    "billed_selection_cost",
+    "select_min_cost_max_performance",
 ]

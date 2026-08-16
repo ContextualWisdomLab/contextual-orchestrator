@@ -27,6 +27,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .priced_selection import billed_selection_cost, select_min_cost_max_performance
 
 
 ChatMessage = dict[str, str]
@@ -823,6 +824,8 @@ class TaskOrchestrator:
         agents_db: str | None = None,
         cache_ttl: float = 0.0,
         cache_max_entries: int = 256,
+        price_book: Any | None = None,
+        original_list_price: dict[str, float] | None = None,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -837,6 +840,10 @@ class TaskOrchestrator:
         self.policy = OrchestrationPolicy()
         # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
         self.price_per_million = dict(price_per_million or {})
+        # Optional PriceBook for min-cost selection. original_list_price is the
+        # published USD-per-1M list retained when billed price is promotional 0.
+        self.price_book = price_book
+        self.original_list_price = dict(original_list_price or {})
         # Operator spend caps; None => disabled (no behavior change). Enforced in run().
         self.budget_max_output_tokens = budget_max_output_tokens
         self.budget_max_cost_usd = budget_max_cost_usd
@@ -1525,12 +1532,29 @@ class TaskOrchestrator:
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
     def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
-        """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
+        """Agents sorted best-first for a role (capability score only; not a failover list)."""
         lowered = text.lower()
         return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
 
+    def _selection_cost(self, agent: ModelAgent) -> float | None:
+        """Billed ranking cost; ``original_list_price`` is never used as billed cost."""
+        any_explicit = bool(self.price_per_million) or self.price_book is not None
+        return billed_selection_cost(
+            agent,
+            price_book=self.price_book,
+            price_per_million=self.price_per_million,
+            any_explicit_price=any_explicit,
+        )
+
     def _select_agent(self, text: str, role: str) -> ModelAgent:
-        selected = self._ranked_agents(text, role)[0]
+        lowered = text.lower()
+        selected = select_min_cost_max_performance(
+            self.agents,
+            role=role,
+            capability_score=lambda agent: self._score_agent(agent, role, lowered),
+            billed_cost=self._selection_cost,
+            is_circuit_open=self._circuit_open,
+        )
         if selected.disabled:  # pragma: no cover
             raise RuntimeError(f"no enabled agent available for role={role}")
         if role in selected.provider_exclusions:  # pragma: no cover
@@ -1540,34 +1564,25 @@ class TaskOrchestrator:
     def _invoke(
         self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
     ) -> tuple[str, str, dict[str, Any] | None]:
-        """Call the primary agent, failing over across capability-matched agents on error.
+        """Call the already-selected worker. Transient retry stays on that worker.
 
-        Transient retry/backoff happens inside ``ModelClient``; this layer adds
-        cross-agent failover plus a per-agent circuit breaker, and returns
-        ``(output, served_agent_id, usage)`` — usage is the provider-reported token
-        usage when available (else None), so spend analytics can prefer it.
+        Sequential next-agent hopping is not used. A failure records the circuit
+        and raises; the *next* request re-selects among healthy min-cost /
+        max-performance candidates. Returns ``(output, served_agent_id, usage)``.
         """
-        candidates = self._failover_candidates(primary, text, role)
-        last_error: Exception | None = None
-        for agent in candidates:
-            try:
-                output = self.client.chat(agent, messages)
-            except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
-                last_error = exc
-                self._record_failure(agent.id)
-                continue
-            self._record_success(agent.id)
-            usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
-            return output, agent.id, usage
-        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+        try:
+            output = self.client.chat(primary, messages)
+        except Exception as exc:  # noqa: BLE001 - selected worker failed; do not hop
+            self._record_failure(primary.id)
+            raise RuntimeError(f"selected agent {primary.id} failed for role={role}") from exc
+        self._record_success(primary.id)
+        usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+        return output, primary.id, usage
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
-        ranked = self._ranked_agents(text, role)
-        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
-        eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
-        healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
-        # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible or [primary]
+        """Return only the chosen worker. Sequential next-agent hopping is not used."""
+        del text, role
+        return [primary]
 
     def _circuit_open(self, agent_id: str) -> bool:
         state = self._circuit.get(agent_id)
@@ -1792,6 +1807,7 @@ class TaskOrchestrator:
                 "step_count": bucket["step_count"],
                 "price_per_million_usd": price,
                 "estimated_cost_usd": cost,
+                "original_list_price": self.original_list_price.get(model),
             })
 
         return {

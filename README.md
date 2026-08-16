@@ -115,7 +115,8 @@ One fused orchestration loop:
 - Deep path: a natural-language workflow is built with planner, worker, verifier, and synthesizer steps.
 - Each step has an access list, so workers see only the prior outputs intentionally exposed to them.
 - Agent definitions are data, so provider preference, exclusions, privacy constraints, and mock testing do not require code changes.
-- Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
+- Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff on the **chosen** worker, while caller errors (4xx) fail fast. Selection is min-cost / max-performance (not a sequential next-agent walk). A per-agent circuit breaker excludes a persistently failing provider from the *next* selection until it cools down.
+- When a KV credential is present, the gateway discovers chat models from that provider by default and exposes the composed catalog at `GET /v1/models` for first-class `/v1` consumers (Noema — review and other jobs — plus gyeot and scopeweave). A static fallback is used only if discovery fails. Promotional-free models keep `original_list_price` when a published list is known.
 
 See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 
@@ -129,7 +130,7 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
 ```
 
 - **Tokens.** `by_model[].output_tokens` uses the provider-reported `usage.completion_tokens` when a real worker returns it, and falls back to a `~4 chars/token` estimate otherwise. Each row carries `usage_source`: `reported` (all steps reported), `mixed`, or `estimated`. `estimated_output_tokens` is always the estimate, kept alongside for comparison. `measurement_status` is `local_runtime_estimate`, not production telemetry.
-- **Cost.** Supply a price table to turn tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models` with `estimated_cost_usd: null`. No prices are assumed or fabricated.
+- **Cost.** Supply a price table to turn tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models` with `estimated_cost_usd: null`. No prices are assumed or fabricated. When a model is billed at `0` but has a known published list, set `original_list_price` (USD per 1M) so the list is retained on the spend row.
 - **Budget cap.** Set an operator cap to refuse runaway spend (default: no cap):
 
   ```bash
@@ -252,6 +253,11 @@ python -m pip install --require-hashes -r requirements.lock
 python -m pip install --no-deps -e .
 python tests/test_self_check.py
 python tests/test_paper_contracts.py
+python tests/test_composed_catalog.py
+python tests/test_priced_selection.py
+python tests/test_original_list_price.py
+python tests/test_models_list.py
+python tests/test_noema_consumer.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py

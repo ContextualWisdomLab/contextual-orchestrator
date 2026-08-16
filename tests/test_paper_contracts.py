@@ -47,6 +47,15 @@ def test_trinity_contract_has_explicit_thinker_worker_verifier_roles() -> None:
     assert ["thinker", "worker", "verifier"] == [step["role"] for step in result["trace"][:3]]
 
 
+def test_fugu_selects_one_worker_without_next_agent_walk() -> None:
+    client = RecordingClient()
+    orchestrator = build(client)
+    result = orchestrator.complete([{"role": "user", "content": "Write one sentence."}], mode="route")
+    assert result["mode"] == "route"
+    assert len(client.calls) == 1
+    assert "failover_from" not in result["trace"][0]
+
+
 def test_conductor_contract_uses_access_lists_to_control_context() -> None:
     client = RecordingClient()
     build(client).conduct([{"role": "user", "content": "Analyze, implement, verify, and synthesize."}])
@@ -63,5 +72,6 @@ def test_conductor_contract_uses_access_lists_to_control_context() -> None:
 if __name__ == "__main__":  # pragma: no cover
     test_fugu_contract_fuses_fast_route_and_deep_workflow()
     test_trinity_contract_has_explicit_thinker_worker_verifier_roles()
+    test_fugu_selects_one_worker_without_next_agent_walk()
     test_conductor_contract_uses_access_lists_to_control_context()
     print("ok")

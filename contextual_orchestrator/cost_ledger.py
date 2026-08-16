@@ -114,6 +114,9 @@ class PriceEntry:
     prompt_price_per_1k: float
     completion_price_per_1k: float
     currency_code: str = "USD"
+    # Published list price retained when billed rates are promotional 0.
+    # Mapping uses the same per-1k keys as the billed columns.
+    original_list_price: Optional[Dict[str, Any]] = None
 
     def as_dict(self) -> Dict[str, Any]:
         """Serialize the price entry for KV storage / reporting."""
@@ -123,6 +126,7 @@ class PriceEntry:
             "prompt_price_per_1k": self.prompt_price_per_1k,
             "completion_price_per_1k": self.completion_price_per_1k,
             "currency_code": self.currency_code,
+            "original_list_price": self.original_list_price,
         }
 
 
@@ -162,12 +166,16 @@ class PriceBook:
             raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, "*"), None)
         if raw is None:
             return None
+        original = raw.get("original_list_price")
+        if original is not None and not isinstance(original, dict):
+            original = None
         return PriceEntry(
             provider_name=raw.get("provider_name", provider),
             model_name=raw.get("model_name", model),
             prompt_price_per_1k=float(raw.get("prompt_price_per_1k", 0.0)),
             completion_price_per_1k=float(raw.get("completion_price_per_1k", 0.0)),
             currency_code=raw.get("currency_code", self.default_currency),
+            original_list_price=original,
         )
 
     def compute_cost(

@@ -1,7 +1,7 @@
-"""Provider reliability: transient-only retry with backoff, cross-agent failover, circuit breaker.
+"""Provider reliability: transient-only retry with backoff, circuit breaker.
 
-These exercise the previously untested resilience path of the orchestration engine —
-the capability a model-orchestration gateway is bought for.
+Sequential next-agent hopping is not used. Transient retry stays on the chosen
+worker; a circuit-open agent is excluded from the next selection.
 """
 
 from __future__ import annotations
@@ -106,17 +106,20 @@ def _two_worker_orchestrator(down_id: str) -> tuple[TaskOrchestrator, _AgentDown
     return TaskOrchestrator(agents, client=client), client
 
 
-def test_failover_to_backup_agent_when_primary_fails() -> None:
+def test_selected_agent_failure_does_not_hop_to_backup() -> None:
     orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
-    result = orchestrator.route_once([{"role": "user", "content": "route this"}])
-    assert result["answer"] == "[backup_worker] answer"
-    row = result["trace"][0]
-    assert row["served_agent_id"] == "backup_worker"
-    assert row["failover_from"] == "primary_worker"
-    assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
+    raised = False
+    try:
+        orchestrator.route_once([{"role": "user", "content": "route this"}])
+    except RuntimeError as exc:
+        raised = True
+        assert "primary_worker" in str(exc)
+        assert "candidate agents failed" not in str(exc)
+    assert raised
+    assert client.calls == ["primary_worker"]
 
 
-def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
+def test_all_agents_failing_raises_after_the_selected_worker() -> None:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning",)),
         ModelAgent("backup_worker", "mock", tags=("reasoning",)),
@@ -132,25 +135,26 @@ def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
         orchestrator.route_once([{"role": "user", "content": "route this"}])
     except RuntimeError as exc:
         raised = True
-        assert "candidate agents failed" in str(exc)
+        assert "selected agent" in str(exc)
+        assert "failed for role=worker" in str(exc)
     assert raised
 
 
-def test_circuit_breaker_opens_then_skips_dead_agent() -> None:
+def test_circuit_breaker_opens_then_skips_dead_agent_on_next_select() -> None:
     orchestrator, client = _two_worker_orchestrator(down_id="primary_worker")
-    primary = orchestrator._agent("primary_worker")
-
-    # Each invoke fails on primary then succeeds on backup; primary accrues failures.
-    for _ in range(orchestrator.circuit_failure_threshold):
-        output, served, _usage = orchestrator._invoke(
-            primary, [{"role": "system", "content": "Role: worker"}], text="task", role="worker"
-        )
-        assert served == "backup_worker"
-
+    orchestrator.circuit_failure_threshold = 1
+    primary = orchestrator._select_agent("task", "worker")
+    assert primary.id == "primary_worker"
+    raised = False
+    try:
+        orchestrator._invoke(primary, [{"role": "system", "content": "Role: worker"}], text="task", role="worker")
+    except RuntimeError:
+        raised = True
+    assert raised
     assert orchestrator._circuit_open("primary_worker") is True
-    # Once open, the dead agent is dropped from the candidate list entirely.
-    candidates = orchestrator._failover_candidates(primary, "task", "worker")
-    assert [a.id for a in candidates] == ["backup_worker"]
+    selected = orchestrator._select_agent("task", "worker")
+    assert selected.id == "backup_worker"
+    assert client.calls == ["primary_worker"]
 
 
 def test_circuit_breaker_resets_after_cooldown() -> None:

@@ -134,6 +134,13 @@ environment:
 The application test workflow must **not** receive `OPENAI_API_KEY`: tests run on
 the mock pool and the in-memory backend and stay green without any secret.
 
+When any of the five org names
+(`NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `BYTEZ_API_KEY`,
+`OPENROUTER_API_KEY`, `OPENAI_API_KEY`) already resolve from the KV, serve-time
+compose **discovers** chat models by default (`GET {base_url}/models` with the
+KV key). A static fallback is used only if that GET fails. `COPILOT_GITHUB_TOKEN`
+is never read. See `docs/doctoring/priced-selection.md`.
+
 ## Why this supersedes `api_key_env`
 
 The previous pattern read `os.environ.get(agent.api_key_env)` at request time —

@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Security gate**: every PR to `main` runs the required Security workflow. A failing Trivy or pip-audit job is a real finding — remediate by bumping the dependency and regenerating `requirements.lock`; never weaken, `continue-on-error`, or disable the gate.
 - **KV, not env**: runtime config and provider secrets are resolved from the KV credential registry (`get_credential`), never `os.getenv` at request time. Env is only bootstrap transport into the KV (see `docs/kv-credentials.md`).
-- **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot` and `scopeweave`. The OpenCode review pipeline is separate, stays on GitHub Models, and must not be changed.
+- **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by **Noema** (first-class multi-purpose `/v1` consumer: review and other jobs), `gyeot`, and `scopeweave`. The OpenCode review pipeline is separate, stays on GitHub Models, and must not be changed.
 - **Research grounding**: substantive feature/process PRs should attach the relevant papers (PDF when redistribution is permissible, otherwise cite + link + summary) under `docs/papers/` with full citations.
 
 This file complements AGENTS.md with commands and architecture; where they differ, AGENTS.md wins.
@@ -80,7 +80,7 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 2. `TaskOrchestrator.complete()` in `orchestrator.py` picks one of two paths:
    - **Fast path (`route`)**: select a single worker for simple or latency-sensitive requests.
    - **Deep path (`conduct`)**: build a natural-language workflow of `thinker → worker → verifier → synthesizer` steps. Each `WorkflowStep` carries an **access list** so a worker sees only the prior outputs deliberately exposed to it.
-3. `ModelClient` (infrastructure adapter) executes each step against `mock://` agents (offline, used by tests) or OpenAI-compatible HTTPS providers, with jittered retries for transient errors, failover to the next capability-matched agent, and a per-agent circuit breaker. Provider keys come from the KV via `get_credential`; egress to loopback/private/reserved addresses is blocked.
+3. `ModelClient` (infrastructure adapter) executes each step against `mock://` agents (offline, used by tests) or OpenAI-compatible HTTPS providers, with jittered retries for transient errors on the **chosen** worker and a per-agent circuit breaker. Selection is paper-grounded min-cost / max-performance (not sequential next-agent hopping). Provider keys come from the KV via `get_credential`; egress to loopback/private/reserved addresses is blocked. The gateway exposes `GET /v1/models` for the composed catalog.
 4. The answer is framed as an OpenAI `chat.completion` (or SSE `chat.completion.chunk` stream). Full orchestration traces are only returned to trusted callers.
 
 ### Modules (`contextual_orchestrator/`)
@@ -89,7 +89,8 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 - `server.py` — HTTP delivery adapter and `SecurityConfig`; all request validation lives here.
 - `admin.py` — static HTML/CSS/JS for the `/admin` operator console (stays inline while the product is dependency-free).
 - `credentials.py` / `kv_config.py` — the KV seam: `get_credential`/`register_credential` over pluggable backends (`InMemoryCredentialBackend` default; pgcrypto-encrypted `PostgresCredentialBackend`, selected via `CONTEXTUAL_ORCHESTRATOR_KV_BACKEND`).
-- `cost_ledger.py` / `cost_router.py` / `batch_routing.py` / `token_counting.py` — the cost-review + routing hub: prompt-safe usage ledger with seven attribution dimensions, `RoutingPolicy` (sync vs batch from request hints + KV thresholds), and the [pg-llm-batch](https://github.com/ContextualWisdomLab/pg-llm-batch) batch/embeddings backends (a local in-process backend keeps the standalone path working with no external service).
+- `cost_ledger.py` / `cost_router.py` / `batch_routing.py` / `token_counting.py` — the cost-review + routing hub: prompt-safe usage ledger with seven attribution dimensions, `RoutingPolicy` (sync vs batch from request hints + KV thresholds), and the [pg-llm-batch](https://github.com/ContextualWisdomLab/pg-llm-batch) batch/embeddings backends (a local in-process backend keeps the standalone path working with no external service). `PriceEntry.original_list_price` retains a published list when billed rates are promotional 0.
+- `composed_catalog.py` / `priced_selection.py` — default-on discovery when a KV credential is present (static fallback only if `GET /v1/models` fails) and single-worker min-cost / max-performance selection.
 - `api_contract.py` / `conventions.py` — API-shape and naming-rule enforcement helpers.
 - `__main__.py` — the single entry point: CLI completion, `--serve`, `--eval`, and the `register-credential` bootstrap subcommand.
 

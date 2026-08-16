@@ -36,9 +36,11 @@ This repository implements the interface and control plane, not the trained coor
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
-- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server plus `GET /v1/models` for the composed catalog consumed by **Noema** (first-class multi-purpose `/v1` client: review and other jobs), gyeot, and scopeweave.
+- `composed_catalog.compose_default_catalog`: when a KV credential is present, discover chat models from the provider list API; use a static fallback only if that GET fails.
+- `priced_selection.select_min_cost_max_performance`: pick one worker by min billed cost, then max capability score. Transient retry stays on that worker; sequential next-agent hopping is not used.
 
-The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
+The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring plus billed-cost ranking so the repo runs without training data, GPUs, or vendor credentials.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 

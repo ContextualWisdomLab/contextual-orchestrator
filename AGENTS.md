@@ -65,7 +65,9 @@ push or open a PR.
 ### This repo: the org LLM gateway
 
 - `contextual-orchestrator` is the org's **LLM-communication hub** — the
-  OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
+  OpenAI-compatible front door consumed by **Noema** (first-class
+  multi-purpose `/v1` consumer: review and other jobs), **gyeot**, and
+  **scopeweave**.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
 - Its `ModelClient` currently reads `os.environ.get(agent.api_key_env)` — this

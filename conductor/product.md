@@ -21,7 +21,8 @@ The product risk is different for API callers and enterprise operators:
 
 Provide one API and one domain model:
 
-- route simple work to one selected worker;
+- route simple work to one selected worker (min-cost / max-performance; no next-agent hop);
+- expose `GET /v1/models` so Noema and other `/v1` consumers can list the composed catalog;
 - conduct complex work through planner, worker, verifier, and synthesizer steps;
 - keep worker visibility explicit with access lists;
 - make the agent pool configurable data.

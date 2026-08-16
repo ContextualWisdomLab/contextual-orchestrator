@@ -53,6 +53,16 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Composed catalog + priced selection (2026-08)
+
+| Area | Library | Decision | Evidence |
+|---|---|---|---|
+| Upstream model list | OpenAI-compatible `GET /v1/models` over stdlib `urllib` | Do not add LiteLLM, instructor, or provider SDKs. Discover when a KV credential is present; static fallback only on failure. | Providers already speak the OpenAI list schema; a flag-gated catalog seed is a different slice (PR #642). |
+| Cost/quality ranking | In-process `priced_selection` over `PriceBook` | Do not add a learned router (RouteLLM training) or a cascade SDK. Rank billed cost then capability score. | FrugalGPT / Hybrid LLM / Fugu justify choose-once min-cost max-performance; sequential failover is a different claim. |
+| List vs billed price | Extra field on existing `llm_price_entries` KV rows | No new table. `original_list_price` is two-word snake_case on `PriceEntry`. | Honest metrics: billed 0 stays 0; published list is stored, not invented. |
+
+Skipped: LiteLLM proxy, RouteLLM training loop, a second price table, GitHub Models discovery, `COPILOT_GITHUB_TOKEN`.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
