@@ -166,7 +166,8 @@ tools, omit unused `description` / `parameters` / `strict` or leave the SDK
 default `null` — both become omit before the provider hop. On assistant
 `tool_calls`, send only `id` / `type` / `function` / optional `index`. On
 `/v1/responses`, send a non-empty `input` and `stream=true` when the SDK
-reads events.
+reads events. Correlate `response.function_call_arguments.delta` chunks
+with `item_id` from `response.output_item.added`.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create

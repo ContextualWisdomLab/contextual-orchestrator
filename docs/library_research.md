@@ -62,11 +62,13 @@ Researched before adding single-agent SSE proxy for `tools` / `response_format`:
 | [httpx](https://www.python-httpx.org/) streaming | Skip. Stdlib `urllib` already pipes provider SSE on the route path (`ModelClient._stream_send`). | Adding httpx would be a new runtime dependency for a transport the stdlib already covers. |
 | [sse-starlette](https://github.com/sysid/sse-starlette) | Skip. The stdlib handler already emits `text/event-stream` via `_begin_sse` / `_write_sse`. | FastAPI/Starlette is the future delivery adapter, not the current lab runtime. |
 | Content-only delta parser | Skip. `_stream_send` drops `delta.tool_calls`. | OpenAI streaming tool calls arrive as `tool_calls` deltas, not `content` (OpenAI, 2024). |
-| Stdlib raw SSE pipe | Selected. `proxy_stream_send` / `_stream_raw` yield provider text verbatim; mock chat frames match `proxy_completion` including `tool_calls`; mock Responses frames emit named `response.*` events including `function_call`. | WHATWG Server-sent events; OpenAI *Streaming API responses*; OpenAI *Create a model response*. |
+| Stdlib raw SSE pipe | Selected. `proxy_stream_send` / `_stream_raw` yield provider text verbatim; mock chat frames match `proxy_completion` including `tool_calls`; mock Responses frames emit named `response.*` events including `function_call` argument deltas keyed by `item_id`. | WHATWG Server-sent events; OpenAI *Streaming events*; OpenAI *Create a model response*. |
 
 Custom code added: `_passthrough_upstream`, `proxy_completion_stream`, `proxy_stream_send`, `_mock_raw_sse`, `_stream_passthrough_completion`. No new dependency.
 
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation. https://platform.openai.com/docs/guides/streaming-responses
+
+OpenAI. (2024). *Streaming events*. OpenAI API reference. https://platform.openai.com/docs/api-reference/responses-streaming
 
 OpenAI. (2024). *Create a model response*. OpenAI API reference. https://platform.openai.com/docs/api-reference/responses/create
 

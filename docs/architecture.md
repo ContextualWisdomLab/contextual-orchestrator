@@ -9,6 +9,7 @@
 - OpenAI. (2024). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
 - OpenAI. (2024). *Create a model response*. OpenAI API reference. https://platform.openai.com/docs/api-reference/responses/create
 - OpenAI. (2024). *Streaming API responses*. OpenAI API documentation. https://platform.openai.com/docs/guides/streaming-responses
+- OpenAI. (2024). *Streaming events*. OpenAI API reference. https://platform.openai.com/docs/api-reference/responses-streaming
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
 
 ## What The Architecture Is
@@ -40,7 +41,7 @@ This repository implements the interface and control plane, not the trained coor
 - `TaskOrchestrator.route_once`: the low-latency routing path.
 - `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
-- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks. `proxy_completion` returns JSON; `proxy_completion_stream` pipes SSE so tool-calling `stream=true` clients receive `chat.completion.chunk` frames (including `delta.tool_calls`) instead of a billed JSON body. `/v1/responses` `stream=true` emits named `response.*` events, including `function_call` argument deltas. Mock function tools emit the same `tool_calls` / `function_call` shape offline so SDK stream parsers can be exercised without a live provider.
+- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks. `proxy_completion` returns JSON; `proxy_completion_stream` pipes SSE so tool-calling `stream=true` clients receive `chat.completion.chunk` frames (including `delta.tool_calls`) instead of a billed JSON body. `/v1/responses` `stream=true` emits named `response.*` events, including `function_call` argument deltas keyed by `item_id`. Mock function tools emit the same `tool_calls` / `function_call` shape offline so SDK stream parsers can be exercised without a live provider.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` and `/v1/responses` HTTP server. Tools and `response_format` take the single-agent passthrough path; `stream=true` on that path is an SSE proxy, not a `400`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.

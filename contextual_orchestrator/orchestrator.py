@@ -642,10 +642,11 @@ class ModelClient:
         """Frame a mock Responses JSON body as official ``response.*`` SSE events.
 
         Function-tool completions emit ``function_call`` output items and
-        ``response.function_call_arguments.delta`` so a streamed invoice
-        lookup reconstructs to the same arguments as ``proxy_completion``.
-        Content completions emit ``response.output_text.delta``. Live
-        providers are still piped verbatim by ``_stream_raw``.
+        ``response.function_call_arguments.delta`` keyed by ``item_id`` so a
+        streamed invoice lookup reconstructs to the same arguments as
+        ``proxy_completion``. Content completions emit
+        ``response.output_text.delta``. Live providers are still piped
+        verbatim by ``_stream_raw``.
         """
         snapshot = dict(payload)
         snapshot["stream"] = False
@@ -667,11 +668,13 @@ class ModelClient:
             if not isinstance(item, dict):
                 continue
             if item.get("type") == "function_call":
+                item_id = str(item.get("id") or f"fc_mock_{index}")
+                function_name = str(item.get("name") or "")
                 added = {
-                    "id": item.get("id"),
+                    "id": item_id,
                     "call_id": item.get("call_id"),
                     "type": "function_call",
-                    "name": item.get("name") or "",
+                    "name": function_name,
                     "arguments": "",
                     "status": "in_progress",
                 }
@@ -690,6 +693,7 @@ class ModelClient:
                         "response.function_call_arguments.delta",
                         {
                             "type": "response.function_call_arguments.delta",
+                            "item_id": item_id,
                             "output_index": index,
                             "delta": delta,
                         },
@@ -698,7 +702,9 @@ class ModelClient:
                     "response.function_call_arguments.done",
                     {
                         "type": "response.function_call_arguments.done",
+                        "item_id": item_id,
                         "output_index": index,
+                        "name": function_name,
                         "arguments": arguments,
                     },
                 )
@@ -718,12 +724,14 @@ class ModelClient:
             for part in content_parts:
                 if isinstance(part, dict) and part.get("type") == "output_text":
                     text += str(part.get("text") or "")
+            item_id = str(item.get("id") or f"msg_mock_{index}")
             yield self._sse_named_event(
                 "response.output_item.added",
                 {
                     "type": "response.output_item.added",
                     "output_index": index,
                     "item": {
+                        "id": item_id,
                         "type": "message",
                         "role": "assistant",
                         "status": "in_progress",
@@ -736,6 +744,7 @@ class ModelClient:
                     "response.content_part.added",
                     {
                         "type": "response.content_part.added",
+                        "item_id": item_id,
                         "output_index": index,
                         "content_index": 0,
                         "part": {"type": "output_text", "text": ""},
@@ -746,6 +755,7 @@ class ModelClient:
                         "response.output_text.delta",
                         {
                             "type": "response.output_text.delta",
+                            "item_id": item_id,
                             "output_index": index,
                             "content_index": 0,
                             "delta": text[start : start + 24],
@@ -755,6 +765,7 @@ class ModelClient:
                     "response.output_text.done",
                     {
                         "type": "response.output_text.done",
+                        "item_id": item_id,
                         "output_index": index,
                         "content_index": 0,
                         "text": text,
@@ -851,13 +862,14 @@ class ModelClient:
                 "object": "response",
                 "status": "completed",
                 "model": agent.model,
-                "output": [
-                    {
-                        "type": "message",
-                        "role": "assistant",
-                        "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
-                    }
-                ],
+                    "output": [
+                        {
+                            "id": f"msg_mock_{agent.id}",
+                            "type": "message",
+                            "role": "assistant",
+                            "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
+                        }
+                    ],
                 "echo": echoed,
             }
         tool_message = self._mock_tool_call_message(payload)

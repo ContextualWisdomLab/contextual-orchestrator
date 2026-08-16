@@ -12,6 +12,9 @@ to the same ``output[].type=function_call`` as the non-stream JSON body
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
 https://platform.openai.com/docs/guides/streaming-responses
 
+OpenAI. (2024). *Streaming events*. OpenAI API reference.
+https://platform.openai.com/docs/api-reference/responses-streaming
+
 OpenAI. (2024). *Create a model response*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/responses/create
 
@@ -89,22 +92,41 @@ def _sse_events(body: str) -> list[dict]:
 
 
 def _reconstruct_function_call(body: str) -> dict[str, str]:
-    """Rebuild a Responses streamed function_call the way the official SDK does."""
+    """Rebuild a streamed function_call by ``item_id`` the way openai-python does.
+
+    Official ``response.function_call_arguments.delta`` / ``.done`` events
+    carry ``item_id`` (and ``.done`` carries ``name``) so a client can attach
+    argument chunks to the ``output_item.added`` function_call. Concatenating
+    unkeyed deltas is not that contract (OpenAI, 2024).
+    """
+    item_id = ""
     name = ""
     arguments = ""
     call_id = ""
+    delta_chunks = 0
     for event in _sse_events(body):
         event_type = event.get("type")
         if event_type == "response.output_item.added":
             item = event.get("item") or {}
             if item.get("type") == "function_call":
+                item_id = str(item.get("id") or "")
                 name = str(item.get("name") or "")
                 call_id = str(item.get("call_id") or "")
         elif event_type == "response.function_call_arguments.delta":
+            assert event.get("item_id") == item_id
             arguments += str(event.get("delta") or "")
+            delta_chunks += 1
         elif event_type == "response.function_call_arguments.done":
+            assert event.get("item_id") == item_id
+            assert event.get("name") == name
             arguments = str(event.get("arguments") or arguments)
-    return {"name": name, "arguments": arguments, "call_id": call_id}
+    return {
+        "id": item_id,
+        "name": name,
+        "arguments": arguments,
+        "call_id": call_id,
+        "delta_chunks": str(delta_chunks),
+    }
 
 
 def _reconstruct_output_text(body: str) -> str:
@@ -171,24 +193,29 @@ def test_proxy_completion_responses_tool_choice_none_keeps_content() -> None:
 
 
 def test_http_responses_stream_emits_function_call_events() -> None:
-    """A streamed invoice lookup must not 400; SDK clients reconstruct function_call."""
+    """A streamed invoice lookup must reconstruct to the JSON twin, keyed by item_id."""
     server, thread, port = _server()
     try:
-        status, content_type, body = _post_raw(
-            port,
-            {
-                "model": "mock-planner",
-                "input": "look up invoice INV-9",
-                "tools": _LOOKUP_TOOLS,
-                "stream": True,
-            },
-        )
+        payload = {
+            "model": "mock-planner",
+            "input": "look up invoice INV-20260816009",
+            "tools": _LOOKUP_TOOLS,
+        }
+        json_status, _json_type, json_body = _post_raw(port, payload)
+        assert json_status == 200, json_body
+        json_item = json.loads(json_body)["output"][0]
+        status, content_type, body = _post_raw(port, {**payload, "stream": True})
         assert status == 200, body
         assert content_type.startswith("text/event-stream")
         assert "data: [DONE]" in body
         call = _reconstruct_function_call(body)
-        assert call["name"] == "lookup_balance"
-        assert json.loads(call["arguments"]) == {"invoice_id": "INV-9"}
+        assert call["id"] == json_item["id"] == "fc_mock_lookup_balance"
+        assert call["call_id"] == json_item["call_id"]
+        assert call["name"] == json_item["name"] == "lookup_balance"
+        assert json.loads(call["arguments"]) == json.loads(json_item["arguments"]) == {
+            "invoice_id": "INV-20260816009"
+        }
+        assert int(call["delta_chunks"]) >= 2
         types = [event.get("type") for event in _sse_events(body)]
         assert "response.created" in types
         assert "response.completed" in types
@@ -198,19 +225,42 @@ def test_http_responses_stream_emits_function_call_events() -> None:
 
 
 def test_http_responses_stream_content_matches_json() -> None:
+    """Content-only stream deltas must equal the non-stream output_text body."""
     server, thread, port = _server()
     try:
-        status, content_type, body = _post_raw(
-            port,
-            {
-                "model": "mock-planner",
-                "input": "summarize the ledger",
-                "stream": True,
-            },
-        )
+        payload = {"model": "mock-planner", "input": "summarize the ledger"}
+        json_status, _json_type, json_body = _post_raw(port, payload)
+        assert json_status == 200, json_body
+        expected = json.loads(json_body)["output"][0]["content"][0]["text"]
+        status, content_type, body = _post_raw(port, {**payload, "stream": True})
         assert status == 200, body
         assert content_type.startswith("text/event-stream")
-        assert _reconstruct_output_text(body) == "[general_agent] responses-mock"
+        assert _reconstruct_output_text(body) == expected == "[general_agent] responses-mock"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_stream_tool_choice_none_keeps_content() -> None:
+    """``tool_choice=none`` on the stream path must stay output_text, not function_call."""
+    server, thread, port = _server()
+    try:
+        payload = {
+            "model": "mock-planner",
+            "input": "look up the invoice",
+            "tools": _LOOKUP_TOOLS,
+            "tool_choice": "none",
+        }
+        json_status, _json_type, json_body = _post_raw(port, payload)
+        assert json_status == 200, json_body
+        json_item = json.loads(json_body)["output"][0]
+        assert json_item["type"] == "message"
+        status, content_type, body = _post_raw(port, {**payload, "stream": True})
+        assert status == 200, body
+        assert content_type.startswith("text/event-stream")
+        types = [event.get("type") for event in _sse_events(body)]
+        assert "response.function_call_arguments.delta" not in types
+        assert _reconstruct_output_text(body) == json_item["content"][0]["text"]
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -262,6 +312,7 @@ if __name__ == "__main__":
     test_proxy_completion_responses_tool_choice_none_keeps_content()
     test_http_responses_stream_emits_function_call_events()
     test_http_responses_stream_content_matches_json()
+    test_http_responses_stream_tool_choice_none_keeps_content()
     test_http_responses_stream_still_rejects_include_usage()
     test_http_responses_stream_still_rejects_non_boolean_stream()
     print("ok")
