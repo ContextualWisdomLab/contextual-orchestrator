@@ -20,6 +20,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Fail closed on `response_format.json_schema.name` that is longer than
   64 characters or outside `[a-zA-Z0-9_-]` so buyers get
   `invalid_response_format` instead of an opaque provider rejection.
+  The request-body fuzz target now exercises that validator.
 
 ### Documentation
 

@@ -12,7 +12,8 @@ CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
-   ``_reject_unknown_keys`` -- the HTTP request-body parser and validators.
+   ``_reject_unknown_keys`` / ``_validate_chat_response_format`` -- the HTTP
+   request-body parser and validators.
 2. ``orchestrator.ModelAgent.from_dict`` -- the agent-pool config parser.
 3. ``orchestrator.redact_text`` / ``redact_value`` -- secret/PII redaction run
    over arbitrary trace payloads (regex + recursion).
@@ -105,6 +106,27 @@ def exercise_request_body(raw: bytes) -> None:
                 assert set(message) == {"role", "content"}
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
+
+    # Structured-output honesty: omit-real optionals + fail-closed name charset.
+    if "response_format" in body:
+        try:
+            fmt = server._validate_chat_response_format(body)
+        except RequestError:
+            pass
+        else:
+            if fmt is not None:
+                assert isinstance(fmt, dict)
+                if fmt.get("type") == "json_schema":
+                    schema = fmt.get("json_schema")
+                    assert isinstance(schema, dict)
+                    name = schema.get("name")
+                    assert isinstance(name, str) and 1 <= len(name) <= 64
+                    assert all(ch.isalnum() or ch in "_-" for ch in name)
+                    description = schema.get("description")
+                    if description is not None:
+                        assert isinstance(description, str) and description.strip()
+                    if "strict" in schema:
+                        assert isinstance(schema["strict"], bool)
 
 
 def exercise_agent_config(value: Any) -> None:

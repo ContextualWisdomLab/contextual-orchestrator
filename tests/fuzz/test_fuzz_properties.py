@@ -74,6 +74,32 @@ def test_request_body_rejects_unhashable_message_role() -> None:
 
 
 @_SETTINGS
+@given(
+    st.fixed_dictionaries(
+        {
+            "response_format": st.fixed_dictionaries(
+                {
+                    "type": st.just("json_schema"),
+                    "json_schema": st.fixed_dictionaries(
+                        {
+                            "name": st.text(max_size=80),
+                            "schema": st.just({"type": "object", "properties": {}}),
+                        },
+                        optional={
+                            "description": st.none() | st.text(max_size=40),
+                            "strict": st.none() | st.booleans() | st.integers(),
+                        },
+                    ),
+                }
+            )
+        }
+    ).map(lambda v: json.dumps(v).encode("utf-8"))
+)
+def test_request_body_json_schema_name_never_crashes(raw: bytes) -> None:
+    exercise_request_body(raw)
+
+
+@_SETTINGS
 @given(_json_values)
 def test_agent_config_parser(value: object) -> None:
     exercise_agent_config(value)
