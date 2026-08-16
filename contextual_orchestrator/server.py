@@ -2422,6 +2422,33 @@ def _validate_chat_prediction(body: dict[str, Any]) -> None:
     )
 
 
+def _normalize_optional_strict_flag(
+    container: dict[str, Any],
+    *,
+    error_code: str,
+    field_path: str,
+) -> None:
+    """Treat JSON-null ``strict`` as omit; require a boolean when the key remains.
+
+    OpenAI SDKs often send ``strict: null`` as an optional default (OpenAI, 2024).
+    Accepting the key without removing it is not omit-equivalent: passthrough
+    forwards ``"strict": null`` and providers may reject it. Pop null in place
+    so the forwarded body matches a request that never set ``strict``.
+    """
+    if "strict" not in container:
+        return
+    value = container.get("strict")
+    if value is None:
+        container.pop("strict")
+        return
+    if not isinstance(value, bool):
+        raise RequestError(
+            400,
+            error_code,
+            f"{field_path} must be a boolean when provided",
+        )
+
+
 def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | None:
     """OpenAI chat ``response_format`` — object with type text/json_object/json_schema.
 
@@ -2501,15 +2528,11 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.schema must be an object",
             )
-        # Explicit JSON null is treat-as-omit (SDK optional default).
-        if "strict" in schema and schema.get("strict") is not None and not isinstance(
-            schema.get("strict"), bool
-        ):
-            raise RequestError(
-                400,
-                "invalid_response_format",
-                "response_format.json_schema.strict must be a boolean when provided",
-            )
+        _normalize_optional_strict_flag(
+            schema,
+            error_code="invalid_response_format",
+            field_path="response_format.json_schema.strict",
+        )
     return fmt
 
 
@@ -2578,15 +2601,11 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "each tool.function accepts only name, description, parameters, and strict",
                 {"fields": unknown_fn},
             )
-        # Explicit JSON null is treat-as-omit (SDK optional default).
-        if "strict" in function and function.get("strict") is not None and not isinstance(
-            function.get("strict"), bool
-        ):
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.strict must be a boolean when provided",
-            )
+        _normalize_optional_strict_flag(
+            function,
+            error_code="invalid_tools",
+            field_path="each tool.function.strict",
+        )
         name = function.get("name")
         if not isinstance(name, str) or not name.strip():
             raise RequestError(

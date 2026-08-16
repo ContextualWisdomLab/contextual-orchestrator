@@ -93,6 +93,19 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
 
+## OpenAI compatibility honesty
+
+Buyer next action: send SDK-default `null` for optional `strict` flags; do not set `parallel_tool_calls=true` on `/v1/responses` unless the request also carries a non-empty `tools` array.
+
+- `tools[].function.strict` and `response_format.json_schema.strict`: JSON `null` is omit-equivalent and is stripped before provider passthrough. `true` / `false` forward. Any other type returns `400` `invalid_tools` or `invalid_response_format` (OpenAI, 2024a, 2024b).
+- `/v1/responses` `parallel_tool_calls=true` requires a non-empty `tools` array (chat parity). `false`, omit, and `null` remain no-ops without tools. `tools: []` with `true` is `400` `invalid_parallel_tool_calls`.
+
+### References
+
+OpenAI. (2024a). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
+
+OpenAI. (2024b). *Structured model outputs*. OpenAI API documentation. https://platform.openai.com/docs/guides/structured-outputs
+
 ## Production Library Target
 
 FastAPI should replace the current stdlib HTTP adapter when the API needs authentication, richer OpenAPI schema generation, dependency injection, and typed request/response models.

@@ -74,6 +74,9 @@ def test_http_chat_accepts_tool_function_strict_null() -> None:
             },
         )
         assert status == 200, body
+        # Omit-equivalent: mock echo must not still carry "strict": null.
+        echoed_tools = body["echo"]["tools"]
+        assert "strict" not in echoed_tools[0]["function"], body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -137,6 +140,36 @@ def test_http_chat_accepts_response_format_json_schema_strict_null() -> None:
             },
         )
         assert status == 200, body
+        echoed_format = body["echo"]["response_format"]
+        assert "strict" not in echoed_format["json_schema"], body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_forwards_tool_function_strict_true() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "strict true"}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {"type": "object", "properties": {}},
+                            "strict": True,
+                        },
+                    }
+                ],
+            },
+        )
+        assert status == 200, body
+        assert body["echo"]["tools"][0]["function"]["strict"] is True
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -181,10 +214,34 @@ def test_http_responses_accepts_parallel_tool_calls_false_without_tools() -> Non
         thread.join(timeout=5)
 
 
+def test_http_responses_rejects_true_parallel_tool_calls_with_empty_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/responses",
+            {
+                "model": "mock-planner",
+                "input": "parallel true empty tools",
+                "parallel_tool_calls": True,
+                "tools": [],
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_parallel_tool_calls" in blob
+        assert "unknown_fields" not in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_accepts_tool_function_strict_null()
     test_http_chat_rejects_tool_function_strict_non_boolean()
     test_http_chat_accepts_response_format_json_schema_strict_null()
+    test_http_chat_forwards_tool_function_strict_true()
     test_http_responses_rejects_parallel_tool_calls_true_without_tools()
     test_http_responses_accepts_parallel_tool_calls_false_without_tools()
+    test_http_responses_rejects_true_parallel_tool_calls_with_empty_tools()
     print("ok")

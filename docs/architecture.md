@@ -36,7 +36,8 @@ This repository implements the interface and control plane, not the trained coor
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
-- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server. Optional OpenAI SDK defaults such as `tools[].function.strict: null` and `response_format.json_schema.strict: null` are stripped before passthrough (omit-equivalent). `/v1/responses` `parallel_tool_calls=true` requires a non-empty `tools` array so clients cannot believe parallel tool invocation was enabled without tools (OpenAI, 2024).
+
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
@@ -53,3 +54,8 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## References
+
+OpenAI. (2024). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
+

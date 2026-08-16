@@ -43,6 +43,22 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## OpenAI compatibility contract (cite + link; no PDF)
+
+OpenAI API reference documents are proprietary. Redistribution of the HTML/PDF
+is not permissible here; the contract is cited and summarized instead.
+
+- OpenAI. (2024a). *Create chat completion*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/chat/create
+  Grounds chat `tools[].function.strict`, `response_format.json_schema.strict`,
+  and `parallel_tool_calls` as optional SDK fields. This gateway treats JSON
+  `null` as omit (strip before passthrough) and requires a non-empty `tools`
+  array when `parallel_tool_calls=true`.
+- OpenAI. (2024b). *Structured model outputs*. OpenAI API documentation.
+  https://platform.openai.com/docs/guides/structured-outputs
+  Grounds `json_schema.strict` as an optional Structured Outputs flag, not a
+  required boolean when SDKs send `null`.
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.
