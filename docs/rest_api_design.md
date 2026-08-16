@@ -124,10 +124,11 @@ batch job plane: `routing.channel=batch` and `routing.latency_tolerant=true`
 fail closed (`invalid_routing`) instead of billing a silent sync
 completion. Send known sync dimensions only (`channel=sync` or omit).
 
-Next action: keep SDK-default nulls; replace `developer` with `system`; omit
-`stream` (or set `false`) on tool-calling requests; always send a pool
-`model`; omit batch routing hints, `seed`, `stop`, `n>1`, and `logprobs` on
-tool-calling requests.
+Next action: always send a non-empty `messages` array of objects; keep
+SDK-default nulls; replace `developer` with `system`; omit `stream` (or set
+`false`) on tool-calling requests; always send a pool `model`; omit batch
+routing hints, `seed`, `stop`, `n>1`, and `logprobs` on tool-calling
+requests.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create

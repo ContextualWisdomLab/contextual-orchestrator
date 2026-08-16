@@ -3844,6 +3844,7 @@ def build_server(
                                 "or response_format; omit it or set false",
                             )
                         _validate_chat_passthrough_request_knobs(body)
+                        _validate_messages(body.get("messages"))
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
