@@ -24,10 +24,18 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Set up Python
+        uses: actions/setup-python@5fda3b95a4ea91299a34e894583c3862153e4b97 # v6.1.0
+        with:
+          python-version: "3.13"
+
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+
       - name: Add narrowly scoped verified Semgrep suppressions
         run: |
           set -euo pipefail
-          python3 <<'PY'
+          python <<'PY'
           from pathlib import Path
 
           ledger_path = Path("contextual_orchestrator/cost_ledger.py")
@@ -110,8 +118,8 @@ jobs:
           SEMGREP_SEND_METRICS: "off"
         run: |
           set -euo pipefail
-          python3 -m pytest -q
-          python3 -m compileall -q contextual_orchestrator tests
+          python -m pytest -q
+          python -m compileall -q contextual_orchestrator tests
           docker run --rm \
             -v "${GITHUB_WORKSPACE}:/src" \
             -w /src \
