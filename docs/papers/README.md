@@ -40,8 +40,11 @@ redistribution; each is cited below with its arXiv identifier.
 Buyers who send `tools` plus `mode=conduct` asked for a Conductor workflow
 (Nielsen et al., 2025) with TRINITY-style role traces (Xu et al., 2025). The
 tools early-return is a single-worker proxy with no access-list plane. Those
-knobs, plus invalid `mode` and non-boolean `include_orchestration_trace`,
-must fail closed before `proxy_completion`.
+knobs, plus invalid or whitespace-only `mode` and non-boolean
+`include_orchestration_trace`, must fail closed before `proxy_completion`.
+Each of `orchestration` / `orchestration_mode` / `mode` is checked on its
+own so mixed `orchestration=route` plus `mode=conduct` cannot hide the
+workflow the buyer asked for.
 
 - Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y.
   (2025). *Learning to orchestrate agents in natural language with the
