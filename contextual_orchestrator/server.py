@@ -1433,6 +1433,18 @@ def _validate_one_chat_message_name(message: dict[str, Any]) -> str | None:
     return msg_name
 
 
+def _require_nonempty_chat_messages(body: dict[str, Any]) -> None:
+    """Require a non-empty ``messages`` array, including on tools passthrough.
+
+    ``_validate_messages`` is skipped on the tools/response_format early return.
+    Missing, JSON null, non-list, or empty ``messages`` must still fail closed
+    so an SDK tool-calling body cannot bill a completion with no prompt.
+    """
+    messages = body.get("messages") if "messages" in body else None
+    if not isinstance(messages, list) or not messages:
+        raise RequestError(400, "invalid_message", "messages must be a non-empty array")
+
+
 def _validate_chat_message_content_and_name(body: dict[str, Any]) -> None:
     """Content shape and participant name — must run before tools passthrough.
 
@@ -3573,6 +3585,7 @@ def build_server(
                     # Shape-check tool results and message audio/function_call before
                     # passthrough or orchestration (named errors, not silent drop).
                     _validate_chat_message_known_fields(body)
+                    _require_nonempty_chat_messages(body)
                     _validate_chat_tool_message_ids(body)
                     _validate_chat_assistant_tool_calls(body)
                     _validate_chat_message_audio_function_call(body)

@@ -77,12 +77,10 @@ def _valid_call(**extra) -> dict:
 def test_http_chat_accepts_tool_calls_with_optional_index() -> None:
     server, thread, port = _server()
     try:
-        for index in (None, 0, 1):
-            call = _valid_call()
-            if index is not None or index is None:
-                call["index"] = index
-            status, body = _post(port, _payload(call))
-            assert status == 200, (index, body)
+        # Missing key, explicit JSON null, and non-negative ints are accepted.
+        for extra in ({}, {"index": None}, {"index": 0}, {"index": 1}):
+            status, body = _post(port, _payload(_valid_call(**extra)))
+            assert status == 200, (extra, body)
     finally:
         server.shutdown()
         thread.join(timeout=5)

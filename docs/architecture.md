@@ -2,10 +2,12 @@
 
 ## Sources Read
 
-- Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
-- Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-- TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
-- Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+APA 7th citations (titles retained for paper-contract search):
+
+- Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
+- Sakana AI. (2026). *Sakana Fugu Technical Report*. https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://arxiv.org/abs/2512.04695
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
 
 ## What The Architecture Is
 
@@ -42,7 +44,10 @@ This repository implements the interface and control plane, not the trained coor
   unknown roles), content shape (empty user/system, multimodal parts),
   participant `name`, and `max_tool_calls` are validated *before* the
   tools/response_format passthrough early-return so SDK tool-calling bodies
-  cannot smuggle unsupported values upstream. Omit-equivalent
+  cannot smuggle unsupported values upstream. A non-empty `messages` array
+  is required on that path as well — missing, JSON null, non-list, or
+  empty `messages` fail closed with `invalid_message` so a tools body
+  cannot bill a completion with no prompt. Omit-equivalent
   `max_tool_calls` (JSON null / empty string) is stripped, not forwarded.
   Request sampling knobs (`temperature`, `top_p`, penalties, `max_tokens`)
   are applied via `ModelClient.request_sampling` on the calling thread only
