@@ -48,6 +48,8 @@ jobs:
         shell: bash
         run: |
           set -euo pipefail
+          git config user.name 'contextual-orchestrator-maintainer[bot]'
+          git config user.email 'contextual-orchestrator-maintainer[bot]@users.noreply.github.com'
           base_ref=feat/reasoning-effort-none-store-stream-empty-noop-http-honesty-20260814114817
           expected_base=718701c66399a56639b8c064c44253078246c2d9
           git fetch origin "$base_ref"
@@ -109,7 +111,5 @@ jobs:
             echo 'No verified merge change was produced.' >&2
             exit 1
           fi
-          git config user.name 'contextual-orchestrator-maintainer[bot]'
-          git config user.email 'contextual-orchestrator-maintainer[bot]@users.noreply.github.com'
           git commit -m 'merge: preserve request isolation with empty-string honesty'
           git push origin HEAD:feat/empty-string-numeric-controls-noop-http-honesty-20260814115859
