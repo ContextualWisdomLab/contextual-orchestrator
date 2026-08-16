@@ -1972,11 +1972,12 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
 def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
     """OpenAI ``metadata`` — object of string pairs, at most 16 entries.
 
-    Keys ≤64 characters; values ≤512 characters. Explicit JSON null values
-    are treat-as-omit for that key and written back onto ``body`` so
-    ``proxy_completion`` does not forward non-string values. Non-objects and
-    other non-string entries fail closed so clients cannot store untyped junk
-    that cost or observability consumers would silently drop.
+    Keys must be non-empty (after strip) and ≤64 characters; values ≤512
+    characters. Explicit JSON null values are treat-as-omit for that key and
+    written back onto ``body`` so ``proxy_completion`` does not forward
+    non-string values. Non-objects and other non-string entries fail closed so
+    clients cannot store untyped junk that cost or observability consumers
+    would silently drop.
     """
     if "metadata" not in body:
         return None
@@ -1993,6 +1994,14 @@ def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
     for key, value in metadata.items():
         if not isinstance(key, str):
             raise RequestError(400, "invalid_metadata", "metadata keys must be strings")
+        # Empty/whitespace keys are not omit-equivalent attribute names — fail
+        # closed so cost/observability consumers never index blank labels.
+        if not key.strip():
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                "metadata keys must be non-empty strings",
+            )
         if len(key) > 64:
             raise RequestError(400, "invalid_metadata", "metadata keys must be at most 64 characters")
         # Explicit JSON null value is treat-as-omit for that key (SDK optional).
