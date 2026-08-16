@@ -98,7 +98,26 @@ def test_http_responses_rejects_conversation() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_truncation() -> None:
+def test_http_responses_accepts_truncation_auto_and_disabled() -> None:
+    """auto|disabled are omit-equivalent no-ops without conversation state."""
+    server, thread, port = _server()
+    try:
+        for value in ("auto", "disabled", " auto ", "disabled"):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "input": "hello truncation",
+                    "truncation": value,
+                },
+            )
+            assert status == 200, (value, body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_unknown_truncation() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -106,7 +125,7 @@ def test_http_responses_rejects_truncation() -> None:
             {
                 "model": "mock-planner",
                 "input": "hello truncation",
-                "truncation": "auto",
+                "truncation": "drop_middle",
             },
         )
         assert status == 400, body
@@ -156,7 +175,8 @@ if __name__ == "__main__":
     test_http_responses_accepts_baseline_without_conversation_controls()
     test_http_responses_rejects_previous_response_id()
     test_http_responses_rejects_conversation()
-    test_http_responses_rejects_truncation()
+    test_http_responses_accepts_truncation_auto_and_disabled()
+    test_http_responses_rejects_unknown_truncation()
     test_http_responses_rejects_include()
     test_http_responses_rejects_text_control()
     print("ok")
