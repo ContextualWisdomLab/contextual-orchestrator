@@ -486,17 +486,76 @@ class ModelClient:
                     pieces.append(str(part.get("text") or ""))
         return " ".join(pieces)
 
+    def _bound_tool_observations(self, payload: dict[str, Any]) -> list[str]:
+        """Return tool-result contents bound to a prior assistant ``tool_call_id``.
+
+        OpenAI and LangChain clients POST the observation after the first
+        ``tool_calls`` hop (Yao et al., 2023; OpenAI, 2024). A matching
+        ``role=tool`` message means the buyer already ran the tool — the
+        mock must synthesize a final answer, not emit another call.
+        Unmatched ``tool_call_id`` values are ignored so an unbound
+        observation cannot masquerade as a completed action.
+        """
+        known_call_ids: set[str] = set()
+        observations: list[str] = []
+        for message in payload.get("messages") or []:
+            if not isinstance(message, dict):
+                continue
+            if message.get("role") == "assistant":
+                for call in message.get("tool_calls") or []:
+                    if not isinstance(call, dict):
+                        continue
+                    call_id = str(call.get("id") or "").strip()
+                    if call_id:
+                        known_call_ids.add(call_id)
+            if message.get("role") != "tool":
+                continue
+            tool_call_id = str(message.get("tool_call_id") or "").strip()
+            if not tool_call_id or tool_call_id not in known_call_ids:
+                continue
+            content = message.get("content")
+            if isinstance(content, str) and content.strip():
+                observations.append(content.strip())
+        return observations
+
+    def _mock_observation_answer(
+        self, agent: ModelAgent, observations: list[str]
+    ) -> str:
+        """Turn bound tool observations into a final assistant answer.
+
+        Invoice lookups must reproduce the observed identifier, balance,
+        and status so buyers can check the second hop against the tool
+        they just ran (Schick et al., 2023).
+        """
+        pieces = [f"[{agent.id}]"]
+        for observation in observations:
+            try:
+                parsed = json.loads(observation)
+            except json.JSONDecodeError:
+                pieces.append(observation)
+                continue
+            if isinstance(parsed, dict):
+                for key, value in parsed.items():
+                    pieces.append(f"{key}={value}")
+                continue
+            pieces.append(observation)
+        return " ".join(pieces)
+
     def _selected_function_name(self, payload: dict[str, Any]) -> str | None:
         """Return the function a mock agent should call, or None for ``tool_choice=none``.
 
         Incidental whitespace around ``none`` matches the HTTP validator so a
-        padded SDK string does not emit ``tool_calls``.
+        padded SDK string does not emit ``tool_calls``. Empty or whitespace
+        ``tool_choice`` is omit-equivalent none. A bound ``role=tool``
+        observation ends the loop — do not fire the same tool again.
         """
         tools = payload.get("tools")
         if not isinstance(tools, list) or not tools:
             return None
+        if self._bound_tool_observations(payload):
+            return None
         tool_choice = payload.get("tool_choice")
-        if isinstance(tool_choice, str) and tool_choice.strip() == "none":
+        if isinstance(tool_choice, str) and tool_choice.strip() in {"", "none"}:
             return None
         if isinstance(tool_choice, dict):
             named = str(((tool_choice.get("function") or {}).get("name") or "")).strip()
@@ -670,8 +729,10 @@ class ModelClient:
         """Mock full provider response for tests; echoes forwarded params so passthrough is assertable.
 
         Function tools return an assistant ``tool_calls`` message so JSON and
-        SSE buyers see the same OpenAI shape. ``tool_choice=none`` and
-        non-tool requests keep the content completion.
+        SSE buyers see the same OpenAI shape. ``tool_choice=none``, bound
+        ``role=tool`` observations, and non-tool requests keep the content
+        completion. A second-hop observation is synthesized into the answer
+        so the buyer can read the values they just observed.
         """
         echoed = {
             key: payload[key]
@@ -708,6 +769,12 @@ class ModelClient:
                 "usage": {"prompt_tokens": 0, "completion_tokens": 0, "total_tokens": 0},
                 "echo": echoed,
             }
+        observations = self._bound_tool_observations(payload)
+        content = (
+            self._mock_observation_answer(agent, observations)
+            if observations
+            else f"[{agent.id}] chat-mock"
+        )
         return {
             "id": f"chatcmpl_mock_{agent.id}",
             "object": "chat.completion",
@@ -715,7 +782,7 @@ class ModelClient:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": f"[{agent.id}] chat-mock"},
+                    "message": {"role": "assistant", "content": content},
                     "finish_reason": "stop",
                 }
             ],

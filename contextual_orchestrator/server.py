@@ -2942,18 +2942,20 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
     """OpenAI chat ``tool_choice`` — none/auto/required or named function object.
 
     When ``type`` is ``function``, ``function.name`` must match a tools entry
-    so clients cannot force a tool the request did not declare.
+    so clients cannot force a tool the request did not declare. Empty or
+    whitespace strings are written back as ``none`` so mock tools and live
+    providers see a legal omit-equivalent token.
     """
     if "tool_choice" not in body:
         return None
     choice = body.get("tool_choice")
-    # Explicit JSON null, empty object, or empty/whitespace string is
-    # treat-as-omit (SDK optional default / stringified empty control).
-    if (
-        choice is None
-        or (isinstance(choice, dict) and not choice)
-        or (isinstance(choice, str) and not choice.strip())
-    ):
+    # Explicit JSON null or empty object is treat-as-omit (SDK optional
+    # default). Empty/whitespace strings are omit-equivalent ``none`` so
+    # tools stay content/stop and live providers see a legal token.
+    if isinstance(choice, str) and not choice.strip():
+        body["tool_choice"] = "none"
+        return "none"
+    if choice is None or (isinstance(choice, dict) and not choice):
         return None
     if isinstance(choice, str):
         # Strip incidental whitespace so " none " / " auto " match honest no-ops.

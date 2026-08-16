@@ -19,6 +19,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Synthesize a final `content` / `stop` answer (JSON and SSE) when the
+  buyer POSTs a `role=tool` observation bound to a prior assistant
+  `tool_call_id`. Mock `lookup_balance` no longer emits a second
+  `tool_calls` hop. The observed invoice id, balance, and status appear
+  in the answer. Empty or whitespace `tool_choice` with `tools` is
+  omit-equivalent `none` (the empty string is written back as `none`
+  before the provider hop). Next action: after the first tool call,
+  POST the tool output with the same `tool_call_id` and read `content`;
+  send `none` or omit `tool_choice` when you want no tool call.
 - Fail closed on unknown assistant `tool_calls` entry and `function` keys
   (`unknown_tool_call_fields` / `unknown_tool_call_function_fields`) on both
   the orchestration path and the tools / `response_format` SSE proxy.

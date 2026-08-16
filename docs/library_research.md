@@ -66,6 +66,18 @@ Researched before adding single-agent SSE proxy for `tools` / `response_format`:
 
 Custom code added: `_passthrough_upstream`, `proxy_completion_stream`, `proxy_stream_send`, `_mock_raw_sse`, `_stream_passthrough_completion`. No new dependency.
 
+## Tool-result continuation (2026-08-16)
+
+Researched before adding the second-hop mock observation synthesizer:
+
+| Option | Decision | Evidence |
+|---|---|---|
+| [LangChain ToolNode](https://python.langchain.com/docs/how_to/tool_calling/) | Skip. That runtime executes tools inside the graph. | This gateway is the OpenAI-compatible front door; the buyer runs the tool and POSTs the observation. |
+| [OpenAI Agents SDK](https://github.com/openai/openai-agents-python) | Skip. New runtime dependency and a different control plane. | Ponytail: no new dependency when the stdlib mock already owns `_mock_raw`. |
+| Bound `tool_call_id` synthesizer | Selected. `_bound_tool_observations` + `_mock_observation_answer` on the existing mock path. | ReAct observation loop (Yao et al., 2023); OpenAI function-calling second hop. |
+
+Custom code added: `_bound_tool_observations`, `_mock_observation_answer`. No new dependency.
+
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation. https://platform.openai.com/docs/guides/streaming-responses
 
 WHATWG. (n.d.). *Server-sent events*. HTML Living Standard. https://html.spec.whatwg.org/multipage/server-sent-events.html

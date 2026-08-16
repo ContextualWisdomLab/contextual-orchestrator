@@ -114,7 +114,12 @@ the tools passthrough path as on the orchestration path. `stream=true` with
 `chat.completion.chunk` frames. Function tools reconstruct to the same
 `message.tool_calls` as the non-stream JSON body (`lookup_balance` binds
 `INV-` identifiers, defaulting to `INV-9`); content-only `response_format`
-streams still match `message.content`. Do not send `stream_options.include_usage=true` or
+streams still match `message.content`. After you run the tool, POST the
+`role=tool` observation with the matching `tool_call_id` — the mock
+second hop synthesizes `content` / `stop` (and the same SSE content
+deltas) from the observed values instead of emitting another
+`lookup_balance`. Empty or whitespace `tool_choice` with `tools` is
+written back as `none`. Do not send `stream_options.include_usage=true` or
 `include_obfuscation=true` — this gateway does not emit a final usage chunk
 or apply SSE obfuscation. Missing `model` and out-of-range
 `temperature` / `top_p` also fail closed before passthrough. `seed`, `stop`,
@@ -157,7 +162,10 @@ Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when
 the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
 pool `model`; put the invoice number in the user text (`INV-4419` or
-`invoice 4419`); omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
+`invoice 4419`); after the first `tool_calls` hop, POST the tool output as
+`role=tool` with the same `tool_call_id` and read `content` / `stop` (or
+streamed content deltas); omit empty `tool_choice` or send `none` when you
+want no tool call; omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
 and `stream_options.include_usage` on tool-calling requests. When declaring
 tools, omit unused `description` / `parameters` / `strict` or leave the SDK
 default `null` — both become omit before the provider hop. On assistant

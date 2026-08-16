@@ -72,7 +72,9 @@ exposes tools as first-class actions rather than free text.
   https://arxiv.org/abs/2210.03629
   Grounds interleaving a thought/action/observation loop: the gateway
   must surface `finish_reason=tool_calls` so the buyer can run the tool
-  and send the observation back. arXiv preprint; cite + link only.
+  and send the observation back, then synthesize a final `content` /
+  `stop` answer from that bound `role=tool` result. arXiv preprint;
+  cite + link only.
 - OpenAI. (2024). *Function calling*. OpenAI API documentation.
   https://platform.openai.com/docs/guides/function-calling
   Normative stream shape: `delta.tool_calls` then
