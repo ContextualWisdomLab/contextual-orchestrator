@@ -519,12 +519,8 @@ def test_provider_auth_failure_without_tool_evidence_keeps_provider_failover() -
     assert decision.action is ToolFallbackAction.FAILOVER_AGENT
 
 
-def test_idempotent_retries_wait_with_exponential_backoff(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_idempotent_retries_wait_with_bounded_full_jitter() -> None:
     delays: list[float] = []
-    monkeypatch.setattr(
-        "contextual_orchestrator.orchestrator.time.sleep",
-        delays.append,
-    )
     first = ToolExecutionError(
         "read timed out",
         tool_name="inspect_repository",
@@ -548,6 +544,8 @@ def test_idempotent_retries_wait_with_exponential_backoff(monkeypatch: pytest.Mo
         tool_retry_attempts=2,
         tool_retry_backoff_seconds=0.25,
     )
+    orchestrator._tool_retry_sleep = delays.append
+    orchestrator._tool_retry_jitter = lambda lower, upper: upper
     result = orchestrator.route_once(
         [{"role": "user", "content": "inspect repository"}]
     )
@@ -688,9 +686,18 @@ def test_stream_fail_closed_tool_error_emits_structured_sse() -> None:
         thread.join(timeout=5)
 
     assert status == 200
-    assert '"code": "tool_execution_stopped"' in body
-    assert '"failure_kind": "ambiguous_outcome"' in body
-    assert '"observed_failure_kind": "transport_error"' in body
-    assert '"finish_reason": "error"' in body
-    assert "data: [DONE]" in body
+    frames = [
+        line[len("data: ") :]
+        for line in body.splitlines()
+        if line.startswith("data: ")
+    ]
+    assert frames[-1] == "[DONE]"
+    parsed = [json.loads(frame) for frame in frames[:-1]]
+    error_frames = [item for item in parsed if "error" in item]
+    assert len(error_frames) == 1
+    error_body = error_frames[0]["error"]
+    assert error_body["code"] == "tool_execution_stopped"
+    assert error_body["detail"]["failure_kind"] == "ambiguous_outcome"
+    assert error_body["detail"]["observed_failure_kind"] == "transport_error"
+    assert parsed[-1]["choices"][0]["finish_reason"] == "error"
     assert "must-not-leak" not in body

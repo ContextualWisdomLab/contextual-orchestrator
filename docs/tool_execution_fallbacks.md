@@ -49,23 +49,23 @@ Structured `ToolExecutionError` remains the preferred contract. For legacy tool 
 | 404 | tool not found | fail over |
 | 405, 410, 426, 501 | tool unavailable | fail over |
 | 408, 504 | timeout | retry only when explicitly idempotent |
-| 409, 424, 500, 508 | execution failed | fail over only when explicitly idempotent |
+| 409, 424, 500, 508 | execution failed | fail over only when explicitly idempotent; otherwise fail closed |
 | 423, 451 | policy blocked | fail closed |
 | 425, 502, 503, 507 | transport error | retry only when explicitly idempotent |
 | 429 | rate limited | bounded retry when explicitly idempotent; otherwise fail over |
 | unrecognized status | unknown | preserve legacy sequential failover |
 
-A non-idempotent timeout or transport error is reported as `ambiguous_outcome` and fails closed. HTTP status inference is compatibility behavior only; adapters should provide structured operation semantics whenever possible.
+A non-idempotent timeout or transport error is reported as `ambiguous_outcome` and fails closed. A non-idempotent `execution_failed` decision also fails closed with action `fail_closed`, reason code `tool_failure.execution_failed.fail_closed`, and `ToolFallbackStoppedError`; the HTTP surface returns the documented `409 tool_execution_stopped` response. HTTP status inference is compatibility behavior only; adapters should provide structured operation semantics whenever possible.
 
 ## Retry bound
 
-`TaskOrchestrator(..., tool_retry_attempts=1, tool_retry_backoff_seconds=0.25)` permits one same-agent retry when the classifier marks the operation `retry_safe`. Retries wait with bounded exponential backoff, capped at 30 seconds. Set `tool_retry_attempts=0` to disable same-agent retries; tests may set the backoff to `0`. Invalid retry counts and negative, non-finite, boolean, or non-numeric backoff values are rejected.
+`TaskOrchestrator(..., tool_retry_attempts=1, tool_retry_backoff_seconds=0.25)` permits one same-agent retry when the classifier marks the operation `retry_safe`. Retries use full-jitter exponential backoff with a 30-second ceiling for each delay. Set `tool_retry_attempts=0` to disable same-agent retries; tests may set the backoff to `0`. Invalid retry counts and negative, non-finite, boolean, or non-numeric backoff values are rejected. The HTTP server deliberately retains the request's concurrency slot during the bounded delay: releasing it would let an unbounded population of sleeping requests bypass `max_concurrent_runs` and later stampede while reacquiring. Workloads that need nonblocking, long-delay retry belong on the durable batch path.
 
 When the retry budget is exhausted, an idempotent transient failure moves to the next eligible agent. Missing/unavailable tools and unknown legacy failures also move directly to the next eligible agent. Circuit-breaker state is updated only after the local retry budget is exhausted.
 
 ## Fail-closed errors
 
-`ToolFallbackStoppedError` is raised for ambiguous outcomes and authorization, policy, or argument failures. Its public message contains a stable reason code and agent id only. The original exception remains available as the Python cause for trusted internal diagnostics, but its text is not copied into audit events.
+`ToolFallbackStoppedError` is raised for ambiguous outcomes, non-idempotent execution failures, and authorization, policy, or argument failures. Its public message contains a stable reason code and agent id only. The original exception remains available as the Python cause for trusted internal diagnostics, but its text is not copied into audit events.
 
 ### HTTP and streaming contract
 
@@ -90,7 +90,7 @@ Each fallback decision records:
 }
 ```
 
-When a timeout or transport failure is normalized to `ambiguous_outcome`, the event additionally records `observed_failure_kind` so operators can distinguish the original cause without retaining raw exception text.
+`failure_kind` is the effective failure kind that determined the action and reason code. When normalization changes that effective kind to `ambiguous_outcome`, `observed_failure_kind` preserves the original normalized timeout or transport cause without retaining raw exception text. The latter field is omitted when it would equal `failure_kind`.
 
 No prompt, tool argument, output, credential, provider response, or exception text is recorded.
 
