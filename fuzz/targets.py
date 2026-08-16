@@ -12,7 +12,8 @@ CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
-   ``_reject_unknown_keys`` -- the HTTP request-body parser and validators.
+   ``_reject_unknown_keys`` / ``_parse_content_length`` -- the HTTP
+   request-body parser, validators, and inbound framing checks.
 2. ``orchestrator.ModelAgent.from_dict`` -- the agent-pool config parser.
 3. ``orchestrator.redact_text`` / ``redact_value`` -- secret/PII redaction run
    over arbitrary trace payloads (regex + recursion).
@@ -55,6 +56,43 @@ _EXPECTED_CONFIG_EXC = (
     TypeError,
     ValueError,
 )
+
+
+def exercise_content_length(raw_length: object, transfer_encoding: object, max_body_bytes: int) -> None:
+    """Drive inbound Content-Length framing over arbitrary header values.
+
+    Invariants: never returns a negative size; never raises anything except
+    ``RequestError``; a successful size is an ``int`` in ``[0, max_body_bytes]``.
+    """
+
+    class _FuzzHeaders:
+        def __init__(self) -> None:
+            self._length = raw_length
+            self._transfer = transfer_encoding
+
+        def get(self, key: str, default: object = None) -> object:
+            lowered = key.lower()
+            if lowered == "content-length":
+                return self._length
+            if lowered == "transfer-encoding":
+                return self._transfer
+            return default
+
+        def get_all(self, key: str) -> list[object] | None:
+            if key.lower() != "content-length":
+                return None
+            if self._length is None:
+                return None
+            if isinstance(self._length, str) and "," in self._length:
+                return [part.strip() for part in self._length.split(",")]
+            return [self._length]
+
+    try:
+        body_size = server._parse_content_length(_FuzzHeaders(), max_body_bytes)
+    except RequestError:
+        return
+    assert isinstance(body_size, int)
+    assert 0 <= body_size <= max_body_bytes
 
 
 def exercise_request_body(raw: bytes) -> None:

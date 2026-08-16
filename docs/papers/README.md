@@ -75,6 +75,23 @@ used the provider nucleus default.
   `presence_penalty`, `frequency_penalty`) that must stay request-scoped on
   both JSON and SSE route completions.
 
+## Inbound HTTP request framing
+
+JSON POSTs on this gateway are fixed-length bodies. A signed, missing,
+duplicate, or transfer-coded `Content-Length` must fail closed before
+`rfile.read` so `max_body_bytes` remains an authoritative bound. Issue #119
+reproduced `Content-Length: -1` reaching `read(-1)` (read-until-EOF).
+
+- Fielding, R. (Ed.), Nottingham, M. (Ed.), & Reschke, J. (Ed.). (2022).
+  *HTTP semantics* (RFC 9110). RFC Editor. https://doi.org/10.17487/RFC9110
+  Grounds message framing and why a recipient must not guess an ambiguous
+  content length. IETF RFC; cite + link (no PDF vendored).
+- Fielding, R. (Ed.), Nottingham, M. (Ed.), & Reschke, J. (Ed.). (2022).
+  *HTTP/1.1* (RFC 9112). RFC Editor. https://doi.org/10.17487/RFC9112
+  Grounds `Content-Length` as an unsigned decimal and the rejection of
+  conflicting `Transfer-Encoding` on this JSON surface. IETF RFC; cite +
+  link (no PDF vendored).
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including

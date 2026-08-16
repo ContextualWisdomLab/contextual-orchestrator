@@ -9,6 +9,8 @@
 - OpenAI. (2024). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
 - Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The curious case of neural text degeneration. *International Conference on Learning Representations*. https://arxiv.org/abs/1904.09751
+- Fielding, R. (Ed.), Nottingham, M. (Ed.), & Reschke, J. (Ed.). (2022). *HTTP semantics* (RFC 9110). RFC Editor. https://doi.org/10.17487/RFC9110
+- Fielding, R. (Ed.), Nottingham, M. (Ed.), & Reschke, J. (Ed.). (2022). *HTTP/1.1* (RFC 9112). RFC Editor. https://doi.org/10.17487/RFC9112
 
 ## What The Architecture Is
 
@@ -31,6 +33,7 @@ The Fugu report combines these ideas into production constraints:
 - Multi-agent tool/function-call workflows need memory discipline: isolate agents inside the current workflow, but keep useful shared memory across turns.
 - Tool-calling passthrough must be schema-honest: SDK JSON `null` on optional `tool.function` fields is popped before the provider hop so Fugu-style tool workflows do not fail on omit-vs-null mismatches (OpenAI, 2024; Bray, 2017).
 - Streamed route completions must apply the same request-scoped `temperature`, `top_p`, `presence_penalty`, and `frequency_penalty` as the non-stream path. Dropping nucleus sampling on `stream=true` bills a different decoding policy than the buyer sent (Holtzman et al., 2020).
+- Inbound JSON POSTs fail closed on request framing before the socket read: a single unsigned decimal `Content-Length` within `max_body_bytes`, no signed/non-decimal tokens, no duplicate lengths, and no chunked `Transfer-Encoding`. `Content-Length: -1` must not become `read(-1)` (Fielding et al., 2022, RFC 9110/9112).
 
 ## Implementation Mapping
 

@@ -221,6 +221,43 @@ def _error_payload(error_code: str, error_message: str, error_detail: dict[str, 
     }
 
 
+def _parse_content_length(headers: Any, max_body_bytes: int) -> int:
+    """Return a validated Content-Length so ``rfile.read`` never sees a negative size.
+
+    Rejects missing, signed, non-decimal, duplicate, overflow, and transfer-coded
+    framing before the socket read. JSON POSTs require a single unsigned decimal
+    Content-Length within ``max_body_bytes`` (RFC 9110 §8.6; RFC 9112 §6).
+    """
+    transfer = (headers.get("transfer-encoding") or "").strip()
+    if transfer and transfer.lower() != "identity":
+        raise RequestError(
+            400,
+            "unsupported_transfer_encoding",
+            "chunked or non-identity Transfer-Encoding is not accepted for JSON bodies",
+        )
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        listed = get_all("content-length")
+        if listed is not None and len(listed) > 1:
+            raise RequestError(400, "invalid_content_length", "duplicate or ambiguous Content-Length")
+    raw = headers.get("content-length")
+    if raw is None or raw == "":
+        raise RequestError(411, "length_required", "Content-Length is required for JSON request bodies")
+    if isinstance(raw, str) and "," in raw:
+        raise RequestError(400, "invalid_content_length", "duplicate or ambiguous Content-Length")
+    text = str(raw).strip()
+    if not text.isdigit():
+        raise RequestError(
+            400,
+            "invalid_content_length",
+            "Content-Length must be an unsigned decimal integer",
+        )
+    body_size = int(text)
+    if body_size > max_body_bytes:
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    return body_size
+
+
 def _coerce_json(payload: bytes) -> dict[str, Any]:
     value = json.loads(payload.decode("utf-8"))
     if not isinstance(value, dict):
@@ -4577,10 +4614,10 @@ def build_server(
         def _read_json(self) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
-            body_size = int(self.headers.get("content-length", "0"))
-            if body_size > security.max_body_bytes:
-                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+            body_size = _parse_content_length(self.headers, security.max_body_bytes)
             raw = self.rfile.read(body_size)
+            if len(raw) != body_size:
+                raise RequestError(400, "incomplete_body", "request body shorter than Content-Length")
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:

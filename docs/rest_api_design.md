@@ -143,6 +143,14 @@ tool-calling requests. When declaring tools, omit unused `description` /
 before the provider hop. On streamed route bodies, send the `top_p` and
 penalty values you want — they are applied, not dropped.
 
+JSON POSTs must send one unsigned decimal `Content-Length` that matches the
+bytes that follow and stays within the configured body limit. Do not send
+`Content-Length: -1`, `+N`, hex, duplicates, or `Transfer-Encoding: chunked`
+— those fail closed with `invalid_content_length`, `length_required`,
+`request_too_large`, or `unsupported_transfer_encoding` before the socket
+read. Next action: let your HTTP client set `Content-Length` from the
+encoded JSON; do not craft signed or chunked framing.
+
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
 
@@ -153,6 +161,12 @@ https://doi.org/10.17487/RFC8259
 Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The
 curious case of neural text degeneration. *International Conference on
 Learning Representations*. https://arxiv.org/abs/1904.09751
+
+Fielding, R. (Ed.), Nottingham, M. (Ed.), & Reschke, J. (Ed.). (2022).
+*HTTP semantics* (RFC 9110). RFC Editor. https://doi.org/10.17487/RFC9110
+
+Fielding, R. (Ed.), Nottingham, M. (Ed.), & Reschke, J. (Ed.). (2022).
+*HTTP/1.1* (RFC 9112). RFC Editor. https://doi.org/10.17487/RFC9112
 
 ## Production Library Target
 

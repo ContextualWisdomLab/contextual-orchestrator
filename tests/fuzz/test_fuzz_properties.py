@@ -18,6 +18,7 @@ from hypothesis import given, settings, strategies as st
 
 from fuzz.targets import (
     exercise_agent_config,
+    exercise_content_length,
     exercise_orchestration,
     exercise_redaction,
     exercise_request_body,
@@ -33,6 +34,16 @@ _json_values = st.recursive(
     lambda children: st.lists(children, max_size=6) | st.dictionaries(st.text(max_size=12), children, max_size=6),
     max_leaves=25,
 )
+
+
+@_SETTINGS
+@given(
+    st.one_of(st.none(), st.integers(), st.booleans(), st.text(max_size=32), st.floats(allow_nan=False)),
+    st.one_of(st.none(), st.sampled_from(["", "identity", "chunked", "gzip", "gzip, chunked"]), st.text(max_size=24)),
+    st.integers(min_value=0, max_value=1_048_576),
+)
+def test_content_length_framing_never_returns_negative(raw_length, transfer_encoding, max_body_bytes) -> None:
+    exercise_content_length(raw_length, transfer_encoding, max_body_bytes)
 
 
 @_SETTINGS

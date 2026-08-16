@@ -27,6 +27,13 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   summary at `top_p=0.1` is not billed with the provider nucleus default.
   Next action: send the nucleus and penalty values you want on `stream=true`
   route bodies; they are no longer dropped.
+- Fail closed on inbound JSON request framing before the socket read.
+  Missing `Content-Length` is `length_required` (411). Signed, non-decimal,
+  or duplicate lengths are `invalid_content_length`. Oversized declared
+  lengths stay `request_too_large`. Chunked `Transfer-Encoding` is
+  `unsupported_transfer_encoding`. Next action: send one unsigned decimal
+  `Content-Length` that matches the JSON bytes; do not send `-1` or chunked
+  bodies.
 
 ### References
 
@@ -38,3 +45,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Holtzman, A., Buys, J., Du, L., Forbes, M., & Choi, Y. (2020). The
   curious case of neural text degeneration. *International Conference on
   Learning Representations*. https://arxiv.org/abs/1904.09751
+- Fielding, R. (Ed.), Nottingham, M. (Ed.), & Reschke, J. (Ed.). (2022).
+  *HTTP semantics* (RFC 9110). RFC Editor.
+  https://doi.org/10.17487/RFC9110
+- Fielding, R. (Ed.), Nottingham, M. (Ed.), & Reschke, J. (Ed.). (2022).
+  *HTTP/1.1* (RFC 9112). RFC Editor. https://doi.org/10.17487/RFC9112
