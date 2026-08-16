@@ -37,6 +37,9 @@ This repository implements the interface and control plane, not the trained coor
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+  Compatibility honesty: JSON-null SDK optionals on `tools[].function` and
+  `response_format.json_schema` are popped in place before
+  `proxy_completion` so providers see omit, not `null`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

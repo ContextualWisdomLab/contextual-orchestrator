@@ -2433,6 +2433,9 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
     the ``type`` key. ``json_schema`` accepts only ``type`` and ``json_schema``.
     Extra sibling keys fail closed so clients cannot smuggle unsupported fields
     into a provider-shaped object that this gateway never interpreted.
+    Inside ``json_schema``, only ``name``, ``description``, ``schema``, and
+    ``strict`` are accepted. JSON-null or blank ``description`` / null
+    ``strict`` are popped in place so passthrough matches omit.
     """
     if "response_format" not in body:
         return None
@@ -2485,6 +2488,19 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema must be an object when type is json_schema",
             )
+        # OpenAI json_schema objects are name + schema + optional description/strict.
+        # Extra siblings fail closed so clients cannot smuggle uninterpreted
+        # fields through passthrough (including null vendor extensions).
+        unknown_schema = sorted(
+            set(schema) - {"name", "description", "schema", "strict"}
+        )
+        if unknown_schema:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema accepts only name, description, schema, and strict",
+                {"fields": unknown_schema},
+            )
         name = schema.get("name")
         if not isinstance(name, str) or not name.strip():
             raise RequestError(
@@ -2502,6 +2518,20 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.schema must be an object",
             )
+        # SDK optional defaults serialize omitted description as JSON null or
+        # blank. Pop in place so proxy_completion forwards omit, not null.
+        if "description" in schema:
+            description_value = schema.get("description")
+            if description_value is None or (
+                isinstance(description_value, str) and not description_value.strip()
+            ):
+                schema.pop("description")
+            elif not isinstance(description_value, str):
+                raise RequestError(
+                    400,
+                    "invalid_response_format",
+                    "response_format.json_schema.description must be a string when provided",
+                )
         # Explicit JSON null is omit-equivalent: pop so passthrough matches omit.
         if "strict" in schema:
             strict_value = schema.get("strict")

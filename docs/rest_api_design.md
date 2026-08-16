@@ -93,6 +93,15 @@ These product surfaces are now implemented in this prototype:
 | `GET` | `/api/v1/commercial_due_diligence_rooms/latest` | Produce the buyer due diligence room that ties purchase approval, runtime API evidence, admin trace/access evidence, security, commercial terms, value analytics, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external missing artifacts into one runtime diligence artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; buyer diligence committee review. |
 | `GET` | `/api/v1/commercial_investment_committee_memos/latest` | Produce the investment committee memo that ties due diligence, purchase approval, financial case, risk/security, commercial terms, implementation readiness, Figma, review-process policy, packaging decision, and buyer/external approval conditions into one executive recommendation artifact. | Fugu API adoption; TRINITY verification; Conductor trace/access evidence; executive investment committee review. |
 
+## Compatibility honesty (caller next action)
+
+When an official OpenAI SDK serializes an omitted optional as JSON `null` or a blank string, do **not** send that key to a provider yourself and do **not** assume this gateway will forward it. On `/v1/chat/completions` and `/v1/responses`:
+
+- `tools[].function.description` / `parameters` / `strict` JSON `null` are popped before proxy so the upstream payload matches omit.
+- `response_format.json_schema` accepts only `name`, `description`, `schema`, and `strict`. JSON-null or blank `description` and JSON-null `strict` are popped in place. Unknown inner keys and non-string `description` return `invalid_response_format` — fix the client payload, then retry.
+
+If a provider still rejects the request, inspect `echo.response_format` / `echo.tools` on the mock path first; a remaining null key is a gateway bug, not a provider quirk.
+
 ## Production Library Target
 
 FastAPI should replace the current stdlib HTTP adapter when the API needs authentication, richer OpenAPI schema generation, dependency injection, and typed request/response models.

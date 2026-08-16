@@ -35,6 +35,31 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## API-shape honesty (structured outputs)
+
+- OpenAI. (2024). *Create chat completion*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/chat/create
+  Grounds the official `tools[].function` and `response_format.json_schema`
+  optional fields (`description`, `parameters`/`schema`, `strict`). Official
+  SDKs serialize omitted optionals as JSON `null`; this gateway pops those
+  keys before proxy so passthrough matches omit. Copyrighted vendor docs —
+  cite + link only; no PDF vendored.
+
+- OpenAI. (2024). *Structured outputs*. OpenAI Platform.
+  https://platform.openai.com/docs/guides/structured-outputs
+  Grounds fail-closed unknown keys on the `json_schema` object and the
+  requirement that `schema` is a JSON Schema object when structured output
+  is requested. Copyrighted vendor docs — cite + link only.
+
+- Wright, A., Andrews, H., Hutton, B., & Dennis, G. (2022). *JSON Schema: A
+  media type for describing JSON documents* (Internet-Draft
+  draft-bhutton-json-schema-01). Internet Engineering Task Force.
+  https://datatracker.ietf.org/doc/html/draft-bhutton-json-schema-01
+  Latest widely deployed JSON Schema dialect (2020-12) used when this
+  gateway type-checks `tool.function.parameters` and
+  `response_format.json_schema.schema` as objects without re-implementing
+  full schema validation. IETF Internet-Draft; cite + link only.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including

@@ -53,6 +53,19 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Structured-output optional-field honesty (2026-08-16)
+
+Researched before adding `_validate_chat_response_format` inner-field omit:
+
+| Option | Decision | Why |
+|---|---|---|
+| Official OpenAI Chat Completions + Structured Outputs docs | Cite (APA 7th) in `docs/papers/README.md`; do not vendor PDFs | Authoritative field list: `name`, `description`, `schema`, `strict` |
+| IETF JSON Schema 2020-12 (Wright et al., 2022) | Cite; type-check object only | Full schema evaluation is a provider concern; this gateway only guarantees omit-real optionals and fail-closed unknown keys |
+| Pydantic / jsonschema library | Skip | Stdlib `dict.pop` + `isinstance` covers the honesty contract; Ponytail forbids a new runtime dependency |
+| Silent drop of unknown `json_schema` keys | Skip | Buyers cannot debug smuggled fields; named `invalid_response_format` is the next action |
+
+No new dependency. Implementation stays in `contextual_orchestrator/server.py`.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
