@@ -16,9 +16,12 @@ import json
 
 from hypothesis import given, settings, strategies as st
 
+from contextual_orchestrator import server
+from contextual_orchestrator.server import RequestError
 from fuzz.targets import (
     exercise_agent_config,
     exercise_orchestration,
+    exercise_output_token_budget,
     exercise_redaction,
     exercise_request_body,
 )
@@ -71,6 +74,62 @@ def test_request_body_validators_on_structured_input(raw: bytes) -> None:
 
 def test_request_body_rejects_unhashable_message_role() -> None:
     exercise_request_body(b'{"messages":[{"role":[],"":[],"modnt":""}]}')
+
+
+def test_output_token_budget_rejects_zero_legacy_when_preferred_is_omit() -> None:
+    """Invoice-lookup SDKs send null preferred + max_tokens=0; must not bill."""
+    try:
+        server._resolve_chat_output_token_budget(
+            {"max_completion_tokens": None, "max_tokens": 0}
+        )
+    except RequestError as exc:
+        assert exc.status == 400
+        assert exc.code == "invalid_max_tokens"
+    else:
+        raise AssertionError("omit preferred must still fail-closed on max_tokens=0")
+
+
+def test_output_token_budget_rejects_zero_legacy_when_preferred_is_blank() -> None:
+    """Empty-string preferred is omit; sibling max_tokens=0 must still 400."""
+    try:
+        server._resolve_chat_output_token_budget(
+            {"max_completion_tokens": "  ", "max_tokens": 0}
+        )
+    except RequestError as exc:
+        assert exc.code == "invalid_max_tokens"
+    else:
+        raise AssertionError("blank preferred must still fail-closed on max_tokens=0")
+
+
+def test_output_token_budget_accepts_positive_legacy_when_preferred_is_omit() -> None:
+    budget = server._resolve_chat_output_token_budget(
+        {"max_completion_tokens": None, "max_tokens": 16}
+    )
+    assert budget == 16
+    assert (
+        exercise_output_token_budget(
+            {"max_completion_tokens": None, "max_tokens": 16}
+        )
+        == 16
+    )
+
+
+def test_output_token_budget_rejects_boolean_top_logprobs() -> None:
+    """JSON false is a bool, not integer 0 — do not omit-as-zero and bill."""
+    try:
+        server._validate_completions_top_logprobs({"top_logprobs": False})
+    except RequestError as exc:
+        assert exc.status == 400
+        assert exc.code == "invalid_top_logprobs"
+    else:
+        raise AssertionError("top_logprobs=false must be invalid_top_logprobs")
+    exercise_output_token_budget({"top_logprobs": False})
+
+
+@_SETTINGS
+@given(_json_values)
+def test_output_token_budget_never_crashes_on_decoded_json(value: object) -> None:
+    exercise_output_token_budget(value)
 
 
 @_SETTINGS

@@ -35,6 +35,29 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## API contract honesty (omit-preferred token budget)
+
+Official chat SDKs often send `max_completion_tokens: null` with a sibling
+`max_tokens`. Key presence must not skip the legacy validator: `max_tokens=0`
+is a billed completion with no output budget. JSON `top_logprobs: false` is a
+bool; in Python `False == 0` is true, so a type-blind omit check would bill.
+
+- OpenAI. (2024). *Create chat completion*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/chat/create
+  Grounds preferred `max_completion_tokens` over legacy `max_tokens`, and
+  integer `top_logprobs` (not boolean).
+- van Rossum, G., Warsaw, B., & Coghlan, N. (2013). *PEP 285 – Adding a
+  bool type*. Python Enhancement Proposals.
+  https://peps.python.org/pep-0285/
+  Documents `bool` as a subclass of `int` so `False == 0`. The gateway must
+  check `isinstance(value, bool)` before integer omit.
+- Manès, V. J. M., Han, H., Han, C., Cha, S. K., Egele, M., Schwartz, E. J.,
+  & Woo, M. (2021). The art, science, and engineering of fuzzing: A
+  survey. *IEEE Transactions on Software Engineering, 47*(11), 2312–2331.
+  https://doi.org/10.1109/TSE.2019.2946563
+  Grounds the shared `exercise_output_token_budget` seam (Hypothesis +
+  Atheris) for the new parser.
+
 ## API contract honesty (tool schema omit)
 
 Gateway buyers send official OpenAI SDK payloads. Optional

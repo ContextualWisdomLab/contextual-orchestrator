@@ -8,15 +8,18 @@ and asserts the invariants that must hold *for arbitrary input*:
   ``AttributeError``, ``RecursionError``, ``SystemError`` or a hang; and
 * structural invariants on any successful result (shape, types, idempotence).
 
-CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
+CodeGraph (``codegraph explore``) surfaced these surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
    ``_reject_unknown_keys`` -- the HTTP request-body parser and validators.
-2. ``orchestrator.ModelAgent.from_dict`` -- the agent-pool config parser.
-3. ``orchestrator.redact_text`` / ``redact_value`` -- secret/PII redaction run
+2. ``server._resolve_chat_output_token_budget`` /
+   ``_validate_completions_top_logprobs`` -- omit-preferred sibling
+   ``max_tokens`` and boolean ``top_logprobs`` (False is not 0).
+3. ``orchestrator.ModelAgent.from_dict`` -- the agent-pool config parser.
+4. ``orchestrator.redact_text`` / ``redact_value`` -- secret/PII redaction run
    over arbitrary trace payloads (regex + recursion).
-4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
+5. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
 
 No network, no secrets, no filesystem: every target runs fully offline.
@@ -105,6 +108,34 @@ def exercise_request_body(raw: bytes) -> None:
                 assert set(message) == {"role", "content"}
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
+
+    exercise_output_token_budget(body)
+
+
+def exercise_output_token_budget(body: Any) -> int | None:
+    """Drive omit-preferred token-budget and top_logprobs validators.
+
+    Arbitrary decoded JSON must raise ``RequestError`` or return a positive
+    integer budget (or ``None`` when both keys are omit). JSON ``false`` for
+    ``top_logprobs`` is a bool, not integer 0 — the helper must fail closed
+    instead of treating ``False == 0`` as omit-and-bill.
+    """
+    if not isinstance(body, dict):
+        return None
+    budget: int | None = None
+    try:
+        budget = server._resolve_chat_output_token_budget(body)
+    except RequestError:
+        budget = None
+    else:
+        assert budget is None or (
+            isinstance(budget, int) and not isinstance(budget, bool) and budget >= 1
+        )
+    try:
+        server._validate_completions_top_logprobs(body)
+    except RequestError:
+        pass
+    return budget
 
 
 def exercise_agent_config(value: Any) -> None:

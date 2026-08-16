@@ -22,13 +22,18 @@ deserialize request config validate untrusted input"`):
    `_validate_mode` / `_validate_messages`. Arbitrary bytes must normalise to a
    validated structure or raise `RequestError` / a JSON decode error — never an
    unhandled crash.
-2. **Agent config** — `orchestrator.ModelAgent.from_dict`. Arbitrary decoded
+2. **Output-token budget** — `server._resolve_chat_output_token_budget` and
+   `_validate_completions_top_logprobs` via `exercise_output_token_budget`.
+   Omit-equivalent `max_completion_tokens` still validates sibling
+   `max_tokens` (so `max_tokens=0` cannot bill). JSON `top_logprobs: false`
+   is `invalid_top_logprobs`, not omit-as-zero (`False == 0` in Python).
+3. **Agent config** — `orchestrator.ModelAgent.from_dict`. Arbitrary decoded
    JSON must yield a well-typed `ModelAgent` or raise `KeyError`/`TypeError`/
    `ValueError`.
-3. **Secret/PII redaction** — `orchestrator.redact_text` / `redact_value`.
+4. **Secret/PII redaction** — `orchestrator.redact_text` / `redact_value`.
    Never crashes, always returns `str`, is **idempotent** (re-redacting redacted
    text is a no-op), and preserves container shape.
-4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
+5. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
    `mock://` providers (fully offline). Arbitrary prompt text and mode must
    produce a JSON-serialisable record whose SSE framing round-trips.
 

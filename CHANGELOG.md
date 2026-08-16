@@ -19,6 +19,16 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Validate sibling `max_tokens` when `max_completion_tokens` is omit-equivalent
+  (JSON null or blank). `max_tokens=0` is `invalid_max_tokens` on tools, chat,
+  and Completions — it cannot bill a completion with no output budget. JSON
+  `top_logprobs: false` is `invalid_top_logprobs` (not omit-as-zero). Integer
+  `top_logprobs=0` remains omit. Next action: do not send `max_tokens=0` even
+  when the preferred budget is null; send `top_logprobs` only as an integer.
+- Drive `_resolve_chat_output_token_budget` and
+  `_validate_completions_top_logprobs` from `exercise_output_token_budget` so
+  arbitrary SDK bodies cannot crash the new parser. Next action: keep new
+  request-body validators on the shared fuzz seam in `fuzz/targets.py`.
 - Fail closed on unknown assistant `tool_calls` entry and `function` keys
   (`unknown_tool_call_fields` / `unknown_tool_call_function_fields`) on both
   the orchestration path and the tools / `response_format` SSE proxy.
@@ -59,3 +69,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   https://platform.openai.com/docs/guides/streaming-responses
 - WHATWG. (n.d.). *Server-sent events*. HTML Living Standard.
   https://html.spec.whatwg.org/multipage/server-sent-events.html
+- van Rossum, G., Warsaw, B., & Coghlan, N. (2013). *PEP 285 – Adding a
+  bool type*. Python Enhancement Proposals.
+  https://peps.python.org/pep-0285/
+- Manès, V. J. M., Han, H., Han, C., Cha, S. K., Egele, M., Schwartz, E. J.,
+  & Woo, M. (2021). The art, science, and engineering of fuzzing: A
+  survey. *IEEE Transactions on Software Engineering, 47*(11), 2312–2331.
+  https://doi.org/10.1109/TSE.2019.2946563
