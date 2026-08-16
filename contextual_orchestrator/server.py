@@ -267,7 +267,12 @@ def _coerce_optional_int(
     error_code: str,
     message: str,
 ) -> int | None:
-    """Treat null/empty as omit; accept int and digit strings (JS JSON)."""
+    """Treat null/empty as omit; accept int, digit strings, and whole-number floats.
+
+    JS JSON and some SDKs serialize integers as strings (``"1"``) or as
+    whole floats (``1.0``). Both coerce to ``int``; non-integral floats and
+    bools fail closed.
+    """
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
     if isinstance(value, bool):
@@ -279,6 +284,10 @@ def _coerce_optional_int(
         raise RequestError(400, error_code, message)
     if isinstance(value, int):
         return value
+    if isinstance(value, float):
+        if value.is_integer() and abs(value) <= 2**53:
+            return int(value)
+        raise RequestError(400, error_code, message)
     raise RequestError(400, error_code, message)
 
 
@@ -513,23 +522,19 @@ def _validate_completions_n(body: dict[str, Any]) -> int | None:
     OpenAI can return multiple completions when ``n > 1``. This gateway always
     returns a single choice, so ``n > 1`` fails closed. ``n=1`` and omit remain
     valid. Cap 128 is retained for clear range errors before the support check.
-    Digit strings (JS JSON sometimes serializes integers as strings) coerce.
+    Digit strings and whole-number floats (JS JSON) coerce.
     """
     if "n" not in body:
         return None
-    n = body.get("n")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if n is None or (isinstance(n, str) and not n.strip()):
+    n = _coerce_optional_int(
+        body.get("n"),
+        error_code="invalid_n",
+        message="n must be a positive integer",
+    )
+    if n is None:
         return None
-    # Digit strings (JS JSON sometimes serializes integers as strings).
-    if isinstance(n, str):
-        stripped = n.strip()
-        if stripped.isdigit():
-            n = int(stripped)
-            body["n"] = n
-        else:
-            raise RequestError(400, "invalid_n", "n must be a positive integer")
-    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+    body["n"] = n
+    if n < 1:
         raise RequestError(400, "invalid_n", "n must be a positive integer")
     if n > 128:
         raise RequestError(400, "invalid_n", "n must be at most 128")
@@ -548,24 +553,18 @@ def _validate_responses_n(body: dict[str, Any]) -> int | None:
     OpenAI may request multiple samples via ``n``. This gateway's Responses
     passthrough returns a single completion shape, so ``n`` greater than 1
     fails closed. ``n=1`` and omit remain valid.
-    Digit strings (JS JSON sometimes serializes integers as strings) coerce.
+    Digit strings and whole-number floats (JS JSON) coerce.
     """
     if "n" not in body:
         return None
-    n = body.get("n")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if n is None or (isinstance(n, str) and not n.strip()):
+    n = _coerce_optional_int(
+        body.get("n"),
+        error_code="invalid_n",
+        message="n must be an integer",
+    )
+    if n is None:
         return None
-    # Digit strings (JS JSON sometimes serializes integers as strings).
-    if isinstance(n, str):
-        stripped = n.strip()
-        if stripped.isdigit():
-            n = int(stripped)
-            body["n"] = n
-        else:
-            raise RequestError(400, "invalid_n", "n must be an integer")
-    if isinstance(n, bool) or not isinstance(n, int):
-        raise RequestError(400, "invalid_n", "n must be an integer")
+    body["n"] = n
     if n < 1:
         raise RequestError(400, "invalid_n", "n must be a positive integer")
     if n > 1:
@@ -677,22 +676,18 @@ def _validate_responses_seed(body: dict[str, Any]) -> int | None:
 
     Unlike Completions (where seed is not applied), Responses passthrough forwards
     seed to the selected agent. Invalid types/ranges fail closed before egress.
+    Digit strings and whole-number floats (JS JSON) coerce.
     """
     if "seed" not in body:
         return None
-    seed = body.get("seed")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if seed is None or (isinstance(seed, str) and not seed.strip()):
+    seed = _coerce_optional_int(
+        body.get("seed"),
+        error_code="invalid_seed",
+        message="seed must be an integer",
+    )
+    if seed is None:
         return None
-    # Digit strings (JS JSON sometimes serializes integers as strings).
-    if isinstance(seed, str):
-        stripped = seed.strip()
-        if stripped.lstrip("-").isdigit() and stripped not in {"-", ""}:
-            seed = int(stripped)
-        else:
-            raise RequestError(400, "invalid_seed", "seed must be an integer")
-    if isinstance(seed, bool) or not isinstance(seed, int):
-        raise RequestError(400, "invalid_seed", "seed must be an integer")
+    body["seed"] = seed
     if seed < -(2**63) or seed > (2**63 - 1):
         raise RequestError(400, "invalid_seed", "seed must fit in a signed 64-bit integer")
     return seed
@@ -780,22 +775,18 @@ def _validate_completions_seed(body: dict[str, Any]) -> int | None:
     OpenAI uses seed for best-effort deterministic sampling. This gateway validates
     signed int64 integers but does not apply seed on the Completions route path,
     so any provided ``seed`` fails closed. Omit remains valid.
+    Digit strings and whole-number floats (JS JSON) coerce before the support reject.
     """
     if "seed" not in body:
         return None
-    seed = body.get("seed")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if seed is None or (isinstance(seed, str) and not seed.strip()):
+    seed = _coerce_optional_int(
+        body.get("seed"),
+        error_code="invalid_seed",
+        message="seed must be an integer",
+    )
+    if seed is None:
         return None
-    # Digit strings (JS JSON sometimes serializes integers as strings).
-    if isinstance(seed, str):
-        stripped = seed.strip()
-        if stripped.lstrip("-").isdigit() and stripped not in {"-", ""}:
-            seed = int(stripped)
-        else:
-            raise RequestError(400, "invalid_seed", "seed must be an integer")
-    if isinstance(seed, bool) or not isinstance(seed, int):
-        raise RequestError(400, "invalid_seed", "seed must be an integer")
+    body["seed"] = seed
     if seed < -(2**63) or seed > (2**63 - 1):
         raise RequestError(400, "invalid_seed", "seed must fit in a signed 64-bit integer")
     raise RequestError(
@@ -945,15 +936,20 @@ def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
     Official Responses clients send ``max_output_tokens`` rather than chat-era
     ``max_tokens``. Accept and type-check so the field is not opaque
     ``unknown_fields``; value is left on the body for provider passthrough.
-    Cap matches ``max_tokens`` (1_048_576).
+    Cap matches ``max_tokens`` (1_048_576). Digit strings and whole-number
+    floats (JS JSON) coerce.
     """
     if "max_output_tokens" not in body:
         return None
-    value = body.get("max_output_tokens")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if value is None or (isinstance(value, str) and not value.strip()):
+    value = _coerce_optional_int(
+        body.get("max_output_tokens"),
+        error_code="invalid_max_output_tokens",
+        message="max_output_tokens must be a positive integer",
+    )
+    if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, int) or value < 1:
+    body["max_output_tokens"] = value
+    if value < 1:
         raise RequestError(
             400,
             "invalid_max_output_tokens",
@@ -1093,22 +1089,19 @@ def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
     This gateway runs a single completion path, so ``best_of > 1`` fails closed
     rather than silently returning one unranked candidate. ``best_of=1`` (and
     omit) remain valid. Boolean ``True``/``False`` are rejected.
+    Digit strings and whole-number floats (JS JSON) coerce.
     """
     if "best_of" not in body:
         return None
-    best_of = body.get("best_of")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if best_of is None or (isinstance(best_of, str) and not best_of.strip()):
+    best_of = _coerce_optional_int(
+        body.get("best_of"),
+        error_code="invalid_best_of",
+        message="best_of must be a positive integer",
+    )
+    if best_of is None:
         return None
-    # Digit strings (JS JSON sometimes serializes integers as strings).
-    if isinstance(best_of, str):
-        stripped = best_of.strip()
-        if stripped.isdigit():
-            best_of = int(stripped)
-            body["best_of"] = best_of
-        else:
-            raise RequestError(400, "invalid_best_of", "best_of must be a positive integer")
-    if isinstance(best_of, bool) or not isinstance(best_of, int) or best_of < 1:
+    body["best_of"] = best_of
+    if best_of < 1:
         raise RequestError(400, "invalid_best_of", "best_of must be a positive integer")
     if best_of > 128:
         raise RequestError(400, "invalid_best_of", "best_of must be at most 128")
@@ -1119,10 +1112,18 @@ def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
             "best_of greater than 1 is not supported on /v1/completions",
         )
     n = body.get("n", 1)
-    if isinstance(n, str) and n.strip().isdigit():
-        n = int(n.strip())
-        body["n"] = n
-    if isinstance(n, bool) or not isinstance(n, int) or n < 1:
+    if n is None or (isinstance(n, str) and not str(n).strip()):
+        n = 1
+    else:
+        n = _coerce_optional_int(
+            n,
+            error_code="invalid_n",
+            message="n must be a positive integer",
+        )
+        if n is None:
+            n = 1
+    body["n"] = n
+    if n < 1:
         raise RequestError(400, "invalid_n", "n must be a positive integer")
     if best_of < n:
         raise RequestError(
@@ -4234,9 +4235,11 @@ def build_server(
                                 ) from exc
                             raise
                     if "stop" in body:
-                        # Explicit JSON null, empty string, empty [], or all-whitespace
-                        # array items is treat-as-omit (SDK optional default).
+                        # Explicit JSON null, empty/whitespace string, empty [], or
+                        # all-whitespace array items is treat-as-omit (SDK optional default).
                         stop_val = body.get("stop")
+                        if isinstance(stop_val, str) and not stop_val.strip():
+                            stop_val = ""
                         if isinstance(stop_val, list):
                             stop_val = [s for s in stop_val if not (isinstance(s, str) and not s.strip())]
                             if not stop_val:
