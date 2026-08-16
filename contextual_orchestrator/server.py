@@ -230,6 +230,27 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
 
 
 
+
+def _coerce_optional_bool(
+    value: Any,
+    *,
+    error_code: str,
+    message: str,
+) -> bool | None:
+    """Treat null/empty as omit; accept bool and int 0/1 (JS SDK).
+
+    ``True``/``False`` are not accepted via the int branch (``bool`` is a
+    subclass of ``int`` in Python), so only bare ``0``/``1`` coerce.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        return value
+    if type(value) is int and value in (0, 1):
+        return bool(value)
+    raise RequestError(400, error_code, message)
+
+
 def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
     """Legacy Completions ``prompt`` → single user message list.
 
@@ -297,11 +318,11 @@ def _validate_completions_stream(body: dict[str, Any]) -> bool | None:
     if "stream" not in body:
         return None
     stream = body.get("stream")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if stream is None or (isinstance(stream, str) and not stream.strip()):
+    stream = _coerce_optional_bool(
+        stream, error_code="invalid_stream", message="stream must be a boolean"
+    )
+    if stream is None:
         return None
-    if not isinstance(stream, bool):
-        raise RequestError(400, "invalid_stream", "stream must be a boolean")
     if stream is True:
         raise RequestError(
             400,
@@ -554,15 +575,13 @@ def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None
     if "parallel_tool_calls" not in body:
         return None
     value = body.get("parallel_tool_calls")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if value is None or (isinstance(value, str) and not value.strip()):
+    value = _coerce_optional_bool(
+        value,
+        error_code="invalid_parallel_tool_calls",
+        message="parallel_tool_calls must be a boolean",
+    )
+    if value is None:
         return None
-    if not isinstance(value, bool):
-        raise RequestError(
-            400,
-            "invalid_parallel_tool_calls",
-            "parallel_tool_calls must be a boolean",
-        )
     if value is True:
         tools = body.get("tools") if "tools" in body else None
         if not isinstance(tools, list) or not tools:
@@ -586,6 +605,13 @@ def _validate_responses_seed(body: dict[str, Any]) -> int | None:
     # Explicit JSON null or empty/whitespace string is treat-as-omit.
     if seed is None or (isinstance(seed, str) and not seed.strip()):
         return None
+    # Digit strings (JS JSON sometimes serializes integers as strings).
+    if isinstance(seed, str):
+        stripped = seed.strip()
+        if stripped.lstrip("-").isdigit() and stripped not in {"-", ""}:
+            seed = int(stripped)
+        else:
+            raise RequestError(400, "invalid_seed", "seed must be an integer")
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise RequestError(400, "invalid_seed", "seed must be an integer")
     if seed < -(2**63) or seed > (2**63 - 1):
@@ -682,6 +708,13 @@ def _validate_completions_seed(body: dict[str, Any]) -> int | None:
     # Explicit JSON null or empty/whitespace string is treat-as-omit.
     if seed is None or (isinstance(seed, str) and not seed.strip()):
         return None
+    # Digit strings (JS JSON sometimes serializes integers as strings).
+    if isinstance(seed, str):
+        stripped = seed.strip()
+        if stripped.lstrip("-").isdigit() and stripped not in {"-", ""}:
+            seed = int(stripped)
+        else:
+            raise RequestError(400, "invalid_seed", "seed must be an integer")
     if isinstance(seed, bool) or not isinstance(seed, int):
         raise RequestError(400, "invalid_seed", "seed must be an integer")
     if seed < -(2**63) or seed > (2**63 - 1):
@@ -2160,11 +2193,11 @@ def _validate_chat_store(body: dict[str, Any]) -> bool | None:
     if "store" not in body:
         return None
     store = body.get("store")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if store is None or (isinstance(store, str) and not store.strip()):
+    store = _coerce_optional_bool(
+        store, error_code="invalid_store", message="store must be a boolean"
+    )
+    if store is None:
         return None
-    if not isinstance(store, bool):
-        raise RequestError(400, "invalid_store", "store must be a boolean")
     if store is True:
         raise RequestError(
             400,
@@ -2206,20 +2239,17 @@ def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
         functions_present = "functions" in body
 
     parallel = body.get("parallel_tool_calls") if "parallel_tool_calls" in body else None
+    if "parallel_tool_calls" in body:
+        parallel = _coerce_optional_bool(
+            parallel,
+            error_code="invalid_parallel_tool_calls",
+            message="parallel_tool_calls must be a boolean",
+        )
     if parallel is False or parallel is None:
-        # false or explicit null are omit-equivalent SDK defaults (no-ops).
+        # false or omit-equivalent SDK defaults (no-ops).
         parallel_present = False
-    elif "parallel_tool_calls" in body:
-        # true or non-boolean — surface as tools unsupported (or type error below).
-        if not isinstance(parallel, bool):
-            raise RequestError(
-                400,
-                "invalid_parallel_tool_calls",
-                "parallel_tool_calls must be a boolean",
-            )
-        parallel_present = True
     else:
-        parallel_present = False
+        parallel_present = True
 
     def _tool_control_present(key: str) -> bool:
         if key not in body:
@@ -2321,11 +2351,11 @@ def _validate_completions_store(body: dict[str, Any]) -> bool | None:
     if "store" not in body:
         return None
     store = body.get("store")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if store is None or (isinstance(store, str) and not store.strip()):
+    store = _coerce_optional_bool(
+        store, error_code="invalid_store", message="store must be a boolean"
+    )
+    if store is None:
         return None
-    if not isinstance(store, bool):
-        raise RequestError(400, "invalid_store", "store must be a boolean")
     if store is True:
         raise RequestError(
             400,
@@ -2346,11 +2376,11 @@ def _validate_responses_store(body: dict[str, Any]) -> bool | None:
     if "store" not in body:
         return None
     store = body.get("store")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if store is None or (isinstance(store, str) and not store.strip()):
+    store = _coerce_optional_bool(
+        store, error_code="invalid_store", message="store must be a boolean"
+    )
+    if store is None:
         return None
-    if not isinstance(store, bool):
-        raise RequestError(400, "invalid_store", "store must be a boolean")
     if store is True:
         raise RequestError(
             400,
@@ -3927,16 +3957,12 @@ def build_server(
                         # provider passthrough; without tools, true fails closed.
                         # Explicit JSON null is treat-as-omit (SDK optional default).
                         ptc = body.get("parallel_tool_calls")
-                        # Empty/whitespace string is treat-as-omit (SDK optional default).
-                        if isinstance(ptc, str) and not ptc.strip():
-                            ptc = None
+                        ptc = _coerce_optional_bool(
+                            ptc,
+                            error_code="invalid_parallel_tool_calls",
+                            message="parallel_tool_calls must be a boolean",
+                        )
                         if ptc is not None:
-                            if not isinstance(ptc, bool):
-                                raise RequestError(
-                                    400,
-                                    "invalid_parallel_tool_calls",
-                                    "parallel_tool_calls must be a boolean",
-                                )
                             if ptc is True and not tools_list:
                                 raise RequestError(
                                     400,
@@ -3986,12 +4012,16 @@ def build_server(
                     else:
                         include_trace = bool(security.expose_trace_by_default)
                     stream = body.get("stream", False)
-                    # Explicit JSON null or empty/whitespace string is treat-as-omit
-                    # (SDK optional default → non-stream).
+                    # Explicit JSON null/empty or int 0/1 (JS SDK) coerce; default non-stream.
                     if stream is None or (isinstance(stream, str) and not stream.strip()):
                         stream = False
-                    if not isinstance(stream, bool):
-                        raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    else:
+                        coerced = _coerce_optional_bool(
+                            stream,
+                            error_code="invalid_request",
+                            message="stream must be a boolean",
+                        )
+                        stream = False if coerced is None else coerced
                     if "stream_options" in body:
                         _validate_chat_stream_options(body, stream)
                     attribution = _validate_attribution(body.get("attribution"))
