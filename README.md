@@ -36,7 +36,7 @@ curl -s http://127.0.0.1:8000/v1/chat/completions \
 
 HTTP serving is hardened for local lab use:
 
-- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` for one local-development token. `CONTEXTUAL_ORCHESTRATOR_TOKEN` (and the split admin/inference vars) are copied into the credential KV once at process start — send the stripped seeded token; a later env edit, or a restart after the KV name is already set, does not change who can call the API. Rotate a persisted key with `--auth-token` or `register-credential`.
+- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` for one local-development token. `CONTEXTUAL_ORCHESTRATOR_TOKEN` (and the split admin/inference vars) are copied into the credential KV once at process start — send the stripped seeded token; a later env edit, or a restart after the KV name is already set, does not change who can call the API. `--auth-token` overrides this process only; persist a new authenticator with `register-credential`. `register-credential --from-env` and `--value-stdin` strip surrounding whitespace so a mounted-secret newline is not stored or sent upstream.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted. Trusted traces keep operational email so invoice and HR tickets stay workable; credential material is still `[REDACTED]`.
@@ -258,6 +258,7 @@ python tests/test_api_contract.py
 python tests/test_security_hardening.py
 python tests/test_provider_host_allowlist_kv.py
 python tests/test_server_auth_kv.py
+python tests/test_kv_credentials.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py

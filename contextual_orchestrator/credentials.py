@@ -223,13 +223,29 @@ def set_backend(backend: CredentialBackend | None) -> None:
 
 
 def get_credential(name: str) -> str | None:
-    """Resolve a named runtime secret from the KV. Never reads os.getenv for it."""
-    return get_backend().get(name)
+    """Resolve a named runtime secret from the KV. Never reads os.getenv for it.
+
+    Surrounding whitespace is stripped so a secret persisted before write-path
+    strip still authorizes. Empty-after-strip is treated as absent.
+    """
+    raw = get_backend().get(name)
+    if raw is None:
+        return None
+    stripped = raw.strip()
+    return stripped or None
 
 
 def register_credential(name: str, value: str) -> None:
-    """Register a named secret into the KV (used by the bootstrap CLI)."""
-    get_backend().set(name, value)
+    """Register a named secret into the KV (used by the bootstrap CLI).
+
+    Values are stored stripped. Buyer next action: pipe or ``--from-env`` a
+    mounted secret; a trailing newline is not persisted. Whitespace-only
+    values raise ``ValueError`` so an empty secret is never stored.
+    """
+    stripped = (value or "").strip()
+    if not stripped:
+        raise ValueError("empty credential value; provide a non-empty secret")
+    get_backend().set(name, stripped)
 
 
 def seed_server_auth_from_environ() -> None:

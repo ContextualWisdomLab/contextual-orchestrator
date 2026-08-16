@@ -62,8 +62,9 @@ def _register_credential_command(argv: list[str]) -> None:
         value = os.environ[args.from_env]
     else:
         # Default: read from stdin so the secret never touches argv or the app env.
-        value = sys.stdin.read().strip()
+        value = sys.stdin.read()
 
+    value = (value or "").strip()
     if not value:
         parser.error("empty credential value; provide a non-empty secret")
 

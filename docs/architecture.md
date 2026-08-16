@@ -54,7 +54,10 @@ This repository implements the interface and control plane, not the trained coor
   `inference_auth_token`) resolve from the credential KV (NIST SP 800-53
   Rev. 5 IA-5; NIST SP 800-63B). `CONTEXTUAL_ORCHESTRATOR_TOKEN` and the
   split admin/inference vars are bootstrap transport via
-  `seed_server_auth_from_environ` only.
+  `seed_server_auth_from_environ` only. `--auth-token` overrides this
+  process; persist with `register-credential`. Seed, resolve,
+  `register_credential`, and `get_credential` strip surrounding
+  whitespace.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

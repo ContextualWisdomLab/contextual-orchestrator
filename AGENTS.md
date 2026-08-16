@@ -63,9 +63,11 @@ push or open a PR.
   and the provider-host allowlist are KV-backed
   (`get_credential`, `resolve_server_auth_tokens`,
   `allowed_provider_hosts`). Env tokens are bootstrap transport via
-  `seed_server_auth_from_environ` only. Seed and resolve strip
-  surrounding whitespace. Seed skips any non-empty key — restart does
-  not recopy a persisted authenticator. Do not reintroduce `os.getenv`
+  `seed_server_auth_from_environ` only. Seed, resolve,
+  `register_credential`, and `get_credential` strip surrounding
+  whitespace. Seed skips any non-empty key — restart does not recopy a
+  persisted authenticator. `--auth-token` overrides this process; persist
+  with `register-credential`. Do not reintroduce `os.getenv`
   inside `ModelClient._validate_provider`, `ModelClient.chat`, or
   `serve_security_tokens` resolution.
 

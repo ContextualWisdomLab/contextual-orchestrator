@@ -27,8 +27,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   authorizes. Changing the env var on a running process — or restarting
   after the KV name is already set — no longer changes who can call the
   API. Buyer next action: pass `--auth-token` (or start once with the
-  env var so bootstrap can copy it), then send that Bearer value. Rotate
-  a persisted key with `--auth-token` or `register-credential`.
+  env var so bootstrap can copy it), then send that Bearer value.
+  `--auth-token` overrides this process only; persist a new authenticator
+  with `register-credential`.
+- `register-credential --from-env` and `register_credential` strip
+  surrounding whitespace (matching `--value-stdin`). A Docker/K8s secret
+  trailing newline is not persisted and does not become
+  `Authorization: Bearer sk-…` plus a newline on the provider request. Whitespace-only
+  values are rejected as empty. `get_credential` also strips so a secret
+  stored before this write-path still authorizes. Buyer next action: seed
+  with `--from-env` or `--value-stdin` from the mounted secret, then send
+  traffic.
 - Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is
   read from the **process-wide runtime ConfigStore** at request time, not from
   `os.getenv` and not from a separately constructed Postgres `com_config`

@@ -97,9 +97,11 @@ cites them rather than vendoring the full PDFs.
   Control **IA-5** (Authenticator Management) is the request-time source
   for serve Bearer tokens: `gateway_auth_token`, `admin_auth_token`, and
   `inference_auth_token` live in the credential KV. Seed and resolve
-  strip surrounding whitespace. Buyer next action: pass `--auth-token`
-  or start once with `CONTEXTUAL_ORCHESTRATOR_TOKEN`. Rotate a persisted
-  key with `--auth-token` or `register-credential`.
+  strip surrounding whitespace. `register-credential --from-env` and
+  `get_credential` also strip so a mounted-secret newline is not stored
+  or sent upstream. Buyer next action: pass `--auth-token` (this process
+  only) or start once with `CONTEXTUAL_ORCHESTRATOR_TOKEN`. Persist a
+  new authenticator with `register-credential`.
 
 - Grassi, P. A., Garcia, M. E., & Fenton, J. L. (2017). *Digital identity
   guidelines: Authentication and lifecycle management* (NIST Special

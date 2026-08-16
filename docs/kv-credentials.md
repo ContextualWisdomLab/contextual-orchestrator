@@ -97,7 +97,8 @@ A one-shot CLI subcommand writes a deploy-time secret into the KV:
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator \
     register-credential --name OPENAI_API_KEY --value-stdin
 
-# Or use bootstrap transport: read the value from a named env var at bootstrap
+# Or use bootstrap transport: read the value from a named env var at bootstrap.
+# Surrounding whitespace (mounted-secret newlines) is stripped before persist.
 python -m contextual_orchestrator \
     register-credential --name OPENAI_API_KEY --from-env OPENAI_API_KEY
 ```
@@ -189,19 +190,22 @@ At process start, `seed_server_auth_from_environ()` may copy
 and `CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN` into those KV names
 **once**, when the name is still empty. Seed skips any non-empty key.
 A later env edit does not change a live process or a persisted key —
-restart does not recopy. Rotate with `--auth-token` or
-`register-credential`. Seed and resolve strip surrounding whitespace so
-a Docker/K8s secret trailing newline still matches the Bearer buyers
-send. `python -m contextual_orchestrator --serve` resolves tokens with
+restart does not recopy. `--auth-token` overrides this process only;
+persist a new authenticator with `register-credential`. Seed, resolve,
+`register-credential --from-env` / `--value-stdin`, and `get_credential`
+strip surrounding whitespace so a Docker/K8s secret trailing newline
+still matches the Bearer buyers send and is not forwarded to providers. `python -m contextual_orchestrator --serve` resolves tokens with
 `resolve_server_auth_tokens()`: an explicit `--auth-token` /
 `--admin-token` / `--inference-token` wins; otherwise the KV value is
 used. `serve()` seeds provider egress but not gateway auth — embedders
 that skip `__main__` must pass `SecurityConfig` or call seed + resolve
 themselves.
 
-Buyer next action: pass `--auth-token` (or the split pair), or start
+Buyer next action: pass `--auth-token` (this process only), or start
 once with the matching env var so bootstrap can copy it, then send that
-Bearer value. Do not edit the env var on a live process and expect
+Bearer value. Persist a new authenticator or provider key with
+`register-credential` (`--from-env` and `--value-stdin` strip mounted-secret
+newlines). Do not edit the env var on a live process and expect
 authorization to change. Do not rotate a persisted KV by changing the
 env var and restarting. Do not expect argparse to read the env var as
 the flag default.
