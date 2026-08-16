@@ -43,6 +43,8 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     # Async background mode — not supported on this gateway.
     "background",
     "include",
+    # Assistants-style tool_resources — named unsupported (not unknown_fields).
+    "tool_resources",
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
@@ -88,6 +90,7 @@ ALLOWED_COMPLETIONS_KEYS = {
     # Modern OpenAI SDK control fields — named unsupported errors.
     "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
     "reasoning", "background", "include",
+    "tool_resources",
 } | {"attribution", "routing"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 # Chat message object keys this gateway interprets. Anything else fails closed
@@ -2455,6 +2458,26 @@ def _validate_chat_audio_web_search_surface(
 
 
 
+def _validate_tool_resources(body: dict[str, Any], *, endpoint_path: str) -> None:
+    """Reject Assistants-style ``tool_resources`` with a named unsupported error.
+
+    OpenAI Assistants/Responses SDKs may send ``tool_resources`` (file_search,
+    code_interpreter bindings). This gateway has no tool-resource plane, so any
+    non-omit value fails closed. Explicit JSON null or empty object is treat-as-omit.
+    """
+    if "tool_resources" not in body:
+        return
+    value = body.get("tool_resources")
+    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    if value is None or (isinstance(value, dict) and not value):
+        return
+    raise RequestError(
+        400,
+        "invalid_tool_resources",
+        f"tool_resources is not supported on {endpoint_path}",
+    )
+
+
 def _validate_openai_sdk_control_fields(body: dict[str, Any], *, endpoint_path: str) -> None:
     """Reject modern OpenAI SDK control fields not applied on this gateway.
 
@@ -3764,6 +3787,7 @@ def build_server(
                         body, endpoint_path="/v1/completions"
                     )
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/completions")
+                    _validate_tool_resources(body, endpoint_path="/v1/completions")
                     _validate_max_tool_calls(body, endpoint_path="/v1/completions")
                     _validate_completions_reasoning_object(body)
                     _validate_openai_background(body, endpoint_path="/v1/completions")
@@ -3880,6 +3904,7 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
                     _validate_chat_audio_web_search_surface(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/chat/completions")
+                    _validate_tool_resources(body, endpoint_path="/v1/chat/completions")
                     _validate_chat_reasoning_object(body)
                     _validate_openai_background(body, endpoint_path="/v1/chat/completions")
                     _validate_chat_include_field(body)
@@ -4440,6 +4465,7 @@ def build_server(
                     if "max_tool_calls" in body:
                         _validate_responses_max_tool_calls(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
+                    _validate_tool_resources(body, endpoint_path="/v1/responses")
                     _validate_openai_background(body, endpoint_path="/v1/responses")
                     if "parallel_tool_calls" in body:
                         _validate_responses_parallel_tool_calls(body)
