@@ -81,9 +81,13 @@ ISO/IEC 27001 is cited, not attached.
   systems and organizations* (NIST Special Publication 800-53 Rev. 5).
   National Institute of Standards and Technology.
   https://doi.org/10.6028/NIST.SP.800-53r5
-  Controls **AC-3** (Access Enforcement) and **AU-2** (Event Logging) are
-  the substitute for email `[REDACTED]` on trusted traces. Credential
-  material remains redacted.
+  Control **AU-2** (Event Logging) plus opt-in disclosure by a token
+  holder is the substitute for email `[REDACTED]` on trusted traces.
+  This is not a separate admin-scope check: any caller who holds the
+  gateway token and sets `include_orchestration_trace` receives the
+  identifier. Credential material remains redacted. Buyer next action:
+  request the trace only from a trusted caller; do not expect emails in
+  that trace to become `[REDACTED]`.
 
 ## Boundary protection (provider host allowlist)
 

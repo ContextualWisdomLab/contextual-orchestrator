@@ -8324,11 +8324,11 @@ def redact_text(text: str) -> str:
     """Mask credential material in traces; keep operational personal data.
 
     API keys, tokens, and Bearer secrets stay ``[REDACTED]``. Email addresses
-    and phone numbers are left intact: trusted-caller traces are the operator
-    work surface, and irreversible PII masking makes invoice/HR/support tickets
-    unworkable. Access control (trace only when the caller opts in) plus
-    audit is the control, not destruction of the identifier (McCallister
-    et al., 2010; Joint Task Force, 2020, AC-3/AU-2).
+    are left intact: trusted-caller traces are the operator work surface, and
+    irreversible PII masking makes invoice/HR/support tickets unworkable.
+    Access control (trace only when the caller opts in) plus audit is the
+    control, not destruction of the identifier (McCallister et al., 2010;
+    Joint Task Force, 2020, AU-2).
     """
     redacted = text
     for pattern in SECRET_PATTERNS:

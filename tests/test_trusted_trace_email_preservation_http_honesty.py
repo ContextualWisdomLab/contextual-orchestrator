@@ -3,7 +3,7 @@
 Invoice, HR, and support tickets name a person. Irreversible email masking on
 the trusted-caller trace makes those tickets unworkable. Access control (trace
 only when the caller opts in) plus credential redaction is the SOC 2 / CSAP
-control; see NIST SP 800-122 and NIST SP 800-53 Rev. 5 AC-3 / AU-2.
+control; see NIST SP 800-122 and NIST SP 800-53 Rev. 5 AU-2.
 """
 
 from __future__ import annotations
@@ -119,7 +119,28 @@ def test_http_trusted_trace_still_redacts_bearer_secret() -> None:
         thread.join(timeout=5)
 
 
+def test_http_untrusted_caller_omits_trace_email() -> None:
+    """Default callers must not receive orchestration.trace on an invoice prompt."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": _INVOICE_PROMPT}],
+            },
+        )
+        assert status == 200, body
+        orchestration = body.get("orchestration") or {}
+        assert "trace" not in orchestration, orchestration
+        assert orchestration.get("mode") == "route"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_trusted_trace_keeps_invoice_email()
     test_http_trusted_trace_still_redacts_bearer_secret()
+    test_http_untrusted_caller_omits_trace_email()
     print("ok")

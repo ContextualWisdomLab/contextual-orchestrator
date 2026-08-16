@@ -11,13 +11,21 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 - Trusted orchestration traces no longer irreversibly mask email addresses.
   Credential shapes (`api_key=`, `Bearer …`) stay `[REDACTED]`. Access control
-  (opt-in `include_orchestration_trace`) plus audit is the PII control, not
-  destruction of the identifier an operator needs to close an invoice or HR
-  ticket. Next action: request the trace only from a trusted caller; do not
-  expect emails in that trace to become `[REDACTED]`.
+  (opt-in `include_orchestration_trace` by a token holder) plus audit (NIST
+  SP 800-53 AU-2) is the PII control, not destruction of the identifier an
+  operator needs to close an invoice or HR ticket. Next action: request the
+  trace only from a trusted caller; do not expect emails in that trace to
+  become `[REDACTED]`.
 
 ### Fixed
 
+- The README Check script runner now executes
+  `test_trusted_trace_keeps_operational_email` and the HTTP honesty file
+  covers a default caller (`include_orchestration_trace` omitted) so an
+  invoice email cannot leak through `orchestration.trace`. Next action: run
+  `python tests/test_security_hardening.py` and
+  `python tests/test_trusted_trace_email_preservation_http_honesty.py`
+  before trusting the keep-email contract.
 - Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is
   read from the **process-wide runtime ConfigStore** at request time, not from
   `os.getenv` and not from a separately constructed Postgres `com_config`

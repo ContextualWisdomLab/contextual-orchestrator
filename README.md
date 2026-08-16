@@ -256,6 +256,7 @@ python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
 python tests/test_security_hardening.py
+python tests/test_trusted_trace_email_preservation_http_honesty.py
 python tests/test_provider_host_allowlist_kv.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py

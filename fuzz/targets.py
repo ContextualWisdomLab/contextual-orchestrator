@@ -143,6 +143,14 @@ def exercise_redaction(text: str) -> None:
     twice = redact_text(once)
     assert once == twice, "redaction is not idempotent"
 
+    # Operational email is not a secret shape. A known invoice address must
+    # survive even when a credential sits in the same string.
+    invoice = "Refund alice@example.com api_key=abcdefghijklmnopqrstuvwxyz"
+    kept = redact_text(invoice)
+    assert "alice@example.com" in kept
+    assert "[REDACTED]" in kept
+    assert "abcdefghijklmnopqrstuvwxyz" not in kept
+
     # ``redact_value`` must preserve container shape while redacting leaves.
     payload = {"trace": [text, {"nested": text}], "count": 3, "flag": True, "none": None}
     out = redact_value(payload)

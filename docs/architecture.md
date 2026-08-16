@@ -10,7 +10,6 @@
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
 - McCallister, E., Grance, T., & Scarfone, K. (2010). *Guide to protecting the confidentiality of personally identifiable information (PII)* (NIST Special Publication 800-122). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-122
 - Joint Task Force. (2020). *Security and privacy controls for information systems and organizations* (NIST Special Publication 800-53 Rev. 5). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-53r5
-- Joint Task Force. (2020). *Security and privacy controls for information systems and organizations* (NIST Special Publication 800-53 Rev. 5). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-53r5
 - International Organization for Standardization. (2022). *Information security, cybersecurity and privacy protection — Information security controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
 
 ## What The Architecture Is
@@ -33,7 +32,7 @@ The Fugu report combines these ideas into production constraints:
 - The agent pool is swappable, allowing provider preference, model exclusion, and compliance controls.
 - Multi-agent tool/function-call workflows need memory discipline: isolate agents inside the current workflow, but keep useful shared memory across turns.
 - Tool-calling passthrough must be schema-honest: SDK JSON `null` on optional `tool.function` fields is popped before the provider hop so Fugu-style tool workflows do not fail on omit-vs-null mismatches (OpenAI, 2024; Bray, 2017).
-- Trusted traces keep operational personal data (email, phone). Irreversible PII masking on the operator work surface makes invoice and HR tickets unworkable. Credential material is still `[REDACTED]`. The control is opt-in trace access plus audit (McCallister et al., 2010; Joint Task Force, 2020, AC-3/AU-2), not destruction of the identifier.
+- Trusted traces keep operational email. Irreversible PII masking on the operator work surface makes invoice and HR tickets unworkable. Credential material is still `[REDACTED]`. The control is opt-in trace access by a token holder plus audit (McCallister et al., 2010; Joint Task Force, 2020, AU-2), not destruction of the identifier.
 
 ## Implementation Mapping
 
