@@ -7,10 +7,25 @@ import json
 import os
 import sys
 
-from .credentials import register_credential
+from .credentials import register_credential, resolve_server_auth_tokens, seed_server_auth_from_environ
 from .kv_config import seed_provider_egress_from_environ
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
+
+
+def serve_security_tokens(args: argparse.Namespace) -> tuple[str, str, str]:
+    """Seed env authenticators into the KV once, then resolve serve tokens.
+
+    Explicit CLI flags win. Env is bootstrap transport only. Buyer next
+    action: pass ``--auth-token`` or start once with
+    ``CONTEXTUAL_ORCHESTRATOR_TOKEN`` so the KV can copy it.
+    """
+    seed_server_auth_from_environ()
+    return resolve_server_auth_tokens(
+        auth_token=args.auth_token,
+        admin_token=args.admin_token,
+        inference_token=args.inference_token,
+    )
 
 
 def _register_credential_command(argv: list[str]) -> None:
@@ -71,9 +86,21 @@ def main() -> None:
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--auth-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_TOKEN", ""))
-    parser.add_argument("--admin-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN", ""))
-    parser.add_argument("--inference-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN", ""))
+    parser.add_argument(
+        "--auth-token",
+        default="",
+        help="Gateway Bearer token. When omitted, bootstrap copies CONTEXTUAL_ORCHESTRATOR_TOKEN into the credential KV once.",
+    )
+    parser.add_argument(
+        "--admin-token",
+        default="",
+        help="Admin Bearer token. When omitted, bootstrap copies CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN into the credential KV once.",
+    )
+    parser.add_argument(
+        "--inference-token",
+        default="",
+        help="Inference Bearer token. When omitted, bootstrap copies CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN into the credential KV once.",
+    )
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
@@ -112,13 +139,15 @@ def main() -> None:
         return
 
     if args.serve:
-        if not (args.auth_token or args.admin_token or args.inference_token):
+        auth_token, admin_token, inference_token = serve_security_tokens(args)
+        if not (auth_token or admin_token or inference_token):
             parser.error(
                 "--serve requires --auth-token, split --admin-token/--inference-token, "
-                "or matching CONTEXTUAL_ORCHESTRATOR_* environment variables"
+                "or matching CONTEXTUAL_ORCHESTRATOR_* environment variables "
+                "so bootstrap can copy them into the credential KV"
             )
-        if not args.auth_token and (args.admin_token or args.inference_token) and not (
-            args.admin_token and args.inference_token
+        if not auth_token and (admin_token or inference_token) and not (
+            admin_token and inference_token
         ):
             parser.error("split token mode requires both --admin-token and --inference-token")
         serve(
@@ -126,9 +155,9 @@ def main() -> None:
             host=args.host,
             port=args.port,
             security=SecurityConfig(
-                auth_token=args.auth_token,
-                admin_token=args.admin_token,
-                inference_token=args.inference_token,
+                auth_token=auth_token,
+                admin_token=admin_token,
+                inference_token=inference_token,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
             ),

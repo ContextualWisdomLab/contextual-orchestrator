@@ -56,12 +56,16 @@ push or open a PR.
 - The reference implementation is xtrmLLMBatchPython's pgcrypto-encrypted
   Postgres credential registry (`get_credential(name)`); reuse that pattern (a
   DB-backed KV is fine) unless a dedicated KV is adopted.
-- **Known deviation to migrate:** `__main__.py` still accepts
-  `CONTEXTUAL_ORCHESTRATOR_*` tokens and bind/TLS flags from env as
-  **process bootstrap**. Provider API keys and the provider-host allowlist
-  are KV-backed at request time (`get_credential`,
-  `allowed_provider_hosts`). Do not reintroduce `os.getenv` inside
-  `ModelClient._validate_provider` or `ModelClient.chat`.
+- **Known deviation to migrate:** `__main__.py` still accepts bind/TLS
+  flags and sqlite/Clearfolio paths from env as **process bootstrap**.
+  Provider API keys, gateway Bearer authenticators
+  (`gateway_auth_token` / `admin_auth_token` / `inference_auth_token`),
+  and the provider-host allowlist are KV-backed
+  (`get_credential`, `resolve_server_auth_tokens`,
+  `allowed_provider_hosts`). Env tokens are bootstrap transport via
+  `seed_server_auth_from_environ` only. Do not reintroduce `os.getenv`
+  inside `ModelClient._validate_provider`, `ModelClient.chat`, or
+  `serve_security_tokens` resolution.
 
 ### This repo: the org LLM gateway
 
@@ -69,10 +73,12 @@ push or open a PR.
   OpenAI-compatible front door consumed by **gyeot** and **scopeweave**.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
-- Provider API keys resolve through `get_credential`. The provider-host
-  allowlist resolves through `allowed_provider_hosts()` on the **process-wide
-  runtime ConfigStore** (KV category `provider_egress`). That store is
-  `InMemoryConfigStore` unless bootstrap installed another backend with
+- Provider API keys and gateway Bearer authenticators resolve through
+  `get_credential` (`gateway_auth_token`, `admin_auth_token`,
+  `inference_auth_token`). The provider-host allowlist resolves through
+  `allowed_provider_hosts()` on the **process-wide runtime ConfigStore**
+  (KV category `provider_egress`). That store is `InMemoryConfigStore`
+  unless bootstrap installed another backend with
   `set_runtime_config_store()`. Env remains bootstrap transport only.
 - The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
   do not change it.

@@ -85,6 +85,29 @@ ISO/IEC 27001 is cited, not attached.
   the substitute for email `[REDACTED]` on trusted traces. Credential
   material remains redacted.
 
+## Authenticator management (gateway Bearer tokens)
+
+NIST SP 800-53 and SP 800-63B are US government publications; this repo
+cites them rather than vendoring the full PDFs.
+
+- Joint Task Force. (2020). *Security and privacy controls for information
+  systems and organizations* (NIST Special Publication 800-53 Rev. 5).
+  National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-53r5
+  Control **IA-5** (Authenticator Management) is the request-time source
+  for serve Bearer tokens: `gateway_auth_token`, `admin_auth_token`, and
+  `inference_auth_token` live in the credential KV. Buyer next action:
+  pass `--auth-token` or start once with `CONTEXTUAL_ORCHESTRATOR_TOKEN`.
+
+- Grassi, P. A., Garcia, M. E., & Fenton, J. L. (2017). *Digital identity
+  guidelines: Authentication and lifecycle management* (NIST Special
+  Publication 800-63B). National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-63b
+  Authenticators are secrets resolved from a registry, not ambient
+  process environment. A later env edit must not change a live process.
+  The guideline text is not attached (US government work is cited, not
+  redistributed here).
+
 ## Boundary protection (provider host allowlist)
 
 ISO/IEC 27001 cannot be redistributed here. NIST SP 800-53 is a US government

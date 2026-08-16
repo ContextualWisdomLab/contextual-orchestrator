@@ -6,11 +6,16 @@ Runtime provider secrets (model provider API keys) are NEVER read from
 ``os.getenv``/raw environment at request time. They are resolved from a
 pluggable credential registry via :func:`get_credential`.
 
-Environment variables are permitted in exactly ONE place: as *bootstrap
-transport* to connect to the KV itself — the Postgres DSN and the pgcrypto
-passphrase used to open the encrypted registry, and the backend selector.
-That is the single allowed env use in this module. The environment is never
-the runtime *source* of a provider API key.
+Environment variables are permitted in exactly TWO bootstrap roles:
+
+* connecting to the KV itself — the Postgres DSN, the pgcrypto passphrase,
+  and the backend selector;
+* copying gateway Bearer authenticators
+  (``CONTEXTUAL_ORCHESTRATOR_TOKEN`` / ``_ADMIN_TOKEN`` / ``_INFERENCE_TOKEN``)
+  into the credential KV once via :func:`seed_server_auth_from_environ`.
+
+The environment is never the runtime *source* of a provider API key or of a
+gateway Bearer token. Request-time resolution uses :func:`get_credential`.
 
 Backends are pluggable behind :class:`CredentialBackend`:
 
@@ -174,6 +179,15 @@ class PostgresCredentialBackend:
             conn.commit()
 
 
+GATEWAY_AUTH_TOKEN = "gateway_auth_token"
+ADMIN_AUTH_TOKEN = "admin_auth_token"
+INFERENCE_AUTH_TOKEN = "inference_auth_token"
+_SERVER_AUTH_ENV = (
+    (GATEWAY_AUTH_TOKEN, "CONTEXTUAL_ORCHESTRATOR_TOKEN"),
+    (ADMIN_AUTH_TOKEN, "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"),
+    (INFERENCE_AUTH_TOKEN, "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"),
+)
+
 _backend: CredentialBackend | None = None
 _backend_lock = threading.Lock()
 
@@ -216,3 +230,40 @@ def get_credential(name: str) -> str | None:
 def register_credential(name: str, value: str) -> None:
     """Register a named secret into the KV (used by the bootstrap CLI)."""
     get_backend().set(name, value)
+
+
+def seed_server_auth_from_environ() -> None:
+    """Bootstrap: copy env Bearer tokens into the credential KV when still empty.
+
+    This is the only allowed ``os.environ`` read for gateway authenticators.
+    Request-time authorization must use :func:`resolve_server_auth_tokens` or
+    :func:`get_credential`. The empty-check and write share ``_backend_lock``
+    so concurrent ``main()`` seeds cannot both observe an empty key.
+    """
+    backend = get_backend()
+    with _backend_lock:
+        for credential_name, env_name in _SERVER_AUTH_ENV:
+            existing = backend.get(credential_name)
+            if (existing or "").strip():
+                continue
+            raw = os.environ.get(env_name, "")
+            if raw.strip():
+                backend.set(credential_name, raw)
+
+
+def resolve_server_auth_tokens(
+    *,
+    auth_token: str = "",
+    admin_token: str = "",
+    inference_token: str = "",
+) -> tuple[str, str, str]:
+    """Return serve tokens. Explicit CLI/constructor values win; else KV.
+
+    Never reads ``os.environ``. Buyer next action: pass ``--auth-token`` (or
+    the split pair) or seed the credential KV, then send that Bearer value.
+    """
+    return (
+        (auth_token or "").strip() or get_credential(GATEWAY_AUTH_TOKEN) or "",
+        (admin_token or "").strip() or get_credential(ADMIN_AUTH_TOKEN) or "",
+        (inference_token or "").strip() or get_credential(INFERENCE_AUTH_TOKEN) or "",
+    )

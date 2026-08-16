@@ -176,6 +176,31 @@ process.
 Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 SC-7; ISO/IEC
 27001:2022 A.8.20.
 
+## Gateway Bearer authenticators (secrets)
+
+Serve-time Bearer tokens are **secrets**, stored under
+`gateway_auth_token`, `admin_auth_token`, and `inference_auth_token` in
+the same credential KV as provider keys. They are not config and they
+are not read from `os.getenv` at request time.
+
+At process start, `seed_server_auth_from_environ()` may copy
+`CONTEXTUAL_ORCHESTRATOR_TOKEN`, `CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN`,
+and `CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN` into those KV names
+**once**, when the name is still empty. After that, changing the env var
+does nothing until the next bootstrap. `python -m contextual_orchestrator
+--serve` resolves tokens with `resolve_server_auth_tokens()`: an explicit
+`--auth-token` / `--admin-token` / `--inference-token` wins; otherwise
+the KV value is used.
+
+Buyer next action: pass `--auth-token` (or the split pair), or start
+once with the matching env var so bootstrap can copy it, then send that
+Bearer value. Do not edit the env var on a live process and expect
+authorization to change. Do not expect argparse to read the env var as
+the flag default.
+
+Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 IA-5; Grassi et
+al. (2017) NIST SP 800-63B.
+
 ## Gateway direction
 
 This credential seam is the durable first step of growing

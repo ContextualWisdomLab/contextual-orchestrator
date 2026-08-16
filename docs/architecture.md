@@ -50,6 +50,11 @@ This repository implements the interface and control plane, not the trained coor
   is bootstrap transport into that KV key only — never `os.getenv` during
   `_validate_provider`.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+  Gateway Bearer authenticators (`gateway_auth_token`, `admin_auth_token`,
+  `inference_auth_token`) resolve from the credential KV (NIST SP 800-53
+  Rev. 5 IA-5; NIST SP 800-63B). `CONTEXTUAL_ORCHESTRATOR_TOKEN` and the
+  split admin/inference vars are bootstrap transport via
+  `seed_server_auth_from_environ` only.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

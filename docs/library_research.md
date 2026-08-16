@@ -62,6 +62,15 @@ Request-time egress allowlisting is a KV config read, not a new dependency.
 | Runtime config | Existing `ConfigStore` / `InMemoryConfigStore` in `kv_config.py`; credential KV (`get_credential`) | Reuse `ConfigStore` as a process-wide request-time store (`provider_egress.allowed_provider_hosts`). Env `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` is bootstrap transport via `seed_provider_egress_from_environ` only. | New allowlist library, OS-level firewall helper, treating the host list as a secret in `get_credential`. |
 | Control baseline | NIST SP 800-53 Rev. 5 SC-7; ISO/IEC 27001:2022 A.8.20 | Document the allowlist as boundary protection. Empty KV set means "no extra hostname filter"; private/loopback/reserved addresses still fail closed. | Shipping a full NIST/ISO control catalog in this slice. |
 
+## Gateway auth tokens (2026-08-16)
+
+Serve-time Bearer authenticators are secrets, not config. Reuse the existing credential KV.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Authenticator store | Existing `get_credential` / `register_credential` (`InMemoryCredentialBackend`, pgcrypto `PostgresCredentialBackend`); process `ConfigStore` used for the host allowlist | Store `gateway_auth_token`, `admin_auth_token`, and `inference_auth_token` in the credential KV. `CONTEXTUAL_ORCHESTRATOR_TOKEN` / `_ADMIN_TOKEN` / `_INFERENCE_TOKEN` are bootstrap transport via `seed_server_auth_from_environ` only. Explicit `--auth-token` / `--admin-token` / `--inference-token` still win. | New auth library, OAuth/OIDC in this slice, putting tokens in `provider_egress` ConfigStore (they are secrets). |
+| Control baseline | NIST SP 800-53 Rev. 5 IA-5; NIST SP 800-63B | Document authenticators as KV-managed secrets. A later env edit must not change a live process. | Shipping a full authenticator lifecycle (rotation API, AAL2) in this slice. |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
