@@ -138,8 +138,9 @@ When any of the five org names
 (`NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `BYTEZ_API_KEY`,
 `OPENROUTER_API_KEY`, `OPENAI_API_KEY`) already resolve from the KV, serve-time
 compose **discovers** chat models by default (`GET {base_url}/models` with the
-KV key). A static fallback is used only if that GET fails. `COPILOT_GITHUB_TOKEN`
-is never read. See `docs/doctoring/priced-selection.md`.
+KV key). Discovery pins public HTTPS addresses and refuses redirects before
+the Bearer is attached. A static fallback is used only if that GET fails.
+`COPILOT_GITHUB_TOKEN` is never read. See `docs/doctoring/priced-selection.md`.
 
 ## Why this supersedes `api_key_env`
 

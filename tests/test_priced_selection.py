@@ -135,6 +135,25 @@ def test_unknown_selection_cost_is_none_not_free() -> None:
     )
 
 
+def test_billed_cost_treats_compute_none_as_unknown() -> None:
+    class _NoneBook:
+        def get_price(self, provider: str, model: str):
+            del provider, model
+            return object()
+
+        def compute_cost(self, provider: str, model: str, prompt_tokens: int, completion_tokens: int):
+            del provider, model, prompt_tokens, completion_tokens
+            return None, "USD"
+
+    agent = ModelAgent("mystery_worker", "mystery-model", provider_name="mystery")
+    assert (
+        billed_selection_cost(
+            agent, price_book=_NoneBook(), price_per_million={}, any_explicit_price=True
+        )
+        is None
+    )
+
+
 def test_billed_cost_ignores_original_list_price() -> None:
     config = InMemoryConfigStore()
     price_book = PriceBook(config)

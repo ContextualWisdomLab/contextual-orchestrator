@@ -171,11 +171,14 @@ class PriceBook:
         original = raw.get("original_list_price")
         if original is not None and not isinstance(original, dict):
             original = None
+        if "prompt_price_per_1k" not in raw or "completion_price_per_1k" not in raw:
+            # A stub that only carries original_list_price is unknown, not free.
+            return None
         return PriceEntry(
             provider_name=raw.get("provider_name", provider),
             model_name=raw.get("model_name", model),
-            prompt_price_per_1k=float(raw.get("prompt_price_per_1k", 0.0)),
-            completion_price_per_1k=float(raw.get("completion_price_per_1k", 0.0)),
+            prompt_price_per_1k=float(raw["prompt_price_per_1k"]),
+            completion_price_per_1k=float(raw["completion_price_per_1k"]),
             currency_code=raw.get("currency_code", self.default_currency),
             original_list_price=original,
         )

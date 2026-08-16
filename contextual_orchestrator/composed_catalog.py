@@ -9,21 +9,24 @@ flag, OpenCode sidecar, or 429→next-agent failover. It owns:
 * exception-robust per-provider isolation (one failure never aborts compose)
 
 Runtime keys resolve only through ``get_credential``. GitHub Models hosts and
-``COPILOT_GITHUB_TOKEN`` are rejected. See ``docs/doctoring/priced-selection.md``.
+``COPILOT_GITHUB_TOKEN`` are rejected. Discovery reuses
+``provider_egress.provider_base_url_rejection`` and a no-redirect fetch so a
+Bearer token is never sent to loopback, private, link-local, or reserved
+addresses, and is never replayed on a 3xx. See
+``docs/doctoring/priced-selection.md``.
 """
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 from .conventions import require_object_name
 from .credentials import get_credential
 from .orchestrator import ModelAgent
+from .provider_egress import no_redirect_models_fetch, provider_base_url_rejection
 
 ORG_CREDENTIAL_NAMES: tuple[str, ...] = (
     "NVIDIA_NIM_API_KEY",
@@ -207,10 +210,8 @@ def parse_models_list(payload: Any) -> list[str]:
 
 
 def default_models_fetch(url: str, headers: dict[str, str], timeout: float) -> Any:
-    """GET ``url`` and JSON-decode the body (stdlib; caller handles errors)."""
-    request = Request(url, headers=headers, method="GET")
-    with urlopen(request, timeout=timeout) as response:  # nosec B310 - URL is a catalog profile base.
-        return json.loads(response.read().decode("utf-8"))
+    """GET ``url`` without following redirects (stdlib; caller handles errors)."""
+    return no_redirect_models_fetch(url, headers, timeout)
 
 
 def discover_provider_models(
@@ -223,21 +224,23 @@ def discover_provider_models(
 ) -> list[str]:
     """GET ``{base_url}/models`` with the KV credential; return chat model ids.
 
-    Any missing credential, transport, HTTP, or parse failure returns ``[]``
-    so the caller can apply the static fallback. Discovery is the default
-    path — there is no flag to opt in.
+    Egress is rejected **before** the Bearer header is built. Any missing
+    credential, non-public/loopback/reserved address, redirect, transport,
+    HTTP, or parse failure returns ``[]`` so the caller can apply the static
+    fallback. ``allow_insecure`` is ignored on the production fetch path.
     """
+    del allow_insecure
     if credential_name in FORBIDDEN_CREDENTIAL_NAMES:
-        return []
-    api_key = get_credential(credential_name)
-    if not api_key:
         return []
     parsed = urlparse(base_url)
     if not parsed.hostname:
         return []
     if not catalog_allows_fields(base_url, "", credential_name):
         return []
-    if not allow_insecure and parsed.scheme != "https":
+    if provider_base_url_rejection(base_url, resolve_dns=fetch is None):
+        return []
+    api_key = get_credential(credential_name)
+    if not api_key:
         return []
     fetcher = fetch or default_models_fetch
     try:

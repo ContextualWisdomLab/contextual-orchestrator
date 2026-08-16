@@ -31,7 +31,7 @@ Paper role values are deliberate exceptions because they are source terminology:
 
 ## Module Rules
 
-- Domain code stays in `contextual_orchestrator/orchestrator.py` until a second implementation forces extraction.
+- Domain code stays in `contextual_orchestrator/orchestrator.py` until a second implementation forces extraction. Provider egress is that second implementation: chat and catalog discovery share `provider_egress.py`.
 - Delivery adapters live in `server.py`.
 - UI static assets live in `admin.py` only while the product remains dependency-free.
 - Do not introduce provider SDKs unless OpenAI-compatible HTTP falls short.

@@ -8,8 +8,10 @@ stay secret-free — credentials are in-memory placeholders, never org keys.
 from __future__ import annotations
 
 from contextlib import contextmanager
+import http.server
 from pathlib import Path
 import sys
+import threading
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,10 +20,15 @@ from contextual_orchestrator.composed_catalog import (  # noqa: E402
     ORG_CREDENTIAL_NAMES,
     ProviderProfile,
     compose_default_catalog,
+    default_models_fetch,
+    discover_provider_models,
     merge_agent_pools,
     models_list_payload,
     parse_models_list,
     present_org_credentials,
+)
+from contextual_orchestrator.provider_egress import (  # noqa: E402
+    provider_base_url_rejection,
 )
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
@@ -154,6 +161,89 @@ def test_models_list_payload_includes_facade_and_composed_ids() -> None:
     assert ids[0] == "contextual-orchestrator"
     assert "gpt-4o-mini" in ids
     assert "moonshotai/kimi-k2.5" in ids
+
+
+def test_loopback_discovery_does_not_send_credential() -> None:
+    seen: list[dict] = []
+
+    def fetch(url: str, headers: dict, timeout: float):
+        seen.append(headers)
+        return {"data": [{"id": "stolen-model"}]}
+
+    profile = ProviderProfile(
+        credential_name="OPENAI_API_KEY",
+        provider_name="loopback_co",
+        base_url="https://127.0.0.1/v1",
+        fallback_models=("fallback-model",),
+    )
+    with fresh_kv():
+        register_credential("OPENAI_API_KEY", "sk-must-not-leak")
+        catalog = compose_default_catalog(fetch=fetch, profiles=(profile,))
+    assert seen == []
+    assert provider_base_url_rejection("https://127.0.0.1/v1", resolve_dns=False)
+    assert discover_provider_models("https://127.0.0.1/v1", "OPENAI_API_KEY", fetch=fetch) == []
+    assert [agent.model for agent in catalog.agents] == ["fallback-model"]
+
+
+def test_link_local_metadata_discovery_does_not_send_credential() -> None:
+    seen: list[dict] = []
+
+    def fetch(url: str, headers: dict, timeout: float):
+        seen.append(headers)
+        return {"data": [{"id": "stolen-model"}]}
+
+    profile = ProviderProfile(
+        credential_name="OPENAI_API_KEY",
+        provider_name="metadata_co",
+        base_url="https://169.254.169.254/latest",
+        fallback_models=("fallback-model",),
+    )
+    with fresh_kv():
+        register_credential("OPENAI_API_KEY", "sk-must-not-leak")
+        catalog = compose_default_catalog(fetch=fetch, profiles=(profile,))
+    assert seen == []
+    assert catalog.provider_reports[0].discovery_source == "fallback"
+
+
+def test_default_models_fetch_refuses_redirect() -> None:
+    hits: list[str] = []
+
+    class _Handler(http.server.BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            hits.append(self.path)
+            if self.path == "/v1/models":
+                self.send_response(302)
+                self.send_header("Location", "/stolen")
+                self.end_headers()
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/json")
+            self.end_headers()
+            self.wfile.write(b'{"data":[{"id":"leaked"}]}')
+
+        def log_message(self, format: str, *args: object) -> None:
+            del format, args
+
+    server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    try:
+        raised = False
+        try:
+            default_models_fetch(
+                f"http://127.0.0.1:{port}/v1/models",
+                {"authorization": "Bearer sk-must-not-leak"},
+                2.0,
+            )
+        except RuntimeError as exc:
+            raised = True
+            assert "redirect refused" in str(exc)
+        assert raised
+        assert hits == ["/v1/models"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
 
 
 def test_merge_agent_pools_does_not_duplicate_base_url_model() -> None:

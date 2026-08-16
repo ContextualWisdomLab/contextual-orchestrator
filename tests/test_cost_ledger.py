@@ -59,6 +59,19 @@ def test_unpriced_model_cost_is_unknown_not_zero() -> None:
     assert ledger.records()[0]["cost_amount"] is None
 
 
+def test_partial_price_row_is_unknown_not_free() -> None:
+    config = InMemoryConfigStore()
+    config.set(
+        "llm_price_entries",
+        "promo_co:promo-model",
+        {"original_list_price": {"prompt_price_per_1k": 2.0, "completion_price_per_1k": 4.0}},
+    )
+    price_book = PriceBook(config)
+    assert price_book.get_price("promo_co", "promo-model") is None
+    cost, _currency = price_book.compute_cost("promo_co", "promo-model", 1000, 1000)
+    assert cost is None
+
+
 def test_provider_wildcard_price_entry() -> None:
     config = InMemoryConfigStore()
     price_book = PriceBook(config)

@@ -43,6 +43,7 @@ from .composed_catalog import (
 from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
 from .priced_selection import billed_selection_cost, select_min_cost_max_performance
+from .provider_egress import provider_base_url_rejection
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .token_counting import HeuristicTokenCounter, build_token_counter
@@ -100,4 +101,5 @@ __all__ = [
     "present_org_credentials",
     "billed_selection_cost",
     "select_min_cost_max_performance",
+    "provider_base_url_rejection",
 ]

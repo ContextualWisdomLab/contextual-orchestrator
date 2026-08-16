@@ -8,7 +8,6 @@ import copy
 from dataclasses import dataclass, replace
 from functools import wraps
 import hashlib
-import ipaddress
 import json
 import os
 from pathlib import Path
@@ -28,6 +27,7 @@ import urllib.request
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .priced_selection import billed_selection_cost, select_min_cost_max_performance
+from .provider_egress import provider_base_url_rejection
 
 
 ChatMessage = dict[str, str]
@@ -461,27 +461,9 @@ class ModelClient:
                 f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
                 "(this replaces the legacy api_key_env environment pattern)"
             )
-        parsed = urlparse(agent.base_url)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise RuntimeError(f"{agent.id} base_url must use https")
-        allowed_hosts = {
-            host.strip().lower()
-            for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")
-            if host.strip()
-        }
-        hostname = parsed.hostname.lower()
-        if allowed_hosts and hostname not in allowed_hosts:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
-        for address in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM):
-            ip_address = ipaddress.ip_address(address[4][0])
-            if (
-                ip_address.is_private
-                or ip_address.is_loopback
-                or ip_address.is_link_local
-                or ip_address.is_multicast
-                or ip_address.is_reserved
-            ):
-                raise RuntimeError(f"{agent.id} provider resolves to non-public address")
+        reason = provider_base_url_rejection(agent.base_url)
+        if reason:
+            raise RuntimeError(f"{agent.id} {reason}")
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""

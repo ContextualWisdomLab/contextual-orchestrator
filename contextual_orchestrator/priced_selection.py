@@ -35,6 +35,8 @@ def billed_selection_cost(
         entry = price_book.get_price(provider, model)
         if entry is not None:
             cost, _currency = price_book.compute_cost(provider, model, 1000, 1000)
+            if cost is None:
+                return None
             return float(cost)
     if model in price_per_million:
         # price_per_million is USD / 1M output tokens; a 1k/1k probe uses output only.
