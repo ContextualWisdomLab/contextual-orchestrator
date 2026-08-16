@@ -183,6 +183,47 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
+def _resolve_requested_chat_mode(body: dict[str, Any]) -> str:
+    """Resolve ``orchestration`` / ``orchestration_mode`` / ``mode`` without first-wins hide.
+
+    Each present alias is validated on its own. JSON ``null`` and ``""`` are
+    omit-equivalent so SDK optional defaults stay no-ops. Whitespace-only
+    values fail closed through ``_validate_mode``. Distinct non-omit aliases
+    fail closed so ``orchestration=route`` cannot hide ``mode=conduct`` and
+    bill a Fugu-style single-worker route for a Conductor workflow the buyer
+    asked for (Nielsen et al., 2025; Xu et al., 2025). When every alias is
+    omitted, the result is ``auto``.
+
+    Args:
+        body: Chat Completions JSON object after unknown-key rejection.
+
+    Returns:
+        One of ``auto``, ``route``, or ``conduct``.
+
+    Raises:
+        RequestError: invalid, whitespace-only, or disagreeing aliases.
+    """
+    resolved_modes: list[str] = []
+    for key in ("orchestration", "orchestration_mode", "mode"):
+        if key not in body:
+            continue
+        raw_mode = body.get(key)
+        if raw_mode is None or raw_mode == "":
+            continue
+        resolved_modes.append(_validate_mode(raw_mode))
+    if not resolved_modes:
+        return "auto"
+    unique_modes = set(resolved_modes)
+    if len(unique_modes) > 1:
+        raise RequestError(
+            400,
+            "invalid_mode",
+            "orchestration, orchestration_mode, and mode must agree; "
+            "omit unused aliases or send the same value on each",
+        )
+    return resolved_modes[0]
+
+
 def _validate_messages(messages: Any) -> list[dict[str, str]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
@@ -732,7 +773,7 @@ def build_server(
                         self._send(proxied)
                         return
                     messages = _validate_messages(body.get("messages"))
-                    mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
+                    mode = _resolve_requested_chat_mode(body)
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
                     stream = body.get("stream", False)
                     if not isinstance(stream, bool):

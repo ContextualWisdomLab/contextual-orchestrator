@@ -43,6 +43,26 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## Mode-alias honesty (route vs conduct)
+
+Buyers who send `orchestration=route` plus `mode=conduct` asked for a Conductor
+workflow (Nielsen et al., 2025) with TRINITY-style role traces (Xu et al., 2025).
+A first-wins `or` chain billed a Fugu-style single-worker route instead. Each of
+`orchestration` / `orchestration_mode` / `mode` is checked on its own; disagreeing
+aliases fail closed before a `chat.completion` is billed. PDFs are not vendored
+here (redistribution not confirmed); cite + link + summary only.
+
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).
+  *Learning to orchestrate agents in natural language with the Conductor*.
+  arXiv. https://doi.org/10.48550/arXiv.2512.04388
+  Grounds natural-language workflow steps, assigned workers, and access lists.
+  Mixed aliases must not hide a workflow the buyer asked for.
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
+  *Trinity: An evolved LLM coordinator*. arXiv.
+  https://doi.org/10.48550/arXiv.2512.04695
+  Grounds thinker / worker / verifier role traces. A silent route completion
+  drops those roles.
+
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.

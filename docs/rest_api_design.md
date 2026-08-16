@@ -8,6 +8,11 @@
 - Error shape: `{"error_code": "...", "error_message": "...", "error_detail": {...}}` in production.
 - Pagination shape: `items`, `total_count`, `page_number`, `page_size` for collections.
 - OpenAI-compatible compatibility endpoint remains `/v1/chat/completions`.
+- On `/v1/chat/completions`, send one of `orchestration` / `orchestration_mode` /
+  `mode`, or omit them. Mixed `orchestration=route` plus `mode=conduct` is
+  `invalid_mode` — aliases must agree. JSON `null` and `""` are omit-equivalent;
+  do not send whitespace-only mode. Next action: pick `auto`, `route`, or
+  `conduct` on one key and omit the others.
 
 ## Current Endpoints
 

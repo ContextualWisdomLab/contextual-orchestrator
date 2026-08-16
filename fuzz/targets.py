@@ -11,8 +11,9 @@ and asserts the invariants that must hold *for arbitrary input*:
 CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
 consume untrusted bytes/JSON:
 
-1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
-   ``_reject_unknown_keys`` -- the HTTP request-body parser and validators.
+1. ``server._coerce_json`` / ``_validate_mode`` / ``_resolve_requested_chat_mode`` /
+   ``_validate_messages`` / ``_reject_unknown_keys`` -- the HTTP request-body
+   parser and validators. Mixed mode aliases must agree or fail closed.
 2. ``orchestrator.ModelAgent.from_dict`` -- the agent-pool config parser.
 3. ``orchestrator.redact_text`` / ``redact_value`` -- secret/PII redaction run
    over arbitrary trace payloads (regex + recursion).
@@ -92,6 +93,15 @@ def exercise_request_body(raw: bytes) -> None:
                 pass
             else:
                 assert mode in server.ALLOWED_MODES
+
+    # Per-key alias resolution: mixed orchestration/mode values must agree or
+    # raise RequestError — never pick the first truthy alias.
+    try:
+        resolved_mode = server._resolve_requested_chat_mode(body)
+    except RequestError:
+        pass
+    else:
+        assert resolved_mode in server.ALLOWED_MODES
 
     # Message validation: returns a normalised list or raises RequestError.
     if "messages" in body:

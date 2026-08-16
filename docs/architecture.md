@@ -4,8 +4,8 @@
 
 - Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
 - Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-- TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
-- Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator*. arXiv. https://doi.org/10.48550/arXiv.2512.04695
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor*. arXiv. https://doi.org/10.48550/arXiv.2512.04388
 
 ## What The Architecture Is
 
@@ -26,6 +26,7 @@ The Fugu report combines these ideas into production constraints:
 - Fugu-Ultra is optimized for quality by generating deeper workflows over a broader agent pool.
 - The agent pool is swappable, allowing provider preference, model exclusion, and compliance controls.
 - Multi-agent tool/function-call workflows need memory discipline: isolate agents inside the current workflow, but keep useful shared memory across turns.
+- Chat Completions mode aliases (`orchestration`, `orchestration_mode`, `mode`) are checked on their own. Mixed `orchestration=route` plus `mode=conduct` fails closed so a Conductor workflow the buyer asked for cannot hide behind a Fugu-style single-worker route (Nielsen et al., 2025; Xu et al., 2025). JSON `null` and `""` stay omit-equivalent; whitespace-only mode is `invalid_mode`.
 
 ## Implementation Mapping
 

@@ -76,7 +76,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** �
 
 One public interface:
 
-- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
+- `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet). Send one of `orchestration` / `orchestration_mode` / `mode`, or omit them — mixed `orchestration=route` plus `mode=conduct` is `invalid_mode`. JSON `null` and `""` are omit-equivalent; do not send whitespace-only mode.
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline — per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
@@ -256,6 +256,7 @@ python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
 python tests/test_security_hardening.py
+python tests/test_chat_orchestration_mode_http_honesty.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py
 python tests/test_plugin_driven_artifacts.py
