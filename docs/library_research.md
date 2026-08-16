@@ -62,7 +62,7 @@ reasoning effort.
 | Area | Researched | Decision | Skipped |
 |---|---|---|---|
 | Profile object | Existing `OrchestrationPolicy` dataclass; OpenAI `reasoning_effort` enum; Anthropic thinking-token budget | New stdlib module `reasoning_effort_profile.py` with a frozen dataclass, fail-closed parser, role catalog, and snapshot hash. No production-default change until the RMSE gate passes. | New dependency, provider SDK, treating temperature as an effort proxy, a second policy factory. |
-| Ablation | Fugu latency-vs-quality frontier; TRINITY role split; Conductor steps/access lists; IRT true-θ RMSE | Deterministic offline estimator with known `true_theta`. Record quality, budget, and `measurement_status=estimated`. | Live NVIDIA NIM calls in this slice (issue #86 evidence plane); changing `OrchestrationPolicy` defaults. |
+| Ablation | Fugu latency-vs-quality frontier; TRINITY role split; Conductor steps/access lists; Baker (2001) IRT true-θ RMSE | Deterministic offline θ̂ = (1−λ)θ with RMSE(θ̂, θ). Access-list scope and recursion depth change λ. Record quality, budget, estimated tokens used, and `measurement_status=estimated`. Persist the same snapshot on `run` / `stream_route` / `batch_route`. | Live NVIDIA NIM calls in this slice (issue #86 evidence plane); changing `OrchestrationPolicy` defaults. |
 | Doctoring | Sakana Fugu (2026); Xu et al. (2025) TRINITY arXiv:2512.04695; Nielsen et al. (2025) Conductor arXiv:2512.04388 | APA 7th citations in `docs/architecture.md` and `docs/papers/README.md`. PDFs are not vendored when redistribution is unclear. | Training a learned coordinator. |
 
 Buyer next action: call `default_role_effort_catalog()` / `run_equal_budget_ablation()`

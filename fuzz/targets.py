@@ -18,6 +18,10 @@ consume untrusted bytes/JSON:
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
+5. ``reasoning_effort_profile.parse_reasoning_effort_profile`` -- untrusted
+   role-compute JSON. Must raise ``EffortProfileError`` / ``TypeError`` /
+   ``ValueError`` or return a finite profile. Never crash on NaN, bool-as-
+   number, or unknown keys.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -25,6 +29,7 @@ No network, no secrets, no filesystem: every target runs fully offline.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from contextual_orchestrator import server
@@ -35,6 +40,14 @@ from contextual_orchestrator.orchestrator import (
     redact_text,
     redact_value,
     sse_stream_body,
+)
+from contextual_orchestrator.reasoning_effort_profile import (
+    ACCESS_LIST_SCOPES,
+    REASONING_EFFORT_LEVELS,
+    EffortProfileError,
+    parse_reasoning_effort_profile,
+    production_default_change_allowed,
+    run_equal_budget_ablation,
 )
 
 # ``RequestError`` is the only *domain* exception the request layer is allowed to
@@ -188,3 +201,33 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
             continue
         assert frame.startswith("data: ")
         json.loads(frame[len("data: "):])
+
+
+def exercise_reasoning_effort_profile(value: Any) -> None:
+    """Drive the issue #568 profile parser and ablation over arbitrary JSON.
+
+    Invariants: unknown keys, NaN, infinity, and bool-as-number fail as
+    ``EffortProfileError`` / ``TypeError`` / ``ValueError``. A successful
+    parse is finite. An ablation against a supplied ``true_theta`` either
+    fails closed or stays production-locked while ``measurement_status`` is
+    estimated.
+    """
+    if not isinstance(value, dict):
+        return
+    try:
+        profile = parse_reasoning_effort_profile(value)
+    except (EffortProfileError, TypeError, ValueError):
+        return
+    assert profile.reasoning_effort in REASONING_EFFORT_LEVELS
+    assert profile.access_list_scope in ACCESS_LIST_SCOPES
+    assert math.isfinite(profile.temperature)
+    assert math.isfinite(profile.top_p)
+    theta = value.get("true_theta")
+    if not isinstance(theta, list) or not theta:
+        return
+    try:
+        report = run_equal_budget_ablation(theta)
+    except (EffortProfileError, TypeError, ValueError):
+        return
+    assert production_default_change_allowed(report) is False
+    assert report["measurement_status"] == "estimated"

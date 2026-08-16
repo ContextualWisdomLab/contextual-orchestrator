@@ -19,6 +19,7 @@ from hypothesis import given, settings, strategies as st
 from fuzz.targets import (
     exercise_agent_config,
     exercise_orchestration,
+    exercise_reasoning_effort_profile,
     exercise_redaction,
     exercise_request_body,
 )
@@ -108,3 +109,9 @@ def test_redaction_never_crashes_and_is_idempotent(text: str) -> None:
 )
 def test_orchestration_on_arbitrary_prompt(prompt: str, mode: str) -> None:
     exercise_orchestration(prompt, mode)
+
+
+@_SETTINGS
+@given(_json_values)
+def test_reasoning_effort_profile_never_crashes(value: object) -> None:
+    exercise_reasoning_effort_profile(value)

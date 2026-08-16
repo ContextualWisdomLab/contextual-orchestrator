@@ -954,20 +954,22 @@ class TaskOrchestrator:
             parts.append(delta)
             yield delta
         answer = "".join(parts)
-        record = {
-            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
-            "created_at": int(time.time()),
-            "mode": "route",
-            "policy_mode": "route",
-            "prompt_text": text,
-            "answer": answer,
-            "trace": [
-                {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
-                 "access": [], "output": answer}
-            ],
-            "policy_snapshot": self.policy.as_dict(),
-            "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
-        }
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": text,
+                "answer": answer,
+                "trace": [
+                    {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
+                     "access": [], "output": answer}
+                ],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
+            }
+        )
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         self._append_audit_event(
@@ -992,17 +994,19 @@ class TaskOrchestrator:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
         result = self.complete(messages, mode=mode)
         prompt = self._latest_user_text(messages)
-        record = {
-            "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
-            "created_at": int(time.time()),
-            "mode": result["mode"],
-            "policy_mode": mode,
-            "prompt_text": prompt,
-            "answer": result["answer"],
-            "trace": result["trace"],
-            "policy_snapshot": self.policy.as_dict(),
-            "verification": result.get("verification"),
-        }
+        record = self._with_effort_snapshot(
+            {
+                "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": result["mode"],
+                "policy_mode": mode,
+                "prompt_text": prompt,
+                "answer": result["answer"],
+                "trace": result["trace"],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": result.get("verification"),
+            }
+        )
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         if self._store is not None:
@@ -1071,17 +1075,19 @@ class TaskOrchestrator:
             }
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
-            record = {
-                "workflow_run_id": f"run_{uuid.uuid4().hex}",
-                "created_at": int(time.time()),
-                "mode": "route",
-                "policy_mode": "route",
-                "prompt_text": prompt,
-                "answer": result["content"],
-                "trace": [row],
-                "policy_snapshot": self.policy.as_dict(),
-                "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
-            }
+            record = self._with_effort_snapshot(
+                {
+                    "workflow_run_id": f"run_{uuid.uuid4().hex}",
+                    "created_at": int(time.time()),
+                    "mode": "route",
+                    "policy_mode": "route",
+                    "prompt_text": prompt,
+                    "answer": result["content"],
+                    "trace": [row],
+                    "policy_snapshot": self.policy.as_dict(),
+                    "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
+                }
+            )
             self._workflow_runs[record["workflow_run_id"]] = record
             self._run_order.appendleft(record["workflow_run_id"])
             if self._store is not None:
@@ -1458,8 +1464,8 @@ class TaskOrchestrator:
         """Attach a replayable role-effort snapshot when the operator opted in.
 
         Buyer next action: compare ``reasoning_effort_snapshot.snapshot_hash``
-        across route, conduct, stream persist, and batch replay. Omit the
-        constructor catalog to keep today's payload.
+        on ``complete``, ``run``, ``stream_route``, and ``batch_route``. Omit
+        the constructor catalog to keep today's payload.
         """
         if self.role_effort_catalog is None:
             return result
