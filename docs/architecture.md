@@ -41,7 +41,9 @@ This repository implements the interface and control plane, not the trained coor
   `GET /v1/models` is the catalog (chat ids only). `examples/agents.production.json`
   is fallback when a list call fails or is empty/malformed. The gateway exposes
   `GET /v1/models` (`contextual-orchestrator` plus surfaced worker ids). GitHub
-  Models are out of catalog. See `docs/doctoring/provider-catalog.md`.
+  Models are out of catalog. Discovery reuses chat egress
+  (`provider_base_url_rejection`): no private/loopback/redirect leak of the KV
+  Bearer token. See `docs/doctoring/provider-catalog.md`.
 
 The product policy is a **cost-performance choose**, not keyword scoring and not
 a walk down the seed JSON / YAML list.

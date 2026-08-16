@@ -28,6 +28,7 @@ not walked as the serving catalog when discovery succeeds.
 | Bytez | Official OpenAI-compatible base URL is `https://api.bytez.com/models/v2/openai/v1` (Bytez, n.d.). A public `/models` list is **not guaranteed**; empty/404 keeps the static `Qwen/Qwen3-4B` seed. |
 | Gateway `GET /v1/models` | The orchestrator exposes the composed catalog: `contextual-orchestrator` plus surfaced worker model ids. |
 | GitHub Models | **Out of catalog.** `models.github.ai`, Copilot tokens, `gpt-5.6-luna`, `gpt-5.6-terra`, and `github-models/*` ids are rejected. There is no fallback to GitHub Models when every org secret is missing. |
+| Discovery egress | `GET {base_url}/models` uses the same public-HTTPS host/IP policy as chat (`provider_base_url_rejection`). Private, loopback, link-local, reserved, and unallowlisted hosts are refused before the KV Bearer token is sent. Redirects are refused. HTTP is opt-in via `allow_insecure_discovery` (loopback lab fixtures only). |
 
 Missing a secret disables that upstream only (`NotConfigured` per agent). The
 gateway keeps serving every worker whose credential is present. When no

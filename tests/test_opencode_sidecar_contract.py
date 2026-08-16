@@ -56,6 +56,8 @@ def test_sidecar_workflow_is_not_the_app_test_job_and_stays_loopback() -> None:
     assert "secrets.NVIDIA_NIM_API_KEY" in workflow
     assert "secrets.OPENAI_API_KEY" in workflow
     assert "pull_request:" not in workflow  # never inject provider secrets into PR app tests
+    assert "sidecar did not become healthy" in workflow
+    assert "ready=1" in workflow
 
     for secret_name in (
         "NVIDIA_NIM_API_KEY",

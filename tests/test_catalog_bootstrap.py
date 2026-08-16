@@ -187,10 +187,12 @@ class _ModelsProvider:
     def __init__(self, status: int, body: object) -> None:
         self.status = status
         self.body = body
+        self.request_count = 0
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_GET(self) -> None:  # noqa: N802
+                outer.request_count += 1
                 raw = json.dumps(outer.body).encode("utf-8") if not isinstance(outer.body, bytes) else outer.body
                 self.send_response(outer.status)
                 self.send_header("content-type", "application/json")
@@ -275,16 +277,67 @@ def test_seed_provider_catalog_discovers_and_skips_partial_keys() -> None:
     assert all("github" not in item["model"].lower() for item in report["ready_agents"])
 
 
-if __name__ == "__main__":  # pragma: no cover
-    import traceback
+def test_discover_refuses_loopback_and_http_without_insecure_flag() -> None:
+    os.environ["OPENAI_API_KEY"] = "sk-ssrf"
+    register_org_credentials_from_env(skip_missing=True)
+    listing = {"data": [{"id": "gpt-5.5"}]}
+    with _ModelsProvider(200, listing) as provider:
+        assert discover_provider_models(provider.base_url, "OPENAI_API_KEY", allow_insecure=False) == []
+        assert provider.request_count == 0
+    assert discover_provider_models("https://127.0.0.1:9", "OPENAI_API_KEY") == []
+    assert discover_provider_models("https://10.0.0.8:443", "OPENAI_API_KEY") == []
 
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            try:
-                fn()
-            except TypeError:
-                # pytest fixtures are not available in the script runner
-                traceback.print_exc()
-                raise
-            print(f"ok {name}")
-    print("ok")
+
+def test_compose_does_not_auto_enable_http_discovery() -> None:
+    os.environ["OPENAI_API_KEY"] = "sk-http"
+    register_org_credentials_from_env(skip_missing=True)
+    listing = {"data": [{"id": "should-not-appear"}]}
+    with _ModelsProvider(200, listing) as provider:
+        seed = [
+            ModelAgent(
+                "openai_loopback_agent",
+                "gpt-5.5",
+                provider.base_url,
+                credential_key="OPENAI_API_KEY",
+                tags=("reasoning",),
+                provider_name="openai",
+            )
+        ]
+        ready, _skipped = compose_provider_catalog(seed, discover=True, allow_insecure_discovery=False)
+    assert [agent.id for agent in ready] == ["openai_loopback_agent"]
+    assert all(agent.model != "should-not-appear" for agent in ready)
+    assert provider.request_count == 0
+
+
+def test_reseed_removes_stale_discovered_agents_from_agents_db() -> None:
+    os.environ["OPENAI_API_KEY"] = "sk-reseed"
+    register_org_credentials_from_env(skip_missing=True)
+    stale = ModelAgent(
+        "stale_discovered_agent",
+        "old-model",
+        "https://api.openai.com/v1",
+        credential_key="OPENAI_API_KEY",
+        tags=("reasoning",),
+    )
+    current = ModelAgent(
+        "openai_primary_agent",
+        "gpt-5.5",
+        "https://api.openai.com/v1",
+        credential_key="OPENAI_API_KEY",
+        tags=("reasoning",),
+    )
+    with tempfile.TemporaryDirectory() as directory:
+        db_path = os.path.join(directory, "agents.db")
+        persist_catalog_to_agents_db([stale, current], db_path)
+        persist_catalog_to_agents_db([current], db_path)
+        restarted = TaskOrchestrator(
+            [ModelAgent("placeholder_agent", "mock-hold", "mock://hold")],
+            agents_db=db_path,
+        )
+        ids = {agent.id for agent in restarted.agents}
+        assert "openai_primary_agent" in ids
+        assert "stale_discovered_agent" not in ids
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))

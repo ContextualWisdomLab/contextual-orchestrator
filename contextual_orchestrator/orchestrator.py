@@ -509,27 +509,9 @@ class ModelClient:
                 f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
                 "(this replaces the legacy api_key_env environment pattern)"
             )
-        parsed = urlparse(agent.base_url)
-        if parsed.scheme != "https" or not parsed.hostname:
-            raise RuntimeError(f"{agent.id} base_url must use https")
-        allowed_hosts = {
-            host.strip().lower()
-            for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")
-            if host.strip()
-        }
-        hostname = parsed.hostname.lower()
-        if allowed_hosts and hostname not in allowed_hosts:
-            raise RuntimeError(f"{agent.id} provider host is not allowlisted")
-        for address in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM):
-            ip_address = ipaddress.ip_address(address[4][0])
-            if (
-                ip_address.is_private
-                or ip_address.is_loopback
-                or ip_address.is_link_local
-                or ip_address.is_multicast
-                or ip_address.is_reserved
-            ):
-                raise RuntimeError(f"{agent.id} provider resolves to non-public address")
+        reason = provider_base_url_rejection(agent.base_url)
+        if reason:
+            raise RuntimeError(f"{agent.id} {reason}")
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""
@@ -693,6 +675,50 @@ def _coerce_input_text(value: Any) -> str:
     return " ".join(parts)
 
 
+def provider_base_url_rejection(base_url: str, *, allow_insecure: bool = False) -> str | None:
+    """Return why a provider URL must not receive a KV credential, or None if safe.
+
+    Chat (``ModelClient._validate_provider``) and catalog discovery share this
+    check so ``GET /models`` cannot leak a Bearer token to a host chat would
+    refuse. ``allow_insecure`` is the lab hook for loopback HTTP fixtures; it
+    still rejects non-http(s) schemes and non-loopback resolved addresses.
+    """
+    parsed = urlparse(base_url)
+    if not parsed.hostname:
+        return "base_url must use https"
+    if parsed.scheme == "http":
+        if not allow_insecure:
+            return "base_url must use https"
+    elif parsed.scheme != "https":
+        return "base_url must use https"
+    allowed_hosts = {
+        host.strip().lower()
+        for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")
+        if host.strip()
+    }
+    hostname = parsed.hostname.lower()
+    if allowed_hosts and hostname not in allowed_hosts:
+        return "provider host is not allowlisted"
+    port = parsed.port or (80 if parsed.scheme == "http" else 443)
+    try:
+        resolved = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+    except OSError:
+        return "provider resolves to non-public address"
+    for address in resolved:
+        ip_address = ipaddress.ip_address(address[4][0])
+        if allow_insecure and ip_address.is_loopback:
+            continue
+        if (
+            ip_address.is_private
+            or ip_address.is_loopback
+            or ip_address.is_link_local
+            or ip_address.is_multicast
+            or ip_address.is_reserved
+        ):
+            return "provider resolves to non-public address"
+    return None
+
+
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
     """Load model agent definitions from an agents JSON file."""
     with open(path, encoding="utf-8") as handle:
@@ -737,6 +763,21 @@ class _AgentPoolStore:
             finally:
                 conn.close()
         return [ModelAgent.from_dict(json.loads(row[0])) for row in rows]
+
+    def replace_all(self, agents: list["ModelAgent"]) -> None:
+        """Replace the stored pool with ``agents`` so a reseed cannot keep stale ids."""
+        with self._lock:
+            conn = sqlite3.connect(self._path)
+            try:
+                conn.execute("DELETE FROM agent_pool")
+                for agent in agents:
+                    conn.execute(
+                        "INSERT INTO agent_pool (agent_id, payload) VALUES (?, ?)",
+                        (agent.id, json.dumps(agent.to_config(), ensure_ascii=False)),
+                    )
+                conn.commit()
+            finally:
+                conn.close()
 
     def close(self) -> None:
         """Compatibility no-op: agent-pool operations use short-lived sqlite handles."""
@@ -1600,7 +1641,8 @@ class TaskOrchestrator:
             return False
         if agent.base_url.startswith("mock://"):
             return True
-        return get_credential(agent.credential_name) is not None
+        secret = get_credential(agent.credential_name)
+        return bool(secret and str(secret).strip())
 
     def _is_healthy_candidate(self, agent: ModelAgent, role: str, excluded: set[str]) -> bool:
         """True when the worker may be chosen: ready, not excluded, circuit closed, role allowed."""

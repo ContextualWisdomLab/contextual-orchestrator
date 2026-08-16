@@ -30,6 +30,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
 from contextual_orchestrator.provider_catalog import (  # noqa: E402
     compose_provider_catalog,
     seed_provider_catalog,
+    tag_discovered_model,
 )
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
@@ -285,6 +286,16 @@ def test_orchestrator_get_v1_models_lists_gateway_and_worker_ids() -> None:
     assert "gpt-5.6-terra" not in ids
     assert all("github" not in item.lower() for item in ids)
     assert all("copilot" not in item.lower() for item in ids)
+
+
+def test_tag_discovered_model_requires_capability_markers() -> None:
+    assert "reasoning" not in tag_discovered_model("vendor/plain-chat-model")
+    assert "review" not in tag_discovered_model("vendor/plain-chat-model")
+    assert "coding" not in tag_discovered_model("vendor/plain-chat-model")
+    assert "reasoning" in tag_discovered_model("nvidia/llama-3.3-nemotron-super-49b")
+    assert "coding" in tag_discovered_model("qwen2.5-coder-32b")
+    assert "review" in tag_discovered_model("safety-guard-8b")
+    assert "review" not in tag_discovered_model("qwen2.5-coder-32b")
 
 
 def test_orchestrator_get_v1_models_requires_inference_bearer() -> None:

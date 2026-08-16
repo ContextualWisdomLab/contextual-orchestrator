@@ -80,12 +80,18 @@ jobs:
             --auth-token "$CONTEXTUAL_ORCHESTRATOR_TOKEN" &
           server_pid=$!
           trap 'kill "$server_pid" 2>/dev/null || true' EXIT
+          ready=0
           for _ in 1 2 3 4 5 6 7 8 9 10; do
             if curl -sf http://127.0.0.1:8000/healthz >/dev/null; then
+              ready=1
               break
             fi
             sleep 1
           done
+          if [ "$ready" -ne 1 ]; then
+            echo "sidecar did not become healthy"
+            exit 1
+          fi
           registered="$(python -c 'import json,sys; print(len(json.load(open(sys.argv[1]))["registered_credentials"]))' "$RUNNER_TEMP/seed-report.json")"
           if [ "$registered" = "0" ]; then
             echo "no provider secrets in this job; skip live chat smoke (fail-closed, no GitHub Models fallback)"

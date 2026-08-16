@@ -15,8 +15,8 @@ import os
 import re
 from pathlib import Path
 from typing import Any
-from urllib.parse import urlparse
-from urllib.request import Request, urlopen
+from urllib.error import HTTPError, URLError
+from urllib.request import HTTPRedirectHandler, Request, build_opener
 
 from .credentials import get_credential, register_credential
 from .orchestrator import (
@@ -27,6 +27,7 @@ from .orchestrator import (
     _AgentPoolStore,
     catalog_allows_fields,
     load_agents,
+    provider_base_url_rejection,
 )
 
 ORG_CREDENTIAL_NAMES: tuple[str, ...] = (
@@ -88,6 +89,13 @@ _REASONING_NAME_MARKERS = (
     "r1",
 )
 _CHEAP_NAME_MARKERS = ("mini", "nano", "small", "haiku", "flash", "-4b", "-7b", "-8b", "-3b")
+
+
+class _RefuseRedirectHandler(HTTPRedirectHandler):
+    """Refuse redirects so a Bearer token cannot follow a host change."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # type: ignore[override]
+        raise HTTPError(req.full_url, code, "redirect refused for credentialed discovery", headers, fp)
 
 ORG_PROVIDER_SPECS: tuple[dict[str, str], ...] = (
     {
@@ -210,21 +218,21 @@ def discover_provider_models(
     stays in force. ``allow_insecure`` is a lab/test hook for loopback fixtures.
     """
     api_key = get_credential(credential_name)
-    if not api_key:
+    if not api_key or not str(api_key).strip():
         return []
-    parsed = urlparse(base_url)
-    if not parsed.hostname:
-        return []
-    if not allow_insecure and parsed.scheme != "https":
+    if provider_base_url_rejection(base_url, allow_insecure=allow_insecure):
         return []
     request = Request(
         f"{base_url.rstrip('/')}/models",
         headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
         method="GET",
     )
+    opener = build_opener(_RefuseRedirectHandler)
     try:
-        with urlopen(request, timeout=timeout) as response:  # nosec B310 - caller supplies a catalog base_url already used for chat.
+        with opener.open(request, timeout=timeout) as response:
             payload = json.loads(response.read().decode("utf-8"))
+    except (HTTPError, URLError, TimeoutError, OSError, json.JSONDecodeError, UnicodeDecodeError):
+        return []
     except Exception:  # noqa: BLE001 - discovery must never break bootstrap
         return []
     return _cap_chat_models(parse_models_list(payload), _DISCOVERY_CAP)
@@ -236,9 +244,9 @@ def tag_discovered_model(model: str, *, credential_name: str = "") -> tuple[str,
     tags: list[str] = []
     if any(marker in lowered for marker in _CODING_NAME_MARKERS):
         tags.append("coding")
-    if any(marker in lowered for marker in _REVIEW_NAME_MARKERS) or "coding" in tags:
+    if any(marker in lowered for marker in _REVIEW_NAME_MARKERS):
         tags.append("review")
-    if any(marker in lowered for marker in _REASONING_NAME_MARKERS) or "reasoning" not in tags:
+    if any(marker in lowered for marker in _REASONING_NAME_MARKERS):
         tags.append("reasoning")
     if any(marker in lowered for marker in _CHEAP_NAME_MARKERS):
         tags.append("cheap")
@@ -357,14 +365,16 @@ def compose_provider_catalog(
             ready.extend(allowed_seed)
             existing_ids.update(agent.id for agent in allowed_seed)
             continue
-        if get_credential(credential_name) is None:
+        secret = get_credential(credential_name)
+        if not secret or not str(secret).strip():
             for agent in allowed_seed:
                 skipped.append({"id": agent.id, "reason": "credential_missing"})
             if not allowed_seed:
                 skipped.append({"id": credential_name.lower(), "reason": "credential_missing"})
             continue
-        insecure = allow_insecure_discovery or urlparse(base_url).scheme == "http"
-        models = discover_provider_models(base_url, credential_name, allow_insecure=insecure)
+        models = discover_provider_models(
+            base_url, credential_name, allow_insecure=allow_insecure_discovery
+        )
         if models:
             ready.extend(
                 _agents_from_discovered_models(
@@ -385,11 +395,10 @@ def compose_provider_catalog(
 
 
 def persist_catalog_to_agents_db(agents: list[ModelAgent], path: str) -> None:
-    """Write ready agents into the sqlite agent-pool store used by ``--agents-db``."""
+    """Replace the sqlite agent-pool with the current ready set (drop stale ids)."""
     store = _AgentPoolStore(path)
     try:
-        for agent in agents:
-            store.save(agent)
+        store.replace_all(agents)
     finally:
         store.close()
 
