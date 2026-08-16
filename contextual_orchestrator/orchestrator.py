@@ -248,7 +248,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep -- unverified-ssl-context: intentional, default-secure (verify_tls defaults True) dev-only opt-out for self-signed endpoints.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -307,7 +307,7 @@ class ModelClient:
     def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
         api_key = get_credential(agent.credential_name) or ""
-        request = urllib.request.Request(
+        request = urllib.request.Request(  # nosemgrep -- dynamic-urllib-use-detected: URL is built from configured agent.base_url, not request body user input
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
             headers={

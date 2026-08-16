@@ -583,12 +583,12 @@ class SqlLedgerStore:
         ph = self._placeholder()
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
+            cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: only the DB-API placeholder char is interpolated; the value is bound.
                 f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
                 (name,),
             )
             if cur.fetchone() is None:
-                cur.execute(
+                cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: only DB-API placeholder chars are interpolated; values are bound.
                     "INSERT INTO cost_attribution_dimensions "
                     f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
                     (name, label, order),
@@ -602,7 +602,7 @@ class SqlLedgerStore:
         placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(
+        cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: columns are the fixed _USAGE_COLUMNS constant; values are bound.
             f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
@@ -622,7 +622,10 @@ class SqlLedgerStore:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        cur.execute(  # nosemgrep -- sqlalchemy-execute-raw-query FP: columns and WHERE clauses are fixed shapes; values are bound.
+            f"SELECT {columns} FROM llm_usage_records{where}",
+            tuple(params),
+        )  # nosec B608 - columns and clauses are fixed.
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 
