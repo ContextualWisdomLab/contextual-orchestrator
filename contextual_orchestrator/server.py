@@ -1555,6 +1555,29 @@ def _validate_chat_passthrough_spend_knobs(body: dict[str, Any]) -> None:
     _validate_chat_logprobs(body)
 
 
+def _validate_chat_passthrough_surface_knobs(body: dict[str, Any]) -> None:
+    """Hoist store and surface knobs before tools/response_format proxy.
+
+    The orchestration path already type-checks ``store``, ``modalities``,
+    ``prediction``, ``reasoning_effort``, ``service_tier``, and ``metadata``.
+    Passthrough skipped those, so an SDK tool-calling body could bill a
+    stored, audio, predicted, high-reasoning, flex-tier, or untyped-metadata
+    completion the gateway cannot honor.
+    """
+    if "store" in body:
+        _validate_chat_store(body)
+    if "modalities" in body:
+        _validate_chat_modalities(body)
+    if "prediction" in body:
+        _validate_chat_prediction(body)
+    if "reasoning_effort" in body:
+        _validate_chat_reasoning_effort(body)
+    if "service_tier" in body:
+        _validate_service_tier(body, endpoint_path="/v1/chat/completions")
+    if "metadata" in body:
+        _validate_openai_metadata(body)
+
+
 def _validate_chat_stop(body: dict[str, Any]) -> None:
     """Chat Completions ``stop`` — omit-equivalent no-op; any sequence fails closed.
 
@@ -3847,6 +3870,7 @@ def build_server(
                         _validate_completions_temperature(body)
                         _validate_completions_top_p(body)
                         _validate_chat_passthrough_spend_knobs(body)
+                        _validate_chat_passthrough_surface_knobs(body)
                         _reject_chat_passthrough_batch_routing(body)
                         started_at = time.perf_counter()
                         proxied = self._run(

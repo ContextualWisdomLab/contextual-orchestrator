@@ -49,11 +49,16 @@ This repository implements the interface and control plane, not the trained coor
   passthrough is sync-only), in-range `temperature` / `top_p` / penalties,
   `max_tokens` / `max_completion_tokens`, `n` (only omit or `1`),
   `seed` (not applied; non-omit is `invalid_seed`), `stop`, `user`,
-  `logprobs` / `top_logprobs`, and `logit_bias`
+  `logprobs` / `top_logprobs`, `logit_bias`, `store` (`true` is
+  `invalid_store`), `modalities` (only `["text"]`), `prediction`,
+  `reasoning_effort` (only omit/`none`), `service_tier` (only
+  auto/default), and `metadata` (string pairs)
   are validated *before* the tools/response_format passthrough early-return
   so SDK tool-calling bodies cannot smuggle unsupported values, silent-select
   a worker, request unused usage chunks, or bill a JSON completion when the
-  client asked for SSE, a batch channel, a multi-choice `n`, or token logprobs.
+  client asked for SSE, a batch channel, a multi-choice `n`, token logprobs,
+  persisted store, audio output, predicted tokens, extra reasoning, or a
+  flex/priority tier.
   Omit-equivalent
   `max_tool_calls` (JSON null / empty string) is stripped, not forwarded.
   Request sampling knobs (`temperature`, `top_p`, penalties, `max_tokens`)
