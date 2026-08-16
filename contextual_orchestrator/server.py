@@ -2608,15 +2608,21 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "each tool.function.name must match [a-zA-Z0-9_-]",
             )
         # OpenAI function tools require parameters as a JSON Schema object when present.
+        # Explicit JSON null is treat-as-omit (SDK optional default).
         if "parameters" in function:
             parameters = function.get("parameters")
-            if not isinstance(parameters, dict):
+            if parameters is not None and not isinstance(parameters, dict):
                 raise RequestError(
                     400,
                     "invalid_tools",
                     "each tool.function.parameters must be an object",
                 )
-        if "description" in function and not isinstance(function.get("description"), str):
+        # Explicit JSON null is treat-as-omit (SDK optional default).
+        if (
+            "description" in function
+            and function.get("description") is not None
+            and not isinstance(function.get("description"), str)
+        ):
             raise RequestError(
                 400,
                 "invalid_tools",
