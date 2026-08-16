@@ -36,6 +36,8 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "modalities", "prediction", "store", "service_tier", "stream_options",
     # Chat-era surfaces accepted only for explicit unsupported errors.
     "audio", "web_search_options",
+    # Assistants-era tool_resources — named unsupported (no vector-store plane).
+    "tool_resources",
     # Modern OpenAI SDK control fields — accepted only for named unsupported errors.
     "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
     # Responses-style reasoning object on chat — named unsupported (not effort string).
@@ -65,6 +67,8 @@ ALLOWED_RESPONSES_KEYS = {
     # with named unsupported errors. Official text.format is validated
     # (omit-real optionals), not rejected wholesale.
     "previous_response_id", "conversation", "truncation", "include", "text",
+    # Official prompt template object — named unsupported (no prompt store).
+    "prompt",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions", "routing"}
@@ -85,6 +89,8 @@ ALLOWED_COMPLETIONS_KEYS = {
     "modalities", "prediction", "reasoning_effort",
     # Chat-era multimodal/search — accepted only for named unsupported errors.
     "audio", "web_search_options",
+    # Assistants-era tool_resources — named unsupported (no vector-store plane).
+    "tool_resources",
     # Modern OpenAI SDK control fields — named unsupported errors.
     "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
     "reasoning", "background", "include",
@@ -2403,6 +2409,57 @@ def _validate_chat_audio_web_search_surface(
 
 
 
+
+def _validate_openai_tool_resources(
+    body: dict[str, Any],
+    *,
+    endpoint_path: str = "/v1/chat/completions",
+) -> None:
+    """Reject Assistants-era ``tool_resources`` with a named unsupported error.
+
+    OpenAI Assistants / some SDKs attach ``tool_resources`` (file_search vector
+    stores, code_interpreter files). This gateway has no vector-store plane —
+    named ``invalid_tool_resources`` beats opaque ``unknown_fields``.
+    Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    """
+    if "tool_resources" not in body:
+        return
+    value = body.get("tool_resources")
+    if value is None or (isinstance(value, dict) and not value):
+        return
+    if isinstance(value, str) and not value.strip():
+        return
+    raise RequestError(
+        400,
+        "invalid_tool_resources",
+        f"tool_resources is not supported on {endpoint_path}",
+    )
+
+
+def _validate_responses_prompt_template(body: dict[str, Any]) -> None:
+    """Reject official Responses ``prompt`` template objects fail-closed.
+
+    OpenAI prompt templates (``prompt: {id, variables}``) require a prompt
+    store this gateway does not host. Named ``invalid_prompt`` beats opaque
+    ``unknown_fields``. Explicit JSON null or empty object/string is omit.
+    """
+    if "prompt" not in body:
+        return
+    value = body.get("prompt")
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_prompt",
+        "prompt templates are not supported on /v1/responses; pass input text or omit",
+    )
+
+
+
 def _validate_openai_sdk_control_fields(body: dict[str, Any], *, endpoint_path: str) -> None:
     """Reject modern OpenAI SDK control fields not applied on this gateway.
 
@@ -3711,6 +3768,9 @@ def build_server(
                     _validate_chat_audio_web_search_surface(
                         body, endpoint_path="/v1/completions"
                     )
+                    _validate_openai_tool_resources(
+                        body, endpoint_path="/v1/completions"
+                    )
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/completions")
                     _validate_max_tool_calls(body, endpoint_path="/v1/completions")
                     _validate_completions_reasoning_object(body)
@@ -3827,6 +3887,9 @@ def build_server(
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
                     _validate_chat_audio_web_search_surface(body)
+                    _validate_openai_tool_resources(
+                        body, endpoint_path="/v1/chat/completions"
+                    )
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/chat/completions")
                     _validate_chat_reasoning_object(body)
                     _validate_openai_background(body, endpoint_path="/v1/chat/completions")
@@ -4351,6 +4414,7 @@ def build_server(
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.
                     _validate_responses_model(body)
                     _validate_responses_conversation_controls(body)
+                    _validate_responses_prompt_template(body)
                     if "store" in body:
                         _validate_responses_store(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as chat/Completions.
@@ -4388,6 +4452,7 @@ def build_server(
                     if "max_tool_calls" in body:
                         _validate_responses_max_tool_calls(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
+                    _validate_openai_tool_resources(body, endpoint_path="/v1/responses")
                     _validate_openai_background(body, endpoint_path="/v1/responses")
                     if "parallel_tool_calls" in body:
                         _validate_responses_parallel_tool_calls(body)
