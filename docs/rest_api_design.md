@@ -16,7 +16,7 @@
 | `GET` | `/openapi.json` | API contract |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
 | `POST` | `/v1/completions` | Compatibility Completions endpoint (streaming rejected) |
-| `POST` | `/v1/responses` | Compatibility Responses endpoint (streaming rejected) |
+| `POST` | `/v1/responses` | Compatibility Responses endpoint (`stream=true` SSE-proxies `response.*` events) |
 | `POST` | `/v1/embeddings` | Compatibility embeddings endpoint |
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
@@ -122,6 +122,14 @@ or apply SSE obfuscation. Missing `model` and out-of-range
 unsupported `reasoning_effort`, and non-default `service_tier` use the same
 named errors on the tools path — do not send them on tool-calling requests.
 
+`/v1/responses` with `stream=true` SSE-proxies a single pool agent as
+named `response.*` events (OpenAI, 2024). Function tools reconstruct to
+the same `output[].type=function_call` as the non-stream JSON body
+(`lookup_balance` binds `INV-` identifiers, defaulting to `INV-9`);
+content-only streams still match `output_text`. Do not set
+`stream_options.include_usage=true` or `include_obfuscation=true` — those
+values fail closed with `invalid_stream_options`.
+
 `attribution` and `routing` use the same named errors on the tools /
 `response_format` path as on the orchestration path. Unknown spend
 dimensions fail closed (`invalid_attribution`). Tools passthrough has no
@@ -150,18 +158,24 @@ billing a silent completion.
 
 Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when
-the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
+the client reads SSE (chat tool calls arrive as `delta.tool_calls`; Responses
+tool calls arrive as `response.function_call_arguments.delta`); always send a
 pool `model`; omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
 and `stream_options.include_usage` on tool-calling requests. When declaring
 tools, omit unused `description` / `parameters` / `strict` or leave the SDK
 default `null` — both become omit before the provider hop. On assistant
-`tool_calls`, send only `id` / `type` / `function` / optional `index`.
+`tool_calls`, send only `id` / `type` / `function` / optional `index`. On
+`/v1/responses`, send a non-empty `input` and `stream=true` when the SDK
+reads events.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
 
 OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
 https://platform.openai.com/docs/guides/streaming-responses
+
+OpenAI. (2024). *Create a model response*. OpenAI API reference.
+https://platform.openai.com/docs/api-reference/responses/create
 
 WHATWG. (n.d.). *Server-sent events*. HTML Living Standard.
 https://html.spec.whatwg.org/multipage/server-sent-events.html

@@ -1,4 +1,4 @@
-"""Responses stream=true reject honesty over HTTP (fail-closed)."""
+"""Responses stream honesty over HTTP: true is SSE; non-boolean still fails closed."""
 
 from __future__ import annotations
 
@@ -81,22 +81,32 @@ def test_http_responses_accepts_stream_omit() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_stream_true() -> None:
-    """Responses passthrough has no SSE plane — stream=true fails closed."""
+def test_http_responses_accepts_stream_true_as_sse() -> None:
+    """Responses stream=true is an SSE proxy, not a billed JSON body or 400."""
     server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/responses",
+        data=json.dumps(
             {
                 "model": "mock-planner",
                 "input": "hello stream true",
                 "stream": True,
-            },
-        )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_stream" in blob
-        assert "not supported" in blob
+            }
+        ).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=15) as response:
+            assert response.status == 200
+            assert response.headers.get("content-type", "").startswith("text/event-stream")
+            body = response.read().decode("utf-8")
+        assert "data: [DONE]" in body
+        assert "response.completed" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)

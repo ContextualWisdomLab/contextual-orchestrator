@@ -91,16 +91,26 @@ def test_http_responses_accepts_stream_null_and_false() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_still_rejects_stream_true() -> None:
+def test_http_responses_accepts_stream_true_as_sse() -> None:
     server, thread, port = _server()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/responses",
+        data=json.dumps(
+            {"model": "mock-planner", "input": "stream true", "stream": True}
+        ).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
     try:
-        status, body = _post(
-            port,
-            "/v1/responses",
-            {"model": "mock-planner", "input": "stream true", "stream": True},
-        )
-        assert status == 400, body
-        assert "invalid_stream" in json.dumps(body)
+        with urllib.request.urlopen(request, timeout=15) as response:
+            assert response.status == 200
+            assert response.headers.get("content-type", "").startswith("text/event-stream")
+            body = response.read().decode("utf-8")
+        assert "data: [DONE]" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)

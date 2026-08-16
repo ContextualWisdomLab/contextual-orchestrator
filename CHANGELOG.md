@@ -16,6 +16,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   providers are piped verbatim. Next action: send `stream=true` when the
   client reads SSE; include the invoice id in the user text; omit
   `stream_options.include_usage`.
+- SSE-proxy `/v1/responses` when `stream=true`. Mock function tools emit
+  named `response.*` events and `function_call` argument deltas that
+  reconstruct to the same invoice `lookup_balance` / `INV-9` JSON body;
+  content-only streams still match `output_text`; live providers are piped
+  verbatim. Next action: send `stream=true` on Responses SDK clients;
+  include the invoice id in `input`; omit `stream_options.include_usage`.
 
 ### Fixed
 
@@ -55,5 +61,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   https://doi.org/10.17487/RFC8259
 - OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
   https://platform.openai.com/docs/guides/streaming-responses
+- OpenAI. (2024). *Create a model response*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/responses/create
 - WHATWG. (n.d.). *Server-sent events*. HTML Living Standard.
   https://html.spec.whatwg.org/multipage/server-sent-events.html

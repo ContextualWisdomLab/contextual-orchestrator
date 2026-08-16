@@ -470,7 +470,7 @@ class ModelClient:
                 yield raw.decode("utf-8")
 
     def _user_prompt_text(self, payload: dict[str, Any]) -> str:
-        """Join user message text so mock tool arguments can bind invoice ids."""
+        """Join user or Responses ``input`` text so mock tools can bind invoice ids."""
         pieces: list[str] = []
         for message in payload.get("messages") or []:
             if not isinstance(message, dict) or message.get("role") != "user":
@@ -482,12 +482,19 @@ class ModelClient:
             if not isinstance(content, list):
                 continue
             for part in content:
-                if isinstance(part, dict) and part.get("type") == "text":
+                if isinstance(part, dict) and part.get("type") in {"text", "input_text"}:
                     pieces.append(str(part.get("text") or ""))
-        return " ".join(pieces)
+        if pieces:
+            return " ".join(pieces)
+        return _coerce_input_text(payload.get("input"))
 
     def _selected_function_name(self, payload: dict[str, Any]) -> str | None:
-        """Return the function a mock agent should call, or None for ``tool_choice=none``."""
+        """Return the function a mock agent should call, or None for ``tool_choice=none``.
+
+        Accepts chat ``tools[].function.name`` and Responses-native
+        ``tools[].name`` / ``tool_choice.name`` so offline invoice lookups
+        match both SDK shapes (OpenAI, 2024).
+        """
         tools = payload.get("tools")
         if not isinstance(tools, list) or not tools:
             return None
@@ -498,13 +505,18 @@ class ModelClient:
             named = str(((tool_choice.get("function") or {}).get("name") or "")).strip()
             if named:
                 return named
+            named = str(tool_choice.get("name") or "").strip()
+            if named:
+                return named
         for tool in tools:
             if not isinstance(tool, dict) or tool.get("type") != "function":
                 continue
             function = tool.get("function")
-            if not isinstance(function, dict):
-                continue
-            name = str(function.get("name") or "").strip()
+            if isinstance(function, dict):
+                name = str(function.get("name") or "").strip()
+                if name:
+                    return name
+            name = str(tool.get("name") or "").strip()
             if name:
                 return name
         return None
@@ -552,11 +564,12 @@ class ModelClient:
         completions emit ``delta.tool_calls`` and finish as ``tool_calls`` so
         ``mock://`` matches the OpenAI SDK stream the live ``_stream_raw`` path
         already preserves. The final frame has no orchestration object — this
-        is a provider passthrough, not a conduct workflow. Responses endpoint
-        streaming is not implemented here.
+        is a provider passthrough, not a conduct workflow. The Responses
+        endpoint emits named ``response.*`` events instead of chat chunks.
         """
         if endpoint.strip("/") == "responses":
-            raise RuntimeError("SSE passthrough is not implemented for /v1/responses")
+            yield from self._mock_responses_sse(agent, payload)
+            return
         snapshot = dict(payload)
         snapshot["stream"] = False
         raw = self._mock_raw(agent, endpoint, snapshot)
@@ -621,6 +634,150 @@ class ModelClient:
             yield _frame({}, finish="stop")
         yield "data: [DONE]\n\n"
 
+    def _sse_named_event(self, event_type: str, payload: dict[str, Any]) -> str:
+        """Format one WHATWG SSE event with an OpenAI Responses ``event:`` name."""
+        return f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+
+    def _mock_responses_sse(self, agent: ModelAgent, payload: dict[str, Any]):
+        """Frame a mock Responses JSON body as official ``response.*`` SSE events.
+
+        Function-tool completions emit ``function_call`` output items and
+        ``response.function_call_arguments.delta`` so a streamed invoice
+        lookup reconstructs to the same arguments as ``proxy_completion``.
+        Content completions emit ``response.output_text.delta``. Live
+        providers are still piped verbatim by ``_stream_raw``.
+        """
+        snapshot = dict(payload)
+        snapshot["stream"] = False
+        raw = self._mock_raw(agent, "responses", snapshot)
+        response_id = str(raw.get("id") or f"resp_mock_{agent.id}")
+        created = {
+            "type": "response.created",
+            "response": {
+                "id": response_id,
+                "object": "response",
+                "status": "in_progress",
+                "model": raw.get("model") or agent.model,
+                "output": [],
+            },
+        }
+        yield self._sse_named_event("response.created", created)
+        output = raw.get("output") or []
+        for index, item in enumerate(output):
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "function_call":
+                added = {
+                    "id": item.get("id"),
+                    "call_id": item.get("call_id"),
+                    "type": "function_call",
+                    "name": item.get("name") or "",
+                    "arguments": "",
+                    "status": "in_progress",
+                }
+                yield self._sse_named_event(
+                    "response.output_item.added",
+                    {
+                        "type": "response.output_item.added",
+                        "output_index": index,
+                        "item": added,
+                    },
+                )
+                arguments = str(item.get("arguments") or "")
+                for start in range(0, len(arguments), 24):
+                    delta = arguments[start : start + 24]
+                    yield self._sse_named_event(
+                        "response.function_call_arguments.delta",
+                        {
+                            "type": "response.function_call_arguments.delta",
+                            "output_index": index,
+                            "delta": delta,
+                        },
+                    )
+                yield self._sse_named_event(
+                    "response.function_call_arguments.done",
+                    {
+                        "type": "response.function_call_arguments.done",
+                        "output_index": index,
+                        "arguments": arguments,
+                    },
+                )
+                done_item = dict(item)
+                done_item["status"] = "completed"
+                yield self._sse_named_event(
+                    "response.output_item.done",
+                    {
+                        "type": "response.output_item.done",
+                        "output_index": index,
+                        "item": done_item,
+                    },
+                )
+                continue
+            content_parts = item.get("content") if isinstance(item.get("content"), list) else []
+            text = ""
+            for part in content_parts:
+                if isinstance(part, dict) and part.get("type") == "output_text":
+                    text += str(part.get("text") or "")
+            yield self._sse_named_event(
+                "response.output_item.added",
+                {
+                    "type": "response.output_item.added",
+                    "output_index": index,
+                    "item": {
+                        "type": "message",
+                        "role": "assistant",
+                        "status": "in_progress",
+                        "content": [],
+                    },
+                },
+            )
+            if text:
+                yield self._sse_named_event(
+                    "response.content_part.added",
+                    {
+                        "type": "response.content_part.added",
+                        "output_index": index,
+                        "content_index": 0,
+                        "part": {"type": "output_text", "text": ""},
+                    },
+                )
+                for start in range(0, len(text), 24):
+                    yield self._sse_named_event(
+                        "response.output_text.delta",
+                        {
+                            "type": "response.output_text.delta",
+                            "output_index": index,
+                            "content_index": 0,
+                            "delta": text[start : start + 24],
+                        },
+                    )
+                yield self._sse_named_event(
+                    "response.output_text.done",
+                    {
+                        "type": "response.output_text.done",
+                        "output_index": index,
+                        "content_index": 0,
+                        "text": text,
+                    },
+                )
+            done_item = dict(item)
+            done_item["status"] = "completed"
+            yield self._sse_named_event(
+                "response.output_item.done",
+                {
+                    "type": "response.output_item.done",
+                    "output_index": index,
+                    "item": done_item,
+                },
+            )
+        completed = dict(raw)
+        completed["status"] = "completed"
+        yield self._sse_named_event(
+            "response.completed",
+            {"type": "response.completed", "response": completed},
+        )
+        yield "data: [DONE]\n\n"
+
     def _send_raw_with_retry(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:  # pragma: no cover
@@ -668,9 +825,31 @@ class ModelClient:
             if key in payload
         }
         if endpoint.strip("/") == "responses":
+            tool_message = self._mock_tool_call_message(payload)
+            if tool_message is not None:
+                call = tool_message["tool_calls"][0]
+                function = call["function"]
+                function_name = str(function["name"])
+                return {
+                    "id": f"resp_mock_{agent.id}",
+                    "object": "response",
+                    "status": "completed",
+                    "model": agent.model,
+                    "output": [
+                        {
+                            "type": "function_call",
+                            "id": f"fc_mock_{function_name}",
+                            "call_id": call["id"],
+                            "name": function_name,
+                            "arguments": function["arguments"],
+                        }
+                    ],
+                    "echo": echoed,
+                }
             return {
                 "id": f"resp_mock_{agent.id}",
                 "object": "response",
+                "status": "completed",
                 "model": agent.model,
                 "output": [
                     {
@@ -1220,13 +1399,14 @@ class TaskOrchestrator:
     def proxy_completion_stream(
         self, body: dict[str, Any], *, endpoint: str = "chat/completions"
     ):
-        """Yield SSE text for a tools/response_format request on one pool agent.
+        """Yield SSE text for a tools/response_format or Responses request.
 
         Bytes already sent cannot be recalled, so this path does not fail over
-        to another agent mid-stream. Mock agents emit ``chat.completion.chunk``
-        frames that match ``proxy_completion`` (``delta.tool_calls`` for
-        function tools, content otherwise); live providers are piped verbatim
-        so ``tool_calls`` deltas survive.
+        to another agent mid-stream. Mock chat agents emit
+        ``chat.completion.chunk`` frames that match ``proxy_completion``
+        (``delta.tool_calls`` for function tools, content otherwise). Mock
+        Responses agents emit named ``response.*`` events, including
+        ``function_call`` argument deltas. Live providers are piped verbatim.
         """
         agent, upstream = self._passthrough_upstream(body, endpoint=endpoint, stream=True)
         yield from self.client.proxy_stream_send(agent, endpoint, upstream)

@@ -53,6 +53,27 @@ OpenAI-compatible backends reject a null JSON Schema object.
   Distinguishes a present `null` member from an omitted member. Redistribution
   of the RFC text is not required here; the citation is the normative source.
 
+## Responses streaming (SSE)
+
+Official OpenAI SDKs default `client.responses.create(..., stream=True)`.
+The gateway must emit named `response.*` events (including
+`response.function_call_arguments.delta`) so a streamed invoice
+`lookup_balance` reconstructs to the same `function_call` as the JSON
+body. Live providers are piped verbatim; `include_usage=true` still
+fails closed because this control plane does not emit a final usage
+chunk.
+
+- OpenAI. (2024). *Create a model response*. OpenAI API reference.
+  https://platform.openai.com/docs/api-reference/responses/create
+  Grounds the Responses `input` / `output` / `function_call` shape and
+  `stream=true`.
+- OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
+  https://platform.openai.com/docs/guides/streaming-responses
+  Grounds the named SSE `event:` field and `data: [DONE]` terminator.
+- WHATWG. (n.d.). *Server-sent events*. HTML Living Standard.
+  https://html.spec.whatwg.org/multipage/server-sent-events.html
+  Normative SSE framing. Cite+link; no PDF redistribution.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including

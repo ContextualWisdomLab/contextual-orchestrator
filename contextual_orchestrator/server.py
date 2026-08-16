@@ -1175,23 +1175,36 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
 
 
 def _validate_responses_stream_options(body: dict[str, Any]) -> None:
-    """Responses ``stream_options`` — not supported (Responses streaming is off).
+    """Responses ``stream_options`` — same omit / true-flag honesty as chat.
 
-    OpenAI pairs stream_options with stream=true. This gateway rejects
-    stream=true on /v1/responses, so any present stream_options would be a
-    silent no-op; fail closed instead. Explicit JSON null (object or flag
-    values) is treat-as-omit. Unknown keys fail closed even when null.
+    All-false or JSON-null flags are omit-equivalent. ``include_usage=true``
+    and ``include_obfuscation=true`` fail closed because this gateway does
+    not emit a final usage chunk or apply SSE obfuscation. Remaining flags
+    require ``stream=true``.
     """
     if "stream_options" not in body:
         return
     kept = _normalized_stream_option_flags(body.get("stream_options"))
     if kept is None:
         return
-    raise RequestError(
-        400,
-        "invalid_stream_options",
-        "stream_options is not supported on /v1/responses (stream is not supported)",
-    )
+    if kept.get("include_usage") is True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_usage=true is not supported on /v1/responses",
+        )
+    if kept.get("include_obfuscation") is True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_obfuscation=true is not supported on /v1/responses",
+        )
+    if body.get("stream") is not True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options requires stream=true on /v1/responses",
+        )
 
 
 def _validate_mode(mode: Any) -> str:
@@ -4522,26 +4535,38 @@ def build_server(
                             "invalid_input",
                             "input must be a non-empty string or non-empty array on /v1/responses",
                         )
-                    # stream=false / omit → non-SSE JSON response (honest no-stream path).
-                    # stream=true is not implemented for Responses passthrough.
+                    # stream=false / omit → JSON. stream=true SSE-proxies one agent
+                    # as official response.* events (including function_call).
+                    stream = False
                     if "stream" in body:
-                        stream = body.get("stream")
+                        stream_flag = body.get("stream")
                         # Explicit JSON null / false / empty string are omit-equivalent no-ops.
                         if (
-                            stream is None
-                            or stream is False
-                            or (isinstance(stream, str) and not stream.strip())
+                            stream_flag is None
+                            or stream_flag is False
+                            or (isinstance(stream_flag, str) and not stream_flag.strip())
                         ):
-                            pass
-                        elif not isinstance(stream, bool):
+                            stream = False
+                        elif not isinstance(stream_flag, bool):
                             raise RequestError(400, "invalid_stream", "stream must be a boolean")
-                        elif stream is True:
-                            raise RequestError(
-                                400,
-                                "invalid_stream",
-                                "stream is not supported on /v1/responses",
-                            )
+                        else:
+                            stream = stream_flag is True
                     started_at = time.perf_counter()
+                    if stream:
+                        self._stream_passthrough_completion(
+                            orchestrator, security, body, endpoint="responses"
+                        )
+                        orchestrator.record_analytics_event(
+                            "responses_passthrough_stream",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                "response_streamed": True,
+                            },
+                        )
+                        return
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
                     )
@@ -4699,20 +4724,26 @@ def build_server(
             self.wfile.flush()
 
         def _stream_passthrough_completion(
-            self, orchestrator: Any, security: Any, body: dict[str, Any]
+            self,
+            orchestrator: Any,
+            security: Any,
+            body: dict[str, Any],
+            endpoint: str = "chat/completions",
         ) -> None:
-            """Pipe a single-agent tools/response_format proxy as OpenAI SSE frames.
+            """Pipe a single-agent proxy as OpenAI SSE frames.
 
-            Validation has already run. Headers are sent before the first frame,
-            so a mid-stream provider failure is surfaced as a terminal error
-            chunk plus ``[DONE]`` rather than a JSON ``500``.
+            Chat tools/response_format emit ``chat.completion.chunk``. Responses
+            emit named ``response.*`` events. Validation has already run.
+            Headers are sent before the first frame, so a mid-stream provider
+            failure is surfaced as a terminal error event plus ``[DONE]``
+            rather than a JSON ``500``.
             """
             security.acquire_run_slot()
             try:
                 self._begin_sse()
                 saw_done = False
                 try:
-                    for frame in orchestrator.proxy_completion_stream(body):
+                    for frame in orchestrator.proxy_completion_stream(body, endpoint=endpoint):
                         if frame.strip() == "data: [DONE]":
                             saw_done = True
                         self.wfile.write(frame.encode("utf-8"))
@@ -4720,14 +4751,32 @@ def build_server(
                     if not saw_done:
                         self._write_sse("data: [DONE]\n\n")
                 except Exception:  # noqa: BLE001 - headers already sent
-                    error_payload = {
-                        "id": f"chatcmpl-{int(time.time() * 1000)}",
-                        "object": "chat.completion.chunk",
-                        "created": int(time.time()),
-                        "model": body.get("model") or "contextual-orchestrator",
-                        "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}],
-                    }
-                    self._write_sse(f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n")
+                    if endpoint.strip("/") == "responses":
+                        error_payload = {
+                            "type": "response.failed",
+                            "response": {
+                                "id": f"resp-{int(time.time() * 1000)}",
+                                "object": "response",
+                                "status": "failed",
+                                "error": {
+                                    "code": "server_error",
+                                    "message": "provider stream failed",
+                                },
+                            },
+                        }
+                        self._write_sse(
+                            "event: response.failed\n"
+                            f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n"
+                        )
+                    else:
+                        error_payload = {
+                            "id": f"chatcmpl-{int(time.time() * 1000)}",
+                            "object": "chat.completion.chunk",
+                            "created": int(time.time()),
+                            "model": body.get("model") or "contextual-orchestrator",
+                            "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}],
+                        }
+                        self._write_sse(f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n")
                     self._write_sse("data: [DONE]\n\n")
             finally:
                 security.release_run_slot()
