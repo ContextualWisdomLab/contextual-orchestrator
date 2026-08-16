@@ -118,9 +118,11 @@ streams still match `message.content`. Do not send `stream_options.include_usage
 `include_obfuscation=true` — this gateway does not emit a final usage chunk
 or apply SSE obfuscation. Missing `model` and out-of-range
 `temperature` / `top_p` also fail closed before passthrough. `seed`, `stop`,
-`n>1`, `logprobs`, `logit_bias`, out-of-range token/penalty knobs,
-unsupported `reasoning_effort`, and non-default `service_tier` use the same
-named errors on the tools path — do not send them on tool-calling requests.
+`n>1`, `logprobs`, boolean or nonzero `top_logprobs`, `logit_bias`,
+out-of-range token/penalty knobs, unsupported `reasoning_effort`, and
+non-default `service_tier` use the same named errors on the tools path —
+do not send them on tool-calling requests. A null `max_completion_tokens`
+does not hide `max_tokens=0`.
 
 `attribution` and `routing` use the same named errors on the tools /
 `response_format` path as on the orchestration path. Unknown spend
@@ -155,7 +157,8 @@ Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; send `stream=true` when
 the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
 pool `model`; omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
-`mode=conduct`, `include_orchestration_trace=true`, and
+boolean `top_logprobs`, `max_tokens=0` even when `max_completion_tokens` is
+null, `mode=conduct`, `include_orchestration_trace=true`, and
 `stream_options.include_usage` on tool-calling requests. When declaring
 tools, omit unused `description` / `parameters` / `strict` or leave the SDK
 default `null` — both become omit before the provider hop. On assistant

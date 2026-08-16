@@ -265,6 +265,68 @@ def test_http_chat_tools_rejects_top_logprobs() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_tools_rejects_boolean_top_logprobs() -> None:
+    """JSON false is not integer 0; do not treat it as omit and bill."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "tools": _LOOKUP_TOOLS,
+                "top_logprobs": False,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_top_logprobs" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_rejects_zero_max_tokens_when_preferred_budget_is_omit() -> None:
+    """SDK null max_completion_tokens must not hide a zero legacy budget."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "tools": _LOOKUP_TOOLS,
+                "max_completion_tokens": None,
+                "max_tokens": 0,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_max_tokens" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_tools_accepts_positive_max_tokens_when_preferred_budget_is_omit() -> None:
+    """Null preferred budget falls back to a valid legacy max_tokens."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "look up invoice 4419"}],
+                "tools": _LOOKUP_TOOLS,
+                "max_completion_tokens": None,
+                "max_tokens": 16,
+            },
+        )
+        assert status == 200, body
+        assert isinstance(body, dict) and "choices" in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_response_format_rejects_seed() -> None:
     """JSON-mode bodies must not bill when seed is silently dropped."""
     server, thread, port = _server()
@@ -316,6 +378,9 @@ if __name__ == "__main__":
     test_http_chat_tools_rejects_unknown_reasoning_effort()
     test_http_chat_tools_rejects_unknown_service_tier()
     test_http_chat_tools_rejects_top_logprobs()
+    test_http_chat_tools_rejects_boolean_top_logprobs()
+    test_http_chat_tools_rejects_zero_max_tokens_when_preferred_budget_is_omit()
+    test_http_chat_tools_accepts_positive_max_tokens_when_preferred_budget_is_omit()
     test_http_chat_response_format_rejects_seed()
     test_http_chat_tools_accepts_omit_equivalent_seed_null()
     print("ok")

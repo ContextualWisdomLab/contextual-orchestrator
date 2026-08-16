@@ -98,3 +98,30 @@ def test_http_completions_accepts_top_logprobs_zero_as_omit() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_http_completions_rejects_boolean_top_logprobs() -> None:
+    """JSON false is not integer 0; do not treat it as omit and bill."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "prompt": "hello top_logprobs false",
+                "top_logprobs": False,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_top_logprobs" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+if __name__ == "__main__":
+    test_http_completions_accepts_baseline_without_top_logprobs()
+    test_http_completions_rejects_top_logprobs()
+    test_http_completions_accepts_top_logprobs_zero_as_omit()
+    test_http_completions_rejects_boolean_top_logprobs()
+    print("ok")

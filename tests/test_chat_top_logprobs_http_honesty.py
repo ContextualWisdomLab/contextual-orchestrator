@@ -107,6 +107,25 @@ def test_http_chat_rejects_top_logprobs() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_boolean_top_logprobs() -> None:
+    """JSON false is not integer 0; do not treat it as omit and bill."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "top_logprobs false"}],
+                "top_logprobs": False,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_top_logprobs" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_top_logprobs_with_logprobs_false() -> None:
     """Even with logprobs=false, top_logprobs must not silently no-op."""
     server, thread, port = _server()
@@ -165,6 +184,7 @@ if __name__ == "__main__":
     test_http_chat_rejects_logprobs_true()
     test_http_chat_accepts_logprobs_false()
     test_http_chat_rejects_top_logprobs()
+    test_http_chat_rejects_boolean_top_logprobs()
     test_http_chat_rejects_top_logprobs_with_logprobs_false()
     test_http_chat_rejects_logprobs_non_boolean()
     test_http_chat_accepts_logprobs_omitted()
