@@ -52,6 +52,8 @@ Locked by `tests/test_tip_reland_sdk_omit_persist_http_honesty.py` on the #668 s
 
 Compatibility honesty for Structured Outputs and tools: `response_format.json_schema.name` and `tools[].function.name` (also message `name` and `tool_calls[].function.name`) must match `[a-zA-Z0-9_-]{1,64}`. ASCII is required — `str.isalnum()` alone accepts Unicode letters and digits (`café`, `名前`, Arabic-Indic digits) and would forward an illegal name for an opaque provider 400. Illegal names return named `invalid_response_format` / `invalid_tools` / `invalid_message` / `invalid_message_name`. Locked by `tests/test_json_schema_name_charset_http_honesty.py` and `tests/test_tool_function_name_charset_http_honesty.py` on the #686 substrate.
 
+Official Responses `text.format` accepts `type` text / json_object / json_schema (flat schema keys), pops null/blank optionals, rejects `verbosity` and dual-plane `text`+`response_format`. Locked by `tests/test_responses_text_format_http_honesty.py` on the #687 substrate.
+
 ### References
 
 OpenAI. (n.d.-a). *Create chat completion*. OpenAI Platform. https://platform.openai.com/docs/api-reference/chat/create

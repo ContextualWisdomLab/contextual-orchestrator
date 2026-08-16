@@ -164,6 +164,22 @@ def exercise_request_body(raw: bytes) -> None:
                         ch.isalnum() or ch in "_-" for ch in tool_name
                     )
 
+    # Official Responses text.format: successful names are ASCII [a-zA-Z0-9_-]{1,64}.
+    if "text" in body:
+        try:
+            text_value = server._validate_responses_text(body)
+        except RequestError:
+            pass
+        else:
+            if isinstance(text_value, dict):
+                fmt = text_value.get("format")
+                if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
+                    name = fmt.get("name")
+                    assert isinstance(name, str) and 1 <= len(name) <= 64
+                    assert name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in name
+                    )
+
 
 def exercise_agent_config(value: Any) -> None:
     """Drive ``ModelAgent.from_dict`` over an arbitrary decoded JSON value."""

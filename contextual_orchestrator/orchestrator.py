@@ -460,6 +460,7 @@ class ModelClient:
                 "metadata",
                 "messages",
                 "top_logprobs",
+                "text",
             )
             if key in payload
         }
