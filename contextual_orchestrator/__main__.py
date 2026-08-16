@@ -9,6 +9,12 @@ import sys
 
 from .credentials import register_credential
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
+from .provider_catalog import (
+    InMemoryProviderCatalogStore,
+    ProviderAwareModelClient,
+    ProviderCatalogService,
+    refresh_and_overlay,
+)
 from .server import SecurityConfig, serve
 
 
@@ -55,10 +61,28 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+def _refresh_provider_catalog_command(argv: list[str]) -> None:
+    """Refresh discovered models from registered KV credentials and print a secret-free summary."""
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator refresh-provider-catalog",
+        description="Discover provider catalogs for registered KV credentials and overlay the worker pool.",
+    )
+    parser.add_argument("--agents", default="examples/agents.mock.json", help="Seed agent config JSON.")
+    parser.add_argument("--force", action="store_true", help="Bypass the refresh throttle.")
+    args = parser.parse_args(argv)
+    orchestrator = TaskOrchestrator(load_agents(args.agents), client=ProviderAwareModelClient())
+    service = ProviderCatalogService(store=InMemoryProviderCatalogStore())
+    summary = refresh_and_overlay(orchestrator, service, force=args.force)
+    print(json.dumps(summary, ensure_ascii=False, indent=2))
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
         _register_credential_command(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "refresh-provider-catalog":
+        _refresh_provider_catalog_command(sys.argv[2:])
         return
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
@@ -80,6 +104,14 @@ def main() -> None:
                         help="Base URL of a Clearfolio deployment to use as the admin document viewer (default: disabled).")
     parser.add_argument("--agents-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None,
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
+    parser.add_argument(
+        "--refresh-provider-catalog",
+        action="store_true",
+        help=(
+            "After loading seed agents, refresh the five org-credential catalogs from the KV "
+            "and overlay discovered workers. Failures are audited and do not invent models."
+        ),
+    )
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
     parser.add_argument("--insecure-skip-tls-verify", action="store_true",
@@ -94,7 +126,8 @@ def main() -> None:
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
-    client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
+    client_cls = ProviderAwareModelClient if args.refresh_provider_catalog else ModelClient
+    client = client_cls(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),
         client=client,
@@ -104,6 +137,10 @@ def main() -> None:
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
     )
+    if args.refresh_provider_catalog:
+        service = ProviderCatalogService(store=InMemoryProviderCatalogStore())
+        orchestrator.catalog_service = service
+        refresh_and_overlay(orchestrator, service, require_candidates=False)
 
     if args.eval:
         print(json.dumps(orchestrator.compare_to_baseline(args.eval, mode=args.mode), ensure_ascii=False, indent=2))

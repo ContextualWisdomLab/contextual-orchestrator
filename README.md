@@ -115,7 +115,9 @@ One fused orchestration loop:
 - Deep path: a natural-language workflow is built with planner, worker, verifier, and synthesizer steps.
 - Each step has an access list, so workers see only the prior outputs intentionally exposed to them.
 - Agent definitions are data, so provider preference, exclusions, privacy constraints, and mock testing do not require code changes.
-- Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
+- Provider catalogs can overlay the seed pool after a KV credential is registered under `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `BYTEZ_API_KEY`, `OPENROUTER_API_KEY`, or `OPENAI_API_KEY`. CLI: `refresh-provider-catalog`. Serve: `--refresh-provider-catalog`. Admin: `POST /api/v1/provider_catalogs/refresh`. Refresh is fail-closed (last-known-good kept; no invented models). Bytez uses native `https://api.bytez.com/models/v2`, not OpenAI `/v1/models`. See [docs/provider_catalog.md](docs/provider_catalog.md).
+- Route selection is capability-first, then minimum **known** price (`price_per_million` / catalog prices). Unpriced models are not treated as free. Trace `selection_reason` records why a worker won. Quality/Pareto beyond tags is issue #86 and is not claimed here.
+- Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If the **already chosen** agent still fails, the request fails over to the next capability-ranked agent, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is resilience after the primary errors, not the selection policy (`served_agent_id`, `failover_from`).
 
 See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 
@@ -255,6 +257,8 @@ python tests/test_paper_contracts.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py
+python tests/test_quality_cost_auto_routing.py
+python tests/test_provider_catalog.py
 python tests/test_security_hardening.py
 python tests/test_repository_security_metadata.py
 python tests/test_product_planning_contract.py

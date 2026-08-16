@@ -37,7 +37,24 @@ from .cost_ledger import (
 from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
-from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, known_price_rank, load_agents
+from .provider_catalog import (
+    DEFAULT_PROVIDER_ACCOUNTS,
+    CatalogHttpError,
+    CatalogModelRecord,
+    DiscoveredModel,
+    InMemoryProviderCatalogStore,
+    ProviderAccount,
+    ProviderAwareModelClient,
+    ProviderCatalogHttpClient,
+    ProviderCatalogService,
+    ProviderCatalogUnavailable,
+    bootstrap_provider_credentials,
+    build_catalog_orchestrator,
+    known_catalog_prices,
+    normalize_models_document,
+    refresh_and_overlay,
+)
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 __all__ = [
@@ -45,9 +62,26 @@ __all__ = [
     "TaskOrchestrator",
     "WorkflowStep",
     "load_agents",
+    "known_price_rank",
     "get_credential",
     "register_credential",
     "NotConfigured",
+    # provider catalog (PR #574 inventory/refresh on main)
+    "DEFAULT_PROVIDER_ACCOUNTS",
+    "ProviderAccount",
+    "DiscoveredModel",
+    "CatalogModelRecord",
+    "CatalogHttpError",
+    "ProviderCatalogUnavailable",
+    "InMemoryProviderCatalogStore",
+    "ProviderCatalogHttpClient",
+    "ProviderAwareModelClient",
+    "ProviderCatalogService",
+    "bootstrap_provider_credentials",
+    "normalize_models_document",
+    "known_catalog_prices",
+    "refresh_and_overlay",
+    "build_catalog_orchestrator",
     # cost review
     "ATTRIBUTION_DIMENSIONS",
     "AttributionDimensions",

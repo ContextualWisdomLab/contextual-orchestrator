@@ -25,6 +25,7 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .provider_catalog import ProviderCatalogUnavailable, refresh_and_overlay
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -399,6 +400,18 @@ def build_server(
                     )
                     self._send(_response_payload(state, security.expose_trace_by_default))
                     return
+                if path == "/api/v1/provider_catalogs/latest":
+                    service = getattr(orchestrator, "catalog_service", None)
+                    if service is None:
+                        self._send({
+                            "measurement_status": "provider_catalog_snapshot",
+                            "candidate_model_count": 0,
+                            "provider_accounts": {},
+                            "note": "no catalog refresh has been run in this process",
+                        })
+                        return
+                    self._send(service.last_refresh_summary)
+                    return
                 if path == "/api/v1/agent_pools":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=100)
                     items = orchestrator.list_agents(page_number=page_number, page_size=page_size)
@@ -699,9 +712,26 @@ def build_server(
         def do_POST(self) -> None:  # noqa: N802
             try:
                 path = urllib.parse.urlparse(self.path).path
-                scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
+                scope = (
+                    "admin"
+                    if path == "/admin/simulate"
+                    or path.startswith("/api/v1/agent_pools/")
+                    or path.startswith("/api/v1/provider_catalogs")
+                    else "inference"
+                )
                 self._authorize(scope)
                 body = self._read_json()
+
+                if path == "/api/v1/provider_catalogs/refresh":
+                    _reject_unknown_keys(body, {"force"})
+                    force = bool(body.get("force", False))
+                    try:
+                        summary = refresh_and_overlay(orchestrator, require_candidates=False, force=force)
+                    except ProviderCatalogUnavailable as exc:
+                        self._send_error(503, "provider_catalog_unavailable", str(exc))
+                        return
+                    self._send(summary, 200)
+                    return
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]

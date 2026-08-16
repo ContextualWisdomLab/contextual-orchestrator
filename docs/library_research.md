@@ -53,6 +53,22 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Provider catalog discovery (2026-08-16)
+
+Researched before adding automatic model-pool composition from the five
+organization credential names:
+
+| Area | Library / source | Decision | Evidence |
+|---|---|---|---|
+| Multi-provider catalog | [LiteLLM](https://github.com/BerriAI/litellm) model list + router | Skip as a runtime dependency. | LiteLLM is the org's "beyond LiteLLM" comparison point; pulling it would add a provider SDK surface and invented prices. The inventory/refresh design already exists in PR #574 (`provider_catalog.py` on `fix/atheris-interpreter-lock`). |
+| OpenAI / NIM / OpenRouter listings | Official `GET /v1/models` | Use stdlib `urllib` against each account's documented catalog URL. | OpenAI-compatible listings are already the transport this repo speaks; no SDK. |
+| Bytez listings | Native `https://api.bytez.com/models/v2` with `Authorization: Key` | Do **not** treat Bytez as OpenAI `GET /v1/models`. | PR #574 and Bytez's documented v2 catalog; fabricating an OpenAI shape is the failure mode to avoid. |
+| Catalog HTTP hardening | PR #96 DNS-pinned egress stack | Skip on this main-line slice. | Host allowlist + private-address block already live in `ModelClient._validate_provider`. Reuse that; do not copy the #96 stack onto main. |
+| Selection | `cheapest_upstream` in `batch_routing.py` | Do **not** wire it. | It treats unpriced as cost `0.0` (same honesty bug as `PriceBook.compute_cost`). Issue #86 / FrugalGPT: unknown is never free. Closest accepted idea on main is open PR #575: capability first, known price second. |
+| Quality / Pareto | Issue #86 NIM benchmark | Out of this slice. | Main has no quality metric. Do not fabricate leaderboard scores. |
+
+Selected: stdlib HTTP + the #574 in-memory inventory/refresh (fail-closed, last-known-good, Bytez native path) composed onto the existing agent pool, plus #575's lexicographic capability-then-known-cost rank. Skipped: LiteLLM, provider SDKs, `cheapest_upstream` as the picker, #96 pinning, and #86 quality selection.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

@@ -16,6 +16,15 @@ from contextual_orchestrator import get_credential, register_credential
 
 get_credential("OPENAI_API_KEY")        # -> "sk-..." | None (from the KV)
 register_credential("OPENAI_API_KEY", value)   # writes into the KV
+
+Organization credential *names* the catalog overlay understands (values only
+in the KV; never paste real keys into source or request-time `os.getenv`):
+
+- `NVIDIA_NIM_API_KEY`
+- `NVIDIA_NIM_API_KEY_SUB`
+- `BYTEZ_API_KEY`
+- `OPENROUTER_API_KEY`
+- `OPENAI_API_KEY`
 ```
 
 The orchestrator resolves an agent's provider key through this seam only:

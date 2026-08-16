@@ -13,7 +13,9 @@ redistribution; each is cited below with its arXiv identifier.
   Motivates the **configurable price table + per-request cost accounting** and
   cost-optimising model selection: cost varies by orders of magnitude across
   providers/models, so a gateway should price each request and route to the
-  cheapest capable upstream. Distributed under arXiv's non-exclusive license to
+  cheapest *capable* upstream. This repo's first slice keeps capability first
+  and uses known price only as a tie-break; unknown price is never treated as
+  free (see issue #86). Distributed under arXiv's non-exclusive license to
   distribute (arXiv perpetual, non-exclusive license 1.0).
 
 ## Query routing (which upstream / which tier)

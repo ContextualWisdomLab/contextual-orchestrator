@@ -18,6 +18,7 @@ from hypothesis import given, settings, strategies as st
 
 from fuzz.targets import (
     exercise_agent_config,
+    exercise_models_document,
     exercise_orchestration,
     exercise_redaction,
     exercise_request_body,
@@ -71,6 +72,12 @@ def test_request_body_validators_on_structured_input(raw: bytes) -> None:
 
 def test_request_body_rejects_unhashable_message_role() -> None:
     exercise_request_body(b'{"messages":[{"role":[],"":[],"modnt":""}]}')
+
+
+@_SETTINGS
+@given(_json_values)
+def test_models_document_never_invents_workers(value: object) -> None:
+    exercise_models_document(value)
 
 
 @_SETTINGS

@@ -36,6 +36,7 @@ from contextual_orchestrator.orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from contextual_orchestrator.provider_catalog import normalize_models_document
 
 # ``RequestError`` is the only *domain* exception the request layer is allowed to
 # raise; everything else below is a legitimate stdlib decode/parse failure.
@@ -105,6 +106,27 @@ def exercise_request_body(raw: bytes) -> None:
                 assert set(message) == {"role", "content"}
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
+
+
+def exercise_models_document(value: Any) -> None:
+    """Drive catalog document normalization over arbitrary decoded JSON.
+
+    Must return a list of well-formed models or an empty list — never invent
+    identifiers from garbage, and never raise unexpected exceptions.
+    """
+    if not isinstance(value, dict):
+        return
+    try:
+        models = normalize_models_document(value)
+    except (TypeError, ValueError, RecursionError):
+        return
+    assert isinstance(models, list)
+    names = [model.model_name for model in models]
+    assert names == sorted(set(names))
+    for model in models:
+        assert model.model_name
+        assert isinstance(model.capabilities, tuple)
+        assert isinstance(model.modalities, tuple)
 
 
 def exercise_agent_config(value: Any) -> None:

@@ -10,6 +10,7 @@ from functools import wraps
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -46,6 +47,22 @@ def estimate_tokens(text: str) -> int:
     usage when real workers return it.
     """
     return (len(text) + 3) // 4 if text else 0
+
+
+def known_price_rank(value: Any) -> tuple[int, float]:
+    """Rank valid nonnegative price evidence ahead of unpriced metadata.
+
+    The second value is negated because callers sort descending: a lower known
+    price therefore ranks ahead of a higher known price. Missing, boolean,
+    nonnumeric, negative, NaN, and infinite values are unpriced rather than free.
+    Explicit ``0`` is a valid known price.
+    """
+    if type(value) not in (int, float):
+        return (0, 0.0)
+    normalized = float(value)
+    if not math.isfinite(normalized) or normalized < 0:
+        return (0, 0.0)
+    return (1, -normalized)
 
 
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
@@ -174,6 +191,8 @@ class OrchestrationPolicy:
         """Return the API-safe policy snapshot for workflow records."""
         return {
             "route_p95_seconds": self.route_p95_seconds,
+            "routing_objective": "maximize_capability_then_minimize_known_cost",
+            "unpriced_model_policy": "unpriced_not_free",
             "conduct_hint_threshold": self.conduct_hint_threshold,
             "verifier_required": self.verifier_required,
             "workflow_planning": self.workflow_planning,
@@ -954,7 +973,8 @@ class TaskOrchestrator:
             "answer": answer,
             "trace": [
                 {"id": 0, "role": "worker", "agent_id": agent.id, "subtask": "Direct route (streamed)",
-                 "access": [], "output": answer}
+                 "access": [], "output": answer,
+                 "selection_reason": self._selection_reason(agent, text, "worker")}
             ],
             "policy_snapshot": self.policy.as_dict(),
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
@@ -1313,6 +1333,41 @@ class TaskOrchestrator:
         )
         return self._agent_to_admin_payload(agent)
 
+    def overlay_discovered_agents(
+        self,
+        agents: list[ModelAgent],
+        prices: dict[str, float] | None = None,
+    ) -> dict[str, Any]:
+        """Merge catalog-derived workers onto the live pool without inventing models.
+
+        Seed / operator agents are kept. Discovered rows overlay by agent id.
+        Only finite nonnegative prices enter ``price_per_million``; missing
+        catalog prices stay unpriced rather than becoming free.
+        """
+        existing = {agent.id: agent for agent in self.agents}
+        added_ids: list[str] = []
+        for agent in agents:
+            if agent.disabled:
+                continue
+            if agent.id not in existing:
+                added_ids.append(agent.id)
+            existing[agent.id] = agent
+            if self._pool_store is not None:
+                self._pool_store.save(agent)
+        self.agents = [agent for agent in existing.values() if not agent.disabled]
+        ingested = 0
+        for model_name, price in (prices or {}).items():
+            if known_price_rank(price)[0]:
+                self.price_per_million[model_name] = float(price)
+                ingested += 1
+        detail = {
+            "added_agent_count": len(added_ids),
+            "catalog_agent_count": len(agents),
+            "priced_model_count": ingested,
+        }
+        self._append_audit_event("catalog_overlay_applied", detail)
+        return detail
+
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
         """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
         if agent_pool_id != "default":  # pragma: no cover
@@ -1351,6 +1406,7 @@ class TaskOrchestrator:
             "access": [],
             "latency_ms": round(latency_ms, 2),
             "output": answer,
+            "selection_reason": self._selection_reason(agent, text, "worker"),
         }
         if usage is not None:
             row["usage"] = usage
@@ -1525,9 +1581,35 @@ class TaskOrchestrator:
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
     def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
-        """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
+        """Rank by maximum capability, then minimum trustworthy known price.
+
+        Failover still walks this list after the chosen primary errors. Price is
+        never the first key: a cheap summarizer cannot beat a coding worker on a
+        coding task. Unpriced models lose a cost comparison; they are not free.
+        """
         lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+
+        def selection_key(agent: ModelAgent) -> tuple[int, int, int, float, str]:
+            capability_score, tag_count, agent_id = self._score_agent(agent, role, lowered)
+            price_known, inverse_price = known_price_rank(self.price_per_million.get(agent.model))
+            return (capability_score, tag_count, price_known, inverse_price, agent_id)
+
+        return sorted(self.agents, key=selection_key, reverse=True)
+
+    def _selection_reason(self, agent: ModelAgent, text: str, role: str) -> dict[str, Any]:
+        """Explain why this agent won: capability first, known cost second."""
+        capability_score, tag_count, _agent_id = self._score_agent(agent, role, text.lower())
+        price = self.price_per_million.get(agent.model)
+        price_known, _inverse = known_price_rank(price)
+        return {
+            "routing_objective": "maximize_capability_then_minimize_known_cost",
+            "unpriced_model_policy": "unpriced_not_free",
+            "agent_id": agent.id,
+            "capability_score": capability_score,
+            "tag_count": tag_count,
+            "price_known": bool(price_known),
+            "price_per_million_usd": float(price) if price_known else None,
+        }
 
     def _select_agent(self, text: str, role: str) -> ModelAgent:
         selected = self._ranked_agents(text, role)[0]

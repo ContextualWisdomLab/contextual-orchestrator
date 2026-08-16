@@ -18,6 +18,8 @@
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |
+| `GET` | `/api/v1/provider_catalogs/latest` | Last fail-closed catalog refresh summary (secret-free) |
+| `POST` | `/api/v1/provider_catalogs/refresh` | Rediscover models for registered KV credentials and overlay the worker pool |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |
 | `GET` | `/api/v1/analytics_snapshots/latest` | Read local runtime KPI and guardrail snapshot |
 | `GET` | `/api/v1/sales_readiness/latest` | Read local enterprise-pilot readiness criteria and evidence |

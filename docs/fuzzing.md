@@ -31,6 +31,9 @@ deserialize request config validate untrusted input"`):
 4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
    `mock://` providers (fully offline). Arbitrary prompt text and mode must
    produce a JSON-serialisable record whose SSE framing round-trips.
+5. **Provider catalog documents** — `provider_catalog.normalize_models_document`.
+   Arbitrary decoded JSON must yield a list of models or `[]` — never invented
+   identifiers and never an unhandled crash.
 
 ## Running locally
 

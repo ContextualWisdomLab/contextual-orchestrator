@@ -532,6 +532,33 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Evaluation run"}},
             }
         },
+        "/api/v1/provider_catalogs/latest": {
+            "get": {
+                "operationId": "get_provider_catalog",
+                "summary": "Read the last fail-closed provider catalog refresh summary",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Catalog refresh snapshot"}},
+            }
+        },
+        "/api/v1/provider_catalogs/refresh": {
+            "post": {
+                "operationId": "refresh_provider_catalog",
+                "summary": "Refresh provider catalogs from registered KV credentials and overlay workers",
+                "security": [{"admin_bearer_auth": []}],
+                "requestBody": {
+                    "required": False,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "properties": {"force": {"type": "boolean"}},
+                            },
+                        },
+                    },
+                },
+                "responses": {"200": {"description": "Catalog refresh summary"}},
+            }
+        },
         "/api/v1/locale_bundles/{locale_code}": {
             "get": {
                 "operationId": "get_locale_bundle",
