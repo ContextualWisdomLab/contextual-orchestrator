@@ -548,7 +548,7 @@ def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None
 
     OpenAI uses this flag to allow concurrent tool invocations. Invalid types
     fail closed before provider passthrough so clients never believe a coerced
-    value was applied.
+    value was applied. ``true`` requires a non-empty ``tools`` array (chat parity).
     """
     if "parallel_tool_calls" not in body:
         return None
@@ -562,6 +562,14 @@ def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None
             "invalid_parallel_tool_calls",
             "parallel_tool_calls must be a boolean",
         )
+    if value is True:
+        tools = body.get("tools") if "tools" in body else None
+        if not isinstance(tools, list) or not tools:
+            raise RequestError(
+                400,
+                "invalid_parallel_tool_calls",
+                "parallel_tool_calls=true requires tools on /v1/responses",
+            )
     return value
 
 
@@ -2493,7 +2501,10 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.schema must be an object",
             )
-        if "strict" in schema and not isinstance(schema.get("strict"), bool):
+        # Explicit JSON null is treat-as-omit (SDK optional default).
+        if "strict" in schema and schema.get("strict") is not None and not isinstance(
+            schema.get("strict"), bool
+        ):
             raise RequestError(
                 400,
                 "invalid_response_format",
@@ -2567,7 +2578,10 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "each tool.function accepts only name, description, parameters, and strict",
                 {"fields": unknown_fn},
             )
-        if "strict" in function and not isinstance(function.get("strict"), bool):
+        # Explicit JSON null is treat-as-omit (SDK optional default).
+        if "strict" in function and function.get("strict") is not None and not isinstance(
+            function.get("strict"), bool
+        ):
             raise RequestError(
                 400,
                 "invalid_tools",

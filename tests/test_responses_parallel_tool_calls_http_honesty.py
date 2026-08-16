@@ -58,19 +58,62 @@ def test_http_responses_accepts_omitted_parallel_tool_calls() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_boolean_parallel_tool_calls() -> None:
+def test_http_responses_accepts_false_parallel_tool_calls_without_tools() -> None:
     server, thread, port = _server()
     try:
-        for value in (True, False):
-            status, body = _post(
-                port,
-                {
-                    "model": "mock-planner",
-                    "input": f"hello ptc {value}",
-                    "parallel_tool_calls": value,
-                },
-            )
-            assert status == 200, (value, body)
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "hello ptc false",
+                "parallel_tool_calls": False,
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_accepts_true_parallel_tool_calls_with_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "hello ptc true with tools",
+                "parallel_tool_calls": True,
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {
+                            "name": "lookup",
+                            "parameters": {"type": "object", "properties": {}},
+                        },
+                    }
+                ],
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_true_parallel_tool_calls_without_tools() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "hello ptc true no tools",
+                "parallel_tool_calls": True,
+            },
+        )
+        assert status == 400, body
+        assert "invalid_parallel_tool_calls" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -114,7 +157,9 @@ def test_http_responses_rejects_integer_parallel_tool_calls() -> None:
 
 if __name__ == "__main__":
     test_http_responses_accepts_omitted_parallel_tool_calls()
-    test_http_responses_accepts_boolean_parallel_tool_calls()
+    test_http_responses_accepts_false_parallel_tool_calls_without_tools()
+    test_http_responses_accepts_true_parallel_tool_calls_with_tools()
+    test_http_responses_rejects_true_parallel_tool_calls_without_tools()
     test_http_responses_rejects_non_boolean_parallel_tool_calls()
     test_http_responses_rejects_integer_parallel_tool_calls()
     print("ok")
