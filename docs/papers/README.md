@@ -35,6 +35,25 @@ redistribution; each is cited below with its arXiv identifier.
   the responsive path. Distributed under the arXiv non-exclusive license /
   CC BY as marked on arXiv.
 
+## API contract honesty (mode and trusted-trace on tools passthrough)
+
+Buyers who send `tools` plus `mode=conduct` asked for a Conductor workflow
+(Nielsen et al., 2025) with TRINITY-style role traces (Xu et al., 2025). The
+tools early-return is a single-worker proxy with no access-list plane. Those
+knobs, plus invalid `mode` and non-boolean `include_orchestration_trace`,
+must fail closed before `proxy_completion`.
+
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y.
+  (2025). *Learning to orchestrate agents in natural language with the
+  Conductor*. arXiv. https://doi.org/10.48550/arXiv.2512.04388
+  Grounds workflow steps and access-list visibility. Cite + link; PDF is
+  arXiv-redistributable but already referenced from `docs/architecture.md`.
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y.
+  (2025). *Trinity: An evolved LLM coordinator*. arXiv.
+  https://doi.org/10.48550/arXiv.2512.04695
+  Grounds Thinker / Worker / Verifier traces that `include_orchestration_trace`
+  exposes on the orchestration path only.
+
 ## API contract honesty (tool schema omit)
 
 Gateway buyers send official OpenAI SDK payloads. Optional

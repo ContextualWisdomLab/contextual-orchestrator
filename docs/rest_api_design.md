@@ -121,7 +121,15 @@ fail closed on the tools path — this gateway has no batch job plane on
 passthrough, so those hints must not bill a silent sync completion.
 `seed`, `stop`, `n>1`, `logprobs`, `logit_bias`, out-of-range penalties,
 and unsupported `reasoning_effort` / `service_tier` also fail closed
-before passthrough, matching the orchestration path. A streamed
+before passthrough, matching the orchestration path. Invalid `mode` /
+`orchestration` / `orchestration_mode` (`invalid_mode`), `mode=conduct`,
+non-boolean `include_orchestration_trace`, and
+`include_orchestration_trace=true` also fail closed before passthrough —
+this path has no Conductor workflow or trusted-trace plane, so those knobs
+must not bill a silent drop (Nielsen et al., 2025; Xu et al., 2025).
+`mode=auto`, `mode=route`, omitted mode, and
+`include_orchestration_trace` omitted / `null` / `false` remain honest
+no-ops. A streamed
 `temperature` on the route path uses the same request-scoped default as
 the non-stream path — it is not reset to `0.2`.
 
@@ -136,8 +144,9 @@ Next action: always send a non-empty `messages` array of objects; keep
 SDK-default nulls; replace `developer` with `system`; omit `stream` (or set
 `false`) on tool-calling requests; always send a pool `model`. Do not send
 `tools` with empty or omitted `messages`. Omit `routing.channel=batch`,
-`latency_tolerant=true`, `seed`, `stop`, `n>1`, and `logprobs` on
-tool-calling requests. When declaring tools, omit unused `description` /
+`latency_tolerant=true`, `seed`, `stop`, `n>1`, `logprobs`, `mode=conduct`,
+and `include_orchestration_trace=true` on tool-calling requests. Use
+`mode=auto` or omit mode; omit the trace flag or set it `false`. When declaring tools, omit unused `description` /
 `parameters` / `strict` or leave the SDK default `null` — both become omit
 before the provider hop.
 
@@ -147,6 +156,14 @@ https://platform.openai.com/docs/api-reference/chat/create
 Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data
 interchange format* (RFC 8259). Internet Engineering Task Force.
 https://doi.org/10.17487/RFC8259
+
+Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025).
+*Learning to orchestrate agents in natural language with the Conductor*.
+arXiv. https://doi.org/10.48550/arXiv.2512.04388
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025).
+*Trinity: An evolved LLM coordinator*. arXiv.
+https://doi.org/10.48550/arXiv.2512.04695
 
 ## Production Library Target
 

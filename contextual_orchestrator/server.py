@@ -1712,6 +1712,58 @@ def _validate_chat_passthrough_request_knobs(body: dict[str, Any]) -> None:
         _validate_openai_metadata(body)
 
 
+def _validate_chat_passthrough_orchestration_controls(body: dict[str, Any]) -> None:
+    """Fail-closed mode and include_orchestration_trace before tools proxy.
+
+    These checks otherwise run only after the tools / ``response_format``
+    early-return. ``mode=explode`` and ``include_orchestration_trace="yes"``
+    must not bill a completion. ``mode=conduct`` and
+    ``include_orchestration_trace=true`` have no Conductor workflow or
+    trusted-trace plane on this path — fail closed instead of silently
+    dropping them (Nielsen et al., 2025; Xu et al., 2025).
+    """
+    raw_mode = None
+    for key in ("orchestration", "orchestration_mode", "mode"):
+        if key not in body:
+            continue
+        candidate = body.get(key)
+        if candidate is None:
+            continue
+        if isinstance(candidate, str) and not candidate.strip():
+            continue
+        raw_mode = candidate
+        break
+    if raw_mode is not None:
+        mode = _validate_mode(raw_mode)
+        if mode == "conduct":
+            raise RequestError(
+                400,
+                "invalid_mode",
+                "mode=conduct is not supported with tools or response_format "
+                "on this gateway; omit mode or set mode=auto or mode=route",
+            )
+    if "include_orchestration_trace" not in body:
+        return
+    include_trace_raw = body.get("include_orchestration_trace")
+    if include_trace_raw is None or (
+        isinstance(include_trace_raw, str) and not include_trace_raw.strip()
+    ):
+        return
+    if not isinstance(include_trace_raw, bool):
+        raise RequestError(
+            400,
+            "invalid_include_orchestration_trace",
+            "include_orchestration_trace must be a boolean",
+        )
+    if include_trace_raw is True:
+        raise RequestError(
+            400,
+            "invalid_include_orchestration_trace",
+            "include_orchestration_trace=true is not supported with tools or "
+            "response_format on this gateway; omit the field or set it false",
+        )
+
+
 def _validate_chat_message_passthrough_honesty(body: dict[str, Any]) -> None:
     """Fail-closed weight/prefix/refusal/annotations/content/name before tools proxy.
 
@@ -3874,6 +3926,7 @@ def build_server(
                         if "top_p" in body:
                             _validate_completions_top_p(body)
                         _validate_chat_passthrough_request_knobs(body)
+                        _validate_chat_passthrough_orchestration_controls(body)
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
