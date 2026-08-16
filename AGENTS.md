@@ -121,6 +121,7 @@ push or open a PR.
   papers).
 - **Issue #568 slice:** `contextual_orchestrator.reasoning_effort_profile`
   is the provider-neutral role catalog and equal-budget true-θ ablation.
-  Do not change production route/conduct defaults until
+  RMSE is computed from θ̂ versus known true parameters, not a rank
+  constant. Do not change production route/conduct defaults until
   `production_default_change_allowed` is true. Temperature is not effort.
 <!-- END cwl-agent-guidance -->

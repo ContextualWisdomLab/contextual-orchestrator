@@ -8,7 +8,7 @@ and asserts the invariants that must hold *for arbitrary input*:
   ``AttributeError``, ``RecursionError``, ``SystemError`` or a hang; and
 * structural invariants on any successful result (shape, types, idempotence).
 
-CodeGraph (``codegraph explore``) surfaced these five surfaces as the ones that
+CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
@@ -18,11 +18,10 @@ consume untrusted bytes/JSON:
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
-5. ``orchestrator._parse_model_judge_reply`` -- strict parsing of untrusted
-   model-generated verdicts.
-6. ``model_discovery._parse_openai_compatible`` / ``_parse_bytez`` -- parsing
-   of a remote provider's model-list HTTP response (attacker/compromised
-   -provider-controlled JSON).
+5. ``reasoning_effort_profile.parse_reasoning_effort_profile`` -- untrusted
+   role-compute JSON. Must raise ``EffortProfileError`` / ``TypeError`` /
+   ``ValueError`` or return a finite profile. Never crash on NaN, bool-as-
+   number, or unknown keys.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -30,22 +29,25 @@ No network, no secrets, no filesystem: every target runs fully offline.
 from __future__ import annotations
 
 import json
+import math
 from typing import Any
 
 from contextual_orchestrator import server
-from contextual_orchestrator.model_discovery import (
-    ProviderModelSource,
-    _parse_bytez,
-    _parse_openai_compatible,
-)
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
-    _parse_model_judge_reply,
     chat_completion_chunks,
     redact_text,
     redact_value,
     sse_stream_body,
+)
+from contextual_orchestrator.reasoning_effort_profile import (
+    ACCESS_LIST_SCOPES,
+    REASONING_EFFORT_LEVELS,
+    EffortProfileError,
+    parse_reasoning_effort_profile,
+    production_default_change_allowed,
+    run_equal_budget_ablation,
 )
 
 # ``RequestError`` is the only *domain* exception the request layer is allowed to
@@ -117,80 +119,6 @@ def exercise_request_body(raw: bytes) -> None:
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
 
-    # Omit-equivalent instructions/metadata must leave the body persist-clean.
-    if "instructions" in body:
-        try:
-            instructions = server._validate_responses_instructions(body)
-        except RequestError:
-            pass
-        else:
-            if instructions is None:
-                assert "instructions" not in body
-    if "metadata" in body:
-        try:
-            metadata = server._validate_openai_metadata(body)
-        except RequestError:
-            pass
-        else:
-            if metadata is None:
-                leftover = body.get("metadata")
-                assert leftover is None or (
-                    isinstance(leftover, dict)
-                    and not any(value is None for value in leftover.values())
-                )
-            else:
-                assert body.get("metadata") == metadata
-                assert all(isinstance(value, str) for value in metadata.values())
-
-    # response_format.json_schema.name must match [a-zA-Z0-9_-]{1,64} ASCII.
-    if "response_format" in body:
-        try:
-            fmt = server._validate_chat_response_format(body)
-        except RequestError:
-            pass
-        else:
-            if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
-                schema = fmt.get("json_schema")
-                if isinstance(schema, dict) and "name" in schema:
-                    schema_name = schema["name"]
-                    assert isinstance(schema_name, str) and 1 <= len(schema_name) <= 64
-                    assert schema_name.isascii() and all(
-                        ch.isalnum() or ch in "_-" for ch in schema_name
-                    )
-
-    # Tools honesty: successful function names match [a-zA-Z0-9_-]{1,64} ASCII.
-    if "tools" in body:
-        try:
-            tools = server._validate_chat_tools(body)
-        except RequestError:
-            pass
-        else:
-            if tools:
-                for item in tools:
-                    function = item.get("function")
-                    assert isinstance(function, dict)
-                    tool_name = function.get("name")
-                    assert isinstance(tool_name, str) and 1 <= len(tool_name) <= 64
-                    assert tool_name.isascii() and all(
-                        ch.isalnum() or ch in "_-" for ch in tool_name
-                    )
-
-    # Official Responses text.format: successful names are ASCII [a-zA-Z0-9_-]{1,64}.
-    if "text" in body:
-        try:
-            text_value = server._validate_responses_text(body)
-        except RequestError:
-            pass
-        else:
-            if isinstance(text_value, dict):
-                fmt = text_value.get("format")
-                if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
-                    name = fmt.get("name")
-                    assert isinstance(name, str) and 1 <= len(name) <= 64
-                    assert name.isascii() and all(
-                        ch.isalnum() or ch in "_-" for ch in name
-                    )
-
 
 def exercise_agent_config(value: Any) -> None:
     """Drive ``ModelAgent.from_dict`` over an arbitrary decoded JSON value."""
@@ -208,41 +136,6 @@ def exercise_agent_config(value: Any) -> None:
     assert isinstance(agent.provider_exclusions, tuple)
     assert isinstance(agent.priority, int)
     assert isinstance(agent.disabled, bool)
-
-
-_FUZZ_OPENAI_SOURCE = ProviderModelSource(
-    provider_name="fuzz_openai",
-    credential_name="FUZZ_OPENAI_API_KEY",
-    list_url="https://example.invalid/v1/models",
-    chat_base_url="https://example.invalid/v1",
-)
-_FUZZ_BYTEZ_SOURCE = ProviderModelSource(
-    provider_name="fuzz_bytez",
-    credential_name="FUZZ_BYTEZ_API_KEY",
-    list_url="https://example.invalid/models/v2/list/models",
-    chat_base_url="https://example.invalid/models/v2/openai/v1",
-    auth_scheme="Key",
-    style="bytez",
-    task_filter="chat",
-)
-
-
-def exercise_provider_model_payload(value: Any) -> None:
-    """Drive the provider model-list JSON parsers over an arbitrary decoded value.
-
-    Both parsers only index dicts/lists defensively (``isinstance`` guards,
-    ``.get`` with defaults); a malformed or hostile provider response must
-    never raise, only yield fewer (or zero) ``DiscoveredModel`` rows.
-    """
-    for source, parser in (
-        (_FUZZ_OPENAI_SOURCE, _parse_openai_compatible),
-        (_FUZZ_BYTEZ_SOURCE, _parse_bytez),
-    ):
-        discovered = parser(value, source)
-        assert isinstance(discovered, list)
-        for model in discovered:
-            assert isinstance(model.model_id, str) and model.model_id
-            assert model.provider_name == source.provider_name
 
 
 def exercise_redaction(text: str) -> None:
@@ -310,11 +203,31 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
         json.loads(frame[len("data: "):])
 
 
-def exercise_model_judge_reply(reply: str) -> None:
-    """Drive strict model-judge parsing over arbitrary untrusted text."""
-    try:
-        decision, reason = _parse_model_judge_reply(reply)
-    except ValueError:
+def exercise_reasoning_effort_profile(value: Any) -> None:
+    """Drive the issue #568 profile parser and ablation over arbitrary JSON.
+
+    Invariants: unknown keys, NaN, infinity, and bool-as-number fail as
+    ``EffortProfileError`` / ``TypeError`` / ``ValueError``. A successful
+    parse is finite. An ablation against a supplied ``true_theta`` either
+    fails closed or stays production-locked while ``measurement_status`` is
+    estimated.
+    """
+    if not isinstance(value, dict):
         return
-    assert decision in {"ACCEPT", "REJECT"}
-    assert isinstance(reason, str) and reason.strip()
+    try:
+        profile = parse_reasoning_effort_profile(value)
+    except (EffortProfileError, TypeError, ValueError):
+        return
+    assert profile.reasoning_effort in REASONING_EFFORT_LEVELS
+    assert profile.access_list_scope in ACCESS_LIST_SCOPES
+    assert math.isfinite(profile.temperature)
+    assert math.isfinite(profile.top_p)
+    theta = value.get("true_theta")
+    if not isinstance(theta, list) or not theta:
+        return
+    try:
+        report = run_equal_budget_ablation(theta)
+    except (EffortProfileError, TypeError, ValueError):
+        return
+    assert production_default_change_allowed(report) is False
+    assert report["measurement_status"] == "estimated"

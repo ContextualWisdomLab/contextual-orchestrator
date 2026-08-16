@@ -32,6 +32,7 @@ REASONING_EFFORT_LEVELS = ("none", "low", "medium", "high")
 ACCESS_LIST_SCOPES = ("none", "role", "workflow")
 UNSUPPORTED_FALLBACKS = ("abstain", "omit", "error")
 _EFFORT_RANK = {"none": 0, "low": 1, "medium": 2, "high": 3}
+_ACCESS_RANK = {"none": 0, "role": 1, "workflow": 2}
 _PROFILE_KEYS = frozenset(
     {
         "profile_version",
@@ -99,6 +100,20 @@ class EffortCatalogSnapshot:
     role_profiles: dict[str, dict[str, Any]]
 
 
+@dataclass(frozen=True)
+class ThetaEstimate:
+    """Deterministic θ̂ and its RMSE against known true parameters.
+
+    Buyer next action: compare ``estimated_theta`` to the true vector you
+    supplied. A lower RMSE from higher effort is evidence; a temperature-only
+    change is not.
+    """
+
+    estimated_theta: tuple[float, ...]
+    rmse: float
+    measurement_status: str = "estimated"
+
+
 def _reject_non_finite_number(value: Any, field_name: str) -> None:
     """Fail closed on NaN, infinity, or a boolean used as a number."""
     if isinstance(value, bool) or not isinstance(value, (int, float)):
@@ -113,7 +128,9 @@ def parse_reasoning_effort_profile(raw: Mapping[str, Any] | None) -> ReasoningEf
     Buyer next action: omit unknown knobs; send ``reasoning_effort`` as
     none/low/medium/high, never as a temperature float.
     """
-    payload = {} if raw is None else dict(raw)
+    if raw is None:
+        raise EffortProfileError("reasoning_effort_profile is required")
+    payload = dict(raw)
     unknown = sorted(set(payload) - _PROFILE_KEYS)
     if unknown:
         raise EffortProfileError(f"unknown reasoning_effort_profile keys: {unknown}")
@@ -147,14 +164,20 @@ def parse_reasoning_effort_profile(raw: Mapping[str, Any] | None) -> ReasoningEf
             merged[field_name] = float(merged[field_name])
     if merged["seed"] is not None:
         _reject_non_finite_number(merged["seed"], "seed")
+        if int(merged["seed"]) != merged["seed"]:
+            raise EffortProfileError("seed must be an integer or null")
         merged["seed"] = int(merged["seed"])
+    if not 0.0 <= float(merged["temperature"]) <= 2.0:
+        raise EffortProfileError("temperature must be between 0 and 2")
+    if not 0.0 < float(merged["top_p"]) <= 1.0:
+        raise EffortProfileError("top_p must be in (0, 1]")
     if merged["access_list_scope"] not in ACCESS_LIST_SCOPES:
         raise EffortProfileError("access_list_scope must be none, role, or workflow")
     if merged["unsupported_provider_fallback"] not in UNSUPPORTED_FALLBACKS:
         raise EffortProfileError("unsupported_provider_fallback must be abstain, omit, or error")
     if merged["max_calls"] < 1 or merged["max_workflow_steps"] < 1:
         raise EffortProfileError("max_calls and max_workflow_steps must be at least 1")
-    version = merged.get("profile_version") or PROFILE_VERSION
+    version = merged.get("profile_version")
     if version != PROFILE_VERSION:
         raise EffortProfileError(f"unsupported profile_version {version!r}")
     return ReasoningEffortProfile(
@@ -210,8 +233,21 @@ def snapshot_role_effort_catalog(
     catalog: Mapping[str, ReasoningEffortProfile],
 ) -> EffortCatalogSnapshot:
     """Hash a role catalog so sync, stream, batch, route, and conduct can replay it."""
-    role_profiles = {role: catalog[role].as_dict() for role in WORKFLOW_ROLES if role in catalog}
-    canonical = json.dumps(role_profiles, sort_keys=True, separators=(",", ":"))
+    if set(catalog) != set(WORKFLOW_ROLES):
+        raise EffortProfileError(
+            f"catalog must bind exactly {list(WORKFLOW_ROLES)}, got {sorted(catalog)}"
+        )
+    role_profiles: dict[str, dict[str, Any]] = {}
+    for role in WORKFLOW_ROLES:
+        profile = catalog[role]
+        if not isinstance(profile, ReasoningEffortProfile):
+            raise EffortProfileError(f"{role} must be a ReasoningEffortProfile")
+        role_profiles[role] = profile.as_dict()
+    canonical = json.dumps(
+        {"profile_version": PROFILE_VERSION, "role_profiles": role_profiles},
+        sort_keys=True,
+        separators=(",", ":"),
+    )
     digest = hashlib.sha256(canonical.encode("utf-8")).hexdigest()
     return EffortCatalogSnapshot(
         profile_version=PROFILE_VERSION,
@@ -220,59 +256,176 @@ def snapshot_role_effort_catalog(
     )
 
 
+def _shrinkage_weight(
+    reasoning_effort: str,
+    extra_workflow_steps: float,
+    extra_recursion_depth: float,
+    access_list_scope: str,
+) -> float:
+    """Return the unused-information weight. Temperature never enters."""
+    rank = _EFFORT_RANK[reasoning_effort]
+    access = _ACCESS_RANK[access_list_scope]
+    return 1.0 / (
+        1.0
+        + rank
+        + 0.5 * extra_workflow_steps
+        + 0.25 * extra_recursion_depth
+        + 0.5 * access
+    )
+
+
+def _estimated_tokens_used(
+    reasoning_effort: str,
+    extra_workflow_steps: int,
+    extra_recursion_depth: int,
+    budget_tokens: int,
+) -> int:
+    """Return tokens consumed under a shared cap. Exceeding the cap fails closed."""
+    rank = _EFFORT_RANK[reasoning_effort]
+    used = 128 + 64 * rank + 48 * extra_workflow_steps + 32 * extra_recursion_depth
+    if used > budget_tokens:
+        raise EffortProfileError("estimated token use exceeds equal-budget cap")
+    return used
+
+
+def estimate_theta(
+    true_theta: Iterable[float],
+    *,
+    reasoning_effort: str,
+    extra_workflow_steps: int,
+    temperature: float,
+    extra_recursion_depth: int = 0,
+    access_list_scope: str = "role",
+) -> ThetaEstimate:
+    """Return θ̂ and RMSE against known true parameters.
+
+    ``θ̂_i = (1 − λ) θ_i`` where λ shrinks as effort, Conductor steps,
+    recursion depth, and access-list scope increase. Temperature is validated
+    and then ignored so a temperature-only change cannot stand in for effort.
+    Buyer next action: assert RMSE uses ``θ̂ − θ``, not a rank constant.
+    """
+    theta: list[float] = []
+    for value in true_theta:
+        _reject_non_finite_number(value, "true_theta")
+        theta.append(float(value))
+    if not theta:
+        raise EffortProfileError("true_theta must contain at least one finite value")
+    if reasoning_effort not in _EFFORT_RANK:
+        raise EffortProfileError(f"unknown reasoning_effort {reasoning_effort!r}")
+    if access_list_scope not in _ACCESS_RANK:
+        raise EffortProfileError("access_list_scope must be none, role, or workflow")
+    _reject_non_finite_number(extra_workflow_steps, "extra_workflow_steps")
+    _reject_non_finite_number(extra_recursion_depth, "extra_recursion_depth")
+    _reject_non_finite_number(temperature, "temperature")
+    if extra_workflow_steps < 0 or extra_recursion_depth < 0:
+        raise EffortProfileError("workflow steps and recursion depth must be non-negative")
+    shrink = _shrinkage_weight(
+        reasoning_effort,
+        float(extra_workflow_steps),
+        float(extra_recursion_depth),
+        access_list_scope,
+    )
+    estimated = tuple((1.0 - shrink) * value for value in theta)
+    residuals = [(hat - value) ** 2 for hat, value in zip(estimated, theta)]
+    rmse = math.sqrt(sum(residuals) / len(residuals))
+    return ThetaEstimate(estimated_theta=estimated, rmse=rmse)
+
+
 def estimate_theta_rmse(
     true_theta: Iterable[float],
     *,
     reasoning_effort: str,
     extra_workflow_steps: int,
     temperature: float,
+    extra_recursion_depth: int = 0,
+    access_list_scope: str = "role",
 ) -> float:
     """Return RMSE of a deterministic θ estimator against known true parameters.
 
-    Error shrinks with provider-neutral effort rank and extra Conductor steps.
-    Temperature is accepted so callers can prove it is not a substitute for
-    effort: it does not enter the error term. Buyer next action: treat a lower
-    RMSE from ``high`` effort as evidence, and a temperature-only change as
-    non-evidence.
+    Error shrinks with provider-neutral effort rank, extra Conductor steps,
+    recursion depth, and access-list scope. Temperature is accepted so callers
+    can prove it is not a substitute for effort: it does not enter θ̂.
+    Buyer next action: treat a lower RMSE from ``high`` effort as evidence,
+    and a temperature-only change as non-evidence.
     """
-    if reasoning_effort not in _EFFORT_RANK:
-        raise EffortProfileError(f"unknown reasoning_effort {reasoning_effort!r}")
-    _reject_non_finite_number(extra_workflow_steps, "extra_workflow_steps")
-    _reject_non_finite_number(temperature, "temperature")
-    rank = _EFFORT_RANK[reasoning_effort]
-    sigma = 1.0 / (1.0 + rank + 0.5 * float(extra_workflow_steps))
-    errors = [sigma for _ in true_theta]
-    return math.sqrt(sum(error * error for error in errors) / len(errors))
+    return estimate_theta(
+        true_theta,
+        reasoning_effort=reasoning_effort,
+        extra_workflow_steps=extra_workflow_steps,
+        extra_recursion_depth=extra_recursion_depth,
+        access_list_scope=access_list_scope,
+        temperature=temperature,
+    ).rmse
+
+
+def _ablation_arm(
+    theta: tuple[float, ...],
+    *,
+    mode: str,
+    reasoning_effort: str,
+    extra_workflow_steps: int,
+    extra_recursion_depth: int,
+    access_list_scope: str,
+    temperature: float,
+    budget_tokens: int,
+) -> dict[str, Any]:
+    """Build one equal-budget arm with θ̂, RMSE, and measured token use."""
+    estimate = estimate_theta(
+        theta,
+        reasoning_effort=reasoning_effort,
+        extra_workflow_steps=extra_workflow_steps,
+        extra_recursion_depth=extra_recursion_depth,
+        access_list_scope=access_list_scope,
+        temperature=temperature,
+    )
+    return {
+        "mode": mode,
+        "rmse": estimate.rmse,
+        "estimated_theta": list(estimate.estimated_theta),
+        "budget_tokens": budget_tokens,
+        "estimated_tokens_used": _estimated_tokens_used(
+            reasoning_effort,
+            extra_workflow_steps,
+            extra_recursion_depth,
+            budget_tokens,
+        ),
+        "reasoning_effort": reasoning_effort,
+        "access_list_scope": access_list_scope,
+    }
 
 
 def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
     """Compare route, conduct, and one-factor variants under one token budget.
 
-    Records estimated RMSE, mode, and budget. Does not persist private
+    Records estimated RMSE, θ̂, mode, and budget. Does not persist private
     chain-of-thought. Buyer next action: read ``measurement_status`` and
     ``production_default_change_allowed`` before changing live defaults.
     """
     theta = tuple(float(value) for value in true_theta)
     budget_tokens = 1024
-    baseline = estimate_theta_rmse(
-        theta, reasoning_effort="medium", extra_workflow_steps=0, temperature=0.2
+    baseline = _ablation_arm(
+        theta,
+        mode="route",
+        reasoning_effort="medium",
+        extra_workflow_steps=0,
+        extra_recursion_depth=0,
+        access_list_scope="role",
+        temperature=0.2,
+        budget_tokens=budget_tokens,
     )
-    role_differentiated = estimate_theta_rmse(
-        theta, reasoning_effort="high", extra_workflow_steps=3, temperature=0.2
+    role_differentiated = _ablation_arm(
+        theta,
+        mode="conduct",
+        reasoning_effort="high",
+        extra_workflow_steps=3,
+        extra_recursion_depth=0,
+        access_list_scope="role",
+        temperature=0.2,
+        budget_tokens=budget_tokens,
     )
     return {
-        "single_model_baseline": {
-            "mode": "route",
-            "rmse": baseline,
-            "budget_tokens": budget_tokens,
-            "reasoning_effort": "medium",
-        },
-        "role_differentiated": {
-            "mode": "conduct",
-            "rmse": role_differentiated,
-            "budget_tokens": budget_tokens,
-            "reasoning_effort": "high",
-        },
+        "single_model_baseline": baseline,
+        "role_differentiated": role_differentiated,
         "one_factor_ablations": {
             "reasoning_effort": {
                 "medium": estimate_theta_rmse(
@@ -292,10 +445,18 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
             },
             "recursion_depth": {
                 "1": estimate_theta_rmse(
-                    theta, reasoning_effort="medium", extra_workflow_steps=0, temperature=0.2
+                    theta,
+                    reasoning_effort="medium",
+                    extra_workflow_steps=0,
+                    extra_recursion_depth=0,
+                    temperature=0.2,
                 ),
                 "2": estimate_theta_rmse(
-                    theta, reasoning_effort="medium", extra_workflow_steps=1, temperature=0.2
+                    theta,
+                    reasoning_effort="medium",
+                    extra_workflow_steps=0,
+                    extra_recursion_depth=1,
+                    temperature=0.2,
                 ),
             },
             "workflow_steps": {
@@ -308,16 +469,24 @@ def run_equal_budget_ablation(true_theta: Iterable[float]) -> dict[str, Any]:
             },
             "access_list_scope": {
                 "role": estimate_theta_rmse(
-                    theta, reasoning_effort="high", extra_workflow_steps=3, temperature=0.2
+                    theta,
+                    reasoning_effort="high",
+                    extra_workflow_steps=3,
+                    access_list_scope="role",
+                    temperature=0.2,
                 ),
                 "workflow": estimate_theta_rmse(
-                    theta, reasoning_effort="high", extra_workflow_steps=3, temperature=0.2
+                    theta,
+                    reasoning_effort="high",
+                    extra_workflow_steps=3,
+                    access_list_scope="workflow",
+                    temperature=0.2,
                 ),
             },
         },
         "route_versus_conduct": {
-            "route": {"rmse": baseline, "mode": "route"},
-            "conduct": {"rmse": role_differentiated, "mode": "conduct"},
+            "route": {"rmse": baseline["rmse"], "mode": "route"},
+            "conduct": {"rmse": role_differentiated["rmse"], "mode": "conduct"},
         },
         "measurement_status": "estimated",
         "usage_source": "synthetic_true_theta",
@@ -329,15 +498,19 @@ def production_default_change_allowed(report: Mapping[str, Any]) -> bool:
     """Return whether a live default change is allowed from this ablation.
 
     Buyer next action: keep current route/conduct defaults when this is false.
-    A later slice may unlock only after RMSE improvement and robustness both
-    clear the predeclared gate.
+    A later slice may unlock only after RMSE improvement, a non-estimated
+    measurement, and robustness all clear the predeclared gate.
     """
-    baseline = float(report["single_model_baseline"]["rmse"])
-    candidate = float(report["role_differentiated"]["rmse"])
-    if baseline <= 0:
+    try:
+        baseline = float(report["single_model_baseline"]["rmse"])
+        candidate = float(report["role_differentiated"]["rmse"])
+    except (KeyError, TypeError, ValueError):
+        return False
+    if not math.isfinite(baseline) or not math.isfinite(candidate) or baseline <= 0:
+        return False
+    if report.get("measurement_status") == "estimated":
+        return False
+    if report.get("robustness_passed") is not True:
         return False
     improvement = (baseline - candidate) / baseline
-    return bool(
-        improvement >= PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD
-        and report.get("robustness_passed") is True
-    )
+    return improvement >= PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD

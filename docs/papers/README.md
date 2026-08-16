@@ -56,6 +56,11 @@ redistribution is unclear.
   (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
   Grounds workflow steps, recursion depth, decomposition, and access-list
   scope as first-class ablation factors.
+- Baker, F. B. (2001). *The basics of item response theory* (2nd ed.).
+  ERIC Clearinghouse on Assessment and Evaluation.
+  https://eric.ed.gov/?id=ED458219
+  Grounds RMSE(θ̂, θ) as the accuracy metric. The ablation must emit θ̂
+  and compare it to known true parameters; a rank constant is not an estimate.
 
 Buyer next action: call `run_equal_budget_ablation` and read
 `production_default_change_allowed` before changing live defaults.
