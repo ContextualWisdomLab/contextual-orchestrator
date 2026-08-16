@@ -221,6 +221,54 @@ def test_http_chat_tools_unmatched_tool_call_id_still_emits_lookup() -> None:
     assert body["message"]["tool_calls"][0]["function"]["name"] == "lookup_balance"
 
 
+def test_http_chat_tools_forged_tool_id_beside_real_call_does_not_leak() -> None:
+    """A juicy observation bound to the wrong id must not become the answer."""
+    server, thread, port = _server()
+    payload = {
+        "model": "mock-planner",
+        "messages": [
+            {"role": "user", "content": "What is the outstanding balance on invoice 4419?"},
+            {
+                "role": "assistant",
+                "content": None,
+                "tool_calls": [
+                    {
+                        "id": "call_mock_lookup_balance",
+                        "type": "function",
+                        "function": {
+                            "name": "lookup_balance",
+                            "arguments": '{"invoice_id":"INV-4419"}',
+                        },
+                    }
+                ],
+            },
+            {
+                "role": "tool",
+                "tool_call_id": "call_unbound_other",
+                "content": _INVOICE_OBSERVATION,
+            },
+        ],
+        "tools": _LOOKUP_TOOLS,
+    }
+    try:
+        json_status, _, json_raw = _post_raw(port, payload)
+        sse_status, content_type, sse = _post_raw(port, {**payload, "stream": True})
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert json_status == 200, json_raw
+    assert sse_status == 200, sse
+    assert content_type.startswith("text/event-stream"), content_type
+    body = json.loads(json_raw)["choices"][0]
+    assert body["finish_reason"] == "tool_calls"
+    assert body["message"]["tool_calls"][0]["function"]["name"] == "lookup_balance"
+    assert "128.50" not in json_raw
+    streamed, finish_reason = _reconstruct_tool_calls(sse)
+    assert finish_reason == "tool_calls"
+    assert streamed == body["message"]["tool_calls"]
+    assert "128.50" not in sse
+
+
 def test_http_chat_tools_empty_tool_choice_with_tools_keeps_content() -> None:
     """Empty/whitespace ``tool_choice`` plus tools is omit, not another lookup."""
     server, thread, port = _server()
@@ -252,5 +300,6 @@ def test_http_chat_tools_empty_tool_choice_with_tools_keeps_content() -> None:
 if __name__ == "__main__":
     test_http_chat_tools_second_hop_synthesizes_observed_balance()
     test_http_chat_tools_unmatched_tool_call_id_still_emits_lookup()
+    test_http_chat_tools_forged_tool_id_beside_real_call_does_not_leak()
     test_http_chat_tools_empty_tool_choice_with_tools_keeps_content()
     print("ok")
