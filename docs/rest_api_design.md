@@ -15,7 +15,7 @@
 |---|---|---|
 | `GET` | `/openapi.json` | API contract |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
-| `POST` | `/v1/responses` | OpenAI Responses passthrough. Send a non-empty `input`. Leave `instructions` out, or send JSON `null` / empty / whitespace — the gateway removes the key before upstream so SDK optional defaults do not become a blank system prompt. Non-string or >32000-character `instructions` return `invalid_instructions`. |
+| `POST` | `/v1/responses` | OpenAI Responses passthrough. Send a non-empty `input`. Leave `instructions` out, or send JSON `null` / empty / whitespace — the gateway removes the key before upstream so SDK optional defaults do not become a blank system prompt. Non-string or >32000-character `instructions` return `invalid_instructions`. Official `text: {format: {type: "text"}}` is accepted and forwarded; other `text` objects return `invalid_text` — use `response_format` for `json_object` / `json_schema`. |
 | `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch |
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |
@@ -97,6 +97,8 @@ These product surfaces are now implemented in this prototype:
 ## Compatibility field honesty
 
 OpenAI SDKs often serialize optional strings as `""` or `"   "`. On `/v1/responses`, those values are **omit-real**: the gateway deletes `instructions` from the forwarded body so the provider sees the same request as if the client omitted the field (OpenAI, 2024; Bray, 2017). If you need a system prompt, send a non-empty string. If you see `invalid_instructions`, fix the type or shorten the value — do not retry the same blank payload.
+
+Official Responses clients also send `text.format` as `{format: {type: "text"}}` (OpenAI, 2024). The gateway forwards that object. If you see `invalid_text`, you sent a non-default `text` control — switch structured output to `response_format` (`json_object` / `json_schema`) or omit `text`.
 
 ## Sources
 

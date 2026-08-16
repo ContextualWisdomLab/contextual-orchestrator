@@ -135,6 +135,7 @@ def test_http_responses_rejects_include() -> None:
 
 
 def test_http_responses_rejects_text_control() -> None:
+    """Non-default text objects stay fail-closed; official type=text is a sibling tip."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -142,7 +143,7 @@ def test_http_responses_rejects_text_control() -> None:
             {
                 "model": "mock-planner",
                 "input": "hello text control",
-                "text": {"format": {"type": "text"}},
+                "text": {"format": {"type": "xml"}},
             },
         )
         assert status == 400, body

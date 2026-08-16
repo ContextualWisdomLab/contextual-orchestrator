@@ -57,6 +57,7 @@ def test_rest_api_design_marks_planned_product_surfaces():
         "/api/v1/agent_pools/{agent_pool_id}/worker_agents/{worker_agent_id}",
         "/v1/responses",
         "omit-real",
+        "text.format",
     ]:
         assert expected_text in api_text
 

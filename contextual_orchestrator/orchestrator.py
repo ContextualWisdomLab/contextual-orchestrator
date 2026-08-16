@@ -457,6 +457,7 @@ class ModelClient:
                 "temperature",
                 "max_tokens",
                 "instructions",
+                "text",
             )
             if key in payload
         }

@@ -1140,6 +1140,9 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
     yields opaque 400s; named unsupported errors let buyers migrate cleanly.
     Explicit JSON null or empty string for string fields is treat-as-omit
     (SDK optional default). Empty include/text structures remain omit no-ops.
+    The official SDK default ``text: {format: {type: "text"}}`` is accepted and
+    forwarded — rejecting it as ``invalid_text`` contradicts ``response_format``
+    ``type=text`` on the same surface (OpenAI, 2024).
     """
     def _present_nonempty(value: Any) -> bool:
         if value is None:
@@ -1190,12 +1193,30 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
             or (isinstance(text, str) and not text.strip())
         ):
             pass
+        elif _is_official_responses_text_format(text):
+            pass
         else:
             raise RequestError(
                 400,
                 "invalid_text",
-                "text is not supported on /v1/responses",
+                "text is not supported on /v1/responses unless format.type is text",
             )
+
+
+def _is_official_responses_text_format(text: Any) -> bool:
+    """Return True for the OpenAI Responses SDK default ``{format: {type: text}}``.
+
+    Official Responses clients send this object as the default output control
+    (OpenAI, 2024). Extra keys or non-text format types stay fail-closed so
+    buyers cannot believe an unapplied verbosity or structured-output control
+    was honored.
+    """
+    if not isinstance(text, dict) or set(text) != {"format"}:
+        return False
+    fmt = text.get("format")
+    if not isinstance(fmt, dict) or set(fmt) != {"type"}:
+        return False
+    return fmt.get("type") == "text"
 
 
 def _validate_responses_stream_options(body: dict[str, Any]) -> None:

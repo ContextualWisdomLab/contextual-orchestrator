@@ -509,6 +509,15 @@ OPENAPI_SPEC = {
                                             "return invalid_instructions."
                                         ),
                                     },
+                                    "text": {
+                                        "type": ["object", "null"],
+                                        "description": (
+                                            "Official SDK default {format: {type: text}} is "
+                                            "accepted and forwarded. Other non-empty text "
+                                            "objects return invalid_text; use response_format "
+                                            "for json_object / json_schema."
+                                        ),
+                                    },
                                 },
                             }
                         }
@@ -516,7 +525,7 @@ OPENAPI_SPEC = {
                 },
                 "responses": {
                     "200": {"description": "Provider Responses object from the selected pool agent"},
-                    "400": {"description": "invalid_instructions, invalid_input, or other fail-closed field"},
+                    "400": {"description": "invalid_instructions, invalid_text, invalid_input, or other fail-closed field"},
                 },
             }
         },
