@@ -168,10 +168,11 @@ class OrchestrationPolicy:
     # fixed 4-step plan. Generated plans that fail validation fall back to the template.
     workflow_planning: str = "template"
     max_workflow_steps: int = 6
-    # Verifier verdict: "terms" (default) matches whole-token accept/reject on the
-    # first line or report body; "model" asks a verifier-selected model to reply
-    # ACCEPT/REJECT. Everyday praise and risk vocabulary without an explicit
-    # verdict fail closed.
+    # Verifier verdict: "terms" (default) matches first-line or whole-report
+    # ACCEPT/REJECT; incidental body "accepted" fails closed when an explicit
+    # verdict is required. "model" asks a verifier-selected model to reply
+    # ACCEPT/REJECT as its first token. Everyday praise and risk vocabulary
+    # without an explicit verdict fail closed.
     verifier_judge: str = "terms"
 
     def as_dict(self) -> dict[str, Any]:
@@ -533,7 +534,10 @@ class ModelClient:
         match = re.search(r"Role: ([a-z]+)", system)
         if match:
             role = match.group(1)
-        return f"[{agent.id}:{role}] {last[:220]}"
+        body = f"[{agent.id}:{role}] {last[:220]}"
+        if role == "verifier":
+            return f"ACCEPT\n{body}"
+        return body
 
     # --- OpenAI Batch API (async, ~50% provider discount; NOT for latency-sensitive chat) ---
 
@@ -1650,13 +1654,21 @@ class TaskOrchestrator:
 
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
-            verification = self._judge_verifier_output(
-                last_output("verifier"), upstream, last_output("worker"), require_explicit_verdict=True
-            )
-            if self.policy.verifier_judge == "model":
-                verification = self._model_judge_verification(
-                    task, verification, reasoning_effort=reasoning_effort
+            verifier_text = last_output("verifier")
+            if verifier_text:
+                verification = self._judge_verifier_output(
+                    verifier_text, upstream, last_output("worker"), require_explicit_verdict=True
                 )
+                if self.policy.verifier_judge == "model":
+                    verification = self._model_judge_verification(
+                        task, verification, reasoning_effort=reasoning_effort
+                    )
+            else:
+                verification = {
+                    "accepted": True,
+                    "reason": "generated plan omitted a verifier step",
+                    "verifier_output": "",
+                }
             answer = outputs[steps[-1].id]
         else:
             verification = self._judge_verifier_output(
@@ -1668,9 +1680,13 @@ class TaskOrchestrator:
                 )
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
 
+        accepted = bool(verification.get("accepted"))
+        if not accepted:
+            answer = self._rejected_verify_answer(verification)
         return {
             "mode": "conduct",
             "answer": answer,
+            "answer_status": "accepted" if accepted else "rejected",
             "trace": trace,
             "verification": verification,
             "plan_source": plan_source,
@@ -1959,9 +1975,6 @@ class TaskOrchestrator:
         if re.search(r"(?<![\w])REJECT(?:ED)?(?![\w])", upper) and not re.search(r"(?<![\w])ACCEPT", upper):
             return {"accepted": False, "reason": "model judge rejected the verifier report",
                     "verifier_output": verifier_output, "judge": "model"}
-        if re.search(r"(?<![\w])ACCEPT(?:ED)?(?![\w])", upper) and not re.search(r"(?<![\w])REJECT", upper):
-            return {"accepted": True, "reason": "model judge accepted the verifier report",
-                    "verifier_output": verifier_output, "judge": "model"}
         return fallback
 
     def _rejected_verify_answer(self, verification: dict[str, Any]) -> str:
@@ -2008,6 +2021,14 @@ class TaskOrchestrator:
         *,
         require_explicit_verdict: bool = False,
     ) -> dict[str, Any]:
+        """Score a verifier report as accept, reject, or fail-closed.
+
+        When ``require_explicit_verdict`` is true, only a first-line or
+        whole-report ``ACCEPT``/``REJECT`` accepts. Body mentions such as
+        ``the password was accepted`` are not verdicts. Reject and negated
+        accept terms still fail closed. The legacy fallback accept remains
+        only for callers that have not opted into an explicit verdict.
+        """
         first_line = self._first_line_explicit_verdict(verifier_output)
         if first_line is True:
             return {
@@ -2040,6 +2061,12 @@ class TaskOrchestrator:
                 "reason": "verifier negated an accept verdict",
                 "verifier_output": verifier_output,
             }
+        if require_explicit_verdict:
+            return {
+                "accepted": False,
+                "reason": "verifier report did not state an explicit accept or reject",
+                "verifier_output": verifier_output,
+            }
         if any(
             self._text_has_hint(lowered, term) and not self._negated_verdict_term(verifier_output, term)
             for term in self.policy.verifier_positive_terms
@@ -2047,12 +2074,6 @@ class TaskOrchestrator:
             return {
                 "accepted": True,
                 "reason": "verifier output accepted the synthesized result",
-                "verifier_output": verifier_output,
-            }
-        if require_explicit_verdict:
-            return {
-                "accepted": False,
-                "reason": "verifier report did not state an explicit accept or reject",
                 "verifier_output": verifier_output,
             }
         if thinker_output and worker_output:
@@ -8906,6 +8927,7 @@ def chat_completion_response(
         "routing_reason": result.get("routing_reason"),
         "routing_decision": result.get("routing_decision"),
         "reasoning_effort": result.get("reasoning_effort"),
+        "answer_status": result.get("answer_status"),
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
     }
@@ -8962,6 +8984,7 @@ def chat_completion_chunks(
         "routing_reason": result.get("routing_reason"),
         "routing_decision": result.get("routing_decision"),
         "reasoning_effort": result.get("reasoning_effort"),
+        "answer_status": result.get("answer_status"),
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
     }

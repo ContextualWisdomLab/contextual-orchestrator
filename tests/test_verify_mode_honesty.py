@@ -87,6 +87,40 @@ class ConductRejectingClient:
         return f"{agent.id} supporting step"
 
 
+class ConductSynthesizerCopiesWorkerClient:
+    """Rejected conduct must not serve a synthesizer that repeats the worker."""
+
+    def chat(self, agent: ModelAgent, messages, reasoning_effort: str | None = None) -> str:
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return "REJECT\nThe worker leaked a secret and fails the adjudication."
+        if "Role: worker" in system:
+            return "conduct worker secret"
+        if "Role: synthesizer" in system:
+            return "Final answer: conduct worker secret"
+        return f"{agent.id} supporting step"
+
+
+class IncidentalAcceptedClient:
+    """Narrating that a password was accepted is not an accept verdict."""
+
+    def chat(self, agent: ModelAgent, messages, reasoning_effort: str | None = None) -> str:
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return "The worker correctly described how the password was accepted by the IdP."
+        return "secret worker payload"
+
+
+class FirstLineAcceptClient:
+    """A first-line ACCEPT remains a valid explicit verdict."""
+
+    def chat(self, agent: ModelAgent, messages, reasoning_effort: str | None = None) -> str:
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return "ACCEPT\nThe password reset write-up is complete."
+        return "accepted worker payload"
+
+
 class EmptyVerifierLongWorkerClient:
     """Empty verifier plus a long worker must still invoice the worker tokens."""
 
@@ -167,6 +201,26 @@ def test_negated_accept_is_a_reject() -> None:
     assert "secret worker payload" not in result["answer"]
 
 
+def test_incidental_accepted_is_not_an_accept_verdict() -> None:
+    result = _orchestrator(IncidentalAcceptedClient()).complete(
+        [{"role": "user", "content": "Does the reset follow the policy?"}],
+        mode="verify",
+    )
+    assert result["verification"]["accepted"] is False
+    assert "secret worker payload" not in result["answer"]
+    assert result["answer_status"] == "rejected"
+
+
+def test_first_line_accept_still_serves_worker() -> None:
+    result = _orchestrator(FirstLineAcceptClient()).complete(
+        [{"role": "user", "content": "Does the reset follow the policy?"}],
+        mode="verify",
+    )
+    assert result["verification"]["accepted"] is True
+    assert result["answer"] == "accepted worker payload"
+    assert result["answer_status"] == "accepted"
+
+
 def test_auto_does_not_verify_everyday_english_substrings() -> None:
     orchestrator = _orchestrator()
     for prompt in (
@@ -212,9 +266,11 @@ def test_chat_response_echoes_routing_decision_and_redacts_verification() -> Non
         "reasoning_effort": {"requested": "high", "applied": "high", "status": "applied"},
         "trace": [{"agent_id": "mock_verifier", "output": "ok"}],
     }
+    result["answer_status"] = "rejected"
     body = chat_completion_response(result)
     assert body["orchestration"]["routing_decision"]["selected_mode"] == "verify"
     assert body["orchestration"]["reasoning_effort"]["status"] == "applied"
+    assert body["orchestration"]["answer_status"] == "rejected"
     assert "abcdefghijklmnopqrstuvwxyz" not in str(body["orchestration"]["verification"])
     assert "[REDACTED]" in body["orchestration"]["verification"]["verifier_output"]
 
@@ -260,11 +316,13 @@ def test_stream_chunks_redact_verification_secrets() -> None:
         "reasoning_effort": {"requested": "high", "applied": "high", "status": "applied"},
         "trace": [{"agent_id": "mock_verifier", "output": "ok"}],
     }
+    result["answer_status"] = "rejected"
     final = chat_completion_chunks(result)[-1]
     assert "abcdefghijklmnopqrstuvwxyz" not in str(final["orchestration"]["verification"])
     assert "[REDACTED]" in final["orchestration"]["verification"]["verifier_output"]
     assert final["orchestration"]["routing_decision"]["selected_mode"] == "verify"
     assert final["orchestration"]["reasoning_effort"]["status"] == "applied"
+    assert final["orchestration"]["answer_status"] == "rejected"
 
 
 def test_empty_verifier_ledger_still_counts_worker() -> None:
@@ -290,7 +348,21 @@ def test_conduct_reject_does_not_serve_worker_answer() -> None:
     )
     assert result["mode"] == "conduct"
     assert result["verification"]["accepted"] is False
+    assert result["answer_status"] == "rejected"
     assert "conduct worker secret" not in result["answer"]
+    assert "Verification rejected" in result["answer"]
+
+
+def test_conduct_reject_does_not_serve_synthesizer_copy_of_worker() -> None:
+    result = _orchestrator(ConductSynthesizerCopiesWorkerClient()).complete(
+        [{"role": "user", "content": "Analyze the architecture and verify the change."}],
+        mode="conduct",
+    )
+    assert result["mode"] == "conduct"
+    assert result["verification"]["accepted"] is False
+    assert result["answer_status"] == "rejected"
+    assert "conduct worker secret" not in result["answer"]
+    assert "Verification rejected" in result["answer"]
 
 
 def test_verify_ledger_counts_worker_and_verifier_outputs() -> None:
@@ -325,6 +397,8 @@ if __name__ == "__main__":
     test_password_substring_does_not_accept_verify()
     test_looks_good_does_not_accept_verify()
     test_negated_accept_is_a_reject()
+    test_incidental_accepted_is_not_an_accept_verdict()
+    test_first_line_accept_still_serves_worker()
     test_auto_does_not_verify_everyday_english_substrings()
     test_auto_still_verifies_explicit_adjudication()
     test_architecture_note_does_not_claim_per_role_allocation()
@@ -334,6 +408,7 @@ if __name__ == "__main__":
     test_batch_envelope_reports_dropped_reasoning_effort()
     test_empty_verifier_ledger_still_counts_worker()
     test_conduct_reject_does_not_serve_worker_answer()
+    test_conduct_reject_does_not_serve_synthesizer_copy_of_worker()
     test_verify_ledger_counts_worker_and_verifier_outputs()
     test_stream_route_omits_unset_reasoning_effort_kwarg()
     print("ok")

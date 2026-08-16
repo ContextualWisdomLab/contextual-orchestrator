@@ -41,6 +41,9 @@ class _PlannerClient(ModelClient):
         self.calls.append(messages)
         if len(self.calls) == 1:
             return self.plan_text
+        system = messages[0]["content"] if messages else ""
+        if "Role: verifier" in system:
+            return f"ACCEPT\nstep-output({len(self.calls) - 1})"
         return f"step-output({len(self.calls) - 1})"
 
 
@@ -128,6 +131,19 @@ def test_plan_validation_rejects_structural_problems() -> None:
         except ValueError:
             raised = True
         assert raised, f"should reject: {case[:60]}"
+
+
+def test_generated_plan_without_verifier_still_serves_synthesizer() -> None:
+    plan = json.dumps({"steps": [
+        {"id": 0, "role": "worker", "agent_id": "general_agent", "subtask": "do the work", "access": []},
+        {"id": 1, "role": "synthesizer", "agent_id": "general_agent", "subtask": "answer", "access": [0]},
+    ]})
+    orchestrator, _ = _orch(plan)
+    result = orchestrator.conduct([{"role": "user", "content": "solve"}])
+    assert result["plan_source"] == "generated"
+    assert result["answer"] == "step-output(2)"
+    assert result["answer_status"] == "accepted"
+    assert result["verification"]["reason"] == "generated plan omitted a verifier step"
 
 
 def test_unknown_agent_id_is_reselected_not_fatal() -> None:
