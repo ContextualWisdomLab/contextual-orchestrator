@@ -136,9 +136,69 @@ def test_http_chat_rejects_nonempty_annotations() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_nonempty_refusal_with_tools() -> None:
+    """Tools passthrough must not skip assistant-refusal fail-closed checks."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [
+                    {"role": "assistant", "content": None, "refusal": "I cannot help"},
+                    {"role": "user", "content": "try a tool"},
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "lookup_balance", "parameters": {"type": "object"}},
+                    }
+                ],
+            },
+        )
+        assert status == 400, body
+        assert "invalid_message_refusal" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_nonempty_annotations_with_tools() -> None:
+    """Tools passthrough must not skip message-annotations fail-closed checks."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [
+                    {
+                        "role": "assistant",
+                        "content": "prior",
+                        "annotations": [{"type": "url_citation", "url": "https://x"}],
+                    },
+                    {"role": "user", "content": "try a tool"},
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "lookup_balance", "parameters": {"type": "object"}},
+                    }
+                ],
+            },
+        )
+        assert status == 400, body
+        assert "invalid_message_annotations" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_accepts_refusal_null_and_empty()
     test_http_chat_rejects_nonempty_refusal()
     test_http_chat_accepts_annotations_null_and_empty()
     test_http_chat_rejects_nonempty_annotations()
+    test_http_chat_rejects_nonempty_refusal_with_tools()
+    test_http_chat_rejects_nonempty_annotations_with_tools()
     print("ok")

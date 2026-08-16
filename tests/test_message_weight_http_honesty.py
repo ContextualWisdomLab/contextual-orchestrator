@@ -105,8 +105,33 @@ def test_http_chat_rejects_weight_non_number() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_weight_out_of_range_with_tools() -> None:
+    """Tools passthrough must not skip message-weight fail-closed checks."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "weighted tool turn", "weight": 0.5}],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "lookup_balance", "parameters": {"type": "object"}},
+                    }
+                ],
+            },
+        )
+        assert status == 400, body
+        assert "invalid_message_weight" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_accepts_weight_null_zero_one()
     test_http_chat_rejects_weight_out_of_range()
     test_http_chat_rejects_weight_non_number()
+    test_http_chat_rejects_weight_out_of_range_with_tools()
     print("ok")
