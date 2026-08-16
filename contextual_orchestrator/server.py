@@ -240,10 +240,11 @@ def _coerce_optional_bool(
     error_code: str,
     message: str,
 ) -> bool | None:
-    """Treat null/empty as omit; accept bool and int 0/1 (JS SDK).
+    """Treat null/empty as omit; accept bool, int 0/1, and "true"/"false" strings.
 
     ``True``/``False`` are not accepted via the int branch (``bool`` is a
-    subclass of ``int`` in Python), so only bare ``0``/``1`` coerce.
+    subclass of ``int`` in Python), so only bare ``0``/``1`` coerce. String
+    forms are case-insensitive and strip incidental whitespace (form/query SDKs).
     """
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
@@ -251,6 +252,54 @@ def _coerce_optional_bool(
         return value
     if type(value) is int and value in (0, 1):
         return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1"}:
+            return True
+        if lowered in {"false", "0"}:
+            return False
+    raise RequestError(400, error_code, message)
+
+
+def _coerce_optional_int(
+    value: Any,
+    *,
+    error_code: str,
+    message: str,
+) -> int | None:
+    """Treat null/empty as omit; accept int and digit strings (JS JSON)."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise RequestError(400, error_code, message)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lstrip("-").isdigit() and stripped not in {"-", ""}:
+            return int(stripped)
+        raise RequestError(400, error_code, message)
+    if isinstance(value, int):
+        return value
+    raise RequestError(400, error_code, message)
+
+
+def _coerce_optional_float(
+    value: Any,
+    *,
+    error_code: str,
+    message: str,
+) -> float | None:
+    """Treat null/empty as omit; accept int/float and numeric strings."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise RequestError(400, error_code, message)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError as exc:
+            raise RequestError(400, error_code, message) from exc
     raise RequestError(400, error_code, message)
 
 
@@ -762,11 +811,13 @@ def _validate_completions_frequency_penalty(body: dict[str, Any]) -> float | Non
     if "frequency_penalty" not in body:
         return None
     value = body.get("frequency_penalty")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if value is None or (isinstance(value, str) and not value.strip()):
+    value = _coerce_optional_float(
+        value,
+        error_code="invalid_frequency_penalty",
+        message="frequency_penalty must be a number in [-2, 2]",
+    )
+    if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise RequestError(400, "invalid_frequency_penalty", "frequency_penalty must be a number in [-2, 2]")
     number = float(value)
     if number < -2 or number > 2:
         raise RequestError(400, "invalid_frequency_penalty", "frequency_penalty must be a number in [-2, 2]")
@@ -777,11 +828,13 @@ def _validate_completions_presence_penalty(body: dict[str, Any]) -> float | None
     if "presence_penalty" not in body:
         return None
     value = body.get("presence_penalty")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if value is None or (isinstance(value, str) and not value.strip()):
+    value = _coerce_optional_float(
+        value,
+        error_code="invalid_presence_penalty",
+        message="presence_penalty must be a number in [-2, 2]",
+    )
+    if value is None:
         return None
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise RequestError(400, "invalid_presence_penalty", "presence_penalty must be a number in [-2, 2]")
     number = float(value)
     if number < -2 or number > 2:
         raise RequestError(400, "invalid_presence_penalty", "presence_penalty must be a number in [-2, 2]")
@@ -792,11 +845,13 @@ def _validate_completions_temperature(body: dict[str, Any]) -> float | None:
     if "temperature" not in body:
         return None
     temperature = body.get("temperature")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if temperature is None or (isinstance(temperature, str) and not temperature.strip()):
+    temperature = _coerce_optional_float(
+        temperature,
+        error_code="invalid_temperature",
+        message="temperature must be a number in [0, 2]",
+    )
+    if temperature is None:
         return None
-    if isinstance(temperature, bool) or not isinstance(temperature, (int, float)):
-        raise RequestError(400, "invalid_temperature", "temperature must be a number in [0, 2]")
     value = float(temperature)
     if value < 0 or value > 2:
         raise RequestError(400, "invalid_temperature", "temperature must be a number in [0, 2]")
@@ -807,11 +862,13 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     if "top_p" not in body:
         return None
     top_p = body.get("top_p")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if top_p is None or (isinstance(top_p, str) and not top_p.strip()):
+    top_p = _coerce_optional_float(
+        top_p,
+        error_code="invalid_top_p",
+        message="top_p must be a number in (0, 1]",
+    )
+    if top_p is None:
         return None
-    if isinstance(top_p, bool) or not isinstance(top_p, (int, float)):
-        raise RequestError(400, "invalid_top_p", "top_p must be a number in (0, 1]")
     value = float(top_p)
     if value <= 0 or value > 1:
         raise RequestError(400, "invalid_top_p", "top_p must be a number in (0, 1]")
@@ -834,10 +891,14 @@ def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
     if "max_tokens" not in body:
         return None
     max_tokens = body.get("max_tokens")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if max_tokens is None or (isinstance(max_tokens, str) and not max_tokens.strip()):
+    max_tokens = _coerce_optional_int(
+        max_tokens,
+        error_code="invalid_max_tokens",
+        message="max_tokens must be a positive integer",
+    )
+    if max_tokens is None:
         return None
-    if isinstance(max_tokens, bool) or not isinstance(max_tokens, int) or max_tokens < 1:
+    if max_tokens < 1:
         raise RequestError(400, "invalid_max_tokens", "max_tokens must be a positive integer")
     if max_tokens > 1_048_576:
         raise RequestError(
@@ -856,16 +917,14 @@ def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
     if "max_completion_tokens" not in body:
         return None
     max_completion_tokens = body.get("max_completion_tokens")
-    # Explicit JSON null or empty/whitespace string is treat-as-omit.
-    if max_completion_tokens is None or (
-        isinstance(max_completion_tokens, str) and not max_completion_tokens.strip()
-    ):
+    max_completion_tokens = _coerce_optional_int(
+        max_completion_tokens,
+        error_code="invalid_max_completion_tokens",
+        message="max_completion_tokens must be a positive integer",
+    )
+    if max_completion_tokens is None:
         return None
-    if (
-        isinstance(max_completion_tokens, bool)
-        or not isinstance(max_completion_tokens, int)
-        or max_completion_tokens < 1
-    ):
+    if max_completion_tokens < 1:
         raise RequestError(
             400,
             "invalid_max_completion_tokens",

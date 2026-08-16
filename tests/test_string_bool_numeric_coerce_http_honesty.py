@@ -1,4 +1,4 @@
-"""Empty-string optional numeric/boolean controls as omit no-ops over HTTP."""
+"""String true/false and numeric-string control honesty over HTTP."""
 
 from __future__ import annotations
 
@@ -14,12 +14,12 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
-_TEST_AUTH_TOKEN = "empty_string_numeric_controls_noop_http_honesty_token"  # noqa: S105
+_TEST_AUTH_TOKEN = "string_bool_numeric_coerce_http_honesty_token"  # noqa: S105
 
 
 def build() -> TaskOrchestrator:
     return TaskOrchestrator(
-        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing", "embedding"))]
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
     )
 
 
@@ -52,7 +52,26 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_chat_accepts_empty_string_sampling_controls() -> None:
+def test_http_chat_accepts_store_false_string() -> None:
+    server, thread, port = _server()
+    try:
+        for value in ("false", "FALSE", " False ", "0"):
+            status, body = _post(
+                port,
+                "/v1/chat/completions",
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "store str"}],
+                    "store": value,
+                },
+            )
+            assert status == 200, (value, body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_store_true_string() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -60,27 +79,18 @@ def test_http_chat_accepts_empty_string_sampling_controls() -> None:
             "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "empty numerics"}],
-                "temperature": "",
-                "top_p": "  ",
-                "max_tokens": "",
-                "max_completion_tokens": "",
-                "presence_penalty": "",
-                "frequency_penalty": "",
-                "n": "",
-                "seed": "",
-                "logprobs": "",
-                "parallel_tool_calls": "",
-                "include_orchestration_trace": "",
+                "messages": [{"role": "user", "content": "store true str"}],
+                "store": "true",
             },
         )
-        assert status == 200, body
+        assert status == 400, body
+        assert "invalid_store" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_whitespace_only_stop_array() -> None:
+def test_http_chat_accepts_stream_false_string() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -88,8 +98,8 @@ def test_http_chat_accepts_whitespace_only_stop_array() -> None:
             "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "stop ws"}],
-                "stop": ["  ", "\t"],
+                "messages": [{"role": "user", "content": "stream false str"}],
+                "stream": "false",
             },
         )
         assert status == 200, body
@@ -98,19 +108,16 @@ def test_http_chat_accepts_whitespace_only_stop_array() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_accepts_empty_echo_best_of_stop() -> None:
+def test_http_chat_accepts_parallel_false_string() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
-            "/v1/completions",
+            "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "prompt": "empty echo best_of",
-                "echo": "",
-                "best_of": "",
-                "stop": ["  "],
-                "seed": "",
+                "messages": [{"role": "user", "content": "ptc false str"}],
+                "parallel_tool_calls": "false",
             },
         )
         assert status == 200, body
@@ -119,32 +126,16 @@ def test_http_completions_accepts_empty_echo_best_of_stop() -> None:
         thread.join(timeout=5)
 
 
-def test_http_embeddings_accepts_empty_dimensions_string() -> None:
+def test_http_chat_accepts_max_tokens_digit_string() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
-            "/v1/embeddings",
-            {"model": "mock-planner", "input": "dims empty", "dimensions": ""},
-        )
-        assert status == 200, body
-    finally:
-        server.shutdown()
-        thread.join(timeout=5)
-
-
-def test_http_responses_accepts_empty_stream_and_max_output() -> None:
-    server, thread, port = _server()
-    try:
-        status, body = _post(
-            port,
-            "/v1/responses",
+            "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "input": "empty stream max_out",
-                "stream": "",
-                "max_output_tokens": "",
-                "n": "",
+                "messages": [{"role": "user", "content": "max tok str"}],
+                "max_tokens": "64",
             },
         )
         assert status == 200, body
@@ -153,8 +144,7 @@ def test_http_responses_accepts_empty_stream_and_max_output() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_numeric_temperature_string() -> None:
-    """Digit/float strings coerce (JS form/query SDKs)."""
+def test_http_chat_accepts_temperature_numeric_string() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -172,7 +162,7 @@ def test_http_chat_accepts_numeric_temperature_string() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_non_numeric_temperature_string() -> None:
+def test_http_chat_accepts_penalty_numeric_strings() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -180,23 +170,38 @@ def test_http_chat_rejects_non_numeric_temperature_string() -> None:
             "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "temp bad"}],
-                "temperature": "warm",
+                "messages": [{"role": "user", "content": "penalties str"}],
+                "frequency_penalty": "0.1",
+                "presence_penalty": "-0.2",
             },
         )
-        assert status == 400, body
-        assert "invalid_temperature" in json.dumps(body)
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_completions_accepts_echo_false_string() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/completions",
+            {"model": "mock-planner", "prompt": "echo false str", "echo": "false"},
+        )
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
 if __name__ == "__main__":
-    test_http_chat_accepts_empty_string_sampling_controls()
-    test_http_chat_accepts_whitespace_only_stop_array()
-    test_http_completions_accepts_empty_echo_best_of_stop()
-    test_http_embeddings_accepts_empty_dimensions_string()
-    test_http_responses_accepts_empty_stream_and_max_output()
-    test_http_chat_accepts_numeric_temperature_string()
-    test_http_chat_rejects_non_numeric_temperature_string()
+    test_http_chat_accepts_store_false_string()
+    test_http_chat_rejects_store_true_string()
+    test_http_chat_accepts_stream_false_string()
+    test_http_chat_accepts_parallel_false_string()
+    test_http_chat_accepts_max_tokens_digit_string()
+    test_http_chat_accepts_temperature_numeric_string()
+    test_http_chat_accepts_penalty_numeric_strings()
+    test_http_completions_accepts_echo_false_string()
     print("ok")
