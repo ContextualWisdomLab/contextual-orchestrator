@@ -10,9 +10,11 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 ### Added
 
 - SSE-proxy `tools` and `response_format` on `/v1/chat/completions` when
-  `stream=true`. Concatenated mock content matches the non-stream JSON body;
-  live providers are piped verbatim so `delta.tool_calls` survive. Next
-  action: send `stream=true` when the client reads SSE; omit
+  `stream=true`. Function-tool mocks emit `delta.tool_calls` and finish as
+  `tool_calls` (invoice `lookup_balance` binds `INV-9` from the prompt);
+  content-only `response_format` streams still match the JSON body; live
+  providers are piped verbatim. Next action: send `stream=true` when the
+  client reads SSE; include the invoice id in the user text; omit
   `stream_options.include_usage`.
 
 ### Fixed

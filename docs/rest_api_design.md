@@ -111,8 +111,10 @@ Message-level `weight`, `prefix`, `refusal`, `annotations`, `developer` role,
 empty user/system content, non-string user content, and participant `name` use the same named errors on
 the tools passthrough path as on the orchestration path. `stream=true` with
 `tools` or `response_format` SSE-proxies a single pool agent as
-`chat.completion.chunk` frames (concatenated content matches the non-stream
-JSON body). Do not send `stream_options.include_usage=true` or
+`chat.completion.chunk` frames. Function tools reconstruct to the same
+`message.tool_calls` as the non-stream JSON body (`lookup_balance` binds
+`INV-` identifiers, defaulting to `INV-9`); content-only `response_format`
+streams still match `message.content`. Do not send `stream_options.include_usage=true` or
 `include_obfuscation=true` — this gateway does not emit a final usage chunk
 or apply SSE obfuscation. Missing `model` and out-of-range
 `temperature` / `top_p` also fail closed before passthrough. `seed`, `stop`,
