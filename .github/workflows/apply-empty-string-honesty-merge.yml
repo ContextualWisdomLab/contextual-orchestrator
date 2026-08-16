@@ -80,31 +80,51 @@ jobs:
 
           path = Path("contextual_orchestrator/server.py")
           text = path.read_text(encoding="utf-8")
-          old = (
-              '    # Explicit JSON null is treat-as-omit (SDK optional default).\n'
-              '    if seed is None:\n'
-              '        return None\n'
-              '    if isinstance(seed, bool) or not isinstance(seed, int):\n'
-              '        raise RequestError(400, "invalid_seed", "seed must be an integer")\n'
+
+          def replace_exact_pair(label: str, old: str, new: str) -> None:
+              global text
+              old_count = text.count(old)
+              new_count = text.count(new)
+              if old_count == 2 and new_count == 0:
+                  text = text.replace(old, new)
+              elif old_count == 0 and new_count == 2:
+                  return
+              else:
+                  raise RuntimeError(
+                      f"{label}: expected 2 old or 2 new fragments, "
+                      f"found old={old_count}, new={new_count}"
+                  )
+
+          replace_exact_pair(
+              "seed no-op contract",
+              (
+                  '    # Explicit JSON null is treat-as-omit (SDK optional default).\n'
+                  '    if seed is None:\n'
+                  '        return None\n'
+                  '    if isinstance(seed, bool) or not isinstance(seed, int):\n'
+                  '        raise RequestError(400, "invalid_seed", "seed must be an integer")\n'
+              ),
+              (
+                  '    # Explicit JSON null or empty/whitespace string is treat-as-omit.\n'
+                  '    if seed is None or (isinstance(seed, str) and not seed.strip()):\n'
+                  '        return None\n'
+                  '    if isinstance(seed, bool) or not isinstance(seed, int):\n'
+                  '        raise RequestError(400, "invalid_seed", "seed must be an integer")\n'
+              ),
           )
-          new = (
-              '    # Explicit JSON null or empty/whitespace string is treat-as-omit.\n'
-              '    if seed is None or (isinstance(seed, str) and not seed.strip()):\n'
-              '        return None\n'
-              '    if isinstance(seed, bool) or not isinstance(seed, int):\n'
-              '        raise RequestError(400, "invalid_seed", "seed must be an integer")\n'
+          replace_exact_pair(
+              "stop-string no-op contract",
+              (
+                  '    if isinstance(stop, str):\n'
+                  '        # Empty string is omit-equivalent (no stop sequences).\n'
+                  '        if not stop:\n'
+              ),
+              (
+                  '    if isinstance(stop, str):\n'
+                  '        # Empty/whitespace string is omit-equivalent (no stop sequences).\n'
+                  '        if not stop.strip():\n'
+              ),
           )
-          old_count = text.count(old)
-          new_count = text.count(new)
-          if old_count == 2 and new_count == 0:
-              text = text.replace(old, new)
-          elif old_count == 0 and new_count == 2:
-              pass
-          else:
-              raise RuntimeError(
-                  f"seed no-op contract: expected 2 old or 2 new fragments, "
-                  f"found old={old_count}, new={new_count}"
-              )
           path.write_text(text, encoding="utf-8")
           PY
           python .github/bootstrap/empty-string-honesty-merge/transform.py
