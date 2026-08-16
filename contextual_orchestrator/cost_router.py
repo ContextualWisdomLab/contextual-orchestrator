@@ -160,6 +160,7 @@ class CostRoutingCoordinator:
         result = self.orchestrator.run(
             messages, mode=mode, workflow_run_id=workflow_run_id, reasoning_effort=reasoning_effort
         )
+        provider_model = self._served_provider_model(result, model_name)
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),
@@ -167,8 +168,9 @@ class CostRoutingCoordinator:
             request_channel="sync",
             attribution=attribution,
             model_name=model_name,
-            provider_model=self._served_provider_model(result, model_name),
+            provider_model=provider_model,
             workflow_run_id=result.get("workflow_run_id"),
+            completion_tokens=self._completion_tokens_from_result(result, provider_model[1]),
         )
         result["channel"] = "sync"
         result["routing_reason"] = decision.reason
@@ -210,6 +212,21 @@ class CostRoutingCoordinator:
             workflow_run_id=workflow_run_id,
             attribution=attribution,
         )
+
+    def _completion_tokens_from_result(self, result: Dict[str, Any], model: str) -> int:
+        """Count every provider step output, not only the public completion text.
+
+        Verify and conduct issue more than one upstream call. Invoicing only the
+        final answer would make those modes look as cheap as a single route.
+        """
+        outputs = [
+            str(step.get("output", ""))
+            for step in result.get("trace") or []
+            if isinstance(step, dict) and step.get("output")
+        ]
+        if len(outputs) >= 2:
+            return sum(int(self.token_counter.count_text(text, model)) for text in outputs)
+        return int(self.token_counter.count_text(result.get("answer", ""), model))
 
     # ------------------------------------------------------------------
     # Batch lifecycle

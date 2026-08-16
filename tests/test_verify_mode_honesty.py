@@ -147,6 +147,24 @@ def test_batch_envelope_reports_dropped_reasoning_effort() -> None:
     assert submitted["reasoning_effort"]["status"] == "dropped"
 
 
+def test_verify_ledger_counts_worker_and_verifier_outputs() -> None:
+    coordinator = CostRoutingCoordinator(
+        _orchestrator(RejectingVerdictClient()),
+        InMemoryConfigStore(),
+    )
+    messages = [{"role": "user", "content": "Does record B follow from record A?"}]
+    verified = coordinator.complete(messages, mode="verify")
+    model_name = "mock-a"
+    expected = sum(
+        coordinator.token_counter.count_text(str(step["output"]), model_name)
+        for step in verified["trace"]
+    )
+    public_only = coordinator.token_counter.count_text(verified["answer"], model_name)
+    assert len(verified["trace"]) == 2
+    assert verified["usage"]["completion_tokens"] == expected
+    assert verified["usage"]["completion_tokens"] != public_only
+
+
 def test_stream_route_omits_unset_reasoning_effort_kwarg() -> None:
     orchestrator = _orchestrator(NarrowStreamClient())
     chunks = list(
@@ -163,5 +181,6 @@ if __name__ == "__main__":
     test_architecture_note_does_not_claim_per_role_allocation()
     test_chat_response_echoes_routing_decision_and_redacts_verification()
     test_batch_envelope_reports_dropped_reasoning_effort()
+    test_verify_ledger_counts_worker_and_verifier_outputs()
     test_stream_route_omits_unset_reasoning_effort_kwarg()
     print("ok")
