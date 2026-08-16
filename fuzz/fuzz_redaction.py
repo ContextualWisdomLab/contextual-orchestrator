@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Atheris coverage-guided harness: secret/PII redaction.
+"""Atheris coverage-guided harness: credential redaction.
 
 Surface: ``orchestrator.redact_text`` / ``redact_value`` -- regex + recursive
 masking applied to arbitrary trace payloads before they leave the process.

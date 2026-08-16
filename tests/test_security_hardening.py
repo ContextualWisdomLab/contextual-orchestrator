@@ -219,7 +219,25 @@ def test_chat_completion_response_requires_explicit_trace() -> None:
 def test_redaction_masks_common_sensitive_values() -> None:
     text = "api_key='abcdefghijklmnopqrstuvwxyz' sent by alice@example.com"
 
-    assert redact_text(text) == "api_key='[REDACTED]' sent by [REDACTED]"
+    assert redact_text(text) == "api_key='[REDACTED]' sent by alice@example.com"
+
+
+def test_trusted_trace_keeps_operational_email() -> None:
+    """Trusted traces must keep the email an operator needs to finish the ticket."""
+    result = {
+        "mode": "route",
+        "answer": "Refund alice@example.com",
+        "trace": [
+            {
+                "agent_id": "general_agent",
+                "output": "Invoice 8841 for alice@example.com; Bearer abcdefghijklmnopqrstuvwxyz",
+            }
+        ],
+    }
+    trace = chat_completion_response(result, include_trace=True)["orchestration"]["trace"]
+    assert "alice@example.com" in trace[0]["output"]
+    assert "Bearer [REDACTED]" in trace[0]["output"]
+    assert "abcdefghijklmnopqrstuvwxyz" not in trace[0]["output"]
 
 
 def test_external_provider_requires_resolvable_credential_and_public_https() -> None:

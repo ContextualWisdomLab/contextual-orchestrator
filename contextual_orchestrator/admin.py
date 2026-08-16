@@ -913,7 +913,7 @@ ADMIN_HTML = r"""<!doctype html>
             <table>
               <thead><tr><th data-i18n="rule_header">Rule</th><th data-i18n="scope_header">Scope</th><th data-i18n="exclusion_header">Exclusion</th></tr></thead>
               <tbody>
-                <tr><td>PII-001</td><td>All agents</td><td>Mask email, phone</td></tr>
+                <tr><td>PII-001</td><td>All agents</td><td>Redact credentials; keep operational email</td></tr>
                 <tr><td>SEC-002</td><td>worker</td><td>Tool web_search</td></tr>
                 <tr><td>DATA-003</td><td>verifier</td><td>Field ip_address</td></tr>
                 <tr><td>FIN-004</td><td>synthesizer</td><td>Record amount</td></tr>

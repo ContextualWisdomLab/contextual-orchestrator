@@ -61,6 +61,30 @@ motivate throughput-oriented **batched** inference and the load-balancing that
 makes the latency-tolerant batch route economical. Those sources are referenced
 but not vendored here so this repository remains one deployable control plane.
 
+## Trusted-trace personal data (no irreversible email mask)
+
+Operational PII on a trusted caller trace is an access-control problem, not a
+masking problem. Destroying the email on an invoice or HR ticket paralyzes
+the operator. NIST SP 800-122 is a US government publication (cite + link);
+ISO/IEC 27001 is cited, not attached.
+
+- McCallister, E., Grance, T., & Scarfone, K. (2010). *Guide to protecting
+  the confidentiality of personally identifiable information (PII)* (NIST
+  Special Publication 800-122). National Institute of Standards and
+  Technology. https://doi.org/10.6028/NIST.SP.800-122
+  Confidentiality of PII is achieved by limiting who can see the identifier
+  and logging that access — not by irreversibly destroying it on the
+  operational work surface. Buyer next action: set
+  `include_orchestration_trace` only for trusted callers.
+
+- Joint Task Force. (2020). *Security and privacy controls for information
+  systems and organizations* (NIST Special Publication 800-53 Rev. 5).
+  National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-53r5
+  Controls **AC-3** (Access Enforcement) and **AU-2** (Event Logging) are
+  the substitute for email `[REDACTED]` on trusted traces. Credential
+  material remains redacted.
+
 ## Boundary protection (provider host allowlist)
 
 ISO/IEC 27001 cannot be redistributed here. NIST SP 800-53 is a US government

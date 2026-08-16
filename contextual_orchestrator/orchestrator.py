@@ -58,7 +58,6 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
-    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
 )
 
 DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
@@ -8322,7 +8321,15 @@ for _report_name, _report_method in list(TaskOrchestrator.__dict__.items()):
 
 
 def redact_text(text: str) -> str:
-    """Mask common secret and personal-data shapes from traces."""
+    """Mask credential material in traces; keep operational personal data.
+
+    API keys, tokens, and Bearer secrets stay ``[REDACTED]``. Email addresses
+    and phone numbers are left intact: trusted-caller traces are the operator
+    work surface, and irreversible PII masking makes invoice/HR/support tickets
+    unworkable. Access control (trace only when the caller opts in) plus
+    audit is the control, not destruction of the identifier (McCallister
+    et al., 2010; Joint Task Force, 2020, AC-3/AU-2).
+    """
     redacted = text
     for pattern in SECRET_PATTERNS:
         if pattern.pattern.lower().startswith("(?i)(api"):

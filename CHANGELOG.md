@@ -7,6 +7,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ## [Unreleased]
 
+### Changed
+
+- Trusted orchestration traces no longer irreversibly mask email addresses.
+  Credential shapes (`api_key=`, `Bearer …`) stay `[REDACTED]`. Access control
+  (opt-in `include_orchestration_trace`) plus audit is the PII control, not
+  destruction of the identifier an operator needs to close an invoice or HR
+  ticket. Next action: request the trace only from a trusted caller; do not
+  expect emails in that trace to become `[REDACTED]`.
+
 ### Fixed
 
 - Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is
@@ -36,6 +45,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### References
 
+- McCallister, E., Grance, T., & Scarfone, K. (2010). *Guide to protecting
+  the confidentiality of personally identifiable information (PII)* (NIST
+  Special Publication 800-122). National Institute of Standards and
+  Technology. https://doi.org/10.6028/NIST.SP.800-122
 - Joint Task Force. (2020). *Security and privacy controls for information
   systems and organizations* (NIST Special Publication 800-53 Rev. 5).
   National Institute of Standards and Technology.
