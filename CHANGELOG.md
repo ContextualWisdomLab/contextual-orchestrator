@@ -21,7 +21,13 @@
 
 ### Changed
 
-- Unconfigured remote workers are skipped at select/failover time. When every
+- Fast-path routing is a cost-performance choose (quality per unit operator
+  cost), not deterministic keyword scoring and not a walk down the seed JSON.
+  429 / 5xx / timeout re-runs the same chooser on the remaining healthy pool.
+  Missing credentials drop that worker from the candidate set. An empty
+  healthy pool fail-closes (no GitHub Models). Deep `conduct` stays
+  Conductor-style and still requires a workflow hint.
+- Unconfigured remote workers are skipped at select/re-selection time. When every
   provider credential is missing, routing raises `NotConfigured` and does not
   fall back to GitHub Models.
 - Malformed upstream chat.completion bodies raise `ProviderResponseError` so

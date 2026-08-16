@@ -82,7 +82,7 @@ A stdlib-Python lab implementing a single OpenAI-compatible API that routes, del
 2. `TaskOrchestrator.complete()` in `orchestrator.py` picks one of two paths:
    - **Fast path (`route`)**: select a single worker for simple or latency-sensitive requests.
    - **Deep path (`conduct`)**: build a natural-language workflow of `thinker → worker → verifier → synthesizer` steps. Each `WorkflowStep` carries an **access list** so a worker sees only the prior outputs deliberately exposed to it.
-3. `ModelClient` (infrastructure adapter) executes each step against `mock://` agents (offline, used by tests) or OpenAI-compatible HTTPS providers, with jittered retries for transient errors, failover to the next capability-matched agent, and a per-agent circuit breaker. Provider keys come from the KV via `get_credential`; egress to loopback/private/reserved addresses is blocked.
+3. `ModelClient` (infrastructure adapter) executes each step against `mock://` agents (offline, used by tests) or OpenAI-compatible HTTPS providers, with jittered retries for transient errors. Worker selection is a cost-performance choose (quality per unit cost); a 429/5xx/timeout **re-runs that chooser** on the remaining healthy pool rather than walking the seed list. A per-agent circuit breaker excludes a persistently failing provider until it cools down. Provider keys come from the KV via `get_credential`; egress to loopback/private/reserved addresses is blocked.
 4. The answer is framed as an OpenAI `chat.completion` (or SSE `chat.completion.chunk` stream). Full orchestration traces are only returned to trusted callers.
 
 ### Modules (`contextual_orchestrator/`)

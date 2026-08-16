@@ -172,7 +172,7 @@ def _mock_orchestrator() -> TaskOrchestrator:
 def exercise_orchestration(prompt: str, mode: str) -> None:
     """Run a full orchestration on arbitrary prompt text against mock providers.
 
-    Exercises ``_latest_user_text`` -> ``_needs_workflow`` -> ``_score_agent`` ->
+    Exercises ``_latest_user_text`` -> ``_needs_workflow`` -> ``_choose_worker`` ->
     route/conduct -> trace assembly -> SSE framing, all offline via ``mock://``.
     """
     orchestrator = _mock_orchestrator()

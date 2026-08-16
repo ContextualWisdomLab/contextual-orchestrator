@@ -1,9 +1,10 @@
 """Exception-robust routing: partial keys, 429 failover, circuit breaker, malformed JSON.
 
-These are fail-closed contracts, not happy-path demos. FrugalGPT-style cascades
-and Hybrid LLM routing only work if a degraded upstream yields to the next
-capability-matched worker instead of taking down the gateway (Chen et al., 2023;
-Ding et al., 2024). Missing credentials must never fall back to GitHub Models.
+These are fail-closed contracts, not happy-path demos. FrugalGPT / Hybrid LLM
+routing re-runs the cost-performance chooser on the remaining healthy pool
+when an upstream 429s or returns junk — not a YAML list walk (Chen et al.,
+2023; Ding et al., 2024). Missing credentials must never fall back to GitHub
+Models.
 """
 
 from __future__ import annotations
@@ -63,23 +64,27 @@ class _ScriptedClient(ModelClient):
         return str(item)
 
 
+NIM_MODEL = "nvidia/llama-3.3-nemotron-super-49b-v1.5"
+OPENAI_MODEL = "gpt-5.5"
+WORKER_PRICES = {NIM_MODEL: 1.0, OPENAI_MODEL: 20.0}
+
+
 def _https_workers() -> list[ModelAgent]:
+    # File order is OpenAI then NIM. The chooser must still pick cheaper NIM first.
     return [
         ModelAgent(
-            "primary_nim_agent",
-            "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-            "https://integrate.api.nvidia.com/v1",
-            credential_key="NVIDIA_NIM_API_KEY",
-            tags=("reasoning", "coding", "writing"),
-            priority=5,
-        ),
-        ModelAgent(
             "backup_openai_agent",
-            "gpt-5.5",
+            OPENAI_MODEL,
             "https://api.openai.com/v1",
             credential_key="OPENAI_API_KEY",
             tags=("reasoning", "coding", "writing"),
-            priority=1,
+        ),
+        ModelAgent(
+            "primary_nim_agent",
+            NIM_MODEL,
+            "https://integrate.api.nvidia.com/v1",
+            credential_key="NVIDIA_NIM_API_KEY",
+            tags=("reasoning", "coding", "writing"),
         ),
     ]
 
@@ -93,7 +98,7 @@ def test_one_provider_429_failovers_to_next_capability_matched_agent() -> None:
             "backup_openai_agent": ["backup answer"],
         }
     )
-    orchestrator = TaskOrchestrator(_https_workers(), client=client)
+    orchestrator = TaskOrchestrator(_https_workers(), client=client, price_per_million=WORKER_PRICES)
     result = orchestrator.route_once([{"role": "user", "content": "route this coding task"}])
     assert result["answer"] == "backup answer"
     assert result["trace"][0]["served_agent_id"] == "backup_openai_agent"
@@ -106,7 +111,7 @@ def test_one_missing_credential_disables_that_worker_and_others_still_route() ->
     register_credential("OPENAI_API_KEY", "sk-only")
     # NVIDIA_NIM_API_KEY is deliberately absent.
     client = _ScriptedClient({"backup_openai_agent": ["openai served"]})
-    orchestrator = TaskOrchestrator(_https_workers(), client=client)
+    orchestrator = TaskOrchestrator(_https_workers(), client=client, price_per_million=WORKER_PRICES)
     result = orchestrator.route_once([{"role": "user", "content": "Write a short status update."}])
     assert result["answer"] == "openai served"
     assert "primary_nim_agent" not in client.calls
@@ -115,7 +120,7 @@ def test_one_missing_credential_disables_that_worker_and_others_still_route() ->
 
 def test_all_credentials_missing_fail_closed_without_github_models_fallback() -> None:
     client = _ScriptedClient({})
-    orchestrator = TaskOrchestrator(_https_workers(), client=client)
+    orchestrator = TaskOrchestrator(_https_workers(), client=client, price_per_million=WORKER_PRICES)
     with pytest.raises(NotConfigured) as exc:
         orchestrator.route_once([{"role": "user", "content": "Write a short status update."}])
     message = str(exc.value).lower()
@@ -138,7 +143,7 @@ def test_timeout_and_5xx_open_circuit_then_skip_dead_agent() -> None:
             ]
         }
     )
-    orchestrator = TaskOrchestrator(_https_workers(), client=client)
+    orchestrator = TaskOrchestrator(_https_workers(), client=client, price_per_million=WORKER_PRICES)
     for _ in range(orchestrator.circuit_failure_threshold):
         output, served, _usage = orchestrator._invoke(
             orchestrator._agent("primary_nim_agent"),
@@ -212,23 +217,25 @@ def test_malformed_provider_response_failovers_instead_of_crashing() -> None:
     with _FakeChatProvider([(200, {"not": "a completion"})]) as bad, _FakeChatProvider([(200, good)]) as ok:
         agents = [
             ModelAgent(
-                "primary_nim_agent",
-                "nvidia/llama-3.3-nemotron-super-49b-v1.5",
-                bad.base_url,
-                credential_key="NVIDIA_NIM_API_KEY",
-                tags=("reasoning", "writing"),
-                priority=5,
-            ),
-            ModelAgent(
                 "backup_openai_agent",
-                "gpt-5.5",
+                OPENAI_MODEL,
                 ok.base_url,
                 credential_key="OPENAI_API_KEY",
                 tags=("reasoning", "writing"),
-                priority=1,
+            ),
+            ModelAgent(
+                "primary_nim_agent",
+                NIM_MODEL,
+                bad.base_url,
+                credential_key="NVIDIA_NIM_API_KEY",
+                tags=("reasoning", "writing"),
             ),
         ]
-        orchestrator = TaskOrchestrator(agents, client=_LoopbackClient(max_retries=0, retry_backoff=0.0))
+        orchestrator = TaskOrchestrator(
+            agents,
+            client=_LoopbackClient(max_retries=0, retry_backoff=0.0),
+            price_per_million=WORKER_PRICES,
+        )
         result = orchestrator.route_once([{"role": "user", "content": "Write a short status update."}])
     assert result["answer"] == "recovered from junk"
     assert result["trace"][0]["served_agent_id"] == "backup_openai_agent"

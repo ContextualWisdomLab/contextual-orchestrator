@@ -34,10 +34,11 @@ thinker/worker/verifier roles (Zhang et al., 2025), and Conductor access lists
 (Li et al., 2025). The production seed only supplies tagged workers those
 policies can compose.
 
-Full-jitter retry on 429/5xx plus cross-agent failover is the operational
-reading of a cascade: a rate-limited or malformed upstream must yield to the
-next capability-matched worker instead of taking down the single public API
-(Chen et al., 2023; Ding et al., 2024).
+Full-jitter retry on 429/5xx stays inside one worker. If that worker still
+fails, the gateway **re-runs the cost-performance chooser** on the remaining
+healthy pool (circuit-open agents excluded). That is re-selection, not “the
+next name in the seed file” (Chen et al., 2023; Ding et al., 2024). See
+[cost_performance_routing.md](cost_performance_routing.md).
 
 ## References
 

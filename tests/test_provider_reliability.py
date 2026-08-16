@@ -98,12 +98,20 @@ class _AgentDownClient(ModelClient):
 
 
 def _two_worker_orchestrator(down_id: str) -> tuple[TaskOrchestrator, _AgentDownClient]:
+    # File order is backup then primary. Prices, not YAML order, pick the first worker.
     agents = [
-        ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
-        ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
+        ModelAgent("backup_worker", "beta-route-model", tags=("reasoning", "writing")),
+        ModelAgent("primary_worker", "alpha-route-model", tags=("reasoning", "writing")),
     ]
     client = _AgentDownClient(down_id)
-    return TaskOrchestrator(agents, client=client), client
+    return (
+        TaskOrchestrator(
+            agents,
+            client=client,
+            price_per_million={"alpha-route-model": 1.0, "beta-route-model": 10.0},
+        ),
+        client,
+    )
 
 
 def test_failover_to_backup_agent_when_primary_fails() -> None:

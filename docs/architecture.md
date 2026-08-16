@@ -41,9 +41,30 @@ This repository implements the interface and control plane, not the trained coor
   OpenRouter / Bytez seed so OpenCode/Strix call one gateway URL. GitHub Models
   are out of catalog. See `docs/doctoring/provider-catalog.md`.
 
-The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
+The product policy is a **cost-performance choose**, not keyword scoring and not
+a walk down the seed JSON / YAML list.
 
-Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
+- **Fast path (`route_once` / `/v1/chat/completions`).** Fugu-style single-worker
+  select (Sakana AI, 2026): pick one live worker from the org pool (NIM,
+  NIM_SUB, OpenAI, OpenRouter, Bytez — never GitHub Models) that maximizes
+  expected quality per unit cost. Quality is TRINITY role-tag overlap (Zhang et
+  al., 2025). Cost is the operator `price_per_million` table already used by
+  spend analytics; missing or non-positive prices are not treated as free
+  (Chen et al., 2023; Ong et al., 2024). Interactive requests apply a
+  measured-latency penalty only when traces already recorded `latency_ms`
+  (Ding et al., 2024). Seed order, `priority`, and prompt-keyword hits are not
+  selection signals.
+- **Exceptions are re-selection.** On 429 / 5xx / timeout the same chooser
+  runs again on the remaining healthy pool (circuit-open agents excluded). A
+  worker with no resolvable KV credential is not a candidate. An empty healthy
+  pool fail-closes — no GitHub Models, no `COPILOT_GITHUB_TOKEN`.
+- **Deep path (`conduct`).** Conductor-style decompose / verify / synthesize
+  (Li et al., 2025) only when `_needs_workflow` says the task needs it. A
+  review is not expanded into a multi-agent walk just to burn the pool.
+
+A trained coordinator may replace this deterministic objective only when an
+evaluation set proves it is the bottleneck. That is future work, not the
+current product policy. See [doctoring/cost_performance_routing.md](doctoring/cost_performance_routing.md).
 
 ## Product Planning Interpretation
 

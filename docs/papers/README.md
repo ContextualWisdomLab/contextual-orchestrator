@@ -45,8 +45,10 @@ but not vendored here so this repository remains one deployable control plane.
 
 The 2026-08 production catalog (NIM + OpenAI + OpenRouter + Bytez, no GitHub
 Models) reuses these three papers as the routing/cascade evidence pack and
-adds Fugu / TRINITY / Conductor (cited in `docs/architecture.md` and
-`docs/doctoring/provider-catalog.md`) for how tagged workers are composed.
+adds Fugu / TRINITY / Conductor (cited in `docs/architecture.md`,
+`docs/doctoring/provider-catalog.md`, and
+`docs/doctoring/cost_performance_routing.md`) for how tagged workers are
+chosen (quality per unit cost) and when a Conductor workflow is required.
 Vendor model cards are cited by URL only; they are not vendored.
 
 > Citations are provided for scholarly attribution. Redistribution here relies

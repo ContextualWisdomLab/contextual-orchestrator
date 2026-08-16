@@ -834,6 +834,9 @@ class TaskOrchestrator:
         "verifier": ("verification", "security", "review", "debugging"),
         "synthesizer": ("writing", "reasoning", "planning"),
     }
+    # Capability vocabulary only — worker selection does not scan the prompt
+    # for these keywords. The chooser uses ROLE_TAGS, operator prices, and
+    # measured circuit/latency signals (see ``_choose_worker``).
     DOMAIN_HINTS = {
         "coding": ("code", "bug", "debug", "implement", "repository", "test", "코드", "구현"),
         "security": ("security", "vulnerability", "xss", "sqli", "auth", "보안"),
@@ -1559,23 +1562,6 @@ class TaskOrchestrator:
             WorkflowStep(3, "synthesizer", synthesizer, "Produce the final answer, incorporating only verified work.", (0, 1, 2)),
         ]
 
-    def _score_agent(self, agent: ModelAgent, role: str, lowered: str) -> tuple[int, int, str]:
-        if agent.disabled:
-            return (-20_000, len(agent.tags), agent.id)
-        if role in agent.provider_exclusions:
-            return (-10_000, len(agent.tags), agent.id)
-        role_score = sum(3 for tag in agent.tags if tag in self.ROLE_TAGS.get(role, ()))
-        domain_score = 0
-        for tag, hints in self.DOMAIN_HINTS.items():
-            if tag in agent.tags and any(hint in lowered for hint in hints):
-                domain_score += 2
-        return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
-
-    def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
-        """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
-        lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
-
     def _agent_ready(self, agent: ModelAgent) -> bool:
         """True when the agent is enabled and (if remote) has a resolvable KV credential."""
         if agent.disabled:
@@ -1584,62 +1570,201 @@ class TaskOrchestrator:
             return True
         return get_credential(agent.credential_name) is not None
 
-    def _select_agent(self, text: str, role: str) -> ModelAgent:
-        ready = [
-            agent
-            for agent in self._ranked_agents(text, role)
-            if self._agent_ready(agent) and role not in agent.provider_exclusions
-        ]
-        if not ready:
-            remote = [agent for agent in self.agents if not agent.base_url.startswith("mock://")]
-            if remote and not any(self._agent_ready(agent) for agent in remote):
-                raise NotConfigured(
-                    "no configured provider credential is resolvable; refuse to route "
-                    "(no GitHub Models fallback)"
-                )
-            raise RuntimeError(f"no enabled agent available for role={role}")
-        return ready[0]
+    def _is_healthy_candidate(self, agent: ModelAgent, role: str, excluded: set[str]) -> bool:
+        """True when the worker may be chosen: ready, not excluded, circuit closed, role allowed."""
+        return (
+            agent.id not in excluded
+            and self._agent_ready(agent)
+            and not self._circuit_open(agent.id)
+            and role not in agent.provider_exclusions
+        )
 
-    def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
-    ) -> tuple[str, str, dict[str, Any] | None]:
-        """Call the primary agent, failing over across capability-matched agents on error.
+    def _healthy_candidates(self, role: str, *, excluded: set[str]) -> list[ModelAgent]:
+        """Live-pool workers the cost-performance chooser may consider."""
+        return [agent for agent in self.agents if self._is_healthy_candidate(agent, role, excluded)]
 
-        Transient retry/backoff happens inside ``ModelClient``; this layer adds
-        cross-agent failover plus a per-agent circuit breaker, and returns
-        ``(output, served_agent_id, usage)`` — usage is the provider-reported token
-        usage when available (else None), so spend analytics can prefer it.
+    def _role_quality(self, agent: ModelAgent, role: str) -> float:
+        """TRINITY role-tag overlap. Zero means this worker is not tagged for the role."""
+        tags = self.ROLE_TAGS.get(role, ())
+        return float(sum(1 for tag in tags if tag in agent.tags))
+
+    def _unit_cost(self, agent: ModelAgent) -> float | None:
+        """Operator ``price_per_million`` for the model, or None when missing/non-positive.
+
+        Missing and non-positive prices are not treated as free (Chen et al., 2023).
         """
-        candidates = self._failover_candidates(primary, text, role)
-        last_error: Exception | None = None
-        for agent in candidates:
-            try:
-                output = self.client.chat(agent, messages)
-            except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
-                last_error = exc
-                self._record_failure(agent.id)
-                continue
-            self._record_success(agent.id)
-            usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
-            return output, agent.id, usage
-        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+        price = self.price_per_million.get(agent.model)
+        if price is None:
+            return None
+        try:
+            value = float(price)
+        except (TypeError, ValueError):
+            return None
+        if value <= 0:
+            return None
+        return value
 
-    def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
-        ranked = self._ranked_agents(text, role)
-        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
-        eligible = [
-            agent
-            for agent in ordered
-            if self._agent_ready(agent) and role not in agent.provider_exclusions
-        ]
-        if not eligible:
+    def _measured_success(self, agent: ModelAgent) -> float:
+        """Paper-grounded prior: 1.0 unless the circuit has recorded failures."""
+        state = self._circuit.get(agent.id)
+        failures = float(state["failures"]) if state else 0.0
+        return 1.0 / (1.0 + failures)
+
+    def _latency_penalty(self, agent: ModelAgent, *, interactive: bool) -> float:
+        """Interactive path only: measured trace latency, or 1.0 when none exists.
+
+        No latency is invented. Prior of 1.0 is the documented Hybrid-LLM reading
+        when the request is not interactive or no samples exist (Ding et al., 2024).
+        """
+        if not interactive:
+            return 1.0
+        samples: list[float] = []
+        for run in self._workflow_runs.values():
+            for step in run.get("trace") or ():
+                if step.get("agent_id") != agent.id:
+                    continue
+                raw = step.get("latency_ms")
+                if raw in (None, ""):
+                    continue
+                try:
+                    samples.append(float(raw))
+                except (TypeError, ValueError):
+                    continue
+        if not samples:
+            return 1.0
+        return 1.0 + (sum(samples) / len(samples) / 1000.0)
+
+    def _chooser_key(
+        self, agent: ModelAgent, *, quality: float, interactive: bool
+    ) -> tuple[float, float, str, str]:
+        """Minimize: higher quality-per-cost first, then cheaper, then (model, id)."""
+        success = self._measured_success(agent)
+        cost = self._unit_cost(agent)
+        unit = cost if cost is not None else 1.0
+        latency = self._latency_penalty(agent, interactive=interactive)
+        score = (quality * success) / (unit * latency)
+        return (-score, unit, agent.model, agent.id)
+
+    def _raise_empty_pool(self, role: str, *, excluded: set[str]) -> None:
+        """Fail closed: no GitHub Models and no invented worker."""
+        remote = [agent for agent in self.agents if not agent.base_url.startswith("mock://")]
+        ready_remote = [agent for agent in remote if self._agent_ready(agent)]
+        if remote and not ready_remote:
             raise NotConfigured(
                 "no configured provider credential is resolvable; refuse to route "
                 "(no GitHub Models fallback)"
             )
-        healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
-        # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible
+        if excluded or any(self._circuit_open(agent.id) for agent in self.agents):
+            raise NotConfigured(
+                "no healthy worker remains in the live pool; refuse to route "
+                "(no GitHub Models fallback)"
+            )
+        raise RuntimeError(f"no enabled agent available for role={role}")
+
+    def _selection_pool(
+        self, role: str, text: str, *, excluded: set[str]
+    ) -> tuple[list[ModelAgent], dict[str, float], bool]:
+        """Healthy capable workers, per-agent quality, and interactive flag."""
+        ready = self._healthy_candidates(role, excluded=excluded)
+        if not ready:
+            return [], {}, not self._needs_workflow(text)
+        qualities = {agent.id: self._role_quality(agent, role) for agent in ready}
+        if any(value > 0 for value in qualities.values()):
+            capable = [agent for agent in ready if qualities[agent.id] > 0]
+        else:
+            capable = ready
+            qualities = {agent.id: 1.0 for agent in capable}
+        priced = [agent for agent in capable if self._unit_cost(agent) is not None]
+        pool = priced if priced else capable
+        return pool, qualities, not self._needs_workflow(text)
+
+    def _choose_worker(self, role: str, text: str, *, excluded: set[str] | None = None) -> ModelAgent:
+        """Pick one worker by quality per unit cost. Seed/JSON order is not a signal.
+
+        Quality is TRINITY role-tag overlap (equal prior of 1.0 when nobody is
+        tagged). Cost is the operator price table; unpriced workers are excluded
+        when any priced capable candidate exists, and otherwise share unit cost
+        1.0 — prices are never invented (Chen et al., 2023; Ong et al., 2024).
+        Interactive requests apply a measured-latency penalty only when traces
+        already recorded ``latency_ms``.
+        """
+        excluded = set(excluded or ())
+        pool, qualities, interactive = self._selection_pool(role, text, excluded=excluded)
+        if not pool:
+            self._raise_empty_pool(role, excluded=excluded)
+            raise RuntimeError(f"no enabled agent available for role={role}")
+        return min(
+            pool,
+            key=lambda agent: self._chooser_key(
+                agent, quality=qualities[agent.id], interactive=interactive
+            ),
+        )
+
+    def _ranked_agents(self, text: str, role: str, *, excluded: set[str] | None = None) -> list[ModelAgent]:
+        """Healthy workers in chooser order (best first). Not seed-file order."""
+        pool, qualities, interactive = self._selection_pool(role, text, excluded=set(excluded or ()))
+        return sorted(
+            pool,
+            key=lambda agent: self._chooser_key(
+                agent, quality=qualities[agent.id], interactive=interactive
+            ),
+        )
+
+    def _select_agent(self, text: str, role: str) -> ModelAgent:
+        """Public selection seam: one cost-performance choose, not a list walk."""
+        return self._choose_worker(role, text)
+
+    def _invoke(
+        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+    ) -> tuple[str, str, dict[str, Any] | None]:
+        """Call the chosen worker; on 429/5xx/timeout re-run the chooser.
+
+        Transient retry/backoff happens inside ``ModelClient``. This layer
+        re-selects on the remaining healthy pool (circuit-open agents excluded).
+        That is re-selection, not a fixed YAML/list fallback order. Returns
+        ``(output, served_agent_id, usage)``.
+        """
+        excluded: set[str] = set()
+        last_error: Exception | None = None
+        first_choice: ModelAgent | None = None
+        attempted = 0
+        while True:
+            if first_choice is None and self._is_healthy_candidate(primary, role, excluded):
+                agent = primary
+            else:
+                try:
+                    agent = self._choose_worker(role, text, excluded=excluded)
+                except (NotConfigured, RuntimeError):
+                    if last_error is not None:
+                        raise RuntimeError(
+                            f"all {attempted} candidate agents failed for role={role}"
+                        ) from last_error
+                    raise
+            if first_choice is None:
+                first_choice = agent
+            try:
+                output = self.client.chat(agent, messages)
+            except Exception as exc:  # noqa: BLE001 - one failure re-runs the chooser
+                last_error = exc
+                attempted += 1
+                self._record_failure(agent.id)
+                excluded.add(agent.id)
+                continue
+            self._record_success(agent.id)
+            usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+            return output, agent.id, usage
+
+    def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
+        """Remaining healthy pool in chooser order. Circuit-open agents are excluded."""
+        del primary  # primary is not a list-walk cursor; the chooser ranks the pool
+        ranked = self._ranked_agents(text, role)
+        if not ranked:
+            self._raise_empty_pool(role, excluded=set())
+            raise NotConfigured(
+                "no healthy worker remains in the live pool; refuse to route "
+                "(no GitHub Models fallback)"
+            )
+        return ranked
 
     def _circuit_open(self, agent_id: str) -> bool:
         state = self._circuit.get(agent_id)

@@ -122,7 +122,7 @@ One fused orchestration loop:
 - Deep path: a natural-language workflow is built with planner, worker, verifier, and synthesizer steps.
 - Each step has an access list, so workers see only the prior outputs intentionally exposed to them.
 - Agent definitions are data, so provider preference, exclusions, privacy constraints, and mock testing do not require code changes.
-- Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
+- Fast-path selection is a cost-performance choose: one worker from the live pool that maximizes expected quality per unit cost (operator `price_per_million`, TRINITY role tags, measured circuit/latency when present). Seed JSON order and prompt keywords do not pick the winner. Transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff on that worker; if it still fails, the **same chooser** runs again on the remaining healthy pool (circuit-open agents excluded). An empty healthy pool fail-closes. Re-selection is recorded in the trace (`served_agent_id`, `failover_from`).
 
 See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
 
@@ -262,6 +262,7 @@ python tests/test_paper_contracts.py
 python tests/test_provider_catalog.py
 python tests/test_catalog_bootstrap.py
 python tests/test_provider_catalog_robustness.py
+python tests/test_cost_performance_chooser.py
 python tests/test_opencode_sidecar_contract.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py

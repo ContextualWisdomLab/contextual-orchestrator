@@ -53,7 +53,10 @@ Enterprise teams want the benefit of collective model intelligence without makin
 
 ## Deliberate Non-goals For This Repository
 
-- No learned coordinator training. Keep deterministic routing until there is an evaluation set proving it is the bottleneck.
+- No learned coordinator training. Routing is a deterministic cost-performance
+  objective (quality per unit cost; re-selection on the remaining healthy pool),
+  not keyword scoring or a YAML list walk. A trained coordinator can replace
+  this objective only when an evaluation set proves it is the bottleneck.
 - No visual workflow builder. Tables and trace details are enough until operators need to author complex topologies.
 - No recursive topology UI. Conductor recursion is a future scaling knob, not an MVP control.
 - No billing, SSO, or RBAC implementation in the stdlib lab. Document the need; add it with the enterprise stack.
