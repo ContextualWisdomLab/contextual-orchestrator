@@ -31,12 +31,12 @@ The Fugu report combines these ideas into production constraints:
 
 This repository implements the interface and control plane, not the trained coordinator.
 
-- `contextual_orchestrator.orchestrator.Agent`: one configured worker model.
-- `Orchestrator.route_once`: the low-latency routing path.
-- `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
+- `contextual_orchestrator.orchestrator.ModelAgent`: one configured worker model.
+- `TaskOrchestrator.route_once`: the low-latency routing path.
+- `TaskOrchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
-- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
-- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks. `proxy_completion` returns JSON; `proxy_completion_stream` pipes SSE so tool-calling `stream=true` clients receive `chat.completion.chunk` frames (including `delta.tool_calls`) instead of a billed JSON body.
+- `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server. Tools and `response_format` take the single-agent passthrough path; `stream=true` on that path is an SSE proxy, not a `400`.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

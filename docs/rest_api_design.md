@@ -110,8 +110,11 @@ newer SDK field is never silently accepted.
 Message-level `weight`, `prefix`, `refusal`, `annotations`, `developer` role,
 empty user/system content, non-string user content, and participant `name` use the same named errors on
 the tools passthrough path as on the orchestration path. `stream=true` with
-`tools` or `response_format` fails closed (`invalid_stream`) — this gateway
-does not SSE-proxy tool calls yet. Missing `model` and out-of-range
+`tools` or `response_format` SSE-proxies a single pool agent as
+`chat.completion.chunk` frames (concatenated content matches the non-stream
+JSON body). Do not send `stream_options.include_usage=true` or
+`include_obfuscation=true` — this gateway does not emit a final usage chunk
+or apply SSE obfuscation. Missing `model` and out-of-range
 `temperature` / `top_p` also fail closed before passthrough. `seed`, `stop`,
 `n>1`, `logprobs`, `logit_bias`, out-of-range token/penalty knobs,
 unsupported `reasoning_effort`, and non-default `service_tier` use the same
@@ -125,13 +128,19 @@ fail closed (`invalid_routing`) instead of billing a silent sync
 completion. Send known sync dimensions only (`channel=sync` or omit).
 
 Next action: always send a non-empty `messages` array of objects; keep
-SDK-default nulls; replace `developer` with `system`; omit `stream` (or set
-`false`) on tool-calling requests; always send a pool `model`; omit batch
-routing hints, `seed`, `stop`, `n>1`, and `logprobs` on tool-calling
-requests.
+SDK-default nulls; replace `developer` with `system`; send `stream=true` when
+the client reads SSE (tool calls arrive as `delta.tool_calls`); always send a
+pool `model`; omit batch routing hints, `seed`, `stop`, `n>1`, `logprobs`,
+and `stream_options.include_usage` on tool-calling requests.
 
 OpenAI. (2024). *Create chat completion*. OpenAI API reference.
 https://platform.openai.com/docs/api-reference/chat/create
+
+OpenAI. (2024). *Streaming API responses*. OpenAI API documentation.
+https://platform.openai.com/docs/guides/streaming-responses
+
+WHATWG. (n.d.). *Server-sent events*. HTML Living Standard.
+https://html.spec.whatwg.org/multipage/server-sent-events.html
 
 ## Production Library Target
 

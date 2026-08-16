@@ -411,6 +411,84 @@ class ModelClient:
         self._validate_provider(agent)  # pragma: no cover
         return self._send_raw_with_retry(agent, endpoint, payload)  # pragma: no cover
 
+    def proxy_stream_send(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ):
+        """Yield SSE text from one agent so ``tool_calls`` deltas survive verbatim.
+
+        The JSON proxy parses a completed body. A content-only SSE parser would
+        drop ``delta.tool_calls``. Mock agents are framed as
+        ``chat.completion.chunk`` events; live providers are piped byte-for-byte.
+        Mid-stream failover is not applied — bytes already sent cannot be recalled.
+        """
+        if agent.base_url.startswith("mock://"):
+            yield from self._mock_raw_sse(agent, endpoint, payload)
+            return
+        self._validate_provider(agent)  # pragma: no cover
+        yield from self._stream_raw(agent, endpoint, payload)  # pragma: no cover
+
+    def _stream_raw(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ):
+        """Pipe a provider SSE body without parsing content-only deltas.
+
+        Unlike ``_stream_send``, this yields the raw decoded text so
+        ``tool_calls``, ``refusal``, and finish-reason frames reach the buyer.
+        """
+        api_key = get_credential(agent.credential_name) or ""
+        request = urllib.request.Request(
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "content-type": "application/json",
+                "accept": "text/event-stream",
+            },
+            method="POST",
+        )
+        with self._open_provider(request) as response:
+            for raw in response:
+                yield raw.decode("utf-8")
+
+    def _mock_raw_sse(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ):
+        """Frame the mock JSON completion as OpenAI ``chat.completion.chunk`` SSE.
+
+        Content is chunked so tests can assert live deltas. The final frame has
+        no orchestration object — this is a provider passthrough, not a conduct
+        workflow. Responses endpoint streaming is not implemented here.
+        """
+        if endpoint.strip("/") == "responses":
+            raise RuntimeError("SSE passthrough is not implemented for /v1/responses")
+        snapshot = dict(payload)
+        snapshot["stream"] = False
+        raw = self._mock_raw(agent, endpoint, snapshot)
+        content = ""
+        choices = raw.get("choices") or []
+        if choices:
+            content = str((choices[0].get("message") or {}).get("content") or "")
+        completion_id = str(raw.get("id") or f"chatcmpl_mock_{agent.id}")
+        created = int(time.time())
+        model_name = str(raw.get("model") or agent.model)
+
+        def _frame(delta: dict[str, Any], finish: str | None = None) -> str:
+            payload_out = {
+                "id": completion_id,
+                "object": "chat.completion.chunk",
+                "created": created,
+                "model": model_name,
+                "choices": [{"index": 0, "delta": delta, "finish_reason": finish}],
+            }
+            return f"data: {json.dumps(payload_out, ensure_ascii=False)}\n\n"
+
+        yield _frame({"role": "assistant"})
+        if content:
+            for start in range(0, len(content), 24):
+                yield _frame({"content": content[start : start + 24]})
+        yield _frame({}, finish="stop")
+        yield "data: [DONE]\n\n"
+
     def _send_raw_with_retry(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:  # pragma: no cover
@@ -932,15 +1010,15 @@ class TaskOrchestrator:
         }
     )
 
-    def proxy_completion(
-        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
-    ) -> dict[str, Any]:
-        """Passthrough a full OpenAI request to the primary agent, returning its raw response.
+    def _passthrough_upstream(
+        self, body: dict[str, Any], *, endpoint: str, stream: bool
+    ) -> tuple[ModelAgent, dict[str, Any]]:
+        """Select the pool agent and build the provider body for JSON or SSE passthrough.
 
-        Requests carrying provider features the multi-agent verifier cannot merge
-        (``response_format``, ``tools``, or the Responses API) are handled by a
-        single selected agent so the full provider response shape survives; the
-        orchestration path stays reserved for plain-text routing/verification.
+        Orchestration-only keys are stripped so a tools or ``response_format``
+        body cannot smuggle ``mode`` / ``attribution`` to the provider.
+        ``stream`` is set explicitly: JSON proxy forces ``false``; SSE proxy
+        forces ``true`` so the provider emits ``chat.completion.chunk`` frames.
         """
         messages = body.get("messages")
         if isinstance(messages, list):
@@ -970,10 +1048,34 @@ class TaskOrchestrator:
             if key not in self._ORCHESTRATION_ONLY_KEYS
         }
         upstream["model"] = agent.model
-        # v1 passthrough returns the full JSON body; SSE stream passthrough is a
-        # follow-up, so force a non-streamed upstream response here.
-        upstream["stream"] = False
+        upstream["stream"] = stream
+        return agent, upstream
+
+    def proxy_completion(
+        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
+    ) -> dict[str, Any]:
+        """Passthrough a full OpenAI request to the primary agent, returning its raw response.
+
+        Requests carrying provider features the multi-agent verifier cannot merge
+        (``response_format``, ``tools``, or the Responses API) are handled by a
+        single selected agent so the full provider response shape survives; the
+        orchestration path stays reserved for plain-text routing/verification.
+        """
+        agent, upstream = self._passthrough_upstream(body, endpoint=endpoint, stream=False)
         return self.client.proxy_send(agent, endpoint, upstream)
+
+    def proxy_completion_stream(
+        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
+    ):
+        """Yield SSE text for a tools/response_format request on one pool agent.
+
+        Bytes already sent cannot be recalled, so this path does not fail over
+        to another agent mid-stream. Mock agents emit ``chat.completion.chunk``
+        frames whose content matches ``proxy_completion``; live providers are
+        piped verbatim so ``tool_calls`` deltas survive.
+        """
+        agent, upstream = self._passthrough_upstream(body, endpoint=endpoint, stream=True)
+        yield from self.client.proxy_stream_send(agent, endpoint, upstream)
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""

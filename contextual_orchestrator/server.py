@@ -1090,8 +1090,8 @@ def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[st
 def _normalize_chat_stream_flag(body: dict[str, Any]) -> bool:
     """Treat null/empty chat ``stream`` as omit; require a boolean otherwise.
 
-    The route path may stream. Tools/response_format passthrough cannot — that
-    branch must reject ``stream=true`` after this helper returns True.
+    The route path and tools/response_format passthrough both stream when this
+    helper returns True. Callers still fail closed on non-boolean ``stream``.
     """
     stream = body.get("stream", False)
     if stream is None or (isinstance(stream, str) and not stream.strip()):
@@ -3807,16 +3807,9 @@ def build_server(
                     ):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
-                        # SSE passthrough is a follow-up — stream=true would otherwise
-                        # return a JSON completion while the SDK waits for SSE.
+                        # stream=true SSE-proxies that same single agent so SDKs
+                        # waiting for chat.completion.chunk do not receive JSON.
                         stream = _normalize_chat_stream_flag(body)
-                        if stream:
-                            raise RequestError(
-                                400,
-                                "invalid_stream",
-                                "stream=true is not supported with tools or response_format "
-                                "on this gateway; omit stream or set stream=false",
-                            )
                         if "stream_options" in body:
                             _validate_chat_stream_options(body, stream)
                         model_name = _validate_completions_model(body)
@@ -3827,8 +3820,8 @@ def build_server(
                             _validate_completions_top_p(body)
                         _validate_attribution(body.get("attribution"))
                         routing = _validate_routing(body.get("routing"))
-                        # Tools / response_format proxy is sync-only. Batch hints
-                        # must not bill a silent sync completion.
+                        # Tools / response_format proxy has no batch job plane.
+                        # Batch hints must not bill a silent sync completion.
                         if routing and routing.get("channel") == "batch":
                             raise RequestError(
                                 400,
@@ -3846,6 +3839,19 @@ def build_server(
                         _validate_chat_passthrough_request_knobs(body)
                         _validate_messages(body.get("messages"))
                         started_at = time.perf_counter()
+                        if stream:
+                            self._stream_passthrough_completion(orchestrator, security, body)
+                            orchestrator.record_analytics_event(
+                                "chat_completion_passthrough_stream",
+                                {
+                                    "endpoint_path": "/v1/chat/completions",
+                                    "actor_scope": "inference",
+                                    "status_code": 200,
+                                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                    "response_streamed": True,
+                                },
+                            )
+                            return
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
                         )
@@ -4606,6 +4612,40 @@ def build_server(
         def _write_sse(self, frame: str) -> None:
             self.wfile.write(frame.encode("utf-8"))
             self.wfile.flush()
+
+        def _stream_passthrough_completion(
+            self, orchestrator: Any, security: Any, body: dict[str, Any]
+        ) -> None:
+            """Pipe a single-agent tools/response_format proxy as OpenAI SSE frames.
+
+            Validation has already run. Headers are sent before the first frame,
+            so a mid-stream provider failure is surfaced as a terminal error
+            chunk plus ``[DONE]`` rather than a JSON ``500``.
+            """
+            security.acquire_run_slot()
+            try:
+                self._begin_sse()
+                saw_done = False
+                try:
+                    for frame in orchestrator.proxy_completion_stream(body):
+                        if frame.strip() == "data: [DONE]":
+                            saw_done = True
+                        self.wfile.write(frame.encode("utf-8"))
+                        self.wfile.flush()
+                    if not saw_done:
+                        self._write_sse("data: [DONE]\n\n")
+                except Exception:  # noqa: BLE001 - headers already sent
+                    error_payload = {
+                        "id": f"chatcmpl-{int(time.time() * 1000)}",
+                        "object": "chat.completion.chunk",
+                        "created": int(time.time()),
+                        "model": body.get("model") or "contextual-orchestrator",
+                        "choices": [{"index": 0, "delta": {}, "finish_reason": "error"}],
+                    }
+                    self._write_sse(f"data: {json.dumps(error_payload, ensure_ascii=False)}\n\n")
+                    self._write_sse("data: [DONE]\n\n")
+            finally:
+                security.release_run_slot()
 
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""

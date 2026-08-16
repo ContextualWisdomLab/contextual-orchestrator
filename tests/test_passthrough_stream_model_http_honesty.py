@@ -1,10 +1,9 @@
 """Tools/response_format passthrough must fail-closed on stream, model, and sampling range.
 
-``_validate_messages`` is skipped when ``tools`` / ``response_format`` force
-single-agent passthrough. Request-level stream, required ``model``,
-``stream_options``, and temperature/top_p range were also skipped, so an
-OpenAI SDK tool-calling body could receive a billed JSON completion when it
-asked for SSE, or a silent pool pick when it omitted ``model``.
+``_validate_messages`` used to be skipped when ``tools`` / ``response_format``
+force single-agent passthrough. Required ``model``, ``stream_options``, and
+temperature/top_p range must still fail closed. ``stream=true`` now
+SSE-proxies that same single agent instead of returning JSON or ``400``.
 """
 
 from __future__ import annotations
@@ -74,8 +73,8 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_chat_rejects_stream_true_with_tools() -> None:
-    """SDK tool-calling streams must not receive a silent JSON completion."""
+def test_http_chat_streams_tools_as_sse() -> None:
+    """SDK tool-calling streams must receive SSE, never a silent JSON completion."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -87,16 +86,17 @@ def test_http_chat_rejects_stream_true_with_tools() -> None:
                 "stream": True,
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_stream" in blob
-        assert "tools" in blob or "response_format" in blob
+        assert status == 200, body
+        blob = body if isinstance(body, str) else json.dumps(body)
+        assert "chat.completion.chunk" in blob
+        assert "data: [DONE]" in blob
+        assert "invalid_stream" not in blob
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_stream_true_with_response_format() -> None:
+def test_http_chat_streams_response_format_as_sse() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -108,8 +108,10 @@ def test_http_chat_rejects_stream_true_with_response_format() -> None:
                 "stream": True,
             },
         )
-        assert status == 400, body
-        assert "invalid_stream" in json.dumps(body)
+        assert status == 200, body
+        blob = body if isinstance(body, str) else json.dumps(body)
+        assert "chat.completion.chunk" in blob
+        assert "data: [DONE]" in blob
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -231,7 +233,7 @@ def test_http_chat_accepts_stream_null_with_tools() -> None:
 
 
 def test_http_chat_route_stream_without_tools_still_sse() -> None:
-    """Plain chat streaming must keep working; only passthrough triggers fail closed."""
+    """Plain chat streaming must keep working alongside tools SSE passthrough."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -251,8 +253,8 @@ def test_http_chat_route_stream_without_tools_still_sse() -> None:
 
 
 if __name__ == "__main__":
-    test_http_chat_rejects_stream_true_with_tools()
-    test_http_chat_rejects_stream_true_with_response_format()
+    test_http_chat_streams_tools_as_sse()
+    test_http_chat_streams_response_format_as_sse()
     test_http_chat_rejects_missing_model_with_tools()
     test_http_chat_rejects_stream_options_usage_true_with_tools()
     test_http_chat_rejects_top_p_out_of_range_with_tools()
