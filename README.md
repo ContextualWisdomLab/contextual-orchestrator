@@ -130,7 +130,7 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
 ```
 
 - **Tokens.** `by_model[].output_tokens` uses the provider-reported `usage.completion_tokens` when a real worker returns it, and falls back to a `~4 chars/token` estimate otherwise. Each row carries `usage_source`: `reported` (all steps reported), `mixed`, or `estimated`. `estimated_output_tokens` is always the estimate, kept alongside for comparison. `measurement_status` is `local_runtime_estimate`, not production telemetry.
-- **Cost.** Supply a price table to turn tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models` with `estimated_cost_usd: null`. No prices are assumed or fabricated. When a model is billed at `0` but has a known published list, set `original_list_price` (USD per 1M) so the list is retained on the spend row.
+- **Cost.** Supply a price table to turn tokens into money — `TaskOrchestrator(price_per_million={"gpt-5.5": 10.0})` (USD per 1M output tokens). Models without a price appear under `unpriced_models` with `estimated_cost_usd: null`. A missing ledger price row is `unknown` (`None`), never billed `0` / “free.” Explicit billed `0` is actual free-to-caller; `original_list_price` stores the hypothetical published list beside it. No prices are assumed or fabricated.
 - **Budget cap.** Set an operator cap to refuse runaway spend (default: no cap):
 
   ```bash

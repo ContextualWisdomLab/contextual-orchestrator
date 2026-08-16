@@ -49,13 +49,14 @@ def test_price_computation_uses_per_1k_rates() -> None:
     assert record.total_tokens == 1500
 
 
-def test_unpriced_model_costs_zero_and_still_records() -> None:
+def test_unpriced_model_cost_is_unknown_not_zero() -> None:
     ledger = _priced_ledger()
     record = ledger.record_usage(
         provider="mystery", model="unpriced", prompt_tokens=100, completion_tokens=50
     )
-    assert record.cost_amount == 0.0
+    assert record.cost_amount is None
     assert len(ledger.records()) == 1
+    assert ledger.records()[0]["cost_amount"] is None
 
 
 def test_provider_wildcard_price_entry() -> None:
@@ -114,6 +115,17 @@ def test_usage_telemetry_event_is_prompt_and_answer_safe() -> None:
     assert "answer" not in event.attributes
     assert all("prompt" not in key for key in event.attributes)
     assert all("answer" not in key for key in event.attributes)
+    assert event.attributes["contextual_orchestrator.price_status"] == "price_known"
+    assert event.metrics["gen_ai.usage.cost"] == 0.04
+
+
+def test_unknown_price_telemetry_omits_zero_cost() -> None:
+    sink = InMemoryUsageTelemetrySink()
+    ledger = _priced_ledger(telemetry_sink=sink)
+    ledger.record_usage(provider="mystery", model="unpriced", prompt_tokens=10, completion_tokens=5)
+    event = sink.events()[-1]
+    assert event.attributes["contextual_orchestrator.price_status"] == "price_unknown"
+    assert "gen_ai.usage.cost" not in event.metrics
 
 
 def test_non_blocking_store_records_p2028_like_failure_as_telemetry_only() -> None:

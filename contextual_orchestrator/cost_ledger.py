@@ -12,7 +12,9 @@ Design:
 
 * Prices come from a configurable **price table** (``llm_price_entries``) that
   lives in the KV config store, not in ``os.getenv``. Cost is computed from
-  prompt/completion token counts against that table.
+  prompt/completion token counts against that table. A missing row is
+  ``unknown`` (``None``), never billed ``0``. Explicit ``0`` is actual
+  free-to-caller; ``original_list_price`` holds the hypothetical published list.
 * Records are written to the **usage ledger** (``llm_usage_records``). Two
   stores are provided: an always-available in-memory store (default, used by
   tests and the mock/local path) and a PEP-249 SQL store that works with the
@@ -184,15 +186,16 @@ class PriceBook:
         model: str,
         prompt_tokens: int,
         completion_tokens: int,
-    ) -> tuple[float, str]:
+    ) -> tuple[float | None, str]:
         """Return ``(cost_amount, currency_code)`` for a request.
 
-        An unpriced provider/model yields ``0.0`` in the default currency so
-        recording never fails on a missing price row.
+        A missing price row is ``unknown`` (``None``), never billed ``0`` /
+        “free” (issue #86). Explicit billed rates of ``0`` remain actual
+        free-to-caller. ``original_list_price`` is never used as billed cost.
         """
         entry = self.get_price(provider, model)
         if entry is None:
-            return 0.0, self.default_currency
+            return None, self.default_currency
         prompt_cost = (Decimal(prompt_tokens) / Decimal(1000)) * Decimal(
             str(entry.prompt_price_per_1k)
         )
@@ -224,7 +227,7 @@ class UsageRecord:
     prompt_tokens: int
     completion_tokens: int
     total_tokens: int
-    cost_amount: float
+    cost_amount: float | None
     currency_code: str
     attribution: AttributionDimensions = field(default_factory=AttributionDimensions)
 
@@ -306,13 +309,17 @@ class UsageTelemetryEvent:
         if error_type:
             attributes["error.type"] = error_type
 
+        attributes["contextual_orchestrator.price_status"] = (
+            "price_known" if record.cost_amount is not None else "price_unknown"
+        )
         metrics = {
             "gen_ai.usage.input_tokens": float(record.prompt_tokens),
             "gen_ai.usage.output_tokens": float(record.completion_tokens),
             "gen_ai.usage.total_tokens": float(record.total_tokens),
-            "gen_ai.usage.cost": float(record.cost_amount),
             "contextual_orchestrator.usage.records": 1.0,
         }
+        if record.cost_amount is not None:
+            metrics["gen_ai.usage.cost"] = float(record.cost_amount)
         if error_type:
             metrics["contextual_orchestrator.usage.export_failures"] = 1.0
         return cls(
@@ -536,7 +543,7 @@ CREATE TABLE IF NOT EXISTS llm_usage_records (
     prompt_tokens     INTEGER NOT NULL,
     completion_tokens INTEGER NOT NULL,
     total_tokens      INTEGER NOT NULL,
-    cost_amount       REAL NOT NULL,
+    cost_amount       REAL,
     currency_code     TEXT NOT NULL
 );
 """
@@ -795,7 +802,9 @@ class CostLedger:
             bucket["prompt_tokens"] += int(row.get("prompt_tokens", 0))
             bucket["completion_tokens"] += int(row.get("completion_tokens", 0))
             bucket["total_tokens"] += int(row.get("total_tokens", 0))
-            bucket["cost_amount"] += Decimal(str(row.get("cost_amount", 0)))
+            known_cost = row.get("cost_amount")
+            if known_cost is not None:
+                bucket["cost_amount"] += Decimal(str(known_cost))
         for bucket in buckets.values():
             bucket["cost_amount"] = float(
                 bucket["cost_amount"].quantize(Decimal("0.000001"), rounding=ROUND_HALF_UP)
@@ -824,7 +833,14 @@ class CostLedger:
     def total(self, start: Optional[int] = None, end: Optional[int] = None) -> Dict[str, Any]:
         """Return grand totals (cost + tokens + record count) over the window."""
         rows = self.store.query(start, end)
-        cost = sum((Decimal(str(row.get("cost_amount", 0))) for row in rows), Decimal("0"))
+        cost = sum(
+            (
+                Decimal(str(row["cost_amount"]))
+                for row in rows
+                if row.get("cost_amount") is not None
+            ),
+            Decimal("0"),
+        )
         return {
             "record_count": len(rows),
             "prompt_tokens": sum(int(row.get("prompt_tokens", 0)) for row in rows),

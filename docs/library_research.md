@@ -59,7 +59,7 @@ single-repo product instead of splitting it.
 |---|---|---|---|
 | Upstream model list | OpenAI-compatible `GET /v1/models` over stdlib `urllib` | Do not add LiteLLM, instructor, or provider SDKs. Discover when a KV credential is present; static fallback only on failure. | Providers already speak the OpenAI list schema; a flag-gated catalog seed is a different slice (PR #642). |
 | Cost/quality ranking | In-process `priced_selection` over `PriceBook` | Do not add a learned router (RouteLLM training) or a cascade SDK. Rank billed cost then capability score. | FrugalGPT / Hybrid LLM / Fugu justify choose-once min-cost max-performance; sequential failover is a different claim. |
-| List vs billed price | Extra field on existing `llm_price_entries` KV rows | No new table. `original_list_price` is two-word snake_case on `PriceEntry`. | Honest metrics: billed 0 stays 0; published list is stored, not invented. |
+| List vs billed price | Extra field on existing `llm_price_entries` KV rows | No new table. `original_list_price` is two-word snake_case on `PriceEntry`. Missing rows stay `unknown` (`None`), not billed 0. | Issue #86: actual free-to-caller and hypothetical list are separate; unknown is never “free.” |
 
 Skipped: LiteLLM proxy, RouteLLM training loop, a second price table, GitHub Models discovery, `COPILOT_GITHUB_TOKEN`.
 

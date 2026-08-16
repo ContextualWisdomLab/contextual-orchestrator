@@ -531,7 +531,8 @@ class CostRoutingCoordinator:
                 workflow_run_id=batch_id,
                 attribution=attribution,
             )
-            total_cost_amount += float(record.cost_amount)
+            if record.cost_amount is not None:
+                total_cost_amount += float(record.cost_amount)
             currency_code = record.currency_code
             token_counts.append(record.prompt_tokens)
             embeddings.append(

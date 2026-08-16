@@ -11,8 +11,10 @@ failover. This release does **not** duplicate that work.
 - **Default discovery.** When an org KV credential is present, compose
   chat models from `GET {base_url}/models`. Static fallback only if that
   GET fails. Exception-isolated per provider. No `--discover-models` flag.
-- **`original_list_price`.** Price-table and spend-analytics field that
-  stays set when billed rates are promotional 0.
+- **`original_list_price`.** Hypothetical/published list, stored beside
+  billed rates. Explicit billed `0` is actual free-to-caller. A missing
+  price row is `unknown` (`None`) — never converted to `0` / “free”
+  (issue #86 honesty bug in `PriceBook.compute_cost`).
 - **Min-cost / max-performance selection.** One worker per step
   (Fugu / FrugalGPT / Hybrid LLM / Trinity). Transient retry on the chosen
   worker; no sequential next-agent hop. Circuit-open agents are skipped on

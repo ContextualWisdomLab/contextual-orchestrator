@@ -125,6 +125,16 @@ def test_circuit_open_is_excluded_from_next_selection_not_hopped() -> None:
     assert client.calls == ["cheap_worker", "pricey_worker"]
 
 
+def test_unknown_selection_cost_is_none_not_free() -> None:
+    agent = ModelAgent("mystery_worker", "mystery-model", provider_name="mystery")
+    assert (
+        billed_selection_cost(
+            agent, price_book=None, price_per_million={}, any_explicit_price=False
+        )
+        is None
+    )
+
+
 def test_billed_cost_ignores_original_list_price() -> None:
     config = InMemoryConfigStore()
     price_book = PriceBook(config)

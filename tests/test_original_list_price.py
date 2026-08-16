@@ -58,6 +58,28 @@ def test_spend_analytics_keeps_original_list_price_on_free_model() -> None:
     assert "free-llama" not in report["unpriced_models"]
 
 
+def test_unknown_price_is_not_converted_to_free() -> None:
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    unknown, _currency = price_book.compute_cost("mystery", "unpriced", 1000, 1000)
+    assert unknown is None
+    price_book.set_price(
+        PriceEntry(
+            "promo_co",
+            "promo-model",
+            prompt_price_per_1k=0.0,
+            completion_price_per_1k=0.0,
+            original_list_price={"prompt_price_per_1k": 1.0, "completion_price_per_1k": 2.0},
+        )
+    )
+    billed, _ = price_book.compute_cost("promo_co", "promo-model", 1000, 1000)
+    listed = price_book.get_price("promo_co", "promo-model")
+    assert billed == 0.0
+    assert listed is not None
+    assert listed.original_list_price is not None
+    assert billed != listed.original_list_price
+
+
 def test_unpriced_model_has_null_original_list_price() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("solo_worker", "mystery-model", tags=("reasoning",))])
     orchestrator.run([{"role": "user", "content": "no price"}])

@@ -16,15 +16,17 @@ selection of **one** worker, and this gateway's own `GET /v1/models`.
    models (Chen et al., 2023, on pricing unknown upstreams honestly).
 2. **Exception isolation.** A timeout, 5xx, or malformed JSON from one
    provider never aborts compose for the others.
-3. **Original list price.** When billed prompt/completion rates are `0`
-   (promotional free) but a published list is known, `original_list_price`
-   is stored on the price-table row and returned by spend analytics. Billed
-   cost remains `0`. The list price is not fabricated (honest-metrics rule).
+3. **Cost honesty (issue #86).** Actual free-to-caller (explicit billed
+   rates, including `0`) and hypothetical/original list price
+   (`original_list_price`) are separate fields. A missing price row is
+   `unknown` (`compute_cost` returns `None`). Unknown is never converted
+   to `0` or “free.” `original_list_price` is never used as billed cost.
 4. **Single-worker selection.** Fugu's low-latency path selects one worker
    without an expensive coordinator search (Sakana AI, 2026). Among capable
    workers this lab then applies FrugalGPT / Hybrid LLM ranking: minimize
-   billed cost, then maximize the existing capability score (Chen et al.,
-   2023; Ding et al., 2024). Transient retry stays on the chosen worker.
+   **known** billed cost, then maximize the existing capability score (Chen et al.,
+   2023; Ding et al., 2024). This is **not** PR #575's capability-first
+   then min-known-cost policy. Transient retry stays on the chosen worker.
    Sequential next-agent hopping is not used. A circuit-open worker is
    excluded from the *next* selection (Trinity's compact choose-once
    coordinator; Xu et al., 2025).
@@ -33,9 +35,11 @@ selection of **one** worker, and this gateway's own `GET /v1/models`.
    consumers (Noema — review and other jobs — plus gyeot and scopeweave)
    can see candidates. GitHub Models hosts and `COPILOT_GITHUB_TOKEN` are
    rejected.
-6. **Out of scope (owned by PR #642).** Production seed JSON, flag-gated
-   `--discover-models`, OpenCode sidecar workflow, and 429 → next
-   capability-matched agent failover.
+6. **Out of scope.** PR #642 owns the production seed, flag-gated
+   `--discover-models`, OpenCode sidecar, and 429 → next-agent failover.
+   PR #575 owns capability-first then min-known-cost ranking. PR #574's
+   3NF catalog is not on protected main (`6841b719`) and is not treated
+   as landed. This PR does not merge #642.
 
 ## References
 

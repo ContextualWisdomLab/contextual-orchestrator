@@ -39,9 +39,8 @@ def billed_selection_cost(
     if model in price_per_million:
         # price_per_million is USD / 1M output tokens; a 1k/1k probe uses output only.
         return float(price_per_million[model]) / 1000.0
-    if any_explicit_price:
-        return None
-    return 0.0
+    _ = any_explicit_price
+    return None
 
 
 def select_min_cost_max_performance(
