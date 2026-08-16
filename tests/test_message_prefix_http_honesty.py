@@ -112,8 +112,36 @@ def test_http_chat_rejects_prefix_non_boolean() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_rejects_prefix_true_with_tools() -> None:
+    """Tools passthrough must not skip message-prefix fail-closed checks."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [
+                    {"role": "assistant", "content": "partial", "prefix": True},
+                    {"role": "user", "content": "continue with a tool"},
+                ],
+                "tools": [
+                    {
+                        "type": "function",
+                        "function": {"name": "lookup_balance", "parameters": {"type": "object"}},
+                    }
+                ],
+            },
+        )
+        assert status == 400, body
+        assert "invalid_message_prefix" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_accepts_prefix_null_and_false()
     test_http_chat_rejects_prefix_true()
     test_http_chat_rejects_prefix_non_boolean()
+    test_http_chat_rejects_prefix_true_with_tools()
     print("ok")

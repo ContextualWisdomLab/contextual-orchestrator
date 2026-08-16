@@ -77,7 +77,7 @@ ALLOWED_COMPLETIONS_KEYS = {
     "store",
     # Chat-era tool surfaces — accepted only for explicit unsupported errors.
     "tools", "tool_choice", "functions", "function_call", "parallel_tool_calls",
-    # Tool-loop budget (chat/Responses-native) — named unsupported, not unknown_fields.
+    # Tool-loop budget — accepted only for named unsupported error (no tool loop).
     "max_tool_calls",
     "response_format",
     # Chat-era structured/output controls — accepted only for explicit migration errors.
@@ -849,13 +849,17 @@ def _validate_max_tool_calls(
     some chat SDKs also send it). This gateway proxies a single completion and
     does not run a tool loop, so any provided value fails closed with a named
     error rather than opaque ``unknown_fields``. Explicit JSON null and empty
-    / whitespace strings are treat-as-omit (SDK optional defaults).
+    / whitespace strings are treat-as-omit (SDK optional defaults) and are
+    stripped from the body before provider passthrough.
     """
     if "max_tool_calls" not in body:
         return
     value = body.get("max_tool_calls")
     # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    # Pop so tools/Responses passthrough cannot forward a non-omit-equivalent
+    # empty string (or a JSON null) to the upstream provider.
     if value is None or (isinstance(value, str) and not value.strip()):
+        body.pop("max_tool_calls", None)
         return
     raise RequestError(
         400,
@@ -1342,7 +1346,7 @@ def _reject_unknown_message_keys(message: dict[str, Any]) -> None:
 
 
 def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
-    """Reject unknown message keys and legacy function role before passthrough."""
+    """Reject unknown message keys and unsupported roles before passthrough."""
     messages = body.get("messages")
     if not isinstance(messages, list):
         return
@@ -1356,7 +1360,99 @@ def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
                 "invalid_message_role",
                 "function role is not supported on /v1/chat/completions; use tool instead",
             )
+        if isinstance(role, str) and role == "developer":
+            # Newer OpenAI clients send developer in place of system; this gateway
+            # does not apply a separate developer plane — fail closed with migration.
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "developer role is not supported on /v1/chat/completions; use system instead",
+            )
         _reject_unknown_message_keys(message)
+
+
+def _normalize_chat_message_content(role: str, content: Any) -> str | list[dict[str, Any]]:
+    """Shape-check chat message content; fail closed on empty user/system or bad parts.
+
+    OpenAI assistant tool turns often send ``content: null`` with ``tool_calls``;
+    treat explicit JSON null as empty string on assistant/tool (SDK optional
+    default). Vision/omni callers send content-parts arrays — text+image_url
+    pass; other part types fail closed.
+    """
+    if content is None and role in {"assistant", "tool"}:
+        content = ""
+    if isinstance(content, list):
+        content = _validate_message_content_parts(content)
+    elif not isinstance(content, str):
+        raise RequestError(400, "invalid_message", "message role or content is invalid")
+    if role in {"user", "system"} and isinstance(content, str) and not content.strip():
+        raise RequestError(
+            400,
+            "invalid_message_content",
+            "user and system message content must be a non-empty string",
+        )
+    return content
+
+
+def _validate_one_chat_message_name(message: dict[str, Any]) -> str | None:
+    """OpenAI optional participant name on system/user/assistant (not tool).
+
+    Explicit JSON null is treat-as-omit. Empty, oversized, or illegal charset
+    values fail closed so clients never believe a name was applied.
+    """
+    if "name" not in message:
+        return None
+    msg_name = message.get("name")
+    if msg_name is None:
+        return None
+    role = message.get("role")
+    if role == "tool":
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "name is not valid on tool role messages",
+        )
+    if not isinstance(msg_name, str) or not msg_name.strip():
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "message name must be a non-empty string",
+        )
+    if len(msg_name) > 64:
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "message name must be at most 64 characters",
+        )
+    if not all(ch.isalnum() or ch in "_-" for ch in msg_name):
+        raise RequestError(
+            400,
+            "invalid_message_name",
+            "message name must match [a-zA-Z0-9_-]",
+        )
+    return msg_name
+
+
+def _validate_chat_message_content_and_name(body: dict[str, Any]) -> None:
+    """Content shape and participant name — must run before tools passthrough.
+
+    ``_validate_messages`` is skipped on the tools/response_format early return.
+    Empty user/system content, unsupported content-part types, and invalid
+    ``name`` values must still fail closed so SDK tool-calling bodies cannot
+    smuggle them upstream.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            raise RequestError(400, "invalid_message", "each message must be an object")
+        role = message.get("role")
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
+            # developer/function already named-rejected in known_fields.
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        _normalize_chat_message_content(role, message.get("content"))
+        _validate_one_chat_message_name(message)
 
 
 def _validate_messages(messages: Any) -> list[dict[str, Any]]:
@@ -1387,24 +1483,7 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
         _reject_unknown_message_keys(message)
         if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        # OpenAI assistant tool turns often send content:null with tool_calls; treat
-        # explicit JSON null as empty string on assistant/tool (SDK optional default).
-        if content is None and role in {"assistant", "tool"}:
-            content = ""
-        if isinstance(content, list):
-            # Vision/omni callers send OpenAI content-parts arrays. Shape-check and
-            # passthrough text+image_url; other part types fail closed.
-            content = _validate_message_content_parts(content)
-        elif not isinstance(content, str):
-            raise RequestError(400, "invalid_message", "message role or content is invalid")
-        # User/system turns drive the prompt — empty string content is never applied.
-        # Multimodal arrays are non-empty after parts validation.
-        if role in {"user", "system"} and isinstance(content, str) and not content.strip():
-            raise RequestError(
-                400,
-                "invalid_message_content",
-                "user and system message content must be a non-empty string",
-            )
+        content = _normalize_chat_message_content(role, content)
         entry: dict[str, Any] = {"role": role, "content": content}
         if role == "tool":
             # OpenAI tool messages bind results to a prior tool_call via tool_call_id.
@@ -1422,142 +1501,124 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                     "tool_call_id must be at most 128 characters",
                 )
             entry["tool_call_id"] = tool_call_id
-        if "name" in message:
-            # OpenAI optional participant name on system/user/assistant (not tool).
-            msg_name = message.get("name")
-            # Explicit JSON null is treat-as-omit (SDK optional default).
-            if msg_name is None:
-                pass
-            else:
-                if role == "tool":
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "name is not valid on tool role messages",
-                    )
-                if not isinstance(msg_name, str) or not msg_name.strip():
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "message name must be a non-empty string",
-                    )
-                if len(msg_name) > 64:
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "message name must be at most 64 characters",
-                    )
-                # OpenAI participant names are alphanumeric plus underscore/hyphen.
-                if not all(ch.isalnum() or ch in "_-" for ch in msg_name):
-                    raise RequestError(
-                        400,
-                        "invalid_message_name",
-                        "message name must match [a-zA-Z0-9_-]",
-                    )
-                entry["name"] = msg_name
-        if "refusal" in message:
-            # OpenAI assistant refusal plane — null/empty omit; non-empty fails closed
-            # (this gateway does not surface or apply refusal content).
-            refusal = message.get("refusal")
-            if refusal is None or (isinstance(refusal, str) and not refusal.strip()):
-                pass
-            elif role != "assistant":
-                raise RequestError(
-                    400,
-                    "invalid_message_refusal",
-                    "refusal is only valid on assistant messages",
-                )
-            elif not isinstance(refusal, str):
-                raise RequestError(
-                    400,
-                    "invalid_message_refusal",
-                    "refusal must be a string",
-                )
-            else:
-                raise RequestError(
-                    400,
-                    "invalid_message_refusal",
-                    "non-empty refusal is not supported on /v1/chat/completions",
-                )
-        if "annotations" in message:
-            # OpenAI message annotations — null/empty omit; non-empty fails closed.
-            annotations = message.get("annotations")
-            if annotations is None or (isinstance(annotations, list) and not annotations):
-                pass
-            else:
-                raise RequestError(
-                    400,
-                    "invalid_message_annotations",
-                    "non-empty annotations are not supported on /v1/chat/completions",
-                )
-        if "audio" in message:
-            # OpenAI assistant audio payload — null/empty omit; non-empty fails closed
-            # (this text gateway has no speech plane on chat message history).
-            audio = message.get("audio")
-            if audio is None or (isinstance(audio, dict) and not audio):
-                pass
-            else:
-                raise RequestError(
-                    400,
-                    "invalid_message_audio",
-                    "non-empty message audio is not supported on /v1/chat/completions",
-                )
-        if "function_call" in message:
-            # Legacy assistant function_call on messages — null/empty omit; non-empty
-            # fails closed (use tool_calls; body-level function_call is also rejected).
-            function_call = message.get("function_call")
-            if function_call is None or (isinstance(function_call, dict) and not function_call):
-                pass
-            else:
-                raise RequestError(
-                    400,
-                    "invalid_message_function_call",
-                    "non-empty message function_call is not supported on /v1/chat/completions; "
-                    "use tool_calls instead",
-                )
-        if "weight" in message:
-            # OpenAI fine-tune style message weight (0 or 1). Explicit null is
-            # treat-as-omit. 0/1 are honest no-ops (no fine-tune plane here).
-            # Other values fail closed so clients never believe weighting applied.
-            weight = message.get("weight")
-            if weight is None:
-                pass
-            elif isinstance(weight, bool) or not isinstance(weight, (int, float)):
-                raise RequestError(
-                    400,
-                    "invalid_message_weight",
-                    "message weight must be 0 or 1",
-                )
-            elif float(weight) not in (0.0, 1.0):
-                raise RequestError(
-                    400,
-                    "invalid_message_weight",
-                    "message weight must be 0 or 1",
-                )
-        if "prefix" in message:
-            # OpenAI partial-assistant / predicted-outputs style prefix flag.
-            # null/false are honest no-ops; true fails closed (no prefix plane).
-            prefix = message.get("prefix")
-            if prefix is None or prefix is False:
-                pass
-            elif prefix is True:
-                raise RequestError(
-                    400,
-                    "invalid_message_prefix",
-                    "message prefix=true is not supported on /v1/chat/completions",
-                )
-            else:
-                raise RequestError(
-                    400,
-                    "invalid_message_prefix",
-                    "message prefix must be a boolean",
-                )
+        msg_name = _validate_one_chat_message_name(message)
+        if msg_name is not None:
+            entry["name"] = msg_name
+        _validate_one_chat_message_honesty(message)
         validated.append(entry)
     return validated
 
 
+def _validate_one_chat_message_honesty(message: dict[str, Any]) -> None:
+    """Fail-closed honesty for message fields that must run before tools passthrough.
+
+    ``_validate_messages`` is skipped on the tools/response_format early return.
+    These checks therefore live here so SDK histories with weight, prefix,
+    refusal, annotations, audio, or function_call cannot smuggle unsupported
+    values upstream.
+    """
+    role = message.get("role")
+    if "refusal" in message:
+        # OpenAI assistant refusal plane — null/empty omit; non-empty fails closed
+        # (this gateway does not surface or apply refusal content).
+        refusal = message.get("refusal")
+        if refusal is None or (isinstance(refusal, str) and not refusal.strip()):
+            pass
+        elif role != "assistant":
+            raise RequestError(
+                400,
+                "invalid_message_refusal",
+                "refusal is only valid on assistant messages",
+            )
+        elif not isinstance(refusal, str):
+            raise RequestError(
+                400,
+                "invalid_message_refusal",
+                "refusal must be a string",
+            )
+        else:
+            raise RequestError(
+                400,
+                "invalid_message_refusal",
+                "non-empty refusal is not supported on /v1/chat/completions",
+            )
+    if "annotations" in message:
+        # OpenAI message annotations — null/empty omit; non-empty fails closed.
+        annotations = message.get("annotations")
+        if annotations is None or (isinstance(annotations, list) and not annotations):
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_message_annotations",
+                "non-empty annotations are not supported on /v1/chat/completions",
+            )
+    if "audio" in message:
+        # OpenAI assistant audio payload — null/empty omit; non-empty fails closed
+        # (this text gateway has no speech plane on chat message history).
+        audio = message.get("audio")
+        if audio is None or (isinstance(audio, dict) and not audio):
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_message_audio",
+                "non-empty message audio is not supported on /v1/chat/completions",
+            )
+    if "function_call" in message:
+        # Legacy assistant function_call on messages — null/empty omit; non-empty
+        # fails closed (use tool_calls; body-level function_call is also rejected).
+        function_call = message.get("function_call")
+        if function_call is None or (isinstance(function_call, dict) and not function_call):
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_message_function_call",
+                "non-empty message function_call is not supported on /v1/chat/completions; "
+                "use tool_calls instead",
+            )
+    if "weight" in message:
+        # OpenAI fine-tune style message weight (0 or 1). Explicit null is
+        # treat-as-omit. 0/1 are honest no-ops (no fine-tune plane here).
+        # Other values fail closed so clients never believe weighting applied.
+        weight = message.get("weight")
+        if weight is None:
+            pass
+        elif isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            raise RequestError(
+                400,
+                "invalid_message_weight",
+                "message weight must be 0 or 1",
+            )
+        elif float(weight) not in (0.0, 1.0):
+            raise RequestError(
+                400,
+                "invalid_message_weight",
+                "message weight must be 0 or 1",
+            )
+    if "prefix" in message:
+        # OpenAI partial-assistant / predicted-outputs style prefix flag.
+        # null/false are honest no-ops; true fails closed (no prefix plane).
+        prefix = message.get("prefix")
+        if prefix is None or prefix is False:
+            pass
+        elif prefix is True:
+            raise RequestError(
+                400,
+                "invalid_message_prefix",
+                "message prefix=true is not supported on /v1/chat/completions",
+            )
+        else:
+            raise RequestError(
+                400,
+                "invalid_message_prefix",
+                "message prefix must be a boolean",
+            )
+
+
 def _validate_chat_message_audio_function_call(body: dict[str, Any]) -> None:
-    """Message-level ``audio`` / ``function_call`` — null/empty omit; else fail closed.
+    """Message-level honesty fields — null/empty omit; else fail closed.
 
     Runs before tools passthrough so multi-turn histories with SDK-default
     null slots stay honest even when the body is proxied verbatim.
@@ -1568,27 +1629,7 @@ def _validate_chat_message_audio_function_call(body: dict[str, Any]) -> None:
     for message in messages:
         if not isinstance(message, dict):
             continue
-        if "audio" in message:
-            audio = message.get("audio")
-            if audio is None or (isinstance(audio, dict) and not audio):
-                pass
-            else:
-                raise RequestError(
-                    400,
-                    "invalid_message_audio",
-                    "non-empty message audio is not supported on /v1/chat/completions",
-                )
-        if "function_call" in message:
-            function_call = message.get("function_call")
-            if function_call is None or (isinstance(function_call, dict) and not function_call):
-                pass
-            else:
-                raise RequestError(
-                    400,
-                    "invalid_message_function_call",
-                    "non-empty message function_call is not supported on /v1/chat/completions; "
-                    "use tool_calls instead",
-                )
+        _validate_one_chat_message_honesty(message)
 
 
 def _validate_chat_tool_message_ids(body: dict[str, Any]) -> None:
@@ -1666,6 +1707,27 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "invalid_message",
                     "each tool_calls entry must be an object",
                 )
+            # OpenAI non-stream entries: id/type/function; optional index from
+            # stream assembly. Anything else fails closed (no silent smuggle).
+            unknown_call_keys = sorted(set(call) - {"id", "type", "function", "index"})
+            if unknown_call_keys:
+                raise RequestError(
+                    400,
+                    "unknown_tool_call_fields",
+                    "tool_calls entry contains unsupported fields",
+                    {"fields": unknown_call_keys},
+                )
+            if "index" in call:
+                index_value = call.get("index")
+                # Explicit JSON null is treat-as-omit (SDK optional default).
+                if index_value is None:
+                    pass
+                elif isinstance(index_value, bool) or not isinstance(index_value, int) or index_value < 0:
+                    raise RequestError(
+                        400,
+                        "invalid_tool_calls",
+                        "each tool_calls index must be a non-negative integer",
+                    )
             call_id = call.get("id")
             if not isinstance(call_id, str) or not call_id.strip():
                 raise RequestError(
@@ -1691,6 +1753,14 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     400,
                     "invalid_message",
                     "each tool_calls entry requires a function object",
+                )
+            unknown_function_keys = sorted(set(function) - {"name", "arguments"})
+            if unknown_function_keys:
+                raise RequestError(
+                    400,
+                    "unknown_tool_call_function_fields",
+                    "tool_calls function contains unsupported fields",
+                    {"fields": unknown_function_keys},
                 )
             name = function.get("name")
             if not isinstance(name, str) or not name.strip():
@@ -3335,6 +3405,7 @@ def build_server(
                     # Legacy OpenAI Completions: prompt → route → text_completion.
                     _reject_unknown_keys(body, ALLOWED_COMPLETIONS_KEYS)
                     _validate_completions_tools_surface(body)
+                    _validate_max_tool_calls(body, endpoint_path="/v1/completions")
                     _validate_completions_response_format_surface(body)
                     _validate_completions_chat_era_fields_surface(body)
                     _validate_chat_audio_web_search_surface(
@@ -3520,6 +3591,7 @@ def build_server(
                     _validate_chat_tool_message_ids(body)
                     _validate_chat_assistant_tool_calls(body)
                     _validate_chat_message_audio_function_call(body)
+                    _validate_chat_message_content_and_name(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
                     if "tools" in body:

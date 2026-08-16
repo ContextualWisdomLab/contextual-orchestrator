@@ -97,3 +97,10 @@ def test_http_responses_rejects_max_tool_calls_one() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+if __name__ == "__main__":
+    test_http_responses_accepts_without_max_tool_calls()
+    test_http_responses_rejects_max_tool_calls()
+    test_http_responses_rejects_max_tool_calls_one()
+    print("ok")

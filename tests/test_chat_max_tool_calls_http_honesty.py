@@ -128,9 +128,66 @@ def test_http_chat_rejects_max_tool_calls_false_zero() -> None:
         thread.join(timeout=5)
 
 
+def _lookup_tools() -> list[dict]:
+    return [
+        {
+            "type": "function",
+            "function": {
+                "name": "lookup_balance",
+                "parameters": {"type": "object", "properties": {}},
+            },
+        }
+    ]
+
+
+def test_http_chat_rejects_max_tool_calls_with_tools() -> None:
+    """SDK tool-calling path must name-reject, not smuggle, max_tool_calls."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "check balance"}],
+                "tools": _lookup_tools(),
+                "max_tool_calls": 3,
+            },
+        )
+        assert status == 400, body
+        blob = json.dumps(body)
+        assert "invalid_max_tool_calls" in blob
+        assert "unknown_fields" not in blob
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_omits_null_max_tool_calls_before_tools_passthrough() -> None:
+    """Null/empty max_tool_calls must not be forwarded on the tools path."""
+    server, thread, port = _server()
+    try:
+        for value in (None, "", "   "):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "check balance"}],
+                    "tools": _lookup_tools(),
+                    "max_tool_calls": value,
+                },
+            )
+            assert status == 200, (value, body)
+            assert "max_tool_calls" not in body.get("echo", {})
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_chat_accepts_max_tool_calls_null_and_empty_string()
     test_http_chat_rejects_max_tool_calls_nonzero()
     test_http_chat_rejects_max_tool_calls_one()
     test_http_chat_rejects_max_tool_calls_false_zero()
+    test_http_chat_rejects_max_tool_calls_with_tools()
+    test_http_chat_omits_null_max_tool_calls_before_tools_passthrough()
     print("ok")

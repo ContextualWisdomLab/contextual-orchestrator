@@ -1,4 +1,4 @@
-"""Legacy Completions max_tool_calls honesty: null/empty omit; else fail-closed."""
+"""Completions max_tool_calls honesty: null/empty omit; else named fail-closed."""
 
 from __future__ import annotations
 
@@ -60,7 +60,7 @@ def test_http_completions_accepts_max_tool_calls_null_and_empty_string() -> None
                 port,
                 {
                     "model": "mock-planner",
-                    "prompt": "hello",
+                    "prompt": "hello completions",
                     "max_tool_calls": value,
                 },
             )
@@ -77,7 +77,7 @@ def test_http_completions_rejects_max_tool_calls_nonzero() -> None:
             port,
             {
                 "model": "mock-planner",
-                "prompt": "hello",
+                "prompt": "hello completions tools budget",
                 "max_tool_calls": 3,
             },
         )
@@ -98,7 +98,7 @@ def test_http_completions_rejects_max_tool_calls_one() -> None:
             port,
             {
                 "model": "mock-planner",
-                "prompt": "hello",
+                "prompt": "hello completions one-round budget",
                 "max_tool_calls": 1,
             },
         )
@@ -117,7 +117,7 @@ def test_http_completions_rejects_max_tool_calls_false_zero() -> None:
                 port,
                 {
                     "model": "mock-planner",
-                    "prompt": "hello",
+                    "prompt": "hello completions false-zero budget",
                     "max_tool_calls": value,
                 },
             )

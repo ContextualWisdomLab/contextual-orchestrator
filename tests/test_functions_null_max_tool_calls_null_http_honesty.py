@@ -101,9 +101,8 @@ def test_http_responses_accepts_null_max_tool_calls_and_functions() -> None:
                 "model": "mock-planner",
                 "input": "max tool null",
                 "max_tool_calls": None,
-                "functions": None,
-                "function_call": None,
                 "functions": [],
+                "function_call": None,
             },
         )
         assert status == 200, body
@@ -129,3 +128,11 @@ def test_http_responses_still_rejects_max_tool_calls() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+if __name__ == "__main__":
+    test_http_chat_accepts_null_and_empty_functions()
+    test_http_chat_still_rejects_nonempty_functions()
+    test_http_responses_accepts_null_max_tool_calls_and_functions()
+    test_http_responses_still_rejects_max_tool_calls()
+    print("ok")
