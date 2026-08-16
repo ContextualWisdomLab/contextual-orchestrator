@@ -25,6 +25,7 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .tool_fallback import ToolFallbackStoppedError
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -162,6 +163,27 @@ def _error_payload(error_code: str, error_message: str, error_detail: dict[str, 
         "error_message": error_message,
         "error_detail": detail,
     }
+
+
+TOOL_FALLBACK_STOPPED_STATUS = 409
+TOOL_FALLBACK_STOPPED_CODE = "tool_execution_stopped"
+TOOL_FALLBACK_STOPPED_MESSAGE = (
+    "tool execution stopped because no safe retry or failover was available"
+)
+
+
+def _tool_fallback_error_detail(error: ToolFallbackStoppedError) -> dict[str, Any]:
+    """Return secret-free structured evidence for one fail-closed tool decision."""
+    decision = error.decision
+    detail = {
+        "action": decision.action.value,
+        "failure_kind": decision.kind.value,
+        "reason_code": decision.reason_code,
+    }
+    observed_kind = decision.observed_kind or decision.kind
+    if observed_kind is not decision.kind:
+        detail["observed_failure_kind"] = observed_kind.value
+    return detail
 
 
 def _coerce_json(payload: bytes) -> dict[str, Any]:
@@ -913,6 +935,13 @@ def build_server(
                 self._send_error(404, "route_not_found", "not found")
             except json.JSONDecodeError:
                 self._send_error(400, "invalid_json", "request body is not valid JSON")
+            except ToolFallbackStoppedError as exc:
+                self._send_error(
+                    TOOL_FALLBACK_STOPPED_STATUS,
+                    TOOL_FALLBACK_STOPPED_CODE,
+                    TOOL_FALLBACK_STOPPED_MESSAGE,
+                    _tool_fallback_error_detail(exc),
+                )
             except BudgetExceededError as exc:
                 self._send_error(429, "budget_exceeded", str(exc), exc.detail)
             except RequestError as exc:
@@ -1043,6 +1072,20 @@ def build_server(
                     for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
+                except ToolFallbackStoppedError as exc:
+                    detail = {
+                        "request_id": uuid.uuid4().hex,
+                        **_tool_fallback_error_detail(exc),
+                    }
+                    payload = _error_payload(
+                        TOOL_FALLBACK_STOPPED_CODE,
+                        TOOL_FALLBACK_STOPPED_MESSAGE,
+                        detail,
+                    )
+                    self._write_sse(
+                        f"data: {json.dumps(payload, ensure_ascii=False)}\n\n"
+                    )
+                    self._write_sse(frame({}, finish="error"))
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
                     self._write_sse(frame({}, finish="error"))
                 self._write_sse("data: [DONE]\n\n")

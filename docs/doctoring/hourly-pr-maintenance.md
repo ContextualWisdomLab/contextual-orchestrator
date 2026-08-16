@@ -32,7 +32,8 @@ separately reviewed OpenCode worker owns NVIDIA NIM access and repair execution.
 this path.
 
 A repair cannot approve itself, weaken checks, label pending evidence as
-passing, replay an ambiguous state-changing tool call, or bypass independent non-author approval. Exact-head CI, security review, coverage, docstrings, and
+passing, replay an ambiguous state-changing tool call, or bypass independent
+non-author approval. Exact-head CI, security review, coverage, docstrings, and
 branch protection remain authoritative.
 
 ## Standalone and ecosystem behavior

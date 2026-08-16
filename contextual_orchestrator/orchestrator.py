@@ -10,6 +10,7 @@ from functools import wraps
 import hashlib
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -27,6 +28,13 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .tool_fallback import (
+    ToolFallbackAction,
+    ToolFallbackStoppedError,
+    ToolFailureDecision,
+    classify_tool_failure,
+    downgrade_to_failover,
+)
 
 
 ChatMessage = dict[str, str]
@@ -825,6 +833,8 @@ class TaskOrchestrator:
         agents_db: str | None = None,
         cache_ttl: float = 0.0,
         cache_max_entries: int = 256,
+        tool_retry_attempts: int = 1,
+        tool_retry_backoff_seconds: float = 0.25,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -836,6 +846,27 @@ class TaskOrchestrator:
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
         self.client = client or ModelClient()
+        if (
+            isinstance(tool_retry_attempts, bool)
+            or not isinstance(tool_retry_attempts, int)
+            or tool_retry_attempts < 0
+        ):
+            raise ValueError("tool_retry_attempts must be a nonnegative integer")
+        self.tool_retry_attempts = tool_retry_attempts
+        if (
+            isinstance(tool_retry_backoff_seconds, bool)
+            or not isinstance(tool_retry_backoff_seconds, (int, float))
+            or not math.isfinite(float(tool_retry_backoff_seconds))
+            or tool_retry_backoff_seconds < 0
+        ):
+            raise ValueError(
+                "tool_retry_backoff_seconds must be a finite nonnegative number"
+            )
+        self.tool_retry_backoff_seconds = float(tool_retry_backoff_seconds)
+        # Injectable seams keep retry timing deterministic in tests while
+        # production uses full jitter to avoid synchronized retry bursts.
+        self._tool_retry_sleep = time.sleep
+        self._tool_retry_jitter = random.uniform
         self.policy = OrchestrationPolicy()
         # Operator-supplied USD price per 1M tokens, keyed by model. Empty => cost not computed.
         self.price_per_million = dict(price_per_million or {})
@@ -1542,26 +1573,75 @@ class TaskOrchestrator:
     def _invoke(
         self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
     ) -> tuple[str, str, dict[str, Any] | None]:
-        """Call the primary agent, failing over across capability-matched agents on error.
+        """Call an agent with bounded, safety-aware tool retry and failover.
 
-        Transient retry/backoff happens inside ``ModelClient``; this layer adds
-        cross-agent failover plus a per-agent circuit breaker, and returns
-        ``(output, served_agent_id, usage)`` — usage is the provider-reported token
-        usage when available (else None), so spend analytics can prefer it.
+        ``ModelClient`` handles provider transport retries. This layer classifies
+        agent/tool-runtime failures: missing tools move to a compatible agent,
+        explicitly idempotent transient calls retry the same agent, and ambiguous
+        side effects or policy/permission/argument errors fail closed.
         """
         candidates = self._failover_candidates(primary, text, role)
         last_error: Exception | None = None
         for agent in candidates:
-            try:
-                output = self.client.chat(agent, messages)
-            except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
-                last_error = exc
-                self._record_failure(agent.id)
-                continue
-            self._record_success(agent.id)
-            usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
-            return output, agent.id, usage
+            retry_attempt = 0
+            while True:
+                try:
+                    output = self.client.chat(agent, messages)
+                except Exception as exc:  # noqa: BLE001 - classify before fallback
+                    last_error = exc
+                    decision = classify_tool_failure(exc)
+                    action = decision.action
+                    if (
+                        action is ToolFallbackAction.RETRY_SAME_AGENT
+                        and retry_attempt < self.tool_retry_attempts
+                    ):
+                        retry_attempt += 1
+                        self._record_tool_fallback(agent.id, decision, retry_attempt)
+                        if self.tool_retry_backoff_seconds:
+                            retry_ceiling = min(
+                                self.tool_retry_backoff_seconds
+                                * (2.0 ** min(retry_attempt - 1, 16)),
+                                30.0,
+                            )
+                            retry_delay = self._tool_retry_jitter(0.0, retry_ceiling)
+                            self._tool_retry_sleep(retry_delay)
+                        continue
+                    if action is ToolFallbackAction.RETRY_SAME_AGENT:
+                        decision = downgrade_to_failover(decision)
+                        action = decision.action
+                    self._record_tool_fallback(agent.id, decision, retry_attempt)
+                    if decision.circuit_failure:
+                        self._record_failure(agent.id)
+                    if action is ToolFallbackAction.FAIL_CLOSED:
+                        raise ToolFallbackStoppedError(agent.id, decision) from exc
+                    break
+                self._record_success(agent.id)
+                usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+                return output, agent.id, usage
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+
+    def _record_tool_fallback(
+        self,
+        agent_id: str,
+        decision: ToolFailureDecision,
+        retry_attempt: int,
+    ) -> None:
+        """Record a secret-free audit event for one tool fallback decision."""
+        event_detail = {
+            "agent_id": agent_id,
+            "action": decision.action.value,
+            "failure_kind": decision.kind.value,
+            "reason_code": decision.reason_code,
+            "retry_attempt": retry_attempt,
+        }
+        observed_kind = (
+            decision.kind
+            if decision.observed_kind is None
+            else decision.observed_kind
+        )
+        if observed_kind is not decision.kind:
+            event_detail["observed_failure_kind"] = observed_kind.value
+        self._append_audit_event("tool_fallback_decision", event_detail)
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
