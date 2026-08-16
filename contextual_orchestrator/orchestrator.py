@@ -850,11 +850,6 @@ class TaskOrchestrator:
         "validate",
         "judge",
         "adjudicate",
-        "review",
-        "check",
-        "evaluate",
-        "assess",
-        "confirm",
         "검증",
         "검토",
         "평가",
@@ -978,11 +973,17 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route":
-            return self.route_once(messages, reasoning_effort=reasoning_effort)
+            return self._with_reasoning_effort(
+                self.route_once(messages, reasoning_effort=reasoning_effort), reasoning_effort
+            )
         if mode == "verify":
-            return self.route_and_verify(messages, reasoning_effort=reasoning_effort)
+            return self._with_reasoning_effort(
+                self.route_and_verify(messages, reasoning_effort=reasoning_effort), reasoning_effort
+            )
         if mode == "conduct":
-            return self.conduct(messages, reasoning_effort=reasoning_effort)
+            return self._with_reasoning_effort(
+                self.conduct(messages, reasoning_effort=reasoning_effort), reasoning_effort
+            )
 
         decision = self._auto_routing_decision(text)
         if decision["selected_mode"] == "route":
@@ -1009,7 +1010,7 @@ class TaskOrchestrator:
             model for model in selected_models if self._model_price(model) is None
         ]
         result["routing_decision"] = decision
-        return result
+        return self._with_reasoning_effort(result, reasoning_effort)
 
     def _auto_routing_decision(self, text: str) -> dict[str, Any]:
         """Choose route, verify, or conduct before cost-aware role assignment."""
@@ -1066,7 +1067,7 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages, reasoning_effort=reasoning_effort):
+        for delta in self._client_stream(agent, messages, reasoning_effort):
             parts.append(delta)
             yield delta
         answer = "".join(parts)
@@ -1512,9 +1513,10 @@ class TaskOrchestrator:
 
         For adjudication-shaped requests ("does B follow from A?") that need a
         verified verdict without paying for the full thinker/worker/verifier/
-        synthesizer workflow. ``reasoning_effort`` applies to both calls, so a
-        caller can request e.g. high effort for the judgment while still using a
-        single request/response round trip.
+        synthesizer workflow. The verifier must state an explicit accept or
+        reject; a neutral report is rejected, not fallback-accepted. A rejected
+        worker answer is not returned as the public completion. ``reasoning_effort``
+        is request-level and applies to both calls.
         """
         text = self._latest_user_text(messages)
         worker = self._select_agent(text, "worker")
@@ -1543,7 +1545,9 @@ class TaskOrchestrator:
         )
         verifier_latency_ms = (time.perf_counter() - verify_start) * 1000
 
-        verification = self._judge_verifier_output(verifier_output, text, answer)
+        verification = self._judge_verifier_output(
+            verifier_output, "", answer, require_explicit_verdict=True
+        )
         if self.policy.verifier_judge == "model":
             verification = self._model_judge_verification(
                 text, verification, reasoning_effort=reasoning_effort
@@ -1579,9 +1583,11 @@ class TaskOrchestrator:
             verifier_row["served_agent_id"] = verifier_served_id
             verifier_row["failover_from"] = verifier.id
 
+        accepted = bool(verification.get("accepted"))
         return {
             "mode": "verify",
-            "answer": answer,
+            "answer": answer if accepted else self._rejected_verify_answer(verification),
+            "answer_status": "accepted" if accepted else "rejected",
             "verification": verification,
             "trace": [worker_row, verifier_row],
         }
@@ -1836,6 +1842,29 @@ class TaskOrchestrator:
             return self.client.chat(agent, messages)
         return self.client.chat(agent, messages, reasoning_effort=reasoning_effort)
 
+    def _with_reasoning_effort(
+        self, result: dict[str, Any], reasoning_effort: str | None
+    ) -> dict[str, Any]:
+        """Attach the applied-or-omitted effort snapshot the chat surface can echo."""
+        result["reasoning_effort"] = {
+            "requested": reasoning_effort,
+            "applied": reasoning_effort,
+            "status": "applied" if reasoning_effort else "omitted",
+        }
+        return result
+
+    def _client_stream(
+        self, agent: ModelAgent, messages: list[ChatMessage], reasoning_effort: str | None
+    ):
+        """Call ``stream_chat``, only passing ``reasoning_effort`` when set.
+
+        Matches ``_client_chat`` so a pre-existing ``stream_chat`` double that
+        does not accept the kwarg keeps working when the caller left effort unset.
+        """
+        if reasoning_effort is None:
+            return self.client.stream_chat(agent, messages)
+        return self.client.stream_chat(agent, messages, reasoning_effort=reasoning_effort)
+
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
         ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
@@ -1874,10 +1903,22 @@ class TaskOrchestrator:
         hits = sum(1 for hint in self.COMPLEX_HINTS if hint in lowered)
         return hits >= self.policy.conduct_hint_threshold or len(text) > 700
 
+    def _text_has_hint(self, text: str, hint: str) -> bool:
+        """Return whether ``hint`` appears as a whole token, not a substring trap.
+
+        ASCII hints use word boundaries so ``review`` does not match ``preview``
+        and ``check`` does not match ``checkbox``. Hangul hints stay substring
+        matches because Korean adjudication terms are not space-delimited the
+        same way.
+        """
+        if any("\uac00" <= character <= "\ud7a3" for character in hint):
+            return hint in text
+        return re.search(rf"(?<![\w]){re.escape(hint)}(?![\w])", text) is not None
+
     def _needs_verification(self, text: str) -> bool:
         """Return whether a bounded independent check is the minimum quality tier."""
         lowered = text.lower()
-        return any(hint in lowered for hint in self.VERIFICATION_HINTS)
+        return any(self._text_has_hint(lowered, hint) for hint in self.VERIFICATION_HINTS)
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
@@ -1914,7 +1955,27 @@ class TaskOrchestrator:
                     "verifier_output": verifier_output, "judge": "model"}
         return fallback
 
-    def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
+    def _rejected_verify_answer(self, verification: dict[str, Any]) -> str:
+        """Return a public rejection envelope that SDK clients cannot ignore.
+
+        Worker text stays on the verify trace. Putting it in ``answer`` would make a
+        failed check look like a successful chat completion.
+        """
+        reason = str(verification.get("reason") or "the verifier did not accept the worker answer")
+        return (
+            "Verification rejected the worker answer. "
+            f"Reason: {reason}. "
+            "The worker text is in the orchestration trace, not in this completion."
+        )
+
+    def _judge_verifier_output(
+        self,
+        verifier_output: str,
+        thinker_output: str,
+        worker_output: str,
+        *,
+        require_explicit_verdict: bool = False,
+    ) -> dict[str, Any]:
         lowered = verifier_output.lower()
         if any(term in lowered for term in self.policy.verifier_negative_terms):  # pragma: no cover
             return {
@@ -1926,6 +1987,12 @@ class TaskOrchestrator:
             return {
                 "accepted": True,
                 "reason": "verifier output accepted the synthesized result",
+                "verifier_output": verifier_output,
+            }
+        if require_explicit_verdict:
+            return {
+                "accepted": False,
+                "reason": "verifier report did not state an explicit accept or reject",
                 "verifier_output": verifier_output,
             }
         if thinker_output and worker_output:
@@ -8774,9 +8841,11 @@ def chat_completion_response(
     orchestration = {
         "workflow_run_id": result.get("workflow_run_id"),
         "mode": result["mode"],
-        "verification": result.get("verification"),
+        "verification": redact_value(result["verification"]) if result.get("verification") is not None else None,
         "channel": result.get("channel"),
         "routing_reason": result.get("routing_reason"),
+        "routing_decision": result.get("routing_decision"),
+        "reasoning_effort": result.get("reasoning_effort"),
         "usage_record_id": result.get("usage_record_id"),
         "cost": result.get("cost"),
     }

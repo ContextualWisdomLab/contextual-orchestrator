@@ -51,8 +51,9 @@ ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 # cheaper than "conduct" for adjudication-shaped requests that still need a
 # checked verdict, without the full thinker/worker/verifier/synthesizer workflow.
 ALLOWED_MODES = {"auto", "route", "conduct", "verify"}
-# OpenAI-compatible reasoning-effort levels (Fugu/Conductor/TRINITY test-time-compute
-# allocation: role/request-specific reasoning effort, never assumed by default).
+# OpenAI-compatible request-level reasoning-effort values. One string applies to
+# every provider call in the request. Per-role profiles are issue #568, not this
+# validator. Omitted by default; never used as a temperature proxy.
 ALLOWED_REASONING_EFFORT = {"minimal", "low", "medium", "high"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}

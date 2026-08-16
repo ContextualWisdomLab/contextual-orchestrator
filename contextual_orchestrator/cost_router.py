@@ -140,7 +140,7 @@ class CostRoutingCoordinator:
                 mode=mode,
             )
             job = self.submit_batch([request], metadata={"routing_reason": decision.reason})
-            return {
+            envelope = {
                 "channel": "batch",
                 "routing_reason": decision.reason,
                 "job_id": job.job_id,
@@ -148,6 +148,14 @@ class CostRoutingCoordinator:
                 "status": job.status,
                 "request_count": job.request_count,
             }
+            if reasoning_effort is not None:
+                envelope["reasoning_effort"] = {
+                    "requested": reasoning_effort,
+                    "applied": None,
+                    "status": "dropped",
+                    "reason": "batch_channel_has_no_reasoning_effort_field",
+                }
+            return envelope
 
         result = self.orchestrator.run(
             messages, mode=mode, workflow_run_id=workflow_run_id, reasoning_effort=reasoning_effort

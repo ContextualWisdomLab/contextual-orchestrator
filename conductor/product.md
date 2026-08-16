@@ -22,6 +22,7 @@ The product risk is different for API callers and enterprise operators:
 Provide one API and one domain model:
 
 - route simple work to one selected worker;
+- verify adjudication-shaped work with one worker call plus one fail-closed verifier judgment;
 - conduct complex work through planner, worker, verifier, and synthesizer steps;
 - keep worker visibility explicit with access lists;
 - make the agent pool configurable data.

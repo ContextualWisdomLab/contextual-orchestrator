@@ -2,10 +2,10 @@
 
 ## Sources Read
 
-- Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
-- Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-- TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
-- Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+- Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
+- Sakana AI. (2026). *Fugu technical report*. https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator*. arXiv. https://arxiv.org/abs/2512.04695
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor*. arXiv. https://arxiv.org/abs/2512.04388
 
 ## What The Architecture Is
 
@@ -36,7 +36,7 @@ This repository implements the interface and control plane, not the trained coor
 - `Orchestrator.route_and_verify` (`mode="verify"`): one worker call plus one checked verifier judgment — for adjudication-shaped requests that need a verified verdict without the full four-step workflow's cost.
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
-- `reasoning_effort` (request-level, OpenAI-compatible `minimal`/`low`/`medium`/`high`): threads through every provider call in a request (`ModelClient.chat`/`stream_chat`), so a caller can request higher test-time compute for a single adjudication call while keeping cheap calls (e.g. embeddings) at default effort — the per-role/per-request test-time-compute allocation Fugu, Conductor, and TRINITY call for.
+- `reasoning_effort` (request-level only, OpenAI-compatible `minimal`/`low`/`medium`/`high`): threads through every provider call in a request (`ModelClient.chat`/`stream_chat`) so a caller can raise test-time compute for one adjudication without changing embeddings or other cheap calls. This is **not** per-role allocation. Issue #568 remains open for a versioned `reasoning_effort_profile` per thinker/worker/verifier/synthesizer/planner/judge, equal-budget ablation, and the same snapshot on sync, stream, and batch.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
@@ -55,3 +55,13 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## References
+
+Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor*. arXiv. https://arxiv.org/abs/2512.04388
+
+Sakana AI. (2026). *Fugu technical report*. https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+
+Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator*. arXiv. https://arxiv.org/abs/2512.04695
