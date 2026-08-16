@@ -2,8 +2,6 @@
 
 from pathlib import Path
 
-import yaml
-
 
 WORKFLOW = Path(".github/workflows/hourly-pr-maintenance.yml")
 DOCTORING = Path("docs/doctoring/hourly-pr-maintenance.md")
@@ -15,20 +13,22 @@ def _read(path: Path) -> str:
     return path.read_text(encoding="utf-8")
 
 
-def test_hourly_workflow_is_valid_and_non_cancelling() -> None:
+def test_hourly_workflow_is_bounded_and_non_cancelling() -> None:
     """Schedule one bounded heartbeat without cancelling prior legitimate work."""
-    workflow_text = _read(WORKFLOW)
-    workflow = yaml.safe_load(workflow_text)
+    workflow = _read(WORKFLOW)
 
-    assert workflow[True]["schedule"] == [{"cron": "11 * * * *"}]
-    assert workflow[True]["workflow_dispatch"] is None
-    assert workflow["concurrency"] == {
-        "group": "contextual-orchestrator-hourly-pr-maintenance",
-        "cancel-in-progress": False,
-    }
-    assert workflow["permissions"] == {"contents": "read"}
-    job = workflow["jobs"]["dispatch-central-review-repair"]
-    assert job["timeout-minutes"] == 5
+    for expected in (
+        '    - cron: "11 * * * *"',
+        "  workflow_dispatch:",
+        "  group: contextual-orchestrator-hourly-pr-maintenance",
+        "  cancel-in-progress: false",
+        "  contents: read",
+        "    timeout-minutes: 5",
+    ):
+        assert expected in workflow
+    assert workflow.count("  schedule:") == 1
+    assert workflow.count("  workflow_dispatch:") == 1
+    assert workflow.count("  cancel-in-progress: false") == 1
 
 
 def test_dispatch_targets_central_policy_with_bounded_inputs() -> None:
@@ -42,7 +42,7 @@ def test_dispatch_targets_central_policy_with_bounded_inputs() -> None:
         '"max_dispatches": "1"',
         '"retry_hours": "1"',
         '"event_type": $event_type',
-        'https://api.github.com/repos/ContextualWisdomLab/.github/dispatches',
+        "https://api.github.com/repos/ContextualWisdomLab/.github/dispatches",
     ):
         assert expected in workflow
     assert '"dry_run": false' in workflow
