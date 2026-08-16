@@ -2502,17 +2502,44 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.schema must be an object",
             )
-        # Explicit JSON null is treat-as-omit (SDK optional default).
-        if "strict" in schema and schema.get("strict") is not None and not isinstance(
-            schema.get("strict"), bool
-        ):
-            raise RequestError(
-                400,
-                "invalid_response_format",
-                "response_format.json_schema.strict must be a boolean when provided",
-            )
+        # Explicit JSON null is omit-equivalent: pop so passthrough matches omit.
+        if "strict" in schema:
+            strict_value = schema.get("strict")
+            if strict_value is None:
+                schema.pop("strict")
+            elif not isinstance(strict_value, bool):
+                raise RequestError(
+                    400,
+                    "invalid_response_format",
+                    "response_format.json_schema.strict must be a boolean when provided",
+                )
     return fmt
 
+
+def _omit_null_tool_function_field(
+    function: dict[str, Any],
+    field_name: str,
+    *,
+    expected_types: tuple[type, ...],
+    error_message: str,
+) -> None:
+    """Drop a JSON-null optional ``tool.function`` field or fail-closed.
+
+    Official OpenAI SDKs serialize omitted optional fields as JSON ``null``.
+    Leaving those keys on the body is not omit-equivalent: ``proxy_completion``
+    forwards the request verbatim and several providers reject ``null``
+    ``parameters``, ``description``, or ``strict``. Pop the key in place so the
+    upstream payload matches an omitted field. Non-null values of the wrong
+    type stay ``invalid_tools``.
+    """
+    if field_name not in function:
+        return
+    value = function.get(field_name)
+    if value is None:
+        function.pop(field_name)
+        return
+    if not isinstance(value, expected_types):
+        raise RequestError(400, "invalid_tools", error_message)
 
 
 def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
@@ -2520,7 +2547,9 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
 
     An empty array is treated as omit: many SDKs send ``tools: []`` when no tools
     are configured. Non-empty entries must be objects with ``type`` == ``function``
-    and a ``function`` object that has a non-empty ``name``. Shape-only validation
+    and a ``function`` object that has a non-empty ``name``. Explicit JSON
+    ``null`` on optional ``description``, ``parameters``, and ``strict`` is
+    popped in place so passthrough matches omit. Shape-only validation
     before passthrough; provider schema depth is not re-checked here.
     """
     if "tools" not in body:
@@ -2579,15 +2608,13 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "each tool.function accepts only name, description, parameters, and strict",
                 {"fields": unknown_fn},
             )
-        # Explicit JSON null is treat-as-omit (SDK optional default).
-        if "strict" in function and function.get("strict") is not None and not isinstance(
-            function.get("strict"), bool
-        ):
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.strict must be a boolean when provided",
-            )
+        # Explicit JSON null is popped so proxy_completion forwards omit, not null.
+        _omit_null_tool_function_field(
+            function,
+            "strict",
+            expected_types=(bool,),
+            error_message="each tool.function.strict must be a boolean when provided",
+        )
         name = function.get("name")
         if not isinstance(name, str) or not name.strip():
             raise RequestError(
@@ -2609,26 +2636,19 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "each tool.function.name must match [a-zA-Z0-9_-]",
             )
         # OpenAI function tools require parameters as a JSON Schema object when present.
-        # Explicit JSON null is treat-as-omit (SDK optional default).
-        if "parameters" in function:
-            parameters = function.get("parameters")
-            if parameters is not None and not isinstance(parameters, dict):
-                raise RequestError(
-                    400,
-                    "invalid_tools",
-                    "each tool.function.parameters must be an object",
-                )
-        # Explicit JSON null is treat-as-omit (SDK optional default).
-        if (
-            "description" in function
-            and function.get("description") is not None
-            and not isinstance(function.get("description"), str)
-        ):
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.description must be a string when provided",
-            )
+        # Explicit JSON null is popped so proxy_completion forwards omit, not null.
+        _omit_null_tool_function_field(
+            function,
+            "parameters",
+            expected_types=(dict,),
+            error_message="each tool.function.parameters must be an object",
+        )
+        _omit_null_tool_function_field(
+            function,
+            "description",
+            expected_types=(str,),
+            error_message="each tool.function.description must be a string when provided",
+        )
         description = function.get("description")
         if isinstance(description, str) and len(description) > 1024:
             raise RequestError(
