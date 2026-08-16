@@ -94,6 +94,12 @@ def main() -> None:
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
+    if args.serve and args.insecure_skip_tls_verify:
+        parser.error(
+            "--insecure-skip-tls-verify is development-only and cannot be used with --serve; "
+            "configure --provider-ca-bundle instead"
+        )
+
     client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),

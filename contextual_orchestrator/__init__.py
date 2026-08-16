@@ -40,6 +40,7 @@ from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .token_counting import HeuristicTokenCounter, build_token_counter
 from .tool_fallback import (
+    MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
     ToolFallbackAction,
     ToolFallbackStoppedError,
@@ -57,6 +58,7 @@ __all__ = [
     "register_credential",
     "NotConfigured",
     # tool fallback
+    "MAX_TOOL_RETRY_ATTEMPTS",
     "ToolExecutionError",
     "ToolFallbackAction",
     "ToolFallbackStoppedError",

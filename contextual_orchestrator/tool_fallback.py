@@ -8,6 +8,10 @@ import socket
 import urllib.error
 
 
+MAX_TOOL_RETRY_ATTEMPTS = 4
+"""Maximum same-agent retries allowed for one classified tool failure."""
+
+
 class ToolFailureKind(str, Enum):
     """Stable categories for failures reported by model tool runtimes."""
 

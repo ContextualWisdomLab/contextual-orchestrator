@@ -36,6 +36,7 @@ def test_dispatch_targets_central_policy_with_bounded_inputs() -> None:
     workflow = _read(WORKFLOW)
 
     for expected in (
+        '--arg event_type "pr-review-fix-scheduler"',
         '"target_repository": "ContextualWisdomLab/contextual-orchestrator"',
         '"base_branch": "main"',
         '"max_prs": "100"',

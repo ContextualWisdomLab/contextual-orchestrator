@@ -12,7 +12,7 @@ NIST AI 600-1 frames generative-AI risk management around governance, measuremen
 
 | Product decision | Source basis | Implementation |
 |---|---|---|
-| Retry only when replay is known safe | RFC 9110 §9.2.2 | `idempotent` metadata gates `retry_same_agent`. |
+| Retry only when replay is known safe | RFC 9110 §9.2.2 | `idempotent` metadata gates `retry_same_agent`; `MAX_TOOL_RETRY_ATTEMPTS` caps one agent at four retries in configuration and execution. |
 | Stop when a non-idempotent result might already have occurred | RFC 9110 §9.2.2 | Non-idempotent timeout/transport uncertainty and `outcome_unknown` map to `ambiguous_outcome` + `fail_closed`; non-idempotent execution failure also fails closed. |
 | Test and measure failure behavior | NIST AI 600-1 | Exact Strix regression plus statement/branch coverage. |
 | Preserve accountability without disclosing sensitive content | NIST AI 600-1 | Stable reason codes and secret-free audit events. |
@@ -20,7 +20,7 @@ NIST AI 600-1 frames generative-AI risk management around governance, measuremen
 
 ## Audited SAST boundaries
 
-The Semgrep suppressions in `cost_ledger.py` cover SQL assembled exclusively from package-owned constant table and column catalogs; user values remain positional bind parameters. The provider transport suppression covers a URL that has already passed the package's scheme, host allowlist, public-address, credential, and response-boundary checks. The unverified TLS context remains an explicit development-only operator opt-out, while verified TLS is the default. These annotations are deliberately attached to the exact audited call sites rather than weakening or excluding the repository-wide scanner rules.
+The Semgrep suppressions in `cost_ledger.py` cover SQL assembled exclusively from package-owned constant table and column catalogs; user values remain positional bind parameters. The provider transport suppression covers a URL that has already passed the package's scheme, host allowlist, public-address, credential, and response-boundary checks. TLS selection accepts only an exact boolean. The unverified context remains an explicit development-only CLI opt-out, while `--serve` rejects that opt-out and requires verified system trust or `--provider-ca-bundle`. These annotations are deliberately attached to the exact audited call sites rather than weakening or excluding the repository-wide scanner rules.
 
 ## References — APA 7th
 
