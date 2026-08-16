@@ -7,6 +7,8 @@ from contextvars import ContextVar
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
+import base64
+import binascii
 import hashlib
 import ipaddress
 import json
@@ -689,6 +691,114 @@ def _coerce_message_content_text(content: Any) -> str:
     return ""
 
 
+_RASTER_MAGIC = {
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/jpg": (b"\xff\xd8\xff",),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+    "image/webp": (b"RIFF",),
+}
+_NEIGHBOR_TEXT_LIMIT = 256
+
+
+def inspect_image_url(url: str) -> dict[str, Any]:
+    """Accept http(s) or a complete data:image raster; reject HTML/JS/truncated bytes.
+
+    Remote http(s) URLs are not fetched here (provider egress still applies on
+    the hop). Data URIs must be ``data:image/<raster>;base64,<payload>`` whose
+    decoded bytes match the codec magic (Masinter, 1998; Boutell, 1997).
+    Buyer next action: send ``https://…/receipt.png`` or a complete PNG/JPEG
+    data URI beside the invoice line.
+    """
+    stripped = (url or "").strip()
+    if not stripped:
+        return {"ok": False, "error": "image_url.url must be a non-empty string"}
+    parsed = urlparse(stripped)
+    if parsed.scheme in {"http", "https"}:
+        if not parsed.netloc:
+            return {"ok": False, "error": "image_url.url http(s) host is required"}
+        return {"ok": True, "image_mime_type": "image/remote", "image_byte_length": 0}
+    if not stripped.lower().startswith("data:"):
+        return {
+            "ok": False,
+            "error": "image_url.url must be http(s) or a data:image raster",
+        }
+    header, separator, payload = stripped.partition(",")
+    if not separator or not payload.strip():
+        return {"ok": False, "error": "image_url.data_uri is missing a base64 payload"}
+    meta = header[5:]
+    tokens = [token.strip().lower() for token in meta.split(";") if token.strip()]
+    if not tokens:
+        return {"ok": False, "error": "image_url.data_uri is missing a media type"}
+    mime = tokens[0]
+    if mime == "image/jpg":
+        mime = "image/jpeg"
+    if mime not in _RASTER_MAGIC or "base64" not in tokens[1:]:
+        return {
+            "ok": False,
+            "error": "image_url.data_uri must be a base64 PNG, JPEG, GIF, or WebP",
+        }
+    try:
+        raw = base64.b64decode(payload, validate=True)
+    except (ValueError, binascii.Error):
+        return {"ok": False, "error": "image_url.data_uri base64 payload is invalid"}
+    prefixes = _RASTER_MAGIC[mime]
+    if mime == "image/webp":
+        if len(raw) < 12 or raw[:4] != b"RIFF" or raw[8:12] != b"WEBP":
+            return {"ok": False, "error": "image_url.data_uri bytes are not a complete WebP"}
+    elif not any(raw.startswith(prefix) for prefix in prefixes):
+        return {"ok": False, "error": "image_url.data_uri bytes do not match the declared raster"}
+    if mime == "image/png" and len(raw) < 67:
+        return {"ok": False, "error": "image_url.data_uri PNG is truncated"}
+    if mime == "image/jpeg" and len(raw) < 12:
+        return {"ok": False, "error": "image_url.data_uri JPEG is truncated"}
+    return {"ok": True, "image_mime_type": mime, "image_byte_length": len(raw)}
+
+
+def collect_message_image_units(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+    """Return one row per image part, keeping part_index next to neighbor text.
+
+    Layout-aware retrieval needs the figure that sat beside the invoice line
+    (Xu et al., 2020). Buyer next action: after a run, call
+    ``list_message_image_units`` and open the unit whose ``neighbor_text``
+    contains the invoice id.
+    """
+    units: list[dict[str, Any]] = []
+    for message_index, message in enumerate(messages):
+        content = message.get("content")
+        if not isinstance(content, list):
+            continue
+        neighbor_text = ""
+        for part_index, part in enumerate(content):
+            if not isinstance(part, dict):
+                continue
+            if part.get("type") == "text" and isinstance(part.get("text"), str):
+                neighbor_text = part["text"].strip()[:_NEIGHBOR_TEXT_LIMIT]
+                continue
+            if part.get("type") != "image_url":
+                continue
+            image_url = part.get("image_url")
+            if isinstance(image_url, str):
+                url = image_url
+            elif isinstance(image_url, dict):
+                url = image_url.get("url")
+            else:
+                url = ""
+            inspected = inspect_image_url(str(url or ""))
+            if not inspected.get("ok"):
+                raise ValueError(inspected.get("error") or "invalid image_url")
+            units.append(
+                {
+                    "message_index": message_index,
+                    "part_index": part_index,
+                    "image_mime_type": inspected["image_mime_type"],
+                    "image_byte_length": inspected["image_byte_length"],
+                    "neighbor_text": neighbor_text,
+                }
+            )
+    return units
+
+
 def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
     """Load model agent definitions from an agents JSON file."""
     with open(path, encoding="utf-8") as handle:
@@ -754,16 +864,44 @@ class _StateStore:
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
     )
     _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = "CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)"
+    _CREATE_IMAGE_UNIT_SQL = (
+        "CREATE TABLE IF NOT EXISTS message_image_unit ("
+        "image_unit_id TEXT PRIMARY KEY, "
+        "workflow_run_id TEXT NOT NULL, "
+        "message_index INTEGER NOT NULL, "
+        "part_index INTEGER NOT NULL, "
+        "image_mime_type TEXT NOT NULL, "
+        "image_byte_length INTEGER NOT NULL, "
+        "neighbor_text TEXT NOT NULL, "
+        "created_at INTEGER NOT NULL)"
+    )
+    _CREATE_IMAGE_UNIT_RUN_INDEX_SQL = (
+        "CREATE INDEX IF NOT EXISTS message_image_unit_run ON message_image_unit(workflow_run_id)"
+    )
     _DELETE_KEYED_SQL = "DELETE FROM records WHERE kind = ? AND key = ?"
     _INSERT_SQL = "INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)"
     _SELECT_ALL_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq"
     _SELECT_LIMIT_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
+    _DELETE_IMAGE_UNITS_SQL = "DELETE FROM message_image_unit WHERE workflow_run_id = ?"
+    _INSERT_IMAGE_UNIT_SQL = (
+        "INSERT INTO message_image_unit ("
+        "image_unit_id, workflow_run_id, message_index, part_index, "
+        "image_mime_type, image_byte_length, neighbor_text, created_at"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?)"
+    )
+    _SELECT_IMAGE_UNITS_SQL = (
+        "SELECT image_unit_id, workflow_run_id, message_index, part_index, "
+        "image_mime_type, image_byte_length, neighbor_text, created_at "
+        "FROM message_image_unit WHERE workflow_run_id = ? ORDER BY message_index, part_index"
+    )
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
         self._conn.execute(self._CREATE_RECORDS_SQL)
         self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
+        self._conn.execute(self._CREATE_IMAGE_UNIT_SQL)
+        self._conn.execute(self._CREATE_IMAGE_UNIT_RUN_INDEX_SQL)
         self._conn.commit()
 
     def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
@@ -782,6 +920,45 @@ class _StateStore:
                 rows = self._conn.execute(self._SELECT_LIMIT_SQL, (kind, limit)).fetchall()
                 rows = list(reversed(rows))
         return [json.loads(row[0]) for row in rows]
+
+    def save_image_units(self, workflow_run_id: str, units: list[dict[str, Any]]) -> None:
+        """Replace the 3NF image-unit rows for one workflow run."""
+        created_at = int(time.time())
+        with self._lock:
+            self._conn.execute(self._DELETE_IMAGE_UNITS_SQL, (workflow_run_id,))
+            for unit in units:
+                self._conn.execute(
+                    self._INSERT_IMAGE_UNIT_SQL,
+                    (
+                        unit.get("image_unit_id") or f"image_unit_{uuid.uuid4().hex}",
+                        workflow_run_id,
+                        int(unit["message_index"]),
+                        int(unit["part_index"]),
+                        str(unit["image_mime_type"]),
+                        int(unit["image_byte_length"]),
+                        str(unit.get("neighbor_text") or "")[:_NEIGHBOR_TEXT_LIMIT],
+                        int(unit.get("created_at") or created_at),
+                    ),
+                )
+            self._conn.commit()
+
+    def load_image_units(self, workflow_run_id: str) -> list[dict[str, Any]]:
+        """Return persisted image units for ``workflow_run_id`` in document order."""
+        with self._lock:
+            rows = self._conn.execute(self._SELECT_IMAGE_UNITS_SQL, (workflow_run_id,)).fetchall()
+        return [
+            {
+                "image_unit_id": row[0],
+                "workflow_run_id": row[1],
+                "message_index": row[2],
+                "part_index": row[3],
+                "image_mime_type": row[4],
+                "image_byte_length": row[5],
+                "neighbor_text": row[6],
+                "created_at": row[7],
+            }
+            for row in rows
+        ]
 
     def close(self) -> None:
         """Close the sqlite handle so Windows can release the database file."""
@@ -886,6 +1063,7 @@ class TaskOrchestrator:
         self.budget_max_output_tokens = budget_max_output_tokens
         self.budget_max_cost_usd = budget_max_cost_usd
         self._workflow_runs: dict[str, dict[str, Any]] = {}
+        self._message_image_units: dict[str, list[dict[str, Any]]] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
@@ -1064,8 +1242,11 @@ class TaskOrchestrator:
         }
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
+        image_units = collect_message_image_units(messages)
+        self._message_image_units[record["workflow_run_id"]] = image_units
         if self._store is not None:
             self._store.save("workflow_run", record["workflow_run_id"], record)
+            self._store.save_image_units(record["workflow_run_id"], image_units)
         self._append_audit_event(
             "workflow_run_created",
             {
@@ -1277,6 +1458,16 @@ class TaskOrchestrator:
         if workflow_run_id not in self._workflow_runs:  # pragma: no cover
             raise KeyError(workflow_run_id)
         return self._workflow_runs[workflow_run_id]
+
+    def list_message_image_units(self, workflow_run_id: str) -> list[dict[str, Any]]:
+        """Return image units for a run, including after sqlite restart.
+
+        Buyer next action: open the unit whose ``neighbor_text`` contains the
+        invoice id; ``part_index`` is the original content-part slot.
+        """
+        if self._store is not None:
+            return self._store.load_image_units(workflow_run_id)
+        return list(self._message_image_units.get(workflow_run_id, []))
 
     def get_access_report(self, workflow_run_id: str) -> dict[str, Any]:
         """Return per-step visibility and accessed output evidence for a run."""

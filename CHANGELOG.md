@@ -16,6 +16,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   ticket. Next action: request the trace only from a trusted caller; do not
   expect emails in that trace to become `[REDACTED]`.
 
+### Added
+
+- Chat ``image_url`` parts now fail closed on HTML, ``javascript:``, SVG, and
+  truncated raster data URIs, and persist a 3NF ``message_image_unit`` with
+  the original ``part_index`` beside neighboring invoice text. Buyer next
+  action: send a complete PNG/JPEG data URI or ``https://…/receipt.png``
+  next to the invoice line, then call ``list_message_image_units`` after
+  restart to reopen the figure that sat at that slot.
+
 ### Fixed
 
 - Serve sqlite, Clearfolio, and provider TLS paths

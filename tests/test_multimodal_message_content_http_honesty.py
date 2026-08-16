@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import base64
 import json
 import threading
 import urllib.error
@@ -15,6 +16,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "multimodal_message_content_http_honesty_token"  # noqa: S105
+_STAMP_PATH = Path(__file__).resolve().parent / "fixtures" / "invoice_stamp_1x1.png"
 
 
 def build() -> TaskOrchestrator:
@@ -67,7 +69,10 @@ def test_http_chat_accepts_text_and_image_url_parts() -> None:
                             {
                                 "type": "image_url",
                                 "image_url": {
-                                    "url": "data:image/png;base64,iVBORw0KGgo="
+                                    "url": (
+                                        "data:image/png;base64,"
+                                        + base64.b64encode(_STAMP_PATH.read_bytes()).decode("ascii")
+                                    )
                                 },
                             },
                         ],

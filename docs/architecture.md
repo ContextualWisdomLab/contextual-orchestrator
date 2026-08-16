@@ -60,7 +60,9 @@ This repository implements the interface and control plane, not the trained coor
   `provider_ca_bundle`; NIST SP 800-53 Rev. 5 CM-6). Matching
   `CONTEXTUAL_ORCHESTRATOR_*` env vars are bootstrap transport via
   `seed_serve_runtime_from_environ` only. `--host` / `--port` stay
-  process bind addresses.
+  process bind addresses. Chat ``image_url`` parts accept http(s) or a
+  complete ``data:image`` raster and persist ``message_image_unit`` rows
+  so a receipt photo stays next to the invoice line it illustrated.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

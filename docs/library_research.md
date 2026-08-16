@@ -81,6 +81,18 @@ configuration, not secrets. Reuse the existing process `ConfigStore`.
 | Runtime paths | Existing process `ConfigStore` (`get_runtime_config` / `set_runtime_config`); credential KV used for Bearer tokens | Store `serve_runtime.state_database_path`, `agents_database_path`, `clearfolio_base_url`, and `provider_ca_bundle`. Env `CONTEXTUAL_ORCHESTRATOR_STATE_DB` / `_AGENTS_DB` / `_CLEARFOLIO_URL` / `_PROVIDER_CA_BUNDLE` are bootstrap transport via `seed_serve_runtime_from_environ` only. Explicit CLI flags still win. | New config library, putting filesystem paths in `get_credential` (they are not secrets), storing `--host`/`--port` in KV (platform bind). |
 | Control baseline | NIST SP 800-53 Rev. 5 CM-6; ISO/IEC 27001:2022 A.8.9 | Document serve paths as a managed configuration baseline. A later env edit must not retarget a live process. | Shipping a full CMDB or remote config API in this slice. |
 
+## Message image units (2026-08-16)
+
+Invoice and receipt photos arrive as OpenAI ``image_url`` data URIs beside
+the line they illustrate. Reuse stdlib ``base64`` / ``urlparse`` and the
+existing sqlite state store. Do not add Pillow, an OCR engine, or a second
+image table format.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Raster gate | RFC 2397 data URIs; PNG/JPEG/GIF/WebP magic; LineageWeave `embedded_image_payload` allowlist | `inspect_image_url` accepts http(s) or a complete ``data:image/<raster>;base64`` whose bytes match the codec magic. HTML, SVG, ``javascript:``, and truncated PNG fail closed with ``part_index``. | Fetching remote bytes in the gateway, Pillow, live OCR in this slice. |
+| Position persist | LayoutLM (Xu et al., 2020); existing `_StateStore` sqlite | 3NF ``message_image_unit`` keyed by ``image_unit_id``, with ``message_index`` / ``part_index`` / ``neighbor_text``. Buyer calls ``list_message_image_units`` after restart. | A second embeddings chunker, a new HTTP collection, storing the raw base64 payload. |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

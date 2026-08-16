@@ -23,6 +23,7 @@ from .orchestrator import (
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
+    inspect_image_url,
     text_completion_response,
     redact_value,
     sse_stream_body,
@@ -1228,7 +1229,8 @@ def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
     Parts are shape-checked and returned for provider passthrough. Unsupported
     part types fail closed with a named error so clients never believe audio or
     other modalities were processed. Empty/whitespace text and image URLs fail
-    closed; bare-string ``image_url`` is normalized to ``{"url": ...}``; optional
+    closed; HTML/JS/truncated data URIs fail closed with ``part_index``;
+    bare-string ``image_url`` is normalized to ``{"url": ...}``; optional
     ``detail`` must be auto/low/high when present.
     """
     if not content:
@@ -1285,6 +1287,15 @@ def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
                     400,
                     "invalid_message_content",
                     "image_url content part requires image_url.url as a non-empty string",
+                    {"part_index": len(parts)},
+                )
+            inspected = inspect_image_url(url)
+            if not inspected.get("ok"):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    str(inspected.get("error") or "image_url.url is not a usable raster"),
+                    {"part_index": len(parts)},
                 )
             if "detail" in image_url:
                 detail = image_url.get("detail")

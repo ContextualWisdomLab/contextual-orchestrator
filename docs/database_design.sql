@@ -77,6 +77,26 @@ create index workflow_step_retention_idx
   on workflow_step (retention_expires_at)
   where deleted_at is null;
 
+create table message_image_unit (
+  image_unit_id text primary key,
+  workflow_run_id text not null references workflow_run(workflow_run_id),
+  message_index integer not null,
+  part_index integer not null,
+  image_mime_type text not null,
+  image_byte_length integer not null,
+  neighbor_text text not null,
+  retention_expires_at timestamptz not null,
+  deleted_at timestamptz,
+  created_at timestamptz not null default now(),
+  constraint message_image_unit_preview_limit check (
+    char_length(neighbor_text) <= 256
+  )
+);
+
+create index message_image_unit_run_idx
+  on message_image_unit (workflow_run_id)
+  where deleted_at is null;
+
 create index audit_event_retention_idx
   on audit_event (retention_expires_at)
   where deleted_at is null;
@@ -116,6 +136,12 @@ begin
     answer_ciphertext = '\x'::bytea,
     prompt_preview_text = '[deleted]',
     answer_preview_text = '[deleted]',
+    deleted_at = p_now
+  where deleted_at is null and retention_expires_at <= p_now;
+
+  update message_image_unit
+  set
+    neighbor_text = '[deleted]',
     deleted_at = p_now
   where deleted_at is null and retention_expires_at <= p_now;
 

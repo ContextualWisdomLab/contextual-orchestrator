@@ -125,6 +125,31 @@ cites them rather than vendoring the full PDFs.
   The guideline text is not attached (US government work is cited, not
   redistributed here).
 
+## Message image units (layout-aware figure position)
+
+A receipt photo is a meaning unit. The gateway must keep the figure's
+original ``part_index`` next to the invoice line it illustrated, and must
+not bill a vision hop on an HTML or truncated PNG payload.
+
+- Xu, Y., Li, M., Cui, L., Huang, S., Wei, F., & Zhou, M. (2020). LayoutLM:
+  Pre-training of text and layout for document image understanding. In
+  *Proceedings of the 26th ACM SIGKDD International Conference on Knowledge
+  Discovery & Data Mining* (pp. 1192–1200). Association for Computing
+  Machinery. https://doi.org/10.1145/3394486.3403172
+  Preprint: https://arxiv.org/abs/1912.13318
+  Grounds storing figure position beside neighboring text so retrieval can
+  find the stamp that sat next to ``INV-4419``. The ACM PDF is not
+  redistributed here; the arXiv preprint is the OA copy.
+- Masinter, L. (1998). *The "data" URL scheme* (RFC 2397). Internet
+  Engineering Task Force. https://doi.org/10.17487/RFC2397
+  Grounds ``data:image/<type>;base64,<payload>`` as the only inlined image
+  form this gateway accepts. RFC text is cited, not vendored.
+- Boutell, T. (1997). *PNG (Portable Network Graphics) specification
+  version 1.0* (RFC 2083). Internet Engineering Task Force.
+  https://doi.org/10.17487/RFC2083
+  Grounds the 8-byte PNG signature check that rejects truncated
+  ``iVBORw0KGgo=`` payloads. RFC text is cited, not vendored.
+
 ## Boundary protection (provider host allowlist)
 
 ISO/IEC 27001 cannot be redistributed here. NIST SP 800-53 is a US government
