@@ -8,6 +8,7 @@ import os
 import sys
 
 from .credentials import register_credential
+from .kv_config import seed_provider_egress_from_environ
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
@@ -94,6 +95,7 @@ def main() -> None:
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
+    seed_provider_egress_from_environ()
     client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),

@@ -29,6 +29,12 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   schema. Non-null wrong types still fail closed with named `invalid_tools`.
   Next action: send those fields only when you have a real string, JSON Schema
   object, or boolean; SDK defaults of `null` are safe.
+- Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is
+  read from the process KV at request time. `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`
+  is copied into that KV key once at process start (`seed_provider_egress_from_environ`).
+  Changing the env var on a running process no longer changes egress policy.
+  Next action: seed the allowlist into the KV, or start the process with
+  the env var set so bootstrap can copy it.
 
 ### References
 
@@ -37,3 +43,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data
   interchange format* (RFC 8259). Internet Engineering Task Force.
   https://doi.org/10.17487/RFC8259
+- Joint Task Force. (2020). *Security and privacy controls for information
+  systems and organizations* (NIST Special Publication 800-53 Rev. 5).
+  National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-53r5
+- International Organization for Standardization. (2022). *Information
+  security, cybersecurity and privacy protection — Information security
+  controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001

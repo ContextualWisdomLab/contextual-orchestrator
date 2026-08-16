@@ -2,12 +2,16 @@
 
 ## Sources Read
 
-- Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
-- Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-- TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
-- Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+APA 7th citations (titles retained for paper-contract search):
+
+- Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
+- Sakana AI. (2026). *Sakana Fugu Technical Report*. https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://arxiv.org/abs/2512.04695
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). https://arxiv.org/abs/2512.04388
 - OpenAI. (2024). *Create chat completion*. OpenAI API reference. https://platform.openai.com/docs/api-reference/chat/create
 - Bray, T. (Ed.). (2017). *The JavaScript Object Notation (JSON) data interchange format* (RFC 8259). Internet Engineering Task Force. https://doi.org/10.17487/RFC8259
+- Joint Task Force. (2020). *Security and privacy controls for information systems and organizations* (NIST Special Publication 800-53 Rev. 5). National Institute of Standards and Technology. https://doi.org/10.6028/NIST.SP.800-53r5
+- International Organization for Standardization. (2022). *Information security, cybersecurity and privacy protection — Information security controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
 
 ## What The Architecture Is
 
@@ -39,6 +43,11 @@ This repository implements the interface and control plane, not the trained coor
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
+  Provider host allowlisting (`provider_egress.allowed_provider_hosts`) is
+  read from the process KV at request time (NIST SP 800-53 Rev. 5 SC-7;
+  ISO/IEC 27001:2022 A.8.20). `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS`
+  is bootstrap transport into that KV key only — never `os.getenv` during
+  `_validate_provider`.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.

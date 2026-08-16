@@ -147,6 +147,27 @@ principle **"No os.getenv, values from KV"**, that source moves to the KV:
 
 `api_key_env` is retained only as a back-compat *credential name* alias.
 
+## Provider host allowlist (config, not a secret)
+
+The approved-gateway hostname list is **config**, stored under
+`provider_egress` / `allowed_provider_hosts` in the process KV
+(`set_runtime_config` / `allowed_provider_hosts()`). It is not a
+credential.
+
+At process start (`python -m contextual_orchestrator` or `serve()`),
+`seed_provider_egress_from_environ()` may copy
+`CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` into that KV key **once**,
+when the key is still empty. After that, changing the env var does nothing
+until the next bootstrap. Request-time `_validate_provider` reads only the
+KV.
+
+Buyer next action: seed the allowlist into the KV (or start the process
+with the env var set so bootstrap can copy it), then send traffic. Do not
+expect a later env edit to change egress policy on a running process.
+
+Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 SC-7; ISO/IEC
+27001:2022 A.8.20.
+
 ## Gateway direction
 
 This credential seam is the durable first step of growing
