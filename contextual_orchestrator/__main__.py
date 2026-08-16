@@ -8,7 +8,11 @@ import os
 import sys
 
 from .credentials import register_credential, resolve_server_auth_tokens, seed_server_auth_from_environ
-from .kv_config import seed_provider_egress_from_environ
+from .kv_config import (
+    resolve_serve_runtime_paths,
+    seed_provider_egress_from_environ,
+    seed_serve_runtime_from_environ,
+)
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
@@ -25,6 +29,23 @@ def serve_security_tokens(args: argparse.Namespace) -> tuple[str, str, str]:
         auth_token=args.auth_token,
         admin_token=args.admin_token,
         inference_token=args.inference_token,
+    )
+
+
+def serve_runtime_paths(args: argparse.Namespace) -> tuple[str | None, str | None, str | None, str | None]:
+    """Seed env sqlite/Clearfolio/TLS paths into the KV once, then resolve them.
+
+    Explicit CLI flags win. Env is bootstrap transport only. Buyer next
+    action: pass ``--state-db``, ``--agents-db``, ``--clearfolio-url``, and
+    ``--provider-ca-bundle``, or start once with the matching
+    ``CONTEXTUAL_ORCHESTRATOR_*`` variables so the KV can copy them.
+    """
+    seed_serve_runtime_from_environ()
+    return resolve_serve_runtime_paths(
+        state_db=args.state_db,
+        agents_db=args.agents_db,
+        clearfolio_url=args.clearfolio_url,
+        provider_ca_bundle=args.provider_ca_bundle,
     )
 
 
@@ -80,8 +101,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
-    parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
-                        help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
+    parser.add_argument(
+        "--state-db",
+        default="",
+        help="Optional sqlite path to persist runs/audit/analytics. When omitted, bootstrap copies CONTEXTUAL_ORCHESTRATOR_STATE_DB into the serve_runtime KV once.",
+    )
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument("--host", default="127.0.0.1")
@@ -104,12 +128,21 @@ def main() -> None:
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
-    parser.add_argument("--clearfolio-url", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL") or None,
-                        help="Base URL of a Clearfolio deployment to use as the admin document viewer (default: disabled).")
-    parser.add_argument("--agents-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None,
-                        help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
-    parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
-                        help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
+    parser.add_argument(
+        "--clearfolio-url",
+        default="",
+        help="Clearfolio viewer URL. When omitted, bootstrap copies CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL into the serve_runtime KV once.",
+    )
+    parser.add_argument(
+        "--agents-db",
+        default="",
+        help="Optional sqlite path for runtime agent-pool changes. When omitted, bootstrap copies CONTEXTUAL_ORCHESTRATOR_AGENTS_DB into the serve_runtime KV once.",
+    )
+    parser.add_argument(
+        "--provider-ca-bundle",
+        default="",
+        help="Provider TLS CA bundle path. When omitted, bootstrap copies CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE into the serve_runtime KV once.",
+    )
     parser.add_argument("--insecure-skip-tls-verify", action="store_true",
                         help="Dev only: do not verify provider TLS certificates (insecure).")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
@@ -123,12 +156,13 @@ def main() -> None:
     args = parser.parse_args()
 
     seed_provider_egress_from_environ()
-    client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
+    state_db, agents_db, clearfolio_url, provider_ca_bundle = serve_runtime_paths(args)
+    client = ModelClient(ca_bundle=provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),
         client=client,
-        state_db=args.state_db,
-        agents_db=args.agents_db,
+        state_db=state_db,
+        agents_db=agents_db,
         budget_max_output_tokens=args.budget_max_output_tokens,
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
@@ -161,7 +195,7 @@ def main() -> None:
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
             ),
-            clearfolio_url=args.clearfolio_url,
+            clearfolio_url=clearfolio_url,
         )
         return
 

@@ -71,6 +71,16 @@ Serve-time Bearer authenticators are secrets, not config. Reuse the existing cre
 | Authenticator store | Existing `get_credential` / `register_credential` (`InMemoryCredentialBackend`, pgcrypto `PostgresCredentialBackend`); process `ConfigStore` used for the host allowlist | Store `gateway_auth_token`, `admin_auth_token`, and `inference_auth_token` in the credential KV. `CONTEXTUAL_ORCHESTRATOR_TOKEN` / `_ADMIN_TOKEN` / `_INFERENCE_TOKEN` are bootstrap transport via `seed_server_auth_from_environ` only. Explicit `--auth-token` / `--admin-token` / `--inference-token` still win. | New auth library, OAuth/OIDC in this slice, putting tokens in `provider_egress` ConfigStore (they are secrets). |
 | Control baseline | NIST SP 800-53 Rev. 5 IA-5; NIST SP 800-63B | Document authenticators as KV-managed secrets. A later env edit must not change a live process. | Shipping a full authenticator lifecycle (rotation API, AAL2) in this slice. |
 
+## Serve runtime paths (2026-08-16)
+
+Sqlite persistence, Clearfolio viewer URL, and provider TLS CA bundle are
+configuration, not secrets. Reuse the existing process `ConfigStore`.
+
+| Area | Researched | Decision | Skipped |
+|---|---|---|---|
+| Runtime paths | Existing process `ConfigStore` (`get_runtime_config` / `set_runtime_config`); credential KV used for Bearer tokens | Store `serve_runtime.state_database_path`, `agents_database_path`, `clearfolio_base_url`, and `provider_ca_bundle`. Env `CONTEXTUAL_ORCHESTRATOR_STATE_DB` / `_AGENTS_DB` / `_CLEARFOLIO_URL` / `_PROVIDER_CA_BUNDLE` are bootstrap transport via `seed_serve_runtime_from_environ` only. Explicit CLI flags still win. | New config library, putting filesystem paths in `get_credential` (they are not secrets), storing `--host`/`--port` in KV (platform bind). |
+| Control baseline | NIST SP 800-53 Rev. 5 CM-6; ISO/IEC 27001:2022 A.8.9 | Document serve paths as a managed configuration baseline. A later env edit must not retarget a live process. | Shipping a full CMDB or remote config API in this slice. |
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

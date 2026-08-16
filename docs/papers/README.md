@@ -53,6 +53,23 @@ OpenAI-compatible backends reject a null JSON Schema object.
   Distinguishes a present `null` member from an omitted member. Redistribution
   of the RFC text is not required here; the citation is the normative source.
 
+## Configuration baseline (serve runtime paths)
+
+Serve-time sqlite paths, the Clearfolio viewer URL, and the provider TLS
+CA bundle are configuration settings. They must live in the process KV
+baseline, not in a live `os.getenv` read after bootstrap.
+
+- Joint Task Force. (2020). *Security and privacy controls for information
+  systems and organizations* (NIST Special Publication 800-53 Rev. 5).
+  National Institute of Standards and Technology.
+  https://doi.org/10.6028/NIST.SP.800-53r5
+  Grounds CM-6 (configuration settings) for `serve_runtime` keys.
+- International Organization for Standardization. (2022). *Information
+  security, cybersecurity and privacy protection — Information security
+  controls* (ISO/IEC 27001:2022). https://www.iso.org/standard/27001
+  Grounds A.8.9 configuration management. The standard text is not
+  redistributed here.
+
 ## Batch execution / load balancing
 
 The external `pg-llm-batch` service carries its own grounding papers, including

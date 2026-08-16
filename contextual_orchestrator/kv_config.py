@@ -26,6 +26,21 @@ from typing import Any, Dict, Iterable, Optional, Protocol, Tuple
 PROVIDER_EGRESS_CATEGORY = "provider_egress"
 ALLOWED_PROVIDER_HOSTS_KEY = "allowed_provider_hosts"
 _ALLOWED_HOSTS_ENV = "CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"
+SERVE_RUNTIME_CATEGORY = "serve_runtime"
+STATE_DATABASE_PATH_KEY = "state_database_path"
+AGENTS_DATABASE_PATH_KEY = "agents_database_path"
+CLEARFOLIO_BASE_URL_KEY = "clearfolio_base_url"
+PROVIDER_CA_BUNDLE_KEY = "provider_ca_bundle"
+_STATE_DB_ENV = "CONTEXTUAL_ORCHESTRATOR_STATE_DB"
+_AGENTS_DB_ENV = "CONTEXTUAL_ORCHESTRATOR_AGENTS_DB"
+_CLEARFOLIO_URL_ENV = "CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL"
+_PROVIDER_CA_BUNDLE_ENV = "CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE"
+_SERVE_RUNTIME_ENV = (
+    (STATE_DATABASE_PATH_KEY, _STATE_DB_ENV),
+    (AGENTS_DATABASE_PATH_KEY, _AGENTS_DB_ENV),
+    (CLEARFOLIO_BASE_URL_KEY, _CLEARFOLIO_URL_ENV),
+    (PROVIDER_CA_BUNDLE_KEY, _PROVIDER_CA_BUNDLE_ENV),
+)
 
 _runtime_store: ConfigStore | None = None
 _runtime_lock = threading.Lock()
@@ -227,3 +242,55 @@ def seed_provider_egress_from_environ() -> None:
         raw = os.environ.get(_ALLOWED_HOSTS_ENV, "")
         if raw.strip():
             store.set(PROVIDER_EGRESS_CATEGORY, ALLOWED_PROVIDER_HOSTS_KEY, raw)
+
+
+def _optional_path(value: str | None) -> str | None:
+    """Treat blank CLI/KV strings as omitted so argparse empty defaults stay None."""
+    if value is None:
+        return None
+    stripped = str(value).strip()
+    return stripped or None
+
+
+def seed_serve_runtime_from_environ() -> None:
+    """Bootstrap: copy sqlite, Clearfolio, and TLS paths into KV when empty.
+
+    This is the only allowed ``os.environ`` read for serve-time persistence
+    and viewer/TLS paths. Request-time callers must use
+    :func:`resolve_serve_runtime_paths`. Each empty-check and write shares
+    ``_runtime_lock`` so concurrent ``main()`` seeds cannot both observe an
+    empty key.
+    """
+    store = get_runtime_config_store()
+    with _runtime_lock:
+        for key, env_name in _SERVE_RUNTIME_ENV:
+            existing = store.get(SERVE_RUNTIME_CATEGORY, key, None)
+            if existing not in (None, ""):
+                continue
+            raw = os.environ.get(env_name, "")
+            if raw.strip():
+                store.set(SERVE_RUNTIME_CATEGORY, key, raw.strip())
+
+
+def resolve_serve_runtime_paths(
+    state_db: str | None = None,
+    agents_db: str | None = None,
+    clearfolio_url: str | None = None,
+    provider_ca_bundle: str | None = None,
+) -> tuple[str | None, str | None, str | None, str | None]:
+    """Return serve paths. Explicit CLI values win; otherwise the KV baseline.
+
+    Never reads ``os.getenv``. Buyer next action: pass ``--state-db``,
+    ``--agents-db``, ``--clearfolio-url``, and ``--provider-ca-bundle``, or
+    start once with the matching env vars so bootstrap can copy them.
+    """
+    return (
+        _optional_path(state_db)
+        or _optional_path(get_runtime_config(SERVE_RUNTIME_CATEGORY, STATE_DATABASE_PATH_KEY, "")),
+        _optional_path(agents_db)
+        or _optional_path(get_runtime_config(SERVE_RUNTIME_CATEGORY, AGENTS_DATABASE_PATH_KEY, "")),
+        _optional_path(clearfolio_url)
+        or _optional_path(get_runtime_config(SERVE_RUNTIME_CATEGORY, CLEARFOLIO_BASE_URL_KEY, "")),
+        _optional_path(provider_ca_bundle)
+        or _optional_path(get_runtime_config(SERVE_RUNTIME_CATEGORY, PROVIDER_CA_BUNDLE_KEY, "")),
+    )

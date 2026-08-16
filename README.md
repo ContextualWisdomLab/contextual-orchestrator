@@ -40,7 +40,7 @@ HTTP serving is hardened for local lab use:
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted. Trusted traces keep operational email so invoice and HR tickets stay workable; credential material is still `[REDACTED]`.
-- State is in-memory by default. Pass `--state-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_STATE_DB`) to persist workflow runs, evaluation runs, audit, and analytics to a stdlib sqlite file so they survive a restart; without it, behavior is unchanged.
+- State is in-memory by default. Pass `--state-db PATH` (or start once with `CONTEXTUAL_ORCHESTRATOR_STATE_DB` so bootstrap can copy it into `serve_runtime.state_database_path`) to persist workflow runs, evaluation runs, audit, and analytics to a stdlib sqlite file so they survive a restart; without it, behavior is unchanged. A later env edit does not retarget the file.
 - Response caching is off by default. Pass `--cache-ttl SECONDS` to serve identical requests (same messages + mode) from an in-memory TTL+LRU cache and skip the provider calls; `0` disables it.
 - `ModelClient.batch_chat(agent, {custom_id: messages})` runs many requests through the provider's Batch API (async, 24h completion window, typically ~50% cheaper) — suited to evaluation/benchmark workloads, not latency-sensitive chat. The mock path answers synchronously.
 
@@ -60,7 +60,7 @@ Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints.
 }
 ```
 
-The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
+The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or start once with `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB` so bootstrap can copy it into `serve_runtime.agents_database_path`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before. A later env edit does not retarget the file.
 
 Seed the credential into the KV once at bootstrap:
 
@@ -81,7 +81,7 @@ One public interface:
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline — per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
-- The admin console can use [Clearfolio](https://github.com/ContextualWisdomLab/clearfolio) as its document viewer: pass `--clearfolio-url URL` (or `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`) and the Integrations view gains a Document Viewer card (open viewer / deep-link `{url}/viewer/{docId}`). Default: disabled, console unchanged.
+- The admin console can use [Clearfolio](https://github.com/ContextualWisdomLab/clearfolio) as its document viewer: pass `--clearfolio-url URL` (or start once with `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL` so bootstrap can copy it into `serve_runtime.clearfolio_base_url`) and the Integrations view gains a Document Viewer card (open viewer / deep-link `{url}/viewer/{docId}`). Default: disabled, console unchanged. A later env edit does not retarget the viewer.
 - `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Output tokens use provider-reported `usage` when available and fall back to a ~4 chars/token estimate otherwise (each model row is labeled `usage_source: reported | mixed | estimated`); cost is computed only for models with an operator-supplied price (`TaskOrchestrator(price_per_million=...)`), otherwise reported as null with the model listed under `unpriced_models`. See [Observability & spend](#observability--spend).
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
 - `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.

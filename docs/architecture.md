@@ -54,7 +54,13 @@ This repository implements the interface and control plane, not the trained coor
   `inference_auth_token`) resolve from the credential KV (NIST SP 800-53
   Rev. 5 IA-5; NIST SP 800-63B). `CONTEXTUAL_ORCHESTRATOR_TOKEN` and the
   split admin/inference vars are bootstrap transport via
-  `seed_server_auth_from_environ` only.
+  `seed_server_auth_from_environ` only. Serve sqlite, Clearfolio, and
+  provider TLS paths resolve from `serve_runtime` KV keys
+  (`state_database_path`, `agents_database_path`, `clearfolio_base_url`,
+  `provider_ca_bundle`; NIST SP 800-53 Rev. 5 CM-6). Matching
+  `CONTEXTUAL_ORCHESTRATOR_*` env vars are bootstrap transport via
+  `seed_serve_runtime_from_environ` only. `--host` / `--port` stay
+  process bind addresses.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

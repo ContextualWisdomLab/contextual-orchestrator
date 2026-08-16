@@ -201,6 +201,34 @@ the flag default.
 Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 IA-5; Grassi et
 al. (2017) NIST SP 800-63B.
 
+## Serve runtime paths (configuration)
+
+Sqlite persistence, the Clearfolio viewer URL, and the provider TLS CA
+bundle are **configuration**, stored under `serve_runtime` keys
+`state_database_path`, `agents_database_path`, `clearfolio_base_url`, and
+`provider_ca_bundle`. They are not secrets and they are not read from
+`os.getenv` after bootstrap.
+
+At process start, `seed_serve_runtime_from_environ()` may copy
+`CONTEXTUAL_ORCHESTRATOR_STATE_DB`, `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`,
+`CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`, and
+`CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE` into those KV keys **once**,
+when the key is still empty. After that, changing the env var does
+nothing until the next bootstrap. `--serve` and CLI completion resolve
+paths with `resolve_serve_runtime_paths()`: an explicit `--state-db` /
+`--agents-db` / `--clearfolio-url` / `--provider-ca-bundle` wins;
+otherwise the KV value is used. `--host` and `--port` stay process bind
+addresses (the platform injects them) and are not stored in this KV.
+
+Buyer next action: pass the CLI flags, or start once with the matching
+env vars so bootstrap can copy them, then open the sqlite file or
+Clearfolio URL that the KV holds. Do not edit the env var on a live
+process and expect persistence, the document viewer, or provider TLS to
+retarget. Do not expect argparse to read those env vars as flag defaults.
+
+Grounding: Joint Task Force (2020) NIST SP 800-53 Rev. 5 CM-6; ISO/IEC
+27001:2022 A.8.9.
+
 ## Gateway direction
 
 This credential seam is the durable first step of growing

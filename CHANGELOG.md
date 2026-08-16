@@ -18,6 +18,17 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 
 ### Fixed
 
+- Serve sqlite, Clearfolio, and provider TLS paths
+  (`serve_runtime.state_database_path`, `agents_database_path`,
+  `clearfolio_base_url`, `provider_ca_bundle`) resolve from the runtime
+  KV. `--state-db` / `--agents-db` / `--clearfolio-url` /
+  `--provider-ca-bundle` still win. The matching
+  `CONTEXTUAL_ORCHESTRATOR_*` env vars are copied into those KV keys once
+  at process start (`seed_serve_runtime_from_environ`). Changing the env
+  var on a running process no longer retargets persistence, the document
+  viewer, or provider TLS. Buyer next action: pass the CLI flags (or
+  start once with the env vars so bootstrap can copy them), then open the
+  KV sqlite path or Clearfolio URL.
 - Gateway Bearer authenticators (`gateway_auth_token`, `admin_auth_token`,
   `inference_auth_token`) resolve from the credential KV. `--auth-token`
   and the split pair still win. `CONTEXTUAL_ORCHESTRATOR_TOKEN` /

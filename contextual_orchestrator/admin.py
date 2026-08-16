@@ -42,7 +42,7 @@ ADMIN_TRANSLATIONS = {
         "doc_viewer_open": "Open viewer",
         "doc_viewer_open_doc": "Open document",
         "doc_viewer_docid": "docId",
-        "doc_viewer_hint": "Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.",
+        "doc_viewer_hint": "Pass --clearfolio-url, or start once with CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL so the serve_runtime KV can copy it.",
         "observability_title": "Observability",
         "spend_title": "Spend",
         "spend_model": "Model",
@@ -276,7 +276,7 @@ ADMIN_TRANSLATIONS = {
         "doc_viewer_open": "뷰어 열기",
         "doc_viewer_open_doc": "문서 열기",
         "doc_viewer_docid": "docId",
-        "doc_viewer_hint": "--clearfolio-url (또는 CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) 설정 시 활성화됩니다.",
+        "doc_viewer_hint": "--clearfolio-url을 넘기거나, CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL로 한 번 기동해 serve_runtime KV에 복사하세요.",
         "observability_title": "관측",
         "spend_title": "비용",
         "spend_model": "모델",
@@ -967,7 +967,7 @@ Summarize this research thread and verify claims.</textarea>
             <input id="docViewerDocId" type="text" data-i18n-placeholder="doc_viewer_docid" placeholder="docId" />
             <button id="docViewerOpenDoc" class="btn" data-i18n="doc_viewer_open_doc">Open document</button>
           </div>
-          <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Set --clearfolio-url (or CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL) to enable.</p>
+          <p class="muted" id="docViewerHint" data-i18n="doc_viewer_hint">Pass --clearfolio-url, or start once with CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL so the serve_runtime KV can copy it.</p>
         </section>
       </section>
       <section class="detail-grid view" data-view="observability" hidden>

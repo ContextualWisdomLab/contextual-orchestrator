@@ -56,16 +56,18 @@ push or open a PR.
 - The reference implementation is xtrmLLMBatchPython's pgcrypto-encrypted
   Postgres credential registry (`get_credential(name)`); reuse that pattern (a
   DB-backed KV is fine) unless a dedicated KV is adopted.
-- **Known deviation to migrate:** `__main__.py` still accepts bind/TLS
-  flags and sqlite/Clearfolio paths from env as **process bootstrap**.
-  Provider API keys, gateway Bearer authenticators
-  (`gateway_auth_token` / `admin_auth_token` / `inference_auth_token`),
-  and the provider-host allowlist are KV-backed
-  (`get_credential`, `resolve_server_auth_tokens`,
-  `allowed_provider_hosts`). Env tokens are bootstrap transport via
-  `seed_server_auth_from_environ` only. Do not reintroduce `os.getenv`
-  inside `ModelClient._validate_provider`, `ModelClient.chat`, or
-  `serve_security_tokens` resolution.
+- **Known remaining bootstrap:** `--host` / `--port` stay process bind
+  addresses (the platform injects them). `--insecure-skip-tls-verify` and
+  `--allow-public-bind` stay explicit CLI flags. Provider API keys, gateway
+  Bearer authenticators (`gateway_auth_token` / `admin_auth_token` /
+  `inference_auth_token`), the provider-host allowlist, and serve sqlite /
+  Clearfolio / TLS CA paths are KV-backed (`get_credential`,
+  `resolve_server_auth_tokens`, `allowed_provider_hosts`,
+  `resolve_serve_runtime_paths`). Env values are bootstrap transport via
+  `seed_server_auth_from_environ` / `seed_serve_runtime_from_environ` /
+  `seed_provider_egress_from_environ` only. Do not reintroduce `os.getenv`
+  inside `ModelClient._validate_provider`, `ModelClient.chat`,
+  `serve_security_tokens`, or `serve_runtime_paths` resolution.
 
 ### This repo: the org LLM gateway
 
