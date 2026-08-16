@@ -41,6 +41,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Apply the request `temperature` on streamed route completions instead of
   silently using `0.2`. Next action: send the temperature you want; streaming
   no longer changes the sampling policy.
+- Apply request `top_p`, `presence_penalty`, and `frequency_penalty` on
+  streamed route completions the same way `chat()` already does. Next
+  action: send the nucleus and penalty knobs you want; streaming no longer
+  drops them.
 
 ### References
 
