@@ -31,6 +31,9 @@ deserialize request config validate untrusted input"`):
 4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
    `mock://` providers (fully offline). Arbitrary prompt text and mode must
    produce a JSON-serialisable record whose SSE framing round-trips.
+5. **Provider host allowlist** — `kv_config._parse_host_allowlist`. Arbitrary
+   CSV / sequence / JSON-ish values must yield a `frozenset[str]` of stripped
+   lower-case hosts or a documented parse error — never an unhandled crash.
 
 ## Running locally
 

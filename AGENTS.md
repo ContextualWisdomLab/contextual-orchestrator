@@ -70,8 +70,10 @@ push or open a PR.
 - **Direction:** grow it toward a **LiteLLM-class multi-provider gateway**. The
   org is open to a **Rust/Python hybrid** to cut overhead.
 - Provider API keys resolve through `get_credential`. The provider-host
-  allowlist resolves through `allowed_provider_hosts()` (KV category
-  `provider_egress`). Env remains bootstrap transport only.
+  allowlist resolves through `allowed_provider_hosts()` on the **process-wide
+  runtime ConfigStore** (KV category `provider_egress`). That store is
+  `InMemoryConfigStore` unless bootstrap installed another backend with
+  `set_runtime_config_store()`. Env remains bootstrap transport only.
 - The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
   do not change it.
 
