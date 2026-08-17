@@ -85,8 +85,8 @@ def test_http_chat_accepts_service_tier_default() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_service_tier_flex() -> None:
-    """flex/priority are capacity modes this gateway does not apply — fail closed."""
+def test_http_chat_accepts_service_tier_flex() -> None:
+    """flex is a known OpenAI tier name; accepted as default-capacity no-op."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -98,16 +98,13 @@ def test_http_chat_rejects_service_tier_flex() -> None:
                 "service_tier": "flex",
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_service_tier" in blob
-        assert "not supported" in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_service_tier_priority() -> None:
+def test_http_chat_accepts_service_tier_priority() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -119,8 +116,7 @@ def test_http_chat_rejects_service_tier_priority() -> None:
                 "service_tier": "priority",
             },
         )
-        assert status == 400, body
-        assert "invalid_service_tier" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -145,7 +141,7 @@ def test_http_chat_rejects_service_tier_non_string() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_rejects_service_tier_flex() -> None:
+def test_http_completions_accepts_service_tier_flex() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -157,8 +153,7 @@ def test_http_completions_rejects_service_tier_flex() -> None:
                 "service_tier": "flex",
             },
         )
-        assert status == 400, body
-        assert "invalid_service_tier" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -184,9 +179,9 @@ def test_http_chat_accepts_service_tier_omitted() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_service_tier_auto()
     test_http_chat_accepts_service_tier_default()
-    test_http_chat_rejects_service_tier_flex()
-    test_http_chat_rejects_service_tier_priority()
+    test_http_chat_accepts_service_tier_flex()
+    test_http_chat_accepts_service_tier_priority()
     test_http_chat_rejects_service_tier_non_string()
-    test_http_completions_rejects_service_tier_flex()
+    test_http_completions_accepts_service_tier_flex()
     test_http_chat_accepts_service_tier_omitted()
     print("ok")

@@ -124,7 +124,7 @@ def test_http_responses_accepts_padded_service_tier_auto() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_flex_service_tier() -> None:
+def test_http_chat_accepts_padded_flex_service_tier() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -136,8 +136,7 @@ def test_http_chat_still_rejects_flex_service_tier() -> None:
                 "service_tier": " flex ",
             },
         )
-        assert status == 400, body
-        assert "invalid_service_tier" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -186,7 +185,7 @@ if __name__ == "__main__":
     test_http_chat_accepts_padded_service_tier_default()
     test_http_completions_accepts_padded_service_tier_default()
     test_http_responses_accepts_padded_service_tier_auto()
-    test_http_chat_still_rejects_flex_service_tier()
+    test_http_chat_accepts_padded_flex_service_tier()
     test_http_embeddings_accepts_padded_encoding_format_float()
     test_http_embeddings_accepts_padded_base64()
     print("ok")

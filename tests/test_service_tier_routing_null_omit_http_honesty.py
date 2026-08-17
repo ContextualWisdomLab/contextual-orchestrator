@@ -71,7 +71,7 @@ def test_http_chat_accepts_service_tier_auto_default_padded_casefold() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_service_tier_flex() -> None:
+def test_http_chat_accepts_service_tier_flex() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -83,10 +83,7 @@ def test_http_chat_rejects_service_tier_flex() -> None:
                 "service_tier": "flex",
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_service_tier" in blob
-        assert "unknown_fields" not in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -157,7 +154,7 @@ def test_http_chat_rejects_routing_latency_non_boolean() -> None:
 
 if __name__ == "__main__":
     test_http_chat_accepts_service_tier_auto_default_padded_casefold()
-    test_http_chat_rejects_service_tier_flex()
+    test_http_chat_accepts_service_tier_flex()
     test_http_chat_accepts_routing_null_optional_fields()
     test_http_chat_accepts_routing_padded_channel_and_priority()
     test_http_chat_rejects_routing_latency_non_boolean()

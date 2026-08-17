@@ -118,11 +118,12 @@ def test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n() -> None:
             (_base(stop="END"), "invalid_stop"),
             (_base(n=2), "invalid_n"),
             (_base(logit_bias={"100": 1.0}), "invalid_logit_bias"),
-            (_base(service_tier="flex"), "invalid_service_tier"),
         ):
             status, body = _post(port, payload)
             assert status == 400, (payload, body)
             assert code in json.dumps(body), (code, body)
+        status, body = _post(port, _base(service_tier="flex"))
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)

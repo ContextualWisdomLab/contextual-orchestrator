@@ -76,7 +76,7 @@ def test_http_responses_accepts_auto_and_default_service_tier() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_flex_service_tier() -> None:
+def test_http_responses_accepts_flex_service_tier() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -87,16 +87,13 @@ def test_http_responses_rejects_flex_service_tier() -> None:
                 "service_tier": "flex",
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_service_tier" in blob
-        assert "not supported" in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_priority_service_tier() -> None:
+def test_http_responses_accepts_priority_service_tier() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -107,8 +104,7 @@ def test_http_responses_rejects_priority_service_tier() -> None:
                 "service_tier": "priority",
             },
         )
-        assert status == 400, body
-        assert "invalid_service_tier" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -135,7 +131,7 @@ def test_http_responses_rejects_non_string_service_tier() -> None:
 if __name__ == "__main__":
     test_http_responses_accepts_omitted_service_tier()
     test_http_responses_accepts_auto_and_default_service_tier()
-    test_http_responses_rejects_flex_service_tier()
-    test_http_responses_rejects_priority_service_tier()
+    test_http_responses_accepts_flex_service_tier()
+    test_http_responses_accepts_priority_service_tier()
     test_http_responses_rejects_non_string_service_tier()
     print("ok")

@@ -540,12 +540,13 @@ def _validate_completions_logit_bias(body: dict[str, Any]) -> dict[str, float] |
 
 
 def _validate_service_tier(body: dict[str, Any], *, endpoint_path: str) -> str | None:
-    """OpenAI ``service_tier`` — accept omit/auto/default as no-ops; reject others.
+    """OpenAI ``service_tier`` — known tier names are no-ops; unknown fail closed.
 
     OpenAI uses service_tier for capacity priority (auto/default/flex/priority).
-    This gateway has no tiered capacity plane, so only auto/default (or omit/null)
-    are honest no-ops. Other values fail closed so clients cannot silently
-    believe flex/priority processing was applied.
+    This gateway has no separate tiered capacity plane, so recognised OpenAI
+    names are accepted as default-capacity no-ops (SDK clients often send flex).
+    Explicit JSON null or empty string is treat-as-omit. Unknown values fail
+    closed so clients cannot invent tier labels.
     """
     if "service_tier" not in body:
         return None
@@ -555,14 +556,16 @@ def _validate_service_tier(body: dict[str, Any], *, endpoint_path: str) -> str |
         return None
     if not isinstance(service_tier, str):
         raise RequestError(400, "invalid_service_tier", "service_tier must be a string")
-    # Strip incidental whitespace and casefold so " AUTO " matches auto.
+    # Strip incidental whitespace and casefold so " AUTO " / " Flex " match.
     service_tier = service_tier.strip().lower()
-    if service_tier not in ("auto", "default"):
+    if service_tier not in {"auto", "default", "flex", "priority"}:
         raise RequestError(
             400,
             "invalid_service_tier",
-            f"service_tier values other than auto or default are not supported on {endpoint_path}",
+            "service_tier must be one of auto, default, flex, priority "
+            f"on {endpoint_path}",
         )
+    body["service_tier"] = service_tier
     return service_tier
 
 

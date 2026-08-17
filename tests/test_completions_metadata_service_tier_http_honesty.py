@@ -136,8 +136,8 @@ def test_http_completions_accepts_service_tier_default() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_rejects_service_tier_flex() -> None:
-    """flex/priority are capacity modes this gateway does not apply — fail closed."""
+def test_http_completions_accepts_service_tier_flex() -> None:
+    """flex is a known OpenAI tier name; accepted as default-capacity no-op."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -148,9 +148,7 @@ def test_http_completions_rejects_service_tier_flex() -> None:
                 "service_tier": "flex",
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_service_tier" in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
