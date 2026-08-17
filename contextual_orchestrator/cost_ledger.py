@@ -554,9 +554,15 @@ _USAGE_COLUMNS = (
     "currency_code",
 )
 
-_USAGE_COLUMN_SQL = ", ".join(_USAGE_COLUMNS)
-_QMARK_USAGE_VALUES = ", ".join("?" for _ in _USAGE_COLUMNS)
-_PYFORMAT_USAGE_VALUES = ", ".join("%s" for _ in _USAGE_COLUMNS)
+# Compile-time string literals so Ruff S608 sees static SQL, not f-string
+# templates. Column order must match ``_USAGE_COLUMNS``.
+_USAGE_COLUMN_SQL = (
+    "usage_record_id, created_at, workflow_run_id, request_channel, "
+    "route_mode, provider_name, model_name, account_name, service_name, "
+    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+    "completion_tokens, total_tokens, cost_amount, currency_code"
+)
+_SUPPORTED_PARAMSTYLES = frozenset({"qmark", "pyformat"})
 
 # Complete statements, not f-strings at execute time. Values are always bound.
 _SELECT_DIMENSION_SQL = {
@@ -574,31 +580,85 @@ _INSERT_DIMENSION_SQL = {
     ),
 }
 _INSERT_USAGE_SQL = {
-    "qmark": f"INSERT INTO llm_usage_records ({_USAGE_COLUMN_SQL}) VALUES ({_QMARK_USAGE_VALUES})",
+    "qmark": (
+        "INSERT INTO llm_usage_records ("
+        "usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ),
     "pyformat": (
-        f"INSERT INTO llm_usage_records ({_USAGE_COLUMN_SQL}) VALUES ({_PYFORMAT_USAGE_VALUES})"
+        "INSERT INTO llm_usage_records ("
+        "usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code"
+        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
     ),
 }
 _SELECT_USAGE_SQL = {
-    "qmark": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records",
-    "pyformat": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records",
+    "qmark": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records"
+    ),
+    "pyformat": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records"
+    ),
 }
 _SELECT_USAGE_SINCE_SQL = {
-    "qmark": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records WHERE created_at >= ?",
-    "pyformat": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records WHERE created_at >= %s",
+    "qmark": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at >= ?"
+    ),
+    "pyformat": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at >= %s"
+    ),
 }
 _SELECT_USAGE_UNTIL_SQL = {
-    "qmark": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records WHERE created_at < ?",
-    "pyformat": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records WHERE created_at < %s",
+    "qmark": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at < ?"
+    ),
+    "pyformat": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at < %s"
+    ),
 }
 _SELECT_USAGE_WINDOW_SQL = {
     "qmark": (
-        f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records "
-        "WHERE created_at >= ? AND created_at < ?"
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at >= ? AND created_at < ?"
     ),
     "pyformat": (
-        f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records "
-        "WHERE created_at >= %s AND created_at < %s"
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at >= %s AND created_at < %s"
     ),
 }
 
@@ -612,6 +672,8 @@ class SqlLedgerStore:
     """
 
     def __init__(self, connection: Any, paramstyle: str = "qmark") -> None:
+        if paramstyle not in _SUPPORTED_PARAMSTYLES:
+            raise ValueError(f"unsupported ledger paramstyle: {paramstyle!r}")
         self._conn = connection
         self._paramstyle = paramstyle
         self._create_schema()
@@ -619,9 +681,10 @@ class SqlLedgerStore:
 
     def _bound_sql(self, statements: dict[str, str]) -> str:
         """Return the statement whose placeholders match this store's paramstyle."""
-        if self._paramstyle == "qmark":
-            return statements["qmark"]
-        return statements["pyformat"]
+        try:
+            return statements[self._paramstyle]
+        except KeyError as exc:
+            raise ValueError(f"unsupported ledger paramstyle: {self._paramstyle!r}") from exc
 
     def _create_schema(self) -> None:
         """Create the ledger tables if they do not already exist."""

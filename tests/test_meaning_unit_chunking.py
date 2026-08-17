@@ -199,6 +199,34 @@ def test_case_insensitive_html_close_still_isolates_the_invoice() -> None:
     assert "INV-20260816" not in greeting.chunk_text
 
 
+def test_deeply_nested_unclosed_html_stays_linear_and_keeps_the_invoice() -> None:
+    text = "<div>" * 8000 + "<p>Invoice INV-20260816 balance due is 1840.00 USD.</p>"
+    started = time.perf_counter()
+    units = meaning_unit_chunks(text)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.25, f"nested unclosed HTML scan stalled ({elapsed:.3f}s)"
+    for unit in units:
+        _assert_span(text, unit)
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert invoice.chunk_kind == "html_block"
+    assert invoice.chunk_text.startswith("<p>")
+
+
+def test_dotted_capital_i_does_not_shift_html_source_offsets() -> None:
+    text = "<DIV>İnvoice INV-20260816</DIV> leftover İ still here"
+    units = meaning_unit_chunks(text)
+    for unit in units:
+        _assert_span(text, unit)
+        assert text[unit.source_offset : unit.source_offset + unit.source_length] == unit.chunk_text
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert invoice.chunk_kind == "html_block"
+    assert invoice.chunk_text.startswith("<DIV>")
+    assert invoice.chunk_text.endswith("</DIV>")
+    leftover = next(unit for unit in units if "leftover" in unit.chunk_text)
+    assert leftover.chunk_kind == "body_paragraph"
+    assert "INV-20260816" not in leftover.chunk_text
+
+
 def test_repeated_empty_anchor_tags_do_not_stall_invoice_isolation() -> None:
     text = "<A>" + " <A>" * 32 + " Invoice INV-20260816 remains open."
     started = time.perf_counter()
@@ -476,6 +504,8 @@ if __name__ == "__main__":
     test_html_blocks_keep_invoice_out_of_the_greeting()
     test_truncated_html_opener_does_not_claim_the_invoice()
     test_unclosed_wrapper_divs_do_not_hide_the_invoice()
+    test_deeply_nested_unclosed_html_stays_linear_and_keeps_the_invoice()
+    test_dotted_capital_i_does_not_shift_html_source_offsets()
     test_case_insensitive_html_close_still_isolates_the_invoice()
     test_repeated_empty_anchor_tags_do_not_stall_invoice_isolation()
     test_tag_only_document_falls_back_to_source_document()

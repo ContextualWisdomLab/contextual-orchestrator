@@ -24,13 +24,15 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   leftover base64 does not glue onto the balance paragraph. Next action:
   POST the raw Gmail HTML or a column-76 MIME wrap with
   `chunking_strategy=meaning_units` and search `chunk_units`.
-- HTML meaning-unit cuts walk to the first matching close tag instead of a
-  backtracking `.*?` matcher, so nested unclosed wrappers cannot stall a
-  batch. Tag-only leftovers use the same linear walk instead of a repeating
-  `(?:\s*</?[A-Za-z][^>]*>\s*)+` matcher, so `<A> <A>…` prefixes cannot
-  stall a batch. Ledger SQL uses complete bind-parameter statements (no
-  execute-time concatenation). Provider TLS opt-out and validated `urlopen`
-  keep audited Semgrep annotations.
+- HTML meaning-unit cuts use one forward stack walk and ASCII-only tag
+  comparison, so nested unclosed wrappers stay linear and a Turkish `İ`
+  cannot shift `source_offset`. Tag-only leftovers use the same linear walk
+  instead of a repeating `(?:\s*</?[A-Za-z][^>]*>\s*)+` matcher, so
+  `<A> <A>…` prefixes cannot stall a batch. Ledger SQL uses complete
+  bind-parameter statements (no execute-time concatenation) and rejects an
+  unsupported paramstyle. Provider TLS opt-out is rejected in production.
+  Direct provider transport requires a non-empty host allowlist, blocks
+  resolved private IPs, and pins the peer before `urlopen`.
 - OpenAPI `chunking_strategy` accepts JSON null alongside `meaning_units`.
   Async 202 and GET completed embeddings responses document optional
   `chunk_units`. A body line that begins `Subject:` is not a second email

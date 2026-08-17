@@ -3,11 +3,13 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
+from collections.abc import Iterable
 from contextvars import ContextVar
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
 import hashlib
+import http.client
 import ipaddress
 import json
 import os
@@ -200,6 +202,72 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+_PRODUCTION_RUNTIME_NAMES = frozenset({"", "production", "prod"})
+
+
+def _is_production_environment(runtime_environment: str) -> bool:
+    """Return True when TLS opt-out and loopback provider URLs must be rejected."""
+    return (runtime_environment or "production").strip().lower() in _PRODUCTION_RUNTIME_NAMES
+
+
+def _format_peer_netloc(ip_text: str, port: int) -> str:
+    """Format a resolved peer for a URL netloc, bracketing IPv6."""
+    if ":" in ip_text:
+        return f"[{ip_text}]:{port}"
+    return f"{ip_text}:{port}"
+
+
+class _PinnedHTTPSConnection(http.client.HTTPSConnection):
+    """HTTPS connection that uses a pre-validated peer IP and the original SNI."""
+
+    def __init__(
+        self,
+        host: str,
+        port: int | None = None,
+        *,
+        server_hostname: str,
+        timeout: float | None = None,
+        context: ssl.SSLContext | None = None,
+        source_address: tuple[str, int] | None = None,
+        blocksize: int = 16384,
+    ) -> None:
+        super().__init__(
+            host,
+            port,
+            timeout=timeout,
+            source_address=source_address,
+            context=context,
+            blocksize=blocksize,
+        )
+        self._server_hostname = server_hostname
+
+    def connect(self) -> None:
+        """Connect to the pinned IP while presenting the original hostname to TLS."""
+        sock = socket.create_connection((self.host, self.port), self.timeout, self.source_address)
+        self.sock = self._context.wrap_socket(sock, server_hostname=self._server_hostname)
+
+
+class _PinnedHTTPSHandler(urllib.request.HTTPSHandler):
+    """HTTPS handler that keeps SNI/Host on the original hostname after IP pinning."""
+
+    def __init__(self, context: ssl.SSLContext, server_hostname: str) -> None:
+        super().__init__(context=context)
+        self._server_hostname = server_hostname
+
+    def https_open(self, req: urllib.request.Request) -> Any:
+        """Open ``req`` through a connection pinned to the validated peer."""
+
+        def http_class(host: str, **kwargs: Any) -> _PinnedHTTPSConnection:
+            return _PinnedHTTPSConnection(
+                host,
+                server_hostname=self._server_hostname,
+                timeout=kwargs.get("timeout"),
+                context=self._context,
+            )
+
+        return self.do_open(http_class, req)
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -212,6 +280,8 @@ class ModelClient:
         retry_backoff_cap: float = 8.0,
         ca_bundle: str | None = None,
         verify_tls: bool = True,
+        runtime_environment: str = "production",
+        allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
@@ -222,17 +292,30 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
+        self._runtime_environment = runtime_environment
+        if allowed_provider_hosts is None:
+            self._configured_provider_hosts: frozenset[str] | None = None
+        else:
+            self._configured_provider_hosts = frozenset(
+                host.strip().lower() for host in allowed_provider_hosts if host.strip()
+            )
         # TLS trust for provider egress. Default verifies against the system trust store;
         # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
-        # explicit dev-only opt-out (insecure) for self-signed endpoints.
-        self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+        # explicit non-production opt-out (insecure) for self-signed endpoints.
+        self._ssl_context = self._build_ssl_context(
+            ca_bundle, verify_tls, runtime_environment
+        )
 
     @staticmethod
-    def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
+    def _build_ssl_context(
+        ca_bundle: str | None, verify_tls: bool, runtime_environment: str = "production"
+    ) -> ssl.SSLContext:
         """Build the provider TLS context; verification is on unless opted out."""
         if not verify_tls:
+            if _is_production_environment(runtime_environment):
+                raise ValueError("verify_tls=False is not allowed in production")
             # nosemgrep: python.lang.security.unverified-ssl-context.unverified-ssl-context
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit non-production provider TLS opt-out.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -300,20 +383,26 @@ class ModelClient:
             },
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(agent, request) as response:
             data = json.loads(response.read().decode("utf-8"))
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
         return data["choices"][0]["message"]["content"]
 
-    def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
+    def _open_provider(self, agent: ModelAgent, request: urllib.request.Request) -> Any:
+        """Validate the agent, pin the resolved peer, then open the request."""
+        pinned_request, server_hostname, scheme = self._prepare_provider_request(agent, request)
+        if scheme == "https":
+            opener = urllib.request.build_opener(
+                _PinnedHTTPSHandler(self._ssl_context, server_hostname)
+            )
+            # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+            return opener.open(pinned_request, timeout=self.timeout)
         # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
-            request,
+            pinned_request,
             timeout=self.timeout,
-            context=self._ssl_context,
         )
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
@@ -352,7 +441,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(agent, request) as response:
             for raw in response:
                 line = raw.decode("utf-8").strip()
                 if not line.startswith("data:"):
@@ -412,7 +501,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(agent, request) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _mock_raw(
@@ -453,8 +542,62 @@ class ModelClient:
             "echo": echoed,
         }
 
-    def _validate_provider(self, agent: ModelAgent) -> None:
-        """Reject unsafe remote model endpoints before any egress happens."""
+    def _allowed_provider_hosts(self) -> frozenset[str]:
+        """Return the required provider-host allowlist (constructor or bootstrap env)."""
+        if self._configured_provider_hosts is not None:
+            return self._configured_provider_hosts
+        return frozenset(
+            host.strip().lower()
+            for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")
+            if host.strip()
+        )
+
+    def _is_production_runtime(self) -> bool:
+        """Return True when this client is running as production."""
+        return _is_production_environment(self._runtime_environment)
+
+    def _is_blocked_provider_ip(self, ip_address: ipaddress.IPv4Address | ipaddress.IPv6Address, hostname: str) -> bool:
+        """Return True when a resolved peer must not be contacted."""
+        unsafe = (
+            ip_address.is_private
+            or ip_address.is_loopback
+            or ip_address.is_link_local
+            or ip_address.is_multicast
+            or ip_address.is_reserved
+        )
+        if not unsafe:
+            return False
+        if (
+            not self._is_production_runtime()
+            and ip_address.is_loopback
+            and hostname in self._allowed_provider_hosts()
+        ):
+            return False
+        return True
+
+    def _resolve_provider_peer(self, agent_id: str, hostname: str, port: int) -> str:
+        """Resolve ``hostname`` once and return the first allowed peer IP."""
+        try:
+            records = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        except OSError as exc:
+            raise RuntimeError(f"{agent_id} provider host could not be resolved") from exc
+        pinned_ip: str | None = None
+        for address in records:
+            ip_address = ipaddress.ip_address(address[4][0])
+            if self._is_blocked_provider_ip(ip_address, hostname):
+                raise RuntimeError(f"{agent_id} provider resolves to non-public address")
+            if pinned_ip is None:
+                pinned_ip = str(ip_address)
+        if pinned_ip is None:
+            raise RuntimeError(f"{agent_id} provider host could not be resolved")
+        return pinned_ip
+
+    def _validate_provider(self, agent: ModelAgent) -> str:
+        """Reject unsafe remote model endpoints before any egress happens.
+
+        Returns the pinned peer IP from a single DNS lookup so later ``urlopen``
+        cannot follow a rebound address.
+        """
         # Runtime secret must be resolvable from the KV — never an env var name,
         # never a silent os.getenv fallback. (Legacy api_key_env, if set, is used
         # only as the credential NAME; see ModelAgent.credential_name.)
@@ -464,26 +607,56 @@ class ModelClient:
                 "(this replaces the legacy api_key_env environment pattern)"
             )
         parsed = urlparse(agent.base_url)
-        if parsed.scheme != "https" or not parsed.hostname:
+        hostname = (parsed.hostname or "").lower()
+        if parsed.scheme == "https" and hostname:
+            pass
+        elif (
+            parsed.scheme == "http"
+            and hostname
+            and not self._is_production_runtime()
+        ):
+            pass
+        else:
             raise RuntimeError(f"{agent.id} base_url must use https")
-        allowed_hosts = {
-            host.strip().lower()
-            for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")
-            if host.strip()
-        }
-        hostname = parsed.hostname.lower()
-        if allowed_hosts and hostname not in allowed_hosts:
+        allowed_hosts = self._allowed_provider_hosts()
+        if not allowed_hosts:
+            raise RuntimeError(f"{agent.id} provider host allowlist is empty")
+        if hostname not in allowed_hosts:
             raise RuntimeError(f"{agent.id} provider host is not allowlisted")
-        for address in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM):
-            ip_address = ipaddress.ip_address(address[4][0])
-            if (
-                ip_address.is_private
-                or ip_address.is_loopback
-                or ip_address.is_link_local
-                or ip_address.is_multicast
-                or ip_address.is_reserved
-            ):
-                raise RuntimeError(f"{agent.id} provider resolves to non-public address")
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        return self._resolve_provider_peer(agent.id, hostname, port)
+
+    def _prepare_provider_request(
+        self, agent: ModelAgent, request: urllib.request.Request
+    ) -> tuple[urllib.request.Request, str, str]:
+        """Validate the agent and rewrite ``request`` onto the pinned peer IP."""
+        pinned_ip = self._validate_provider(agent)
+        parsed = urlparse(request.full_url)
+        agent_host = (urlparse(agent.base_url).hostname or "").lower()
+        request_host = (parsed.hostname or "").lower()
+        if not request_host or request_host != agent_host:
+            raise RuntimeError(f"{agent.id} provider URL host does not match the agent")
+        scheme = parsed.scheme
+        port = parsed.port or (443 if scheme == "https" else 80)
+        try:
+            request_ip = ipaddress.ip_address(request_host)
+        except ValueError:
+            request_ip = None
+        if request_ip is not None:
+            if str(request_ip) != pinned_ip:
+                raise RuntimeError(f"{agent.id} provider URL host does not match the agent")
+            return request, agent_host, scheme
+        netloc = _format_peer_netloc(pinned_ip, port)
+        pinned_url = parsed._replace(netloc=netloc).geturl()
+        headers = {key: value for key, value in request.header_items()}
+        headers["Host"] = agent_host if port in {80, 443} else f"{agent_host}:{port}"
+        pinned_request = urllib.request.Request(
+            pinned_url,
+            data=request.data,
+            headers=headers,
+            method=request.get_method(),
+        )
+        return pinned_request, agent_host, scheme
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""
@@ -599,7 +772,7 @@ class ModelClient:
             },
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(agent, request) as response:
             return json.loads(response.read().decode("utf-8"))["id"]
 
     def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
@@ -613,7 +786,7 @@ class ModelClient:
             },
             method=method,
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(agent, request) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
@@ -623,7 +796,7 @@ class ModelClient:
             headers={"authorization": f"Bearer {api_key}"},
             method="GET",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(agent, request) as response:
             return response.read()
 
 

@@ -16,11 +16,14 @@ from contextual_orchestrator.cost_ledger import (  # noqa: E402
     PriceBook,
     PriceEntry,
     SqlLedgerStore,
+    _INSERT_USAGE_SQL,
     _SELECT_DIMENSION_SQL,
     _SELECT_USAGE_SINCE_SQL,
     _SELECT_USAGE_SQL,
     _SELECT_USAGE_UNTIL_SQL,
     _SELECT_USAGE_WINDOW_SQL,
+    _USAGE_COLUMN_SQL,
+    _USAGE_COLUMNS,
     dimension_catalog,
 )
 from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: E402
@@ -256,6 +259,41 @@ def test_ledger_table_names_follow_two_word_snake_case() -> None:
 def test_dimension_catalog_covers_all_required_dimensions() -> None:
     names = {entry["dimension_name"] for entry in dimension_catalog()}
     assert names == {"account", "service", "upstream_api", "model_name", "team", "group", "company"}
+
+
+def test_sql_ledger_statements_are_static_and_match_usage_columns() -> None:
+    assert _USAGE_COLUMN_SQL == ", ".join(_USAGE_COLUMNS)
+    column_count = len(_USAGE_COLUMNS)
+    assert _INSERT_USAGE_SQL["qmark"].count("?") == column_count
+    assert _INSERT_USAGE_SQL["pyformat"].count("%s") == column_count
+    for statements in (
+        _INSERT_USAGE_SQL,
+        _SELECT_USAGE_SQL,
+        _SELECT_USAGE_SINCE_SQL,
+        _SELECT_USAGE_UNTIL_SQL,
+        _SELECT_USAGE_WINDOW_SQL,
+    ):
+        for sql in statements.values():
+            assert "{" not in sql
+            assert _USAGE_COLUMN_SQL in sql
+
+
+def test_sql_ledger_rejects_unsupported_paramstyle() -> None:
+    conn = sqlite3.connect(":memory:")
+    try:
+        SqlLedgerStore(conn, paramstyle="numeric")
+    except ValueError as exc:
+        assert "paramstyle" in str(exc)
+    else:
+        raise AssertionError("unsupported paramstyle must fail closed")
+    store = SqlLedgerStore(conn, paramstyle="qmark")
+    store._paramstyle = "format"
+    try:
+        store._bound_sql(_SELECT_DIMENSION_SQL)
+    except ValueError as exc:
+        assert "paramstyle" in str(exc)
+    else:
+        raise AssertionError("unsupported bound paramstyle must fail closed")
 
 
 def test_sql_ledger_bound_sql_tracks_paramstyle() -> None:

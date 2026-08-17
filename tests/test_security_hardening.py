@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import urllib.error
 import urllib.request
@@ -244,12 +245,19 @@ def test_external_provider_requires_resolvable_credential_and_public_https() -> 
         backend = InMemoryCredentialBackend()
         backend.set("MODEL_KEY", "sk-loopback")
         set_backend(backend)
+        previous = os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS")
+        os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = "127.0.0.1"
         try:
             client._validate_provider(loopback_agent)
         except RuntimeError as exc:
             assert "non-public address" in str(exc)
         else:
             raise AssertionError("loopback provider should fail")
+        finally:
+            if previous is None:
+                os.environ.pop("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", None)
+            else:
+                os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
     finally:
         set_backend(None)
 
@@ -285,6 +293,104 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
             os.environ.pop("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", None)
         else:
             os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
+
+
+def test_external_provider_requires_non_empty_host_allowlist() -> None:
+    client = ModelClient()
+    agent = ModelAgent("remote_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY")
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-allowlist")
+    set_backend(backend)
+    previous = os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS")
+    os.environ.pop("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", None)
+    try:
+        try:
+            client._validate_provider(agent)
+        except RuntimeError as exc:
+            assert "allowlist" in str(exc)
+        else:
+            raise AssertionError("empty provider host allowlist should fail closed")
+    finally:
+        set_backend(None)
+        if previous is not None:
+            os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
+
+
+def test_direct_send_rejects_private_and_unlisted_hosts_before_urlopen() -> None:
+    opened: list[str] = []
+    original_urlopen = urllib.request.urlopen
+    original_build = urllib.request.build_opener
+
+    def fake_urlopen(*args: object, **kwargs: object) -> object:
+        opened.append("urlopen")
+        raise AssertionError("urlopen must not run for a rejected provider")
+
+    def fake_build(*args: object, **kwargs: object) -> object:
+        opened.append("opener")
+        raise AssertionError("build_opener must not run for a rejected provider")
+
+    urllib.request.urlopen = fake_urlopen  # type: ignore[assignment]
+    urllib.request.build_opener = fake_build  # type: ignore[assignment]
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-direct")
+    set_backend(backend)
+    try:
+        private_client = ModelClient(allowed_provider_hosts=("127.0.0.1",))
+        private_agent = ModelAgent("loopback_agent", "gpt-example", "https://127.0.0.1/v1", "MODEL_KEY")
+        try:
+            private_client._send(private_agent, {"model": "gpt-example"})
+        except RuntimeError as exc:
+            assert "non-public address" in str(exc)
+        else:
+            raise AssertionError("direct _send to loopback must fail before urlopen")
+
+        listed_client = ModelClient(allowed_provider_hosts=("api.openai.com",))
+        unlisted_agent = ModelAgent(
+            "unlisted_agent", "gpt-example", "https://evil.example/v1", "MODEL_KEY"
+        )
+        try:
+            listed_client._send(unlisted_agent, {"model": "gpt-example"})
+        except RuntimeError as exc:
+            assert "allowlisted" in str(exc)
+        else:
+            raise AssertionError("direct _send to an unlisted host must fail before urlopen")
+        assert opened == []
+    finally:
+        urllib.request.urlopen = original_urlopen
+        urllib.request.build_opener = original_build
+        set_backend(None)
+
+
+def test_prepare_provider_request_pins_resolved_ip_against_dns_rebinding() -> None:
+    client = ModelClient(allowed_provider_hosts=("rebinder.example",))
+    backend = InMemoryCredentialBackend()
+    backend.set("MODEL_KEY", "sk-rebind")
+    set_backend(backend)
+    lookups: list[str] = []
+
+    def fake_getaddrinfo(host: str, port: int, *args: object, **kwargs: object):
+        lookups.append(str(host))
+        if host == "rebinder.example":
+            if lookups.count("rebinder.example") == 1:
+                return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("8.8.8.8", port or 443))]
+            return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("127.0.0.1", port or 443))]
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", (host, port or 443))]
+
+    original = socket.getaddrinfo
+    socket.getaddrinfo = fake_getaddrinfo  # type: ignore[assignment]
+    try:
+        agent = ModelAgent("rebind_agent", "gpt-example", "https://rebinder.example/v1", "MODEL_KEY")
+        request = urllib.request.Request("https://rebinder.example/v1/chat/completions", method="POST")
+        pinned, server_hostname, scheme = client._prepare_provider_request(agent, request)
+        assert scheme == "https"
+        assert server_hostname == "rebinder.example"
+        assert "8.8.8.8" in pinned.full_url
+        assert "127.0.0.1" not in pinned.full_url
+        assert pinned.get_header("Host") == "rebinder.example"
+        assert lookups.count("rebinder.example") == 1
+    finally:
+        socket.getaddrinfo = original  # type: ignore[assignment]
+        set_backend(None)
 
 
 def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:
@@ -328,6 +434,9 @@ if __name__ == "__main__":
     test_redaction_masks_common_sensitive_values()
     test_external_provider_requires_resolvable_credential_and_public_https()
     test_external_provider_rejects_insecure_or_unlisted_hosts()
+    test_external_provider_requires_non_empty_host_allowlist()
+    test_direct_send_rejects_private_and_unlisted_hosts_before_urlopen()
+    test_prepare_provider_request_pins_resolved_ip_against_dns_rebinding()
     test_provider_transport_rejects_local_url_schemes_before_urllib()
     test_provider_transport_rejects_protocol_relative_batch_paths()
     test_redact_value_preserves_non_string_scalars()

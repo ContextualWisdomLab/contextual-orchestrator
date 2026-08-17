@@ -17,6 +17,7 @@ import threading
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent  # noqa: E402
+from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
@@ -94,7 +95,13 @@ class _FakeBatchProvider:
 
 
 def _client() -> ModelClient:
-    client = ModelClient()
+    backend = InMemoryCredentialBackend()
+    backend.set("UNSET_KEY_ENV", "sk-loopback-test")
+    set_backend(backend)
+    client = ModelClient(
+        runtime_environment="development",
+        allowed_provider_hosts=("127.0.0.1",),
+    )
     client._sleep = lambda _s: None  # no real sleeping between polls in tests
     return client
 
@@ -106,40 +113,49 @@ REQUESTS = {
 
 
 def test_batch_run_full_flow_over_http() -> None:
-    with _FakeBatchProvider(polls_before_done=3) as provider:
-        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
-        results = _client()._batch_run(agent, REQUESTS, temperature=0.2, poll_interval=0.01, poll_timeout=30)
+    try:
+        with _FakeBatchProvider(polls_before_done=3) as provider:
+            agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
+            results = _client()._batch_run(agent, REQUESTS, temperature=0.2, poll_interval=0.01, poll_timeout=30)
 
-        assert results["task_a"]["content"] == "answer A"
-        assert results["task_b"]["usage"]["completion_tokens"] == 2
-        assert provider.poll_count >= 3  # actually polled through in_progress
-        # The uploaded multipart body carries the JSONL with our custom ids and model.
-        assert b'"custom_id": "task_a"' in provider.uploaded_jsonl
-        assert b'"model": "gpt-x"' in provider.uploaded_jsonl
-        assert b'name="purpose"' in provider.uploaded_jsonl
+            assert results["task_a"]["content"] == "answer A"
+            assert results["task_b"]["usage"]["completion_tokens"] == 2
+            assert provider.poll_count >= 3  # actually polled through in_progress
+            # The uploaded multipart body carries the JSONL with our custom ids and model.
+            assert b'"custom_id": "task_a"' in provider.uploaded_jsonl
+            assert b'"model": "gpt-x"' in provider.uploaded_jsonl
+            assert b'name="purpose"' in provider.uploaded_jsonl
+    finally:
+        set_backend(None)
 
 
 def test_batch_terminal_failure_raises() -> None:
-    with _FakeBatchProvider(fail_status="failed") as provider:
-        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
-        raised = False
-        try:
-            _client()._batch_run(agent, REQUESTS, temperature=0.2, poll_interval=0.01, poll_timeout=30)
-        except RuntimeError as exc:
-            raised = True
-            assert "failed" in str(exc)
-        assert raised
+    try:
+        with _FakeBatchProvider(fail_status="failed") as provider:
+            agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
+            raised = False
+            try:
+                _client()._batch_run(agent, REQUESTS, temperature=0.2, poll_interval=0.01, poll_timeout=30)
+            except RuntimeError as exc:
+                raised = True
+                assert "failed" in str(exc)
+            assert raised
+    finally:
+        set_backend(None)
 
 
 def test_batch_poll_timeout_raises() -> None:
-    with _FakeBatchProvider(polls_before_done=10_000) as provider:
-        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
-        raised = False
-        try:
-            _client()._batch_run(agent, REQUESTS, temperature=0.2, poll_interval=0.01, poll_timeout=0.0)
-        except TimeoutError:
-            raised = True
-        assert raised
+    try:
+        with _FakeBatchProvider(polls_before_done=10_000) as provider:
+            agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
+            raised = False
+            try:
+                _client()._batch_run(agent, REQUESTS, temperature=0.2, poll_interval=0.01, poll_timeout=0.0)
+            except TimeoutError:
+                raised = True
+            assert raised
+    finally:
+        set_backend(None)
 
 
 def test_mock_path_answers_synchronously() -> None:
@@ -151,8 +167,11 @@ def test_mock_path_answers_synchronously() -> None:
 
 
 if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-            print(f"ok {name}")
-    print("ok")
+    try:
+        for name, fn in sorted(globals().items()):
+            if name.startswith("test_") and callable(fn):
+                fn()
+                print(f"ok {name}")
+        print("ok")
+    finally:
+        set_backend(None)

@@ -17,6 +17,7 @@ import urllib.request
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
@@ -67,9 +68,18 @@ def test_stream_send_parses_real_provider_sse() -> None:
         "data: [DONE]\n\n",
     ]
     with _FakeSSEProvider(frames) as provider:
-        client = ModelClient()
-        agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
-        deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+        backend = InMemoryCredentialBackend()
+        backend.set("UNSET_KEY_ENV", "sk-loopback-test")
+        set_backend(backend)
+        try:
+            client = ModelClient(
+                runtime_environment="development",
+                allowed_provider_hosts=("127.0.0.1",),
+            )
+            agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
+            deltas = list(client._stream_send(agent, {"model": "gpt-x", "stream": True}))
+        finally:
+            set_backend(None)
     assert deltas == ["Hello", " streamed", " world"]  # role delta skipped, [DONE] stops
     assert "".join(deltas) == "Hello streamed world"
 

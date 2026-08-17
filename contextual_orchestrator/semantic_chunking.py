@@ -33,9 +33,27 @@ _IMAGE_HEAD = re.compile(
 _B64_CHAR = frozenset(
     "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_"
 )
-_HTML_OPEN = re.compile(
-    r"<(p|div|li|h[1-6]|tr|td|section|article|blockquote)\b",
-    re.IGNORECASE,
+_HTML_BLOCK_TAGS = frozenset(
+    {
+        "p",
+        "div",
+        "li",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "tr",
+        "td",
+        "section",
+        "article",
+        "blockquote",
+    }
+)
+_ASCII_CASE_FOLD = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "abcdefghijklmnopqrstuvwxyz",
 )
 _PARAGRAPH_BREAK = re.compile(r"\n\s*\n+")
 _SENTENCE_CUT = re.compile(r"(?<=[.!?。！？])(?=\s+(?:[A-Z\"'(가-힣]))")
@@ -382,49 +400,70 @@ def _is_tag_only(text: str) -> bool:
     return saw_tag
 
 
-def _html_block_span(
-    text: str, lowered: str, opener_start: int, tag: str
-) -> tuple[int, int] | None:
-    """Return ``[opener_start, close_end)`` for the first matching close tag.
+def _fold_ascii_case(text: str) -> str:
+    """Lower A-Z only so Unicode ``İ`` cannot change string length or offsets."""
+    return text.translate(_ASCII_CASE_FOLD)
 
-    A linear ``find`` replaces ``.*?`` plus a backreference. Nested
-    ``<div> <div> <div>`` prefixes made that matcher explode; the first
-    same-tag close is the previous non-greedy behavior and stays O(n).
-    """
-    gt = text.find(">", opener_start)
-    if gt < 0:
-        return None
-    needle = f"</{tag}>"
-    close_at = lowered.find(needle, gt + 1)
-    if close_at < 0:
-        return None
-    return opener_start, close_at + len(needle)
+
+def _is_ascii_tag_name_char(char: str) -> bool:
+    return "A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9"
+
+
+def _is_ascii_word_char(char: str) -> bool:
+    return _is_ascii_tag_name_char(char) or char == "_"
 
 
 def _html_leaf_spans(text: str) -> list[tuple[int, int, str]]:
     """Return innermost HTML blocks so a wrapper div does not hide inner ``<p>``.
 
-    ``finditer`` on the wrapper tag consumes every nested paragraph. Gmail and
-    naruon bodies arrive as ``<div><p>greeting</p><p>invoice</p></div>``. This
-    walks each opener, then drops a match that strictly contains another.
+    One forward stack walk replaces per-opener closer searches. Nested
+    unclosed wrappers stay O(n). Tag names compare with ASCII-only case
+    folding so a Turkish ``İ`` cannot shift ``source_offset``.
     """
-    found: list[tuple[int, int, str]] = []
-    lowered = text.lower()
-    for opener in _HTML_OPEN.finditer(text):
-        span = _html_block_span(text, lowered, opener.start(), opener.group(1).lower())
-        if span is None:
-            continue
-        start, end = span
-        found.append((start, end, text[start:end]))
     leaves: list[tuple[int, int, str]] = []
-    for start, end, piece in found:
-        contained = any(
-            start < other_start and other_end <= end and (other_start, other_end) != (start, end)
-            for other_start, other_end, _ in found
-        )
-        if contained:
+    stack: list[tuple[str, int, bool]] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        lt = text.find("<", index)
+        if lt < 0:
+            break
+        if lt + 1 >= length:
+            break
+        closing = text[lt + 1] == "/"
+        name_at = lt + 2 if closing else lt + 1
+        if name_at >= length:
+            break
+        name_end = name_at
+        while name_end < length and _is_ascii_tag_name_char(text[name_end]):
+            name_end += 1
+        if name_end == name_at:
+            index = lt + 1
             continue
-        leaves.append((start, end, piece))
+        if name_end < length and _is_ascii_word_char(text[name_end]):
+            index = lt + 1
+            continue
+        tag = _fold_ascii_case(text[name_at:name_end])
+        gt = text.find(">", name_end)
+        if gt < 0:
+            break
+        if tag in _HTML_BLOCK_TAGS:
+            if closing:
+                for depth in range(len(stack) - 1, -1, -1):
+                    if stack[depth][0] != tag:
+                        continue
+                    _name, start, has_child = stack[depth]
+                    del stack[depth:]
+                    if not has_child:
+                        end = gt + 1
+                        leaves.append((start, end, text[start:end]))
+                    break
+            else:
+                if stack:
+                    name, start, _has_child = stack[-1]
+                    stack[-1] = (name, start, True)
+                stack.append((tag, lt, False))
+        index = gt + 1
     return leaves
 
 

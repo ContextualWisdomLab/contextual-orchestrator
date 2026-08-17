@@ -17,6 +17,7 @@ import threading
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent  # noqa: E402
+from contextual_orchestrator.credentials import InMemoryCredentialBackend, set_backend  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
@@ -70,52 +71,78 @@ def _agent(base_url: str) -> ModelAgent:
     return ModelAgent("worker_agent", "gpt-x", base_url=base_url, api_key_env="UNSET_KEY_ENV")
 
 
+def _loopback_client(**kwargs) -> ModelClient:
+    backend = InMemoryCredentialBackend()
+    backend.set("UNSET_KEY_ENV", "sk-loopback-test")
+    set_backend(backend)
+    return ModelClient(
+        runtime_environment="development",
+        allowed_provider_hosts=("127.0.0.1",),
+        **kwargs,
+    )
+
+
 def test_send_real_http_round_trip_and_usage_capture() -> None:
     usage = {"prompt_tokens": 11, "completion_tokens": 42, "total_tokens": 53}
-    with _FakeProvider([(200, _completion("live answer", usage))]) as provider:
-        client = ModelClient()
-        client._local.usage = None
-        result = client._send(_agent(provider.base_url), {"model": "gpt-x"})
-    assert result == "live answer"  # real POST + JSON parse over the wire
-    assert client._local.usage == usage  # provider-reported usage captured from a real response
+    try:
+        with _FakeProvider([(200, _completion("live answer", usage))]) as provider:
+            client = _loopback_client()
+            client._local.usage = None
+            result = client._send(_agent(provider.base_url), {"model": "gpt-x"})
+        assert result == "live answer"  # real POST + JSON parse over the wire
+        assert client._local.usage == usage  # provider-reported usage captured from a real response
+    finally:
+        set_backend(None)
 
 
 def test_transient_5xx_retries_then_succeeds_over_http() -> None:
-    with _FakeProvider([(503, {}), (503, {}), (200, _completion("recovered"))]) as provider:
-        client = ModelClient(max_retries=3, retry_backoff=0.0)
-        result = client._send_with_retry(_agent(provider.base_url), {"model": "gpt-x"})
-        assert result == "recovered"
-        assert provider.request_count == 3  # two real 503s (urllib.error.HTTPError) then success
+    try:
+        with _FakeProvider([(503, {}), (503, {}), (200, _completion("recovered"))]) as provider:
+            client = _loopback_client(max_retries=3, retry_backoff=0.0)
+            result = client._send_with_retry(_agent(provider.base_url), {"model": "gpt-x"})
+            assert result == "recovered"
+            assert provider.request_count == 3  # two real 503s (urllib.error.HTTPError) then success
+    finally:
+        set_backend(None)
 
 
 def test_permanent_4xx_is_not_retried_over_http() -> None:
-    with _FakeProvider([(400, {"error": "bad request"})]) as provider:
-        client = ModelClient(max_retries=5, retry_backoff=0.0)
-        raised = False
-        try:
-            client._send_with_retry(_agent(provider.base_url), {"model": "gpt-x"})
-        except RuntimeError:
-            raised = True
-        assert raised
-        assert provider.request_count == 1  # 400 is a real HTTPError classified permanent: one attempt
+    try:
+        with _FakeProvider([(400, {"error": "bad request"})]) as provider:
+            client = _loopback_client(max_retries=5, retry_backoff=0.0)
+            raised = False
+            try:
+                client._send_with_retry(_agent(provider.base_url), {"model": "gpt-x"})
+            except RuntimeError:
+                raised = True
+            assert raised
+            assert provider.request_count == 1  # 400 is a real HTTPError classified permanent: one attempt
+    finally:
+        set_backend(None)
 
 
 def test_connection_error_is_transient_and_exhausts() -> None:
     # Point at a port with nothing listening: a real urllib URLError, classified transient.
-    client = ModelClient(max_retries=1, retry_backoff=0.0, timeout=2)
-    agent = _agent("http://127.0.0.1:1")  # port 1: connection refused
-    raised = False
     try:
-        client._send_with_retry(agent, {"model": "gpt-x"})
-    except RuntimeError as exc:
-        raised = True
-        assert "worker_agent" in str(exc)
-    assert raised
+        client = _loopback_client(max_retries=1, retry_backoff=0.0, timeout=2)
+        agent = _agent("http://127.0.0.1:1")  # port 1: connection refused
+        raised = False
+        try:
+            client._send_with_retry(agent, {"model": "gpt-x"})
+        except RuntimeError as exc:
+            raised = True
+            assert "worker_agent" in str(exc)
+        assert raised
+    finally:
+        set_backend(None)
 
 
 if __name__ == "__main__":
-    for name, fn in sorted(globals().items()):
-        if name.startswith("test_") and callable(fn):
-            fn()
-            print(f"ok {name}")
-    print("ok")
+    try:
+        for name, fn in sorted(globals().items()):
+            if name.startswith("test_") and callable(fn):
+                fn()
+                print(f"ok {name}")
+        print("ok")
+    finally:
+        set_backend(None)

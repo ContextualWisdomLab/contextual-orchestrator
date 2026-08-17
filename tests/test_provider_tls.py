@@ -24,10 +24,25 @@ def test_default_verifies_against_system_store() -> None:
     assert context.check_hostname is True
 
 
-def test_insecure_skip_verify_disables_checks() -> None:
-    context = ModelClient(verify_tls=False)._ssl_context
+def test_insecure_skip_verify_disables_checks_outside_production() -> None:
+    context = ModelClient(verify_tls=False, runtime_environment="development")._ssl_context
     assert context.verify_mode == ssl.CERT_NONE
     assert context.check_hostname is False
+
+
+def test_production_rejects_tls_opt_out() -> None:
+    try:
+        ModelClient(verify_tls=False)
+    except ValueError as exc:
+        assert "production" in str(exc)
+    else:
+        raise AssertionError("production must reject verify_tls=False")
+    try:
+        ModelClient(verify_tls=False, runtime_environment="production")
+    except ValueError as exc:
+        assert "production" in str(exc)
+    else:
+        raise AssertionError("explicit production must reject verify_tls=False")
 
 
 def test_ca_bundle_is_loaded() -> None:
