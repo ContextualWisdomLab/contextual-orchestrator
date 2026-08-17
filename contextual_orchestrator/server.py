@@ -1774,7 +1774,8 @@ def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
         if not isinstance(message, dict):
             continue
         role = message.get("role")
-        if isinstance(role, str) and role == "function":
+        # Strip + casefold so "Function" / " FUNCTION " hit the migration reject.
+        if isinstance(role, str) and role.strip().lower() == "function":
             raise RequestError(
                 400,
                 "invalid_message_role",
@@ -1792,6 +1793,10 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
         content = message.get("content")
+        # Form/JS SDKs sometimes send "User" / " Assistant " — casefold + strip.
+        if isinstance(role, str):
+            role = role.strip().lower()
+            message["role"] = role
         if isinstance(role, str) and role == "developer":
             # Newer OpenAI clients send developer in place of system; this gateway
             # does not apply a separate developer plane — fail closed with migration.
@@ -2169,7 +2174,12 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "invalid_message",
                     "each tool_calls id must be at most 128 characters",
                 )
-            if call.get("type") != "function":
+            call_type = call.get("type")
+            # Strip + casefold so "Function" / " FUNCTION " match OpenAI type.
+            if isinstance(call_type, str):
+                call_type = call_type.strip().lower()
+                call["type"] = call_type
+            if call_type != "function":
                 raise RequestError(
                     400,
                     "invalid_message",
@@ -3208,7 +3218,12 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "each tool accepts only type and function fields",
                 {"fields": unknown_tool},
             )
-        if item.get("type") != "function":
+        tool_type = item.get("type")
+        # Strip + casefold so "Function" / " FUNCTION " match OpenAI type.
+        if isinstance(tool_type, str):
+            tool_type = tool_type.strip().lower()
+            item["type"] = tool_type
+        if tool_type != "function":
             raise RequestError(
                 400,
                 "invalid_tools",
@@ -3344,7 +3359,12 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
                 "tool_choice object accepts only type and function fields",
                 {"fields": unknown},
             )
-        if choice.get("type") != "function":
+        choice_type = choice.get("type")
+        # Strip + casefold so "Function" / " FUNCTION " match OpenAI type.
+        if isinstance(choice_type, str):
+            choice_type = choice_type.strip().lower()
+            choice["type"] = choice_type
+        if choice_type != "function":
             raise RequestError(
                 400,
                 "invalid_tool_choice",
