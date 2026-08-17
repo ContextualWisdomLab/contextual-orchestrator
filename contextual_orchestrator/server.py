@@ -1466,6 +1466,9 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
             "invalid_text",
             "text.format.name must be a non-empty string",
         )
+    # Strip incidental whitespace before length/charset (SDK pad).
+    name = name.strip()
+    fmt["name"] = name
     # OpenAI Structured Outputs: name is [a-zA-Z0-9_-]{1,64}. Fail closed
     # so buyers get invalid_text instead of a provider 400.
     if len(name) > 64:
@@ -1844,6 +1847,8 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                     "invalid_message",
                     "tool messages require a non-empty tool_call_id string",
                 )
+            # Strip incidental whitespace so form/JS SDKs that pad IDs still bind.
+            tool_call_id = tool_call_id.strip()
             if len(tool_call_id) > 128:
                 raise RequestError(
                     400,
@@ -1871,6 +1876,8 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                         "invalid_message_name",
                         "message name must be a non-empty string",
                     )
+                # Strip incidental whitespace before length/charset (SDK pad).
+                msg_name = msg_name.strip()
                 if len(msg_name) > 64:
                     raise RequestError(
                         400,
@@ -2053,12 +2060,15 @@ def _validate_chat_tool_message_ids(body: dict[str, Any]) -> None:
                 "invalid_message",
                 "tool messages require a non-empty tool_call_id string",
             )
+        # Strip + write back so tools passthrough sees the canonical id.
+        tool_call_id = tool_call_id.strip()
         if len(tool_call_id) > 128:
             raise RequestError(
                 400,
                 "invalid_message",
                 "tool_call_id must be at most 128 characters",
             )
+        message["tool_call_id"] = tool_call_id
 
 
 def _validate_chat_logprobs_surface(body: dict[str, Any]) -> None:
@@ -2168,12 +2178,15 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "invalid_message",
                     "each tool_calls entry requires a non-empty id string",
                 )
+            # Strip incidental whitespace; length after strip (SDK pad).
+            call_id = call_id.strip()
             if len(call_id) > 128:
                 raise RequestError(
                     400,
                     "invalid_message",
                     "each tool_calls id must be at most 128 characters",
                 )
+            call["id"] = call_id
             call_type = call.get("type")
             # Strip + casefold so "Function" / " FUNCTION " match OpenAI type.
             if isinstance(call_type, str):
@@ -2199,6 +2212,8 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "invalid_message",
                     "each tool_calls function.name must be a non-empty string",
                 )
+            # Strip before length/charset so " lookup_item " is honest wire form.
+            name = name.strip()
             if len(name) > 64:
                 raise RequestError(
                     400,
@@ -2214,6 +2229,7 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
                     "invalid_message",
                     "each tool_calls function.name must match [a-zA-Z0-9_-]",
                 )
+            function["name"] = name
             arguments = function.get("arguments")
             # Explicit JSON null / missing is treat-as-omit → empty JSON-text.
             # Write back so proxy_completion forwards a string, not JSON null.
@@ -3074,6 +3090,9 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.name must be a non-empty string",
             )
+        # Strip incidental whitespace before length/charset (SDK pad).
+        name = name.strip()
+        schema["name"] = name
         # OpenAI Structured Outputs: name is [a-zA-Z0-9_-]{1,64}. Fail closed
         # so buyers get invalid_response_format instead of a provider 400.
         # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
@@ -3276,6 +3295,8 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "invalid_tools",
                 "each tool.function.name must be a non-empty string",
             )
+        # Strip incidental whitespace before length/charset (SDK pad).
+        name = name.strip()
         # OpenAI function names: [a-zA-Z0-9_-]{1,64}. Fail closed so buyers
         # get invalid_tools instead of a provider 400.
         # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
@@ -3291,6 +3312,7 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "invalid_tools",
                 "each tool.function.name must match [a-zA-Z0-9_-]",
             )
+        function["name"] = name
         # OpenAI function tools require parameters as a JSON Schema object when present.
         # Explicit JSON null is popped so proxy_completion forwards omit, not null.
         _omit_null_tool_function_field(
@@ -3399,6 +3421,9 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
                 "invalid_tool_choice",
                 "tool_choice.function.name must be a non-empty string",
             )
+        # Strip so padded names match tools[].function.name after tools strip.
+        name = name.strip()
+        function["name"] = name
         tools = body.get("tools")
         tool_names: set[str] = set()
         if isinstance(tools, list):
@@ -3409,7 +3434,7 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
                 if isinstance(fn, dict):
                     tool_name = fn.get("name")
                     if isinstance(tool_name, str):
-                        tool_names.add(tool_name)
+                        tool_names.add(tool_name.strip())
         if name not in tool_names:
             raise RequestError(
                 400,
