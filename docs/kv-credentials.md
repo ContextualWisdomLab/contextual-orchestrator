@@ -140,9 +140,9 @@ When any of the five org names
 compose **discovers** chat models by default (`GET {base_url}/models` with the
 KV key). The destination is rejected with the same chat egress policy
 (`provider_base_url_rejection`) before the Bearer is attached, and the
-production fetch does not follow redirects. A static fallback is used only if
-that GET fails. `COPILOT_GITHUB_TOKEN` is never read. See
-`docs/doctoring/priced-selection.md`.
+production GET reuses `ModelClient` (no second urllib client). A static
+fallback is used only if that GET fails. `COPILOT_GITHUB_TOKEN` is never
+read. See `docs/doctoring/priced-selection.md`.
 
 ## Why this supersedes `api_key_env`
 
