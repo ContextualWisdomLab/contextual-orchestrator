@@ -25,6 +25,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   scan with `chunking_strategy=meaning_units` and search `chunk_units`.
 - HTML meaning-unit cuts walk to the first matching close tag instead of a
   backtracking `.*?` matcher, so nested unclosed wrappers cannot stall a
-  batch. Ledger SQL uses complete bind-parameter statements (no execute-time
-  concatenation). Provider TLS opt-out and validated `urlopen` keep audited
-  Semgrep annotations.
+  batch. Tag-only leftovers use the same linear walk instead of a repeating
+  `(?:\s*</?[A-Za-z][^>]*>\s*)+` matcher, so `<A> <A>…` prefixes cannot
+  stall a batch. Ledger SQL uses complete bind-parameter statements (no
+  execute-time concatenation). Provider TLS opt-out and validated `urlopen`
+  keep audited Semgrep annotations.

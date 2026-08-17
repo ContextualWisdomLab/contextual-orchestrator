@@ -35,7 +35,6 @@ _HTML_OPEN = re.compile(
     r"<(p|div|li|h[1-6]|tr|td|section|article|blockquote)\b",
     re.IGNORECASE,
 )
-_TAG_ONLY = re.compile(r"^(?:\s*</?[A-Za-z][^>]*>\s*)+$")
 _PARAGRAPH_BREAK = re.compile(r"\n\s*\n+")
 _SENTENCE_CUT = re.compile(r"(?<=[.!?。！？])(?=\s+(?:[A-Z\"'(가-힣]))")
 _TOKEN = re.compile(r"[A-Za-z0-9]+(?:[.-][A-Za-z0-9]+)*|[가-힣]+")
@@ -139,7 +138,7 @@ def meaning_unit_chunks(
     units = [
         unit
         for unit in units
-        if unit.chunk_text.strip() and _TAG_ONLY.match(unit.chunk_text) is None
+        if unit.chunk_text.strip() and not _is_tag_only(unit.chunk_text)
     ]
     if not units:
         return [MeaningUnit("source_document", 0, len(text), text, input_index, 0)]
@@ -212,6 +211,39 @@ def _looks_like_email(text: str) -> bool:
         if len(headers) >= 8:
             break
     return bool({"from", "to", "subject"} & set(headers))
+
+
+def _is_tag_only(text: str) -> bool:
+    """Return True when ``text`` is only HTML tags and whitespace.
+
+    A linear ``find`` replaces ``(?:\\s*</?[A-Za-z][^>]*>\\s*)+``. Overlapping
+    ``\\s*`` on both sides of that group made ``<A> <A> <A>`` prefixes explode
+    when leftover prose kept the match from succeeding; each ``>`` stays O(n).
+    """
+    index = 0
+    length = len(text)
+    saw_tag = False
+    while index < length:
+        while index < length and text[index].isspace():
+            index += 1
+        if index >= length:
+            return saw_tag
+        if text[index] != "<":
+            return False
+        name_at = index + 1
+        if name_at < length and text[name_at] == "/":
+            name_at += 1
+        if name_at >= length:
+            return False
+        first = text[name_at]
+        if not ("A" <= first <= "Z" or "a" <= first <= "z"):
+            return False
+        close_at = text.find(">", name_at + 1)
+        if close_at < 0:
+            return False
+        index = close_at + 1
+        saw_tag = True
+    return saw_tag
 
 
 def _html_block_span(

@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 import re
 import sys
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -151,6 +152,27 @@ def test_case_insensitive_html_close_still_isolates_the_invoice() -> None:
     invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
     assert greeting is not invoice
     assert "INV-20260816" not in greeting.chunk_text
+
+
+def test_repeated_empty_anchor_tags_do_not_stall_invoice_isolation() -> None:
+    text = "<A>" + " <A>" * 32 + " Invoice INV-20260816 remains open."
+    started = time.perf_counter()
+    units = meaning_unit_chunks(text)
+    elapsed = time.perf_counter() - started
+    assert elapsed < 0.25, f"tag-only leftover scan stalled ({elapsed:.3f}s)"
+    for unit in units:
+        _assert_span(text, unit)
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert invoice.chunk_kind == "body_paragraph"
+    assert "INV-20260816" in invoice.chunk_text
+
+
+def test_tag_only_document_falls_back_to_source_document() -> None:
+    text = "<A>" + " <A>" * 8
+    units = meaning_unit_chunks(text)
+    assert len(units) == 1
+    assert units[0].chunk_kind == "source_document"
+    assert units[0].chunk_text == text
 
 
 def test_wrapped_div_keeps_invoice_out_of_the_greeting() -> None:
@@ -317,6 +339,8 @@ if __name__ == "__main__":
     test_truncated_html_opener_does_not_claim_the_invoice()
     test_unclosed_wrapper_divs_do_not_hide_the_invoice()
     test_case_insensitive_html_close_still_isolates_the_invoice()
+    test_repeated_empty_anchor_tags_do_not_stall_invoice_isolation()
+    test_tag_only_document_falls_back_to_source_document()
     test_wrapped_div_keeps_invoice_out_of_the_greeting()
     test_embedded_image_keeps_source_offset_and_neighbors()
     test_charset_data_image_is_its_own_unit()
