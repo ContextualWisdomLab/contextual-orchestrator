@@ -19,13 +19,16 @@ from contextual_orchestrator import (  # noqa: E402
     list_served_models,
 )
 from contextual_orchestrator.credentials import InMemoryCredentialBackend, register_credential, set_backend  # noqa: E402
+from contextual_orchestrator import model_discovery as discovery  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
     DISCOVERY_CREDENTIAL_NAMES,
     PROVIDER_ENDPOINTS,
     allocate_compute_tags,
+    floor_models,
     normalize_catalog_payload,
     registered_discovery_keys,
 )
+from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
 def _backend() -> None:
@@ -44,12 +47,10 @@ def test_unregistered_keys_are_not_read_from_environ() -> None:
         assert get_credential("OPENAI_API_KEY") is None
         assert registered_discovery_keys() == ()
         snapshot = discover_model_catalog(fetcher=lambda endpoint, key: (_ for _ in ()).throw(AssertionError(key)))
-        assert snapshot.used_floor is True
-        assert snapshot.source == "floor"
-        assert {model.model_id for model in snapshot.models} == {
-            FLOOR_DEFAULT_MODEL_ID,
-            FLOOR_SMALL_MODEL_ID,
-        }
+        assert snapshot.used_floor is False
+        assert snapshot.source == "empty"
+        assert snapshot.models == []
+        assert floor_models() == []
     finally:
         os.environ.pop("OPENAI_API_KEY", None)
         os.environ.pop("NVIDIA_NIM_API_KEY", None)
@@ -111,7 +112,55 @@ def test_empty_live_fetch_falls_back_to_nim_floor_only() -> None:
         FLOOR_SMALL_MODEL_ID,
     ]
     assert all(model.discovery_source == "floor" for model in snapshot.models)
+    assert all(model.credential_name == "NVIDIA_NIM_API_KEY" for model in snapshot.models)
     set_backend(None)
+
+
+def test_empty_catalog_without_nim_credential_keeps_seed() -> None:
+    _backend()
+    register_credential("OPENAI_API_KEY", "sk-test")
+    seed = [ModelAgent("general_agent", "mock-generalist", tags=("reasoning",))]
+    orchestrator = TaskOrchestrator(seed)
+    snapshot = apply_discovered_pool(orchestrator, fetcher=lambda endpoint, key: {"data": []})
+    assert snapshot.used_floor is False
+    assert snapshot.source == "empty"
+    assert snapshot.models == []
+    assert orchestrator.agents[0].id == "general_agent"
+    set_backend(None)
+
+
+def test_nim_sub_credential_can_own_the_floor() -> None:
+    _backend()
+    register_credential("NVIDIA_NIM_API_KEY_SUB", "nvapi-sub")
+    snapshot = discover_model_catalog(fetcher=lambda endpoint, key: {"data": []})
+    assert snapshot.used_floor is True
+    assert {model.credential_name for model in snapshot.models} == {"NVIDIA_NIM_API_KEY_SUB"}
+    set_backend(None)
+
+
+def test_default_catalog_fetch_reuses_orchestrator_tls_client() -> None:
+    _backend()
+    register_credential("OPENAI_API_KEY", "sk-test")
+    client = ModelClient(verify_tls=False, timeout=11)
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "mock-generalist", tags=("reasoning",))],
+        client=client,
+    )
+    captured: dict[str, object] = {}
+    original = discovery.fetch_provider_catalog
+
+    def wrapped(endpoint, api_key, client=None):
+        captured["client"] = client
+        return {"data": [{"id": "gpt-4.1"}]}
+
+    discovery.fetch_provider_catalog = wrapped
+    try:
+        snapshot = apply_discovered_pool(orchestrator)
+        assert snapshot.source == "live"
+        assert captured["client"] is client
+    finally:
+        discovery.fetch_provider_catalog = original
+        set_backend(None)
 
 
 def test_failed_provider_does_not_abort_other_catalogs() -> None:
@@ -206,6 +255,9 @@ if __name__ == "__main__":  # pragma: no cover
     test_unregistered_keys_are_not_read_from_environ()
     test_live_catalog_is_not_the_two_nim_floor_ids()
     test_empty_live_fetch_falls_back_to_nim_floor_only()
+    test_empty_catalog_without_nim_credential_keeps_seed()
+    test_nim_sub_credential_can_own_the_floor()
+    test_default_catalog_fetch_reuses_orchestrator_tls_client()
     test_failed_provider_does_not_abort_other_catalogs()
     test_apply_keeps_seed_when_no_key_is_registered()
     test_apply_replaces_seed_with_discovered_workers()

@@ -28,6 +28,16 @@ def test_non_finite_and_boolean_prices_are_unknown() -> None:
     assert finite_unit_price(float("inf")) is None
     assert finite_unit_price("0") == 0.0
     assert finite_unit_price(1.5) == 1.5
+    assert finite_unit_price(10**10000) is None
+
+
+def test_partial_two_sided_price_is_unknown_not_free() -> None:
+    payload = {"data": [{"id": "partial/prompt-only", "pricing": {"prompt": "0"}}]}
+    model = normalize_catalog_payload(payload, PROVIDER_ENDPOINTS["OPENROUTER_API_KEY"])[0]
+    assert model.price_status == "unknown"
+    assert model.comparison_cost() is None
+    assert classify_price_status(0.0, None, None, None) == "unknown"
+    assert classify_price_status(None, 0.0, 1.0, None) == "unknown"
 
 
 def test_openrouter_free_variant_keeps_sibling_list_price() -> None:
@@ -130,6 +140,7 @@ def test_price_book_uses_original_list_when_billed_is_zero() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     test_non_finite_and_boolean_prices_are_unknown()
+    test_partial_two_sided_price_is_unknown_not_free()
     test_openrouter_free_variant_keeps_sibling_list_price()
     test_explicit_zero_without_list_is_known_free()
     test_missing_price_is_unknown_not_free()

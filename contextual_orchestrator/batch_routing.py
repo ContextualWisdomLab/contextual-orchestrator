@@ -138,14 +138,9 @@ def cheapest_upstream(
     for candidate in candidates:
         provider = candidate.get("provider", "")
         model = candidate.get("model", "")
-        if hasattr(price_book, "known_compute_cost"):
-            cost, _currency = price_book.known_compute_cost(
-                provider, model, assumed_prompt_tokens, assumed_completion_tokens
-            )
-        else:
-            cost, _currency = price_book.compute_cost(
-                provider, model, assumed_prompt_tokens, assumed_completion_tokens
-            )
+        cost, _currency = price_book.known_compute_cost(
+            provider, model, assumed_prompt_tokens, assumed_completion_tokens
+        )
         if cost is None:
             continue
         if best_cost is None or cost < best_cost:

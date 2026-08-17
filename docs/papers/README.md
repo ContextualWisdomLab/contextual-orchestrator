@@ -22,9 +22,10 @@ redistribution; each is cited below with its arXiv identifier.
   Almahairi, Vincent Wu, Wei-Lin Chiang, Tianhao Wu, Joseph E. Gonzalez, M.
   Waleed Kadous, Ion Stoica. arXiv:2406.18665, 2024.
   `routellm-routing-2406.18665.pdf`
-  Grounds the **routing decision** layer (`RoutingPolicy` + cost-aware upstream
-  selection and model auto-discovery): route strong/weak model choices to hit
-  a cost/quality target. Live catalogs replace a static two-model inventory.
+  Grounds the **routing decision** layer (`RoutingPolicy`): learn when to send
+  a query to a strong versus weak model to hit a cost/quality target. Cost-aware
+  upstream selection and live provider-catalog / model auto-discovery are
+  repository implementation details, not contributions of this paper.
   arXiv preprint; distributed under the arXiv non-exclusive distribution license.
 
 - **Hybrid LLM: Cost-Efficient and Quality-Aware Query Routing** — Dujian Ding,

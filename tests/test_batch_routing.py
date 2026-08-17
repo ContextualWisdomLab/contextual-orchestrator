@@ -96,6 +96,18 @@ def test_cheapest_upstream_skips_unpriced_instead_of_treating_as_free() -> None:
     assert cheapest_upstream([{"provider": "mystery_co", "model": "unpriced"}], price_book) is None
 
 
+def test_cheapest_upstream_requires_known_compute_cost() -> None:
+    class LegacyBook:
+        def compute_cost(self, *_args):
+            return 0.0, "USD"
+
+    try:
+        cheapest_upstream([{"provider": "mystery_co", "model": "unpriced"}], LegacyBook())
+    except AttributeError:
+        return
+    raise AssertionError("legacy compute_cost fallback must not treat unknown as free")
+
+
 # ---------------------------------------------------------------------------
 # Local (mock/standalone) backend
 # ---------------------------------------------------------------------------

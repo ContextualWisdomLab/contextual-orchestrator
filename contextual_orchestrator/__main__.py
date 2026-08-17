@@ -106,8 +106,10 @@ def main() -> None:
         cache_ttl=args.cache_ttl,
     )
     # Product auto-discovery: when any of the five provider keys is in the KV,
-    # replace the seed pool with the live catalog (NIM floor only if empty).
-    # Unregistered keys are skipped — never os.getenv as a "key exists" signal.
+    # replace the seed pool with the live catalog. Catalog HTTPS reuses this
+    # ModelClient's TLS settings. NIM floor only if every fetch is empty and a
+    # NIM credential is registered. Unregistered keys are skipped — never
+    # os.getenv as a "key exists" signal.
     apply_discovered_pool(orchestrator)
 
     if args.eval:

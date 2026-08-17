@@ -7,8 +7,10 @@ catalog.
 
 ## Floor, not inventory
 
-These NVIDIA NIM ids are used **only** when every registered catalog fetch
-returns nothing (empty, malformed, 4xx/5xx, or timeout):
+These NVIDIA NIM ids are used **only** after discovery runs, every registered
+catalog fetch returns nothing (empty, malformed, 4xx/5xx, or timeout), **and**
+`NVIDIA_NIM_API_KEY` or `NVIDIA_NIM_API_KEY_SUB` is already in the KV. Without
+a NIM credential the seed/mock pool is kept:
 
 | Size class | Model id |
 |---|---|
@@ -33,11 +35,13 @@ transport into the KV, not the runtime source.
 
 ## Price honesty
 
-- Explicit billed `0` is known-free.
+- Explicit billed `0` is known-free only when both prompt and completion
+  prices are finite.
 - A free channel that still has a published list price or a paid `:free`
   sibling stores `original_list_price` and is **compared at that list price**.
-- Missing, boolean, non-numeric, negative, NaN, or infinite prices are
-  `unknown`. Unknown is never converted to `0` / “free.”
+- Missing, partial (one-sided), boolean, non-numeric, negative, NaN,
+  infinite, or overflowing prices are `unknown`. Unknown is never converted
+  to `0` / “free.”
 
 ## Fugu / Conductor / TRINITY allocation
 
@@ -56,7 +60,7 @@ ids are tagged cheap / fallback / coding so latency routing has a worker.
 |---|---|---|
 | `GET` | `/v1/models` | inference — `contextual-orchestrator` plus current pool ids |
 | `GET` | `/api/v1/provider_catalogs` | admin — last secret-redacted snapshot |
-| `POST` | `/api/v1/provider_catalogs/refresh` | admin — re-run discovery |
+| `POST` | `/api/v1/provider_catalogs/refresh` | admin — re-run discovery (no request body) |
 
 Startup (`python -m contextual_orchestrator --serve`) applies discovery when
 any of the five names is already in the KV. No registered key keeps the seed

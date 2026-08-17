@@ -27,6 +27,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .price_honesty import known_comparison_cost, optional_finite_price
 
 
 ChatMessage = dict[str, str]
@@ -48,35 +49,17 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
-def _optional_finite_price(value: Any) -> float | None:
-    """Parse a ranking price. Missing/non-finite/negative values stay unknown."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed != parsed or parsed in (float("inf"), float("-inf")) or parsed < 0:
-        return None
-    return parsed
-
-
 def known_agent_comparison_cost(agent: "ModelAgent") -> float | None:
     """Return the known ranking cost for ``agent``, or ``None`` if unpriced.
 
     Promotional-free workers with ``original_list_price`` compare at that list
     price. Unpriced is never treated as ``0`` / free.
     """
-    billed = _optional_finite_price(getattr(agent, "price_per_million", None))
-    listed = _optional_finite_price(getattr(agent, "original_list_price", None))
-    status = str(getattr(agent, "price_status", "unknown") or "unknown")
-    if status == "unknown" and billed is None and listed is None:
-        return None
-    if billed == 0.0 and listed is not None:
-        return listed
-    if billed is not None:
-        return billed
-    return listed
+    return known_comparison_cost(
+        optional_finite_price(getattr(agent, "price_per_million", None)),
+        optional_finite_price(getattr(agent, "original_list_price", None)),
+        str(getattr(agent, "price_status", "unknown") or "unknown"),
+    )
 
 
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
@@ -165,8 +148,8 @@ class ModelAgent:
             disabled=bool(value.get("disabled", False)),
             provider_name=value.get("provider_name", ""),
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
-            price_per_million=_optional_finite_price(value.get("price_per_million")),
-            original_list_price=_optional_finite_price(value.get("original_list_price")),
+            price_per_million=optional_finite_price(value.get("price_per_million")),
+            original_list_price=optional_finite_price(value.get("original_list_price")),
             price_status=str(value.get("price_status") or "unknown"),
             discovery_source=str(value.get("discovery_source") or ""),
         )

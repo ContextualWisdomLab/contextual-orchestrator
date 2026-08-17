@@ -15,11 +15,12 @@ registration is ``None`` — never ``os.getenv`` as a product fallback.
 
 Price honesty (issue #86):
 
-* an explicit billed rate of ``0`` is known-free;
+* an explicit billed rate of ``0`` is known-free only when both prompt and
+  completion prices are finite;
 * a free channel that still has a published list/sibling price stores that
   value as ``original_list_price`` and is compared at the list price;
-* missing, boolean, non-numeric, negative, NaN, or infinite prices are
-  ``unknown`` and are never converted to ``0`` / "free".
+* missing, partial, boolean, non-numeric, negative, NaN, infinite, or
+  overflowing prices are ``unknown`` and are never converted to ``0`` / "free".
 """
 
 from __future__ import annotations
@@ -35,6 +36,7 @@ import urllib.request
 from .conventions import is_two_word_snake_case, require_object_name
 from .credentials import get_credential
 from .orchestrator import ModelAgent, ModelClient, TaskOrchestrator
+from .price_honesty import complete_pair_mean, known_comparison_cost, optional_finite_price
 
 
 DISCOVERY_CREDENTIAL_NAMES: tuple[str, ...] = (
@@ -193,20 +195,14 @@ class CatalogModel:
         price. Explicit billed ``0`` with no list price is known-free (``0``).
         Unknown is never converted to ``0``.
         """
-        billed = _mean_known(
+        billed = complete_pair_mean(
             self.billed_prompt_per_million, self.billed_completion_per_million
         )
-        listed = _mean_known(
+        listed = complete_pair_mean(
             self.original_list_prompt_per_million,
             self.original_list_completion_per_million,
         )
-        if billed == 0.0 and listed is not None:
-            return listed
-        if billed is not None:
-            return billed
-        if listed is not None:
-            return listed
-        return None
+        return known_comparison_cost(billed, listed, self.price_status)
 
     def as_dict(self) -> dict[str, Any]:
         """Secret-free snapshot row for operators and CWL consumers."""
@@ -269,23 +265,10 @@ def skipped_discovery_keys() -> tuple[str, ...]:
 def finite_unit_price(value: Any) -> float | None:
     """Parse a price as a finite non-negative float, or ``None`` if unknown.
 
-    Booleans, strings that are not numbers, negatives, NaN, and infinities
-    are unknown — they are not coerced to ``0``.
+    Booleans, strings that are not numbers, negatives, NaN, infinities, and
+    values that overflow ``float`` are unknown — they are not coerced to ``0``.
     """
-    if value is None or isinstance(value, bool):
-        return None
-    if isinstance(value, str):
-        stripped = value.strip()
-        if stripped == "":
-            return None
-        value = stripped
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed != parsed or parsed in (float("inf"), float("-inf")) or parsed < 0:
-        return None
-    return parsed
+    return optional_finite_price(value)
 
 
 def price_per_million(value: Any, *, unit: str) -> float | None:
@@ -305,8 +288,8 @@ def classify_price_status(
     list_completion: float | None,
 ) -> str:
     """Return ``known``, ``promotional_free``, or ``unknown``."""
-    billed = _mean_known(billed_prompt, billed_completion)
-    listed = _mean_known(list_prompt, list_completion)
+    billed = complete_pair_mean(billed_prompt, billed_completion)
+    listed = complete_pair_mean(list_prompt, list_completion)
     if billed == 0.0 and listed is not None:
         return "promotional_free"
     if billed is not None:
@@ -377,13 +360,32 @@ def agent_id_for(provider_name: str, model_id: str, taken: set[str]) -> str:
     return candidate
 
 
+def floor_credential_name() -> str | None:
+    """Return a registered NVIDIA NIM credential, or ``None`` if neither exists.
+
+    Floor rows are callable only when a NIM key is already in the KV. Absence
+    is ``get_credential(...) is None`` — never an environment fallback.
+    """
+    for name in ("NVIDIA_NIM_API_KEY", "NVIDIA_NIM_API_KEY_SUB"):
+        if get_credential(name):
+            return name
+    return None
+
+
 def floor_models() -> list[CatalogModel]:
-    """Return the two NIM floor rows used only when discovery is empty."""
+    """Return the two NIM floor rows when a NIM credential is registered.
+
+    Used only after discovery ran and every catalog was empty or failed.
+    Without a NIM key the existing seed pool is left in place.
+    """
+    credential_name = floor_credential_name()
+    if credential_name is None:
+        return []
     return [
         CatalogModel(
             model_id=FLOOR_DEFAULT_MODEL_ID,
             provider_name="nvidia_nim",
-            credential_name="NVIDIA_NIM_API_KEY",
+            credential_name=credential_name,
             base_url=NVIDIA_NIM_BASE_URL,
             owner="nvidia",
             price_status="unknown",
@@ -392,7 +394,7 @@ def floor_models() -> list[CatalogModel]:
         CatalogModel(
             model_id=FLOOR_SMALL_MODEL_ID,
             provider_name="nvidia_nim",
-            credential_name="NVIDIA_NIM_API_KEY",
+            credential_name=credential_name,
             base_url=NVIDIA_NIM_BASE_URL,
             owner="nvidia",
             price_status="unknown",
@@ -580,15 +582,20 @@ def normalize_catalog_payload(
 def discover_model_catalog(
     *,
     fetcher: CatalogFetcher | None = None,
+    client: ModelClient | None = None,
 ) -> DiscoverySnapshot:
     """Discover chat models from every KV-registered provider key.
 
     Unregistered names are skipped (KV miss, not an environment fallback).
-    When every fetch is empty or fails, the snapshot is the NIM floor.
+    When every fetch is empty or fails and a NIM credential is registered,
+    the snapshot is the NIM floor. Otherwise the catalog stays empty so the
+    caller can keep its seed pool.
     """
     registered = registered_discovery_keys()
     skipped = skipped_discovery_keys()
-    fetch = fetcher or fetch_provider_catalog
+    fetch = fetcher or (
+        lambda endpoint, api_key: fetch_provider_catalog(endpoint, api_key, client=client)
+    )
     discovered: list[CatalogModel] = []
     errors: dict[str, str] = {}
     for name in registered:
@@ -610,10 +617,20 @@ def discover_model_catalog(
             skipped_credentials=skipped,
             provider_errors=errors,
         )
+    floor = floor_models()
+    if floor:
+        return DiscoverySnapshot(
+            models=floor,
+            source="floor",
+            used_floor=True,
+            registered_credentials=registered,
+            skipped_credentials=skipped,
+            provider_errors=errors,
+        )
     return DiscoverySnapshot(
-        models=floor_models(),
-        source="floor",
-        used_floor=True,
+        models=[],
+        source="empty",
+        used_floor=False,
         registered_credentials=registered,
         skipped_credentials=skipped,
         provider_errors=errors,
@@ -628,7 +645,7 @@ def agents_from_catalog(models: Iterable[CatalogModel]) -> list[ModelAgent]:
         agent_id = agent_id_for(model.provider_name, model.model_id, taken)
         size = size_class_for_model(model.model_id)
         cost = model.comparison_cost()
-        list_cost = _mean_known(
+        list_cost = complete_pair_mean(
             model.original_list_prompt_per_million,
             model.original_list_completion_per_million,
         )
@@ -674,7 +691,10 @@ def apply_discovered_pool(
         )
         orchestrator.discovery_snapshot = snapshot.as_dict()
         return snapshot
-    snapshot = discover_model_catalog(fetcher=fetch)
+    snapshot = discover_model_catalog(
+        fetcher=fetch,
+        client=getattr(orchestrator, "client", None),
+    )
     agents = agents_from_catalog(snapshot.models)
     if agents:
         orchestrator.agents = agents
@@ -716,23 +736,24 @@ def comparison_cost_for_agent(agent: ModelAgent) -> float | None:
     A free billed channel with ``original_list_price`` compares at the list
     price. Unpriced agents are not treated as free.
     """
-    listed = finite_unit_price(getattr(agent, "original_list_price", None))
-    billed = finite_unit_price(getattr(agent, "price_per_million", None))
-    status = getattr(agent, "price_status", "unknown")
-    if status == "unknown" and billed is None and listed is None:
-        return None
-    if billed == 0.0 and listed is not None:
-        return listed
-    if billed is not None:
-        return billed
-    return listed
+    return known_comparison_cost(
+        finite_unit_price(getattr(agent, "price_per_million", None)),
+        finite_unit_price(getattr(agent, "original_list_price", None)),
+        getattr(agent, "price_status", "unknown"),
+    )
 
 
-def fetch_provider_catalog(endpoint: ProviderEndpoint, api_key: str) -> Any:
+def fetch_provider_catalog(
+    endpoint: ProviderEndpoint,
+    api_key: str,
+    client: ModelClient | None = None,
+) -> Any:
     """Fetch one official catalog through the chat egress policy.
 
-    Reuses :class:`ModelClient` host/TLS checks. Redirects are rejected.
-    The Bearer/Key header is attached only after the URL is validated.
+    Reuses the configured :class:`ModelClient` host/TLS checks when one is
+    supplied (CA bundle / ``--insecure-skip-tls-verify``). Redirects are
+    rejected. The Bearer/Key header is attached only after the URL is
+    validated.
     """
     probe = ModelAgent(
         id="catalog_probe",
@@ -741,9 +762,9 @@ def fetch_provider_catalog(endpoint: ProviderEndpoint, api_key: str) -> Any:
         credential_key=endpoint.credential_name,
         provider_name=endpoint.provider_name,
     )
-    client = ModelClient(timeout=30)
-    client._validate_provider(probe)
-    url = client._provider_url(probe, endpoint.catalog_path)
+    fetch_client = client if client is not None else ModelClient(timeout=30)
+    fetch_client._validate_provider(probe)
+    url = fetch_client._provider_url(probe, endpoint.catalog_path)
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise RuntimeError("catalog URL must be https")
@@ -760,9 +781,9 @@ def fetch_provider_catalog(endpoint: ProviderEndpoint, api_key: str) -> Any:
     )
     opener = urllib.request.build_opener(
         _NoRedirectHandler,
-        urllib.request.HTTPSHandler(context=client._ssl_context),
+        urllib.request.HTTPSHandler(context=fetch_client._ssl_context),
     )
-    with opener.open(request, timeout=client.timeout) as response:  # nosec B310 - URL from validated provider origin.  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    with opener.open(request, timeout=fetch_client.timeout) as response:  # nosec B310 - URL from validated provider origin.  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         raw = response.read(_MAX_CATALOG_BYTES + 1)
     if len(raw) > _MAX_CATALOG_BYTES:
         raise RuntimeError("catalog response exceeded bounded size")
@@ -793,13 +814,6 @@ def _first_price(
             if parsed is not None:
                 return parsed
     return None
-
-
-def _mean_known(*values: float | None) -> float | None:
-    known = [value for value in values if value is not None]
-    if not known:
-        return None
-    return sum(known) / len(known)
 
 
 def _dedupe_models(models: list[CatalogModel]) -> list[CatalogModel]:

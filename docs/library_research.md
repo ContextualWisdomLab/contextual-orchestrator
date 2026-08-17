@@ -65,6 +65,11 @@ Researched before adding a catalog composer:
 
 Skipped: a static two-model catalog, request-time `os.getenv` as “key registered,” and a second HTTP stack beside `ModelClient`.
 
+Price honesty is a shared stdlib helper (`price_honesty.py`), not a pricing
+library: LiteLLM's price table and vendor SDKs were already rejected above.
+The helper exists so discovery, ranking, and the ledger cannot drift on the
+same four-way comparison (unknown / promotional-free / billed / list).
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

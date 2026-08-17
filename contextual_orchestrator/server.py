@@ -728,16 +728,15 @@ def build_server(
                     else "inference"
                 )
                 self._authorize(scope)
-                body = self._read_json()
-
                 if path == "/api/v1/provider_catalogs/refresh":
+                    self._discard_request_body()
                     snapshot = apply_discovered_pool(
                         orchestrator,
                         fetcher=getattr(orchestrator, "catalog_fetcher", None),
-                        replace_unregistered=True,
                     )
                     self._send(snapshot.as_dict())
                     return
+                body = self._read_json()
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
@@ -992,6 +991,13 @@ def build_server(
             if raw is None or raw == "":
                 return None
             return int(raw)
+
+        def _discard_request_body(self) -> None:
+            body_size = int(self.headers.get("content-length", "0") or 0)
+            if body_size > security.max_body_bytes:
+                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+            if body_size:
+                self.rfile.read(body_size)
 
         def _read_json(self) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":

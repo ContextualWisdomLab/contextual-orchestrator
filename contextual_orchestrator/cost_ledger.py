@@ -35,6 +35,8 @@ import time
 from typing import Any, Dict, List, Optional, Protocol
 import uuid
 
+from .price_honesty import optional_finite_price
+
 
 # ---------------------------------------------------------------------------
 # Attribution dimensions
@@ -65,19 +67,6 @@ _DIMENSION_TO_COLUMN: Dict[str, str] = {
 _DIMENSION_TO_COLUMN["provider"] = "upstream_api"
 
 UNATTRIBUTED = "unattributed"
-
-
-def _optional_price(value: Any) -> Optional[float]:
-    """Parse an original-list price. Missing or non-finite values stay unknown."""
-    if value is None or isinstance(value, bool):
-        return None
-    try:
-        parsed = float(value)
-    except (TypeError, ValueError):
-        return None
-    if parsed != parsed or parsed in (float("inf"), float("-inf")) or parsed < 0:
-        return None
-    return parsed
 
 
 @dataclass
@@ -191,8 +180,8 @@ class PriceBook:
             prompt_price_per_1k=float(raw.get("prompt_price_per_1k", 0.0)),
             completion_price_per_1k=float(raw.get("completion_price_per_1k", 0.0)),
             currency_code=raw.get("currency_code", self.default_currency),
-            original_list_prompt_per_1k=_optional_price(raw.get("original_list_prompt_per_1k")),
-            original_list_completion_per_1k=_optional_price(raw.get("original_list_completion_per_1k")),
+            original_list_prompt_per_1k=optional_finite_price(raw.get("original_list_prompt_per_1k")),
+            original_list_completion_per_1k=optional_finite_price(raw.get("original_list_completion_per_1k")),
         )
 
     def compute_cost(

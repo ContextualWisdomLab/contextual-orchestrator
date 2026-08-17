@@ -97,7 +97,32 @@ def test_refresh_replaces_pool_from_registered_key() -> None:
         set_backend(None)
 
 
+def test_bodyless_refresh_keeps_seed_when_unregistered() -> None:
+    server, thread, orchestrator, port = _start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/v1/provider_catalogs/refresh",
+            headers={"authorization": "Bearer admin_secret"},
+            method="POST",
+        )
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status = response.status
+            body = json.loads(response.read().decode("utf-8"))
+        assert status == 200
+        assert body["source"] == "seed"
+        assert body["used_floor"] is False
+        assert orchestrator.agents[0].id == "general_agent"
+        served_status, listed = _json(port, "/v1/models", "inference_secret")
+        assert served_status == 200
+        assert any(row["id"] == "mock-generalist" for row in listed["data"])
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        set_backend(None)
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_models_list_requires_inference_bearer()
     test_refresh_replaces_pool_from_registered_key()
+    test_bodyless_refresh_keeps_seed_when_unregistered()
     print("ok")
