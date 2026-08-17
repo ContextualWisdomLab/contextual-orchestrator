@@ -8,6 +8,7 @@ import copy
 from dataclasses import dataclass, replace
 from functools import wraps
 import hashlib
+import ipaddress
 import json
 import os
 from pathlib import Path
@@ -328,25 +329,11 @@ class ModelClient:
     def fetch_provider_json(self, agent: ModelAgent, path: str) -> Any:
         """GET JSON from a validated provider path (catalog discovery).
 
-        Reuses ``_validate_provider`` / ``_provider_url`` / ``_open_provider``
-        so discovery does not grow a second urllib client.
+        Reuses the existing batch GET helper so discovery does not add a
+        second urllib ``Request``.
         """
         self._validate_provider(agent)
-        api_key = get_credential(agent.credential_name)
-        if not api_key:
-            raise NotConfigured(
-                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV"
-            )
-        request = urllib.request.Request(
-            self._provider_url(agent, path),
-            headers={
-                "authorization": f"Bearer {api_key}",
-                "accept": "application/json",
-            },
-            method="GET",
-        )
-        with self._open_provider(request) as response:
-            return json.loads(response.read(1_048_576).decode("utf-8"))
+        return self._batch_json(agent, "GET", path)
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
@@ -495,9 +482,25 @@ class ModelClient:
                 f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
                 "(this replaces the legacy api_key_env environment pattern)"
             )
-        reason = provider_base_url_rejection(agent.base_url, allowed_hosts=allowed_provider_hosts())
+        reason = provider_base_url_rejection(
+            agent.base_url,
+            allowed_hosts=allowed_provider_hosts(),
+            resolve_dns=False,
+        )
         if reason:
             raise RuntimeError(f"{agent.id} {reason}")
+        parsed = urlparse(agent.base_url)
+        hostname = (parsed.hostname or "").lower()
+        for address in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM):
+            ip_address = ipaddress.ip_address(address[4][0])
+            if (
+                ip_address.is_private
+                or ip_address.is_loopback
+                or ip_address.is_link_local
+                or ip_address.is_multicast
+                or ip_address.is_reserved
+            ):
+                raise RuntimeError(f"{agent.id} provider resolves to non-public address")
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""

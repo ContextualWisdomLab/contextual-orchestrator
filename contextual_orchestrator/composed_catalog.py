@@ -147,17 +147,20 @@ class ComposedCatalog:
     provider_reports: list[ProviderReport] = field(default_factory=list)
 
 
+def _hostname_is_marker(host: str, marker: str) -> bool:
+    """True when ``host`` is ``marker`` or a subdomain of it (not a substring)."""
+    return host == marker or host.endswith("." + marker)
+
+
 def catalog_allows_fields(base_url: str, model: str, credential_name: str) -> bool:
     """Return True when a row is not a retired GitHub Models / Copilot target."""
     if (credential_name or "") in FORBIDDEN_CREDENTIAL_NAMES:
         return False
     host = (urlparse(base_url).hostname or "").lower()
-    if any(marker in host for marker in FORBIDDEN_HOST_MARKERS):
-        return False
-    if "github" in host and "model" in host:
+    if any(_hostname_is_marker(host, marker) for marker in FORBIDDEN_HOST_MARKERS):
         return False
     lowered_model = (model or "").lower()
-    if any(marker in lowered_model for marker in FORBIDDEN_MODEL_MARKERS):
+    if any(marker == lowered_model or lowered_model.endswith("/" + marker) for marker in FORBIDDEN_MODEL_MARKERS):
         return False
     return True
 

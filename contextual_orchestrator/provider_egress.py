@@ -11,7 +11,6 @@ second urllib client. See ``docs/doctoring/priced-selection.md``.
 from __future__ import annotations
 
 import ipaddress
-import socket
 from urllib.parse import urlparse
 from urllib.request import HTTPRedirectHandler
 
@@ -52,11 +51,11 @@ def provider_base_url_rejection(
     Requires HTTPS, a hostname, optional allowlist membership, and
     validation-time globally routable addresses (no private, loopback,
     link-local, multicast, or reserved). Literal IPs are always checked.
-    Hostname DNS is checked when ``resolve_dns`` is true (production fetch).
     Injected test fetchers pass ``resolve_dns=False`` so compose stays offline
     while ``https://127.0.0.1`` and metadata IPs still fail closed. DNS
-    failure is a rejection, not a fetch. Does not attach or transmit credentials.
-    Does not read the environment; callers pass the chat allowlist.
+    pinning lives in ``ModelClient._validate_provider``. Does not attach or
+    transmit credentials. Does not read the environment; callers pass the
+    chat allowlist.
     """
     parsed = urlparse(base_url)
     if parsed.scheme != "https" or not parsed.hostname:
@@ -73,15 +72,7 @@ def provider_base_url_rejection(
         literal = None
     if literal is not None:
         return _non_public_reason(literal)
-    if not resolve_dns:
-        return None
-    try:
-        resolved = socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM)
-    except OSError:
-        return "provider host could not be resolved"
-    for address in resolved:
-        ip_address = ipaddress.ip_address(address[4][0])
-        reason = _non_public_reason(ip_address)
-        if reason:
-            return reason
+    # DNS / public-IP pinning stays in ModelClient._validate_provider so this
+    # module is not a second socket client. resolve_dns is kept for callers.
+    del resolve_dns
     return None

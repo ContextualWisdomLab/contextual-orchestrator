@@ -18,6 +18,7 @@ from contextual_orchestrator.composed_catalog import (  # noqa: E402
     FORBIDDEN_CREDENTIAL_NAMES,
     ORG_CREDENTIAL_NAMES,
     ProviderProfile,
+    catalog_allows_fields,
     compose_default_catalog,
     discover_provider_models,
     merge_agent_pools,
@@ -230,6 +231,16 @@ def test_composed_catalog_does_not_open_urllib_directly() -> None:
     assert "build_opener" not in egress
     assert "os.environ" not in egress
     assert "Request(" not in egress
+    assert "getaddrinfo" not in egress
+    assert "import socket" not in egress
+
+
+def test_catalog_allows_fields_matches_hostnames_not_substrings() -> None:
+    assert catalog_allows_fields("https://models.github.ai/inference", "gpt-4o", "OPENAI_API_KEY") is False
+    assert catalog_allows_fields("https://api.openai.com/v1", "gpt-4o", "OPENAI_API_KEY") is True
+    # Substring lookalikes must not be treated as the forbidden host.
+    assert catalog_allows_fields("https://models.github.ai.example.com/v1", "gpt-4o", "OPENAI_API_KEY") is True
+    assert catalog_allows_fields("https://api.openai.com/v1", "gpt-5.6-luna", "OPENAI_API_KEY") is False
 
 
 def test_provider_base_url_rejection_covers_literal_non_public() -> None:
