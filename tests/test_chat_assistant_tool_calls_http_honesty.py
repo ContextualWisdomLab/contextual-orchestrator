@@ -194,7 +194,8 @@ def test_http_chat_rejects_tool_calls_bad_type() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_tool_calls_non_string_arguments() -> None:
+def test_http_chat_accepts_tool_calls_object_arguments_as_json_text() -> None:
+    """Parsed object/array arguments serialize to OpenAI JSON-text wire form."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -211,6 +212,35 @@ def test_http_chat_rejects_tool_calls_non_string_arguments() -> None:
                                 "id": "call_1",
                                 "type": "function",
                                 "function": {"name": "lookup_item", "arguments": {"q": 1}},
+                            }
+                        ],
+                    },
+                ],
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_tool_calls_non_json_arguments() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [
+                    {"role": "user", "content": "hi"},
+                    {
+                        "role": "assistant",
+                        "content": "",
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "lookup_item", "arguments": 3},
                             }
                         ],
                     },
@@ -264,6 +294,7 @@ if __name__ == "__main__":
     test_http_chat_accepts_empty_tool_calls_array_as_omit()
     test_http_chat_rejects_tool_calls_missing_id()
     test_http_chat_rejects_tool_calls_bad_type()
-    test_http_chat_rejects_tool_calls_non_string_arguments()
+    test_http_chat_accepts_tool_calls_object_arguments_as_json_text()
+    test_http_chat_rejects_tool_calls_non_json_arguments()
     test_http_chat_rejects_tool_calls_bad_function_name()
     print("ok")

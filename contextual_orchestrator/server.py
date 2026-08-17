@@ -2220,6 +2220,13 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
             if arguments is None:
                 function["arguments"] = ""
                 arguments = ""
+            # Some SDKs send already-parsed objects/arrays; serialize to JSON text
+            # so the OpenAI wire shape (string) is preserved on passthrough.
+            elif isinstance(arguments, (dict, list)):
+                function["arguments"] = json.dumps(
+                    arguments, separators=(",", ":"), ensure_ascii=False
+                )
+                arguments = function["arguments"]
             if not isinstance(arguments, str):
                 raise RequestError(
                     400,
