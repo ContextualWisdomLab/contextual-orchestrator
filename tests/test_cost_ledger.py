@@ -10,12 +10,14 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator.cost_ledger import (  # noqa: E402
     ATTRIBUTION_DIMENSIONS,
+    INSERT_USAGE_SQL,
     CostLedger,
     InMemoryUsageTelemetrySink,
     NonBlockingLedgerStore,
     PriceBook,
     PriceEntry,
     SqlLedgerStore,
+    _USAGE_COLUMNS,
     dimension_catalog,
 )
 from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: E402
@@ -246,6 +248,11 @@ def test_sql_ledger_store_on_sqlite_creates_objects_and_rolls_up() -> None:
 def test_ledger_table_names_follow_two_word_snake_case() -> None:
     for name in ("llm_usage_records", "cost_attribution_dimensions", "llm_price_entries"):
         assert is_two_word_snake_case(name)
+
+
+def test_usage_sql_placeholders_match_column_count() -> None:
+    assert INSERT_USAGE_SQL["qmark"].count("?") == len(_USAGE_COLUMNS)
+    assert INSERT_USAGE_SQL["pyformat"].count("%s") == len(_USAGE_COLUMNS)
 
 
 def test_dimension_catalog_covers_all_required_dimensions() -> None:
