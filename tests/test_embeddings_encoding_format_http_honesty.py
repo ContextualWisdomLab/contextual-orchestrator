@@ -82,8 +82,8 @@ def test_http_embeddings_accepts_encoding_format_omitted() -> None:
         thread.join(timeout=5)
 
 
-def test_http_embeddings_rejects_encoding_format_base64() -> None:
-    """Buyers must not believe base64 vectors were returned when gateway emits floats."""
+def test_http_embeddings_accepts_encoding_format_base64() -> None:
+    """OpenAI base64 encoding returns string embeddings (float32 LE)."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -94,10 +94,9 @@ def test_http_embeddings_rejects_encoding_format_base64() -> None:
                 "encoding_format": "base64",
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_encoding_format" in blob
-        assert "float" in blob
+        assert status == 200, body
+        emb = (body.get("data") or [{}])[0].get("embedding")
+        assert isinstance(emb, str) and emb, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -162,7 +161,7 @@ def test_http_embeddings_rejects_blank_input() -> None:
 if __name__ == "__main__":
     test_http_embeddings_accepts_encoding_format_float()
     test_http_embeddings_accepts_encoding_format_omitted()
-    test_http_embeddings_rejects_encoding_format_base64()
+    test_http_embeddings_accepts_encoding_format_base64()
     test_http_embeddings_rejects_encoding_format_non_string()
     test_http_embeddings_rejects_dimensions()
     test_http_embeddings_rejects_blank_input()

@@ -67,7 +67,7 @@ def test_http_embeddings_accepts_casefold_float_encoding_format() -> None:
         thread.join(timeout=5)
 
 
-def test_http_embeddings_rejects_base64_encoding_format() -> None:
+def test_http_embeddings_accepts_base64_encoding_format() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -75,8 +75,9 @@ def test_http_embeddings_rejects_base64_encoding_format() -> None:
             "/v1/embeddings",
             {"model": "mock-planner", "input": "enc", "encoding_format": "base64"},
         )
-        assert status == 400, body
-        assert "invalid_encoding_format" in json.dumps(body)
+        assert status == 200, body
+        emb = (body.get("data") or [{}])[0].get("embedding")
+        assert isinstance(emb, str) and emb, body
     finally:
         server.shutdown()
         thread.join(timeout=5)

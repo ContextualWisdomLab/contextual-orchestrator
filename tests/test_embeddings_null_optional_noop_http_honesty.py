@@ -121,7 +121,7 @@ def test_http_embeddings_still_rejects_nonzero_dimensions() -> None:
         thread.join(timeout=5)
 
 
-def test_http_embeddings_still_rejects_base64_encoding() -> None:
+def test_http_embeddings_accepts_base64_encoding() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -133,8 +133,11 @@ def test_http_embeddings_still_rejects_base64_encoding() -> None:
                 "encoding_format": "base64",
             },
         )
-        assert status == 400, body
-        assert "invalid_encoding_format" in json.dumps(body)
+        assert status == 200, body
+        data = body.get("data") or []
+        assert data, body
+        emb = data[0].get("embedding")
+        assert isinstance(emb, str) and emb, body
     finally:
         server.shutdown()
         thread.join(timeout=5)

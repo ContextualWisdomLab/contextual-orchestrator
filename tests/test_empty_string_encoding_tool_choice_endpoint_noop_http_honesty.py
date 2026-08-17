@@ -164,8 +164,8 @@ def test_http_responses_accepts_empty_tool_choice_string_as_omit() -> None:
         thread.join(timeout=5)
 
 
-def test_http_batch_endpoint_null_and_empty_still_ok_and_base64_fails() -> None:
-    """Regression: empty endpoint omit; base64 encoding_format still fail-closed."""
+def test_http_embeddings_base64_ok_and_tool_choice_required_still_needs_tools() -> None:
+    """Regression: base64 encoding_format works; tool_choice=required needs tools."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -173,8 +173,9 @@ def test_http_batch_endpoint_null_and_empty_still_ok_and_base64_fails() -> None:
             "/v1/embeddings",
             {"model": "mock-planner", "input": "base64", "encoding_format": "base64"},
         )
-        assert status == 400, body
-        assert "invalid_encoding_format" in json.dumps(body)
+        assert status == 200, body
+        emb = (body.get("data") or [{}])[0].get("embedding")
+        assert isinstance(emb, str) and emb, body
         status, body = _post(
             port,
             "/v1/chat/completions",
@@ -199,5 +200,5 @@ if __name__ == "__main__":
     test_http_chat_accepts_empty_function_call_string_as_omit()
     test_http_chat_accepts_empty_response_format_string_as_omit()
     test_http_responses_accepts_empty_tool_choice_string_as_omit()
-    test_http_batch_endpoint_null_and_empty_still_ok_and_base64_fails()
+    test_http_embeddings_base64_ok_and_tool_choice_required_still_needs_tools()
     print("ok")

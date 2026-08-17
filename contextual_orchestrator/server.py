@@ -4,8 +4,10 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+import base64
 import json
 import secrets
+import struct
 import threading
 import time
 import urllib.parse
@@ -3835,13 +3837,12 @@ def _validate_embeddings_model(body: dict[str, Any]) -> str:
 
 
 def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
-    """OpenAI ``encoding_format`` — omit/null/empty or ``float`` only; base64 fail-closed.
+    """OpenAI ``encoding_format`` — omit/null/empty, ``float``, or ``base64``.
 
-    This gateway returns float vectors on the OpenAI list shape. ``base64`` is
-    not produced, so requesting it fails closed rather than silently returning
-    floats. Explicit JSON ``null`` or empty/whitespace string is treated as omit
-    (SDK optional default / stringified empty control). Case-insensitive
-    ``float`` (e.g. ``FLOAT``) is accepted and written back lowercased.
+    ``float`` (default) returns numeric vectors; ``base64`` returns OpenAI-style
+    little-endian float32 base64 strings. Explicit JSON ``null`` or empty
+    whitespace string is treat-as-omit. Case-insensitive values are written back
+    lowercased.
     """
     if "encoding_format" not in body:
         return None
@@ -3850,13 +3851,13 @@ def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
         return None
     if not isinstance(value, str):
         raise RequestError(400, "invalid_encoding_format", "encoding_format must be a string")
-    # Strip incidental whitespace and casefold so " FLOAT " matches float.
+    # Strip incidental whitespace and casefold so " FLOAT " / "Base64" match.
     value = value.strip().lower()
-    if value != "float":
+    if value not in {"float", "base64"}:
         raise RequestError(
             400,
             "invalid_encoding_format",
-            'only encoding_format "float" is supported on embeddings endpoints',
+            'encoding_format must be "float" or "base64"',
         )
     body["encoding_format"] = value
     return value
@@ -3891,16 +3892,30 @@ def _validate_embeddings_dimensions(body: dict[str, Any]) -> None:
     )
 
 
-def _openai_embeddings_response(document: dict[str, Any], *, model: str) -> dict[str, Any]:
+def _encode_embedding_base64(vector: list[Any]) -> str:
+    """OpenAI base64 embedding: little-endian float32 binary, ASCII base64."""
+    floats = [float(x) for x in vector]
+    packed = struct.pack(f"<{len(floats)}f", *floats)
+    return base64.b64encode(packed).decode("ascii")
+
+
+def _openai_embeddings_response(
+    document: dict[str, Any],
+    *,
+    model: str,
+    encoding_format: str | None = None,
+) -> dict[str, Any]:
     """Map batch document vectors to the OpenAI ``/v1/embeddings`` list shape."""
     items = document.get("embeddings") or []
+    use_base64 = encoding_format == "base64"
     data = []
     for item in items:
+        vector = list(item.get("embedding") or [])
         data.append(
             {
                 "object": "embedding",
                 "index": int(item.get("index", 0)),
-                "embedding": list(item.get("embedding") or []),
+                "embedding": _encode_embedding_base64(vector) if use_base64 else vector,
             }
         )
     total_tokens = int(document.get("total_tokens") or 0)
@@ -4863,7 +4878,7 @@ def build_server(
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
                     _require_pool_model(orchestrator, model_name)
-                    _validate_embeddings_encoding_format(body)
+                    encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
                     if "routing" in body:
@@ -4937,7 +4952,13 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    self._send(_openai_embeddings_response(document, model=model_name))
+                    self._send(
+                        _openai_embeddings_response(
+                            document,
+                            model=model_name,
+                            encoding_format=encoding_format,
+                        )
+                    )
                     return
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)

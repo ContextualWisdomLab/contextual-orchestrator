@@ -67,7 +67,8 @@ def test_http_batch_embeddings_accepts_encoding_format_float() -> None:
         thread.join(timeout=5)
 
 
-def test_http_batch_embeddings_rejects_encoding_format_base64() -> None:
+def test_http_batch_embeddings_accepts_encoding_format_base64() -> None:
+    """Batch path accepts base64 encoding_format (validated; job payload shape)."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -78,10 +79,8 @@ def test_http_batch_embeddings_rejects_encoding_format_base64() -> None:
                 "encoding_format": "base64",
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_encoding_format" in blob
-        assert "unknown_fields" not in blob
+        assert status in (200, 202), body
+        assert "invalid_encoding_format" not in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -161,7 +161,7 @@ def test_http_embeddings_accepts_padded_encoding_format_float() -> None:
         thread.join(timeout=5)
 
 
-def test_http_embeddings_still_rejects_padded_base64() -> None:
+def test_http_embeddings_accepts_padded_base64() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -173,8 +173,9 @@ def test_http_embeddings_still_rejects_padded_base64() -> None:
                 "encoding_format": " base64 ",
             },
         )
-        assert status == 400, body
-        assert "invalid_encoding_format" in json.dumps(body)
+        assert status == 200, body
+        data = body.get("data") or []
+        assert data and isinstance(data[0].get("embedding"), str), body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -187,5 +188,5 @@ if __name__ == "__main__":
     test_http_responses_accepts_padded_service_tier_auto()
     test_http_chat_still_rejects_flex_service_tier()
     test_http_embeddings_accepts_padded_encoding_format_float()
-    test_http_embeddings_still_rejects_padded_base64()
+    test_http_embeddings_accepts_padded_base64()
     print("ok")
