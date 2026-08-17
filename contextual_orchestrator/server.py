@@ -1677,6 +1677,11 @@ def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
                 "message content part must be an object",
             )
         part_type = part.get("type")
+        # Strip + casefold so " TEXT " / "Image_Url" match official part types.
+        if isinstance(part_type, str):
+            part_type = part_type.strip().lower()
+            if part.get("type") != part_type:
+                part = {**part, "type": part_type}
         if part_type == "text":
             text = part.get("text")
             if not isinstance(text, str):
