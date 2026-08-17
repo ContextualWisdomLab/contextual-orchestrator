@@ -554,6 +554,46 @@ _USAGE_COLUMNS = (
     "currency_code",
 )
 
+_USAGE_COLUMN_LIST = ", ".join(_USAGE_COLUMNS)
+
+# Bound-parameter SQL keyed by DB-API paramstyle. Identifiers are the fixed
+# ``_USAGE_COLUMNS`` / catalog names; values are never interpolated.
+_SQL_SELECT_DIMENSION = {
+    "qmark": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?",
+    "pyformat": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s",
+}
+_SQL_INSERT_DIMENSION = {
+    "qmark": (
+        "INSERT INTO cost_attribution_dimensions "
+        "(dimension_name, dimension_label, dimension_order) VALUES (?, ?, ?)"
+    ),
+    "pyformat": (
+        "INSERT INTO cost_attribution_dimensions "
+        "(dimension_name, dimension_label, dimension_order) VALUES (%s, %s, %s)"
+    ),
+}
+_SQL_INSERT_USAGE = {
+    "qmark": (
+        f"INSERT INTO llm_usage_records ({_USAGE_COLUMN_LIST}) "
+        f"VALUES ({', '.join('?' for _ in _USAGE_COLUMNS)})"
+    ),
+    "pyformat": (
+        f"INSERT INTO llm_usage_records ({_USAGE_COLUMN_LIST}) "
+        f"VALUES ({', '.join('%s' for _ in _USAGE_COLUMNS)})"
+    ),
+}
+_SQL_SELECT_USAGE = f"SELECT {_USAGE_COLUMN_LIST} FROM llm_usage_records"
+_SQL_SELECT_USAGE_WINDOW = {
+    ("qmark", "none"): _SQL_SELECT_USAGE,
+    ("qmark", "start"): f"{_SQL_SELECT_USAGE} WHERE created_at >= ?",
+    ("qmark", "end"): f"{_SQL_SELECT_USAGE} WHERE created_at < ?",
+    ("qmark", "both"): f"{_SQL_SELECT_USAGE} WHERE created_at >= ? AND created_at < ?",
+    ("pyformat", "none"): _SQL_SELECT_USAGE,
+    ("pyformat", "start"): f"{_SQL_SELECT_USAGE} WHERE created_at >= %s",
+    ("pyformat", "end"): f"{_SQL_SELECT_USAGE} WHERE created_at < %s",
+    ("pyformat", "both"): f"{_SQL_SELECT_USAGE} WHERE created_at >= %s AND created_at < %s",
+}
+
 
 class SqlLedgerStore:
     """PEP-249 SQL ledger store (stdlib ``sqlite3`` or ``psycopg``).
@@ -569,9 +609,6 @@ class SqlLedgerStore:
         self._create_schema()
         self._seed_dimension_catalog()
 
-    def _placeholder(self) -> str:
-        return "?" if self._paramstyle == "qmark" else "%s"
-
     def _create_schema(self) -> None:
         cur = self._conn.cursor()
         for statement in SCHEMA_SQL.strip().split(";"):
@@ -580,49 +617,41 @@ class SqlLedgerStore:
         self._conn.commit()
 
     def _seed_dimension_catalog(self) -> None:
-        ph = self._placeholder()
         cur = self._conn.cursor()
+        select_sql = _SQL_SELECT_DIMENSION[self._paramstyle]
+        insert_sql = _SQL_INSERT_DIMENSION[self._paramstyle]
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
-                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
-                (name,),
-            )
+            cur.execute(select_sql, (name,))
             if cur.fetchone() is None:
-                cur.execute(
-                    "INSERT INTO cost_attribution_dimensions "
-                    f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
-                    (name, label, order),
-                )
+                cur.execute(insert_sql, (name, label, order))
         self._conn.commit()
 
     def append(self, record: UsageRecord) -> None:
         """Insert a usage record row."""
         row = record.as_dict()
-        ph = self._placeholder()
-        placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
-        columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
         cur.execute(
-            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
+            _SQL_INSERT_USAGE[self._paramstyle],
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
         self._conn.commit()
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return record rows in the optional half-open window."""
-        ph = self._placeholder()
-        clauses: List[str] = []
         params: List[Any] = []
-        if start is not None:
-            clauses.append(f"created_at >= {ph}")
+        if start is not None and end is not None:
+            window = "both"
+            params.extend((start, end))
+        elif start is not None:
+            window = "start"
             params.append(start)
-        if end is not None:
-            clauses.append(f"created_at < {ph}")
+        elif end is not None:
+            window = "end"
             params.append(end)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        columns = ", ".join(_USAGE_COLUMNS)
+        else:
+            window = "none"
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        cur.execute(_SQL_SELECT_USAGE_WINDOW[(self._paramstyle, window)], tuple(params))
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 
