@@ -905,7 +905,12 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     return value
 
 def _validate_completions_model(body: dict[str, Any]) -> str:
-    """Legacy Completions ``model`` — required non-empty string (OpenAI parity)."""
+    """Legacy Completions ``model`` — required non-empty string (OpenAI parity).
+
+    Incidental leading/trailing whitespace is stripped and written back so
+    tools/response_format passthrough (``proxy_completion``) matches the same
+    pool model id as the orchestration path. Form/JS SDKs often pad model names.
+    """
     if "model" not in body:
         raise RequestError(400, "invalid_model", "model is required")
     model = body.get("model")
@@ -914,6 +919,7 @@ def _validate_completions_model(body: dict[str, Any]) -> str:
     model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
     return model
 
 def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
@@ -3659,7 +3665,8 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
 
     OpenAI requires model on Responses. Missing/empty/non-string values fail
     closed so clients cannot hit passthrough with an implicit mock default and
-    believe a named deployment was selected.
+    believe a named deployment was selected. Strip + write back so
+    ``proxy_completion`` pool match sees the same id as form/JS padded names.
     """
     model = body.get("model")
     if model is None:
@@ -3669,6 +3676,7 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
     model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
     return model
 
 
@@ -3782,7 +3790,11 @@ def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
 
 
 def _validate_embeddings_model(body: dict[str, Any]) -> str:
-    """OpenAI embeddings ``model`` — required non-empty string ≤256 chars."""
+    """OpenAI embeddings ``model`` — required non-empty string ≤256 chars.
+
+    Strip + write back (parity with chat/Completions/Responses) so padded
+    form/JS model names bind to the pool id on every surface.
+    """
     model = body.get("model")
     if model is None:
         raise RequestError(400, "invalid_model", "model is required")
@@ -3791,6 +3803,7 @@ def _validate_embeddings_model(body: dict[str, Any]) -> str:
     model = model.strip()
     if len(model) > 256:
         raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    body["model"] = model
     return model
 
 
@@ -4553,6 +4566,10 @@ def build_server(
                                     "invalid_parallel_tool_calls",
                                     "parallel_tool_calls=true requires tools on /v1/chat/completions",
                                 )
+                            body["parallel_tool_calls"] = ptc
+                    # Strip+writeback model before tools/response_format passthrough so
+                    # proxy_completion pool match sees the same id as form/JS padded names.
+                    _validate_completions_model(body)
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if any(
