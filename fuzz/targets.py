@@ -191,14 +191,8 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
         json.loads(frame[len("data: "):])
 
 
-def exercise_meaning_unit_chunks(text: str) -> None:
-    """Meaning-unit parser must keep exact source spans and never overlap.
-
-    Arbitrary prompt/email/HTML text is a retrieval input. Units are either a
-    well-formed non-overlapping cover of slices or a single source_document
-    fallback — never a crash or a span that does not match the source.
-    """
-    units = meaning_unit_chunks(text)
+def _assert_meaning_unit_spans(text: str, units: list) -> None:
+    """Require exact source slices and no overlap for one grain."""
     assert isinstance(units, list)
     seen: list[tuple[int, int]] = []
     for unit in units:
@@ -211,4 +205,15 @@ def exercise_meaning_unit_chunks(text: str) -> None:
         for other_start, other_end in seen:
             assert end <= other_start or start >= other_end
         seen.append((start, end))
-    meaning_unit_chunks(text, unit_grain="body_sentence")
+
+
+def exercise_meaning_unit_chunks(text: str) -> None:
+    """Meaning-unit parser must keep exact source spans and never overlap.
+
+    Arbitrary prompt/email/HTML text is a retrieval input. Units are either a
+    well-formed non-overlapping cover of slices or a single source_document
+    fallback — never a crash or a span that does not match the source. The
+    same span contract applies to ``body_paragraph`` and ``body_sentence``.
+    """
+    for unit_grain in ("body_paragraph", "body_sentence"):
+        _assert_meaning_unit_spans(text, meaning_unit_chunks(text, unit_grain=unit_grain))

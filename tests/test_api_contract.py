@@ -17,6 +17,24 @@ def test_rest_resource_paths_use_two_word_snake_case() -> None:
         assert is_two_word_snake_case(segment.rstrip("s")), path
 
 
+def test_embeddings_chunking_strategy_allows_json_null() -> None:
+    field = OPENAPI_SPEC["paths"]["/v1/batch/embeddings"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]["properties"]["chunking_strategy"]
+    assert "null" in field["type"]
+    assert "string" in field["type"]
+    assert "meaning_units" in field["enum"]
+    assert None in field["enum"]
+
+
+def test_embeddings_responses_document_optional_chunk_units() -> None:
+    post = OPENAPI_SPEC["paths"]["/v1/batch/embeddings"]["post"]["responses"]
+    get = OPENAPI_SPEC["paths"]["/v1/batch/embeddings/{batch_id}"]["get"]["responses"]
+    assert "chunk_units" in post["200"]["description"]
+    assert "chunk_units" in post["202"]["description"]
+    assert "chunk_units" in get["200"]["description"]
+
+
 def test_openapi_uses_resource_oriented_operation_ids() -> None:
     operation_ids = []
     for path_item in OPENAPI_SPEC["paths"].values():
@@ -34,5 +52,7 @@ def test_openapi_uses_resource_oriented_operation_ids() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     test_rest_resource_paths_use_two_word_snake_case()
+    test_embeddings_chunking_strategy_allows_json_null()
+    test_embeddings_responses_document_optional_chunk_units()
     test_openapi_uses_resource_oriented_operation_ids()
     print("ok")

@@ -9,7 +9,8 @@ This module cuts at linguistic meaning units — email parties, innermost HTML
 leaves, RFC 2397 embedded images, paragraphs, and sentences — so a later
 lexical or neural search can recover the invoice line without the greeting
 (Zhao et al., 2024; Qu et al., 2025; Unicode Consortium, 2024; Masinter,
-1998). Similarity-breakpoint “semantic chunking” is deliberately not used:
+1998; Freed & Borenstein, 1996). Similarity-breakpoint “semantic chunking”
+is deliberately not used:
 Qu et al. (2025) found that cost is not justified by consistent gains.
 Sentence cuts follow the Unicode text segmentation intent in UAX #29 without
 adding a Unicode dependency.
@@ -25,11 +26,12 @@ _EMAIL_HEADER = re.compile(
     r"^(From|To|Cc|Bcc|Subject|Reply-To|Date):\s*.+$",
     re.MULTILINE | re.IGNORECASE,
 )
-_IMAGE = re.compile(
-    r"data:image/[A-Za-z0-9.+-]+(?:;[A-Za-z0-9!#$&^_.+-]+(?:=[^;,\s]+)?)*;base64,"
-    r"[A-Za-z0-9+/_-]+(?:=[A-Za-z0-9+/_=-]*)*"
-    r"(?:\r?\n[A-Za-z0-9+/_-]{16,}[ \t=]*)*",
+_IMAGE_HEAD = re.compile(
+    r"data:image/[A-Za-z0-9.+-]+(?:;[A-Za-z0-9!#$&^_.+-]+(?:=[^;,\s]+)?)*;base64,",
     re.IGNORECASE,
+)
+_B64_CHAR = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_"
 )
 _HTML_OPEN = re.compile(
     r"<(p|div|li|h[1-6]|tr|td|section|article|blockquote)\b",
@@ -111,10 +113,11 @@ def meaning_unit_chunks(
         return [MeaningUnit("source_document", 0, len(text), text, input_index, 0)]
 
     reserved: list[tuple[int, int, str, str]] = []
-    for match in _IMAGE.finditer(text):
-        reserved.append((match.start(), match.end(), "embedded_image", match.group(0)))
+    for start, end, piece in _iter_embedded_images(text):
+        reserved.append((start, end, "embedded_image", piece))
     if _looks_like_email(text):
-        for match in _EMAIL_HEADER.finditer(text):
+        header_end = _leading_email_header_end(text)
+        for match in _EMAIL_HEADER.finditer(text, 0, header_end):
             if _overlaps(reserved, match.start(), match.end()):
                 continue
             kind = _EMAIL_KIND.get(match.group(1).lower(), "email_header")
@@ -211,6 +214,139 @@ def _looks_like_email(text: str) -> bool:
         if len(headers) >= 8:
             break
     return bool({"from", "to", "subject"} & set(headers))
+
+
+def _leading_email_header_end(text: str) -> int:
+    """Return the exclusive end of the leading RFC 5322 header block.
+
+    ``_looks_like_email`` already stops at the first blank line. Header
+    reservation must use the same bound so a body line that begins
+    ``Subject:`` stays a paragraph.
+    """
+    offset = 0
+    saw_header = False
+    header_count = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if not stripped:
+            if saw_header:
+                return offset
+            offset += len(line)
+            continue
+        if _EMAIL_HEADER.match(stripped) is None:
+            return offset
+        saw_header = True
+        header_count += 1
+        offset += len(line)
+        if header_count >= 8:
+            return offset
+    return offset
+
+
+def _iter_embedded_images(text: str) -> list[tuple[int, int, str]]:
+    """Return RFC 2397 ``data:image`` spans, including RFC 2045 folded lines.
+
+    A ``{16,}`` continuation floor misses the last line of a 76-column wrap
+    when that line is 15 alphabet characters plus padding, or a 4/8-character
+    padded remainder (Freed & Borenstein, 1996; Masinter, 1998). This walker
+    consumes the media-type head, then folds only a following line that is
+    entirely base64/padding, and stops at padding completion, space, quote,
+    or ``>``.
+    """
+    found: list[tuple[int, int, str]] = []
+    for head in _IMAGE_HEAD.finditer(text):
+        if found and head.start() < found[-1][1]:
+            continue
+        end = _consume_base64_payload(text, head.end())
+        if end <= head.end():
+            continue
+        found.append((head.start(), end, text[head.start() : end]))
+    return found
+
+
+def _is_b64_line(line: str) -> bool:
+    """Return True when ``line`` is only base64 alphabet plus at most two ``=``."""
+    stripped = line.rstrip(" \t")
+    if not stripped:
+        return False
+    padding = 0
+    for char in stripped:
+        if char == "=":
+            padding += 1
+            if padding > 2:
+                return False
+            continue
+        if padding or char not in _B64_CHAR:
+            return False
+    return True
+
+
+def _is_mime_continuation(line: str, previous_payload_len: int) -> bool:
+    """Return True when ``line`` is a MIME-folded base64 continuation.
+
+    A following alphanumeric prose line such as ``PleaseRemitInvoice…`` is
+    valid base64 alphabet. Accept it only when it has padding, wrap width,
+    or base64-specific ``+/_-`` characters (Freed & Borenstein, 1996).
+    """
+    stripped = line.rstrip(" \t")
+    if not _is_b64_line(stripped):
+        return False
+    if "=" in stripped:
+        return True
+    if len(stripped) >= 64 and previous_payload_len >= 16:
+        return True
+    has_b64_mark = any(char in stripped for char in "+/_-")
+    return has_b64_mark and (len(stripped) >= 8 or previous_payload_len >= 16)
+
+
+def _consume_base64_payload(text: str, start_index: int) -> int:
+    """Return the exclusive end of a data-URL payload starting at ``start_index``.
+
+    Same-line prose after padding (``…CYII=The amount``) stays out of the
+    image. A newline after padding ends the span so a following invoice
+    identifier is its own unit.
+    """
+    length = len(text)
+    cursor = start_index
+    end = start_index
+    padding = 0
+    line_payload_len = 0
+    while cursor < length:
+        char = text[cursor]
+        if char in " \t\"'<>":
+            break
+        if char in "\r\n":
+            if padding:
+                break
+            next_index = cursor + 1
+            if char == "\r" and next_index < length and text[next_index] == "\n":
+                next_index += 1
+            line_end = next_index
+            while line_end < length and text[line_end] not in "\r\n":
+                line_end += 1
+            peek = text[next_index:line_end]
+            if _is_mime_continuation(peek, line_payload_len):
+                cursor = next_index
+                line_payload_len = 0
+                continue
+            break
+        if char == "=":
+            padding += 1
+            if padding > 2:
+                break
+            end = cursor + 1
+            line_payload_len += 1
+            cursor += 1
+            continue
+        if char in _B64_CHAR:
+            if padding:
+                break
+            end = cursor + 1
+            line_payload_len += 1
+            cursor += 1
+            continue
+        break
+    return end
 
 
 def _is_tag_only(text: str) -> bool:

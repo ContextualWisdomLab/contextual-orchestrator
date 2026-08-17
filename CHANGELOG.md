@@ -20,9 +20,10 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
 - Meaning-unit HTML cuts keep innermost leaves, so a wrapped
   `<div><p>Good morning</p><p>Invoice INV-…</p></div>` no longer becomes one
   vector. RFC 2397 `data:image` units now accept charset parameters, URL-safe
-  `-_`, and MIME line wraps so a scanned invoice does not glue onto the
-  balance paragraph. Next action: POST the raw Gmail HTML or MIME-wrapped
-  scan with `chunking_strategy=meaning_units` and search `chunk_units`.
+  `-_`, and RFC 2045 folds (76-column wraps and short padded last lines) so
+  leftover base64 does not glue onto the balance paragraph. Next action:
+  POST the raw Gmail HTML or a column-76 MIME wrap with
+  `chunking_strategy=meaning_units` and search `chunk_units`.
 - HTML meaning-unit cuts walk to the first matching close tag instead of a
   backtracking `.*?` matcher, so nested unclosed wrappers cannot stall a
   batch. Tag-only leftovers use the same linear walk instead of a repeating
@@ -30,3 +31,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   stall a batch. Ledger SQL uses complete bind-parameter statements (no
   execute-time concatenation). Provider TLS opt-out and validated `urlopen`
   keep audited Semgrep annotations.
+- OpenAPI `chunking_strategy` accepts JSON null alongside `meaning_units`.
+  Async 202 and GET completed embeddings responses document optional
+  `chunk_units`. A body line that begins `Subject:` is not a second email
+  header.

@@ -33,7 +33,8 @@ deserialize request config validate untrusted input"`):
    produce a JSON-serialisable record whose SSE framing round-trips.
 5. **Meaning-unit chunking** — `semantic_chunking.meaning_unit_chunks`.
    Arbitrary email/HTML/image text must yield non-overlapping source spans
-   whose `chunk_text` equals the original slice.
+   whose `chunk_text` equals the original slice for both `body_paragraph`
+   and `body_sentence` grains.
 
 ## Running locally
 

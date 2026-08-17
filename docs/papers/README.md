@@ -78,6 +78,12 @@ later averaged away.
   Cite + link (IETF). `data:image` units accept optional media-type parameters,
   `;base64`, URL-safe `-_`, and MIME line wraps so a scanned invoice keeps one
   `source_offset` for a later OCR job.
+- Freed, N., & Borenstein, N. (1996). *Multipurpose Internet Mail Extensions
+  (MIME) Part One: Format of Internet Message Bodies* (RFC 2045). RFC Editor.
+  https://doi.org/10.17487/RFC2045
+  Cite + link (IETF). A 76-column wrap of a short `data:image` payload can
+  leave a 4/8-character or padded last line; that remainder stays in the
+  image unit so leftover base64 does not glue onto the invoice paragraph.
 
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no

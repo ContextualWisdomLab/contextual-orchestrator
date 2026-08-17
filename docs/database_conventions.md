@@ -31,8 +31,10 @@ for the in-memory batch path.
 | `image_text_span` | `image_id`, `span_index`, `ocr_text` | Recognized text for one image (future NIM/OCR job). |
 | `image_object_tag` | `image_id`, `tag_index`, `object_label` | Detected objects for image search (future). |
 
-Do not store greeting text on `unit_embedding`. Do not collapse invoice and
-greeting into one `source_document` row and call it searched.
+Keep one `source_document` row per imported email or file. Do not split the
+greeting and the invoice line into separate `source_document` rows — that
+breaks document identity and unit offsets. Search vectors live on
+`meaning_unit` plus `unit_embedding`, not on the document row.
 
 ## Persistence Stack
 

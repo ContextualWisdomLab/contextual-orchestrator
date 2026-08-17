@@ -36,7 +36,7 @@ This repository implements the interface and control plane, not the trained coor
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
-- `contextual_orchestrator.semantic_chunking`: meaning-unit cuts for `/v1/batch/embeddings` when `chunking_strategy=meaning_units` (email parties, innermost HTML leaves, RFC 2397 embedded-image offsets, paragraphs). Token-budget map/reduce stays the provider-safety path and still averages parts of *one* unit.
+- `contextual_orchestrator.semantic_chunking`: meaning-unit cuts for `/v1/batch/embeddings` when `chunking_strategy=meaning_units` (email parties, innermost HTML leaves, RFC 2397/2045 embedded-image offsets, paragraphs). Token-budget map/reduce stays the provider-safety path and still averages parts of *one* unit.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.

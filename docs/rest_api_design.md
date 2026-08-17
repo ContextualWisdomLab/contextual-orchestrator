@@ -15,8 +15,8 @@
 |---|---|---|
 | `GET` | `/openapi.json` | API contract |
 | `POST` | `/v1/chat/completions` | Compatibility chat endpoint |
-| `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch. Send `chunking_strategy=meaning_units` to embed email, HTML, image, and paragraph units separately and read `chunk_units` for source offsets. |
-| `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
+| `POST` | `/v1/batch/embeddings` | Submit a bulk, latency-tolerant embeddings batch; oversized inputs are token-split before routing via pg-llm-batch. Send `chunking_strategy=meaning_units` to embed email, HTML, image, and paragraph units separately and read `chunk_units` for source offsets. Omit or JSON null keeps one vector per input. |
+| `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed, plus optional `chunk_units` when the submit used `meaning_units` |
 | `GET` | `/api/v1/agent_pools` | List model agents |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |
 | `GET` | `/api/v1/analytics_snapshots/latest` | Read local runtime KPI and guardrail snapshot |

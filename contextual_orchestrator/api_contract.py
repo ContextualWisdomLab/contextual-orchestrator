@@ -441,13 +441,14 @@ OPENAPI_SPEC = {
                                     },
                                     "attribution": {"type": "object"},
                                     "chunking_strategy": {
-                                        "type": "string",
-                                        "enum": ["meaning_units"],
+                                        "type": ["string", "null"],
+                                        "enum": ["meaning_units", None],
                                         "description": (
-                                            "Omit to keep one vector per input (naruon contract). "
-                                            "meaning_units embeds email parties, HTML blocks, "
-                                            "embedded images, and paragraphs separately and "
-                                            "returns chunk_units with source offsets."
+                                            "Omit or JSON null to keep one vector per input "
+                                            "(naruon contract). meaning_units embeds email "
+                                            "parties, HTML blocks, embedded images, and "
+                                            "paragraphs separately and returns chunk_units "
+                                            "with source offsets."
                                         ),
                                     },
                                 },
@@ -464,7 +465,12 @@ OPENAPI_SPEC = {
                             "input_part_counts, map_reduce, optional chunk_units}"
                         )
                     },
-                    "202": {"description": "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}"},
+                    "202": {
+                        "description": (
+                            "Batch accepted; poll GET /v1/batch/embeddings/{batch_id}. "
+                            "Pending and completed documents may include optional chunk_units."
+                        )
+                    },
                 },
             }
         },
@@ -480,7 +486,8 @@ OPENAPI_SPEC = {
                     "200": {
                         "description": (
                             "{batch_id, status, embeddings:[[...]], cost_micro_usd, "
-                            "token_counts, input_part_counts, map_reduce}"
+                            "token_counts, input_part_counts, map_reduce, "
+                            "optional chunk_units}"
                         )
                     },
                     "404": {"description": "Embeddings batch not found"},

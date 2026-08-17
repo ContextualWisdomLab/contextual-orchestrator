@@ -64,13 +64,16 @@ Researched before adding `contextual_orchestrator/semantic_chunking.py`:
 | [LlamaIndex SentenceSplitter](https://docs.llamaindex.ai/) | Skip. | Same dependency and token-window grain. Does not isolate email parties or `data:image` offsets. |
 | Similarity-breakpoint “semantic chunking” (LangChain / LlamaIndex) | Skip. | Qu et al. (2025) found computational cost is not justified by consistent retrieval gains. |
 | [RFC 2397 data URL scheme](https://www.rfc-editor.org/rfc/rfc2397) | Cite as the `data:image` authority; accept optional `;k=v` parameters, URL-safe `-_`, and MIME line wraps in the payload. | Masinter (1998). A parser library is not justified for span isolation. |
+| [RFC 2045 MIME bodies](https://www.rfc-editor.org/rfc/rfc2045) | Cite as the 76-column fold authority; walk the payload instead of a `{16,}` continuation floor so a short padded last line stays in the image. | Freed & Borenstein (1996). A MIME library is not justified for span isolation. |
 
-Selected: stdlib regular expressions plus linear HTML closer and tag-only
-walks (first same-tag close, innermost-leaf filter, then a linear tag-only
-scan) and paragraph/email/image detectors. Custom code that was deliberately
-skipped: LLM-as-chunker, perplexity chunking, a backtracking ``.*?`` HTML
-matcher, a repeating tag-only ``(?:\\s*</?[A-Za-z][^>]*>\\s*)+`` matcher, and
-any new pip dependency.
+Selected: stdlib regular expressions plus linear HTML closer, tag-only, and
+RFC 2045 image-fold walks (first same-tag close, innermost-leaf filter, a
+linear tag-only scan, then a payload walker that stops at padding / space /
+quote / ``>``) and paragraph/email detectors. Custom code that was
+deliberately skipped: LLM-as-chunker, perplexity chunking, a backtracking
+``.*?`` HTML matcher, a repeating tag-only
+``(?:\\s*</?[A-Za-z][^>]*>\\s*)+`` matcher, a ``{16,}`` MIME continuation
+floor, and any new pip dependency.
 
 ## Required For New Designs
 

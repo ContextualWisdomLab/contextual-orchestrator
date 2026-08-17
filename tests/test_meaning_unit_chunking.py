@@ -71,6 +71,51 @@ INVOICE_IMAGE_MIME_WRAP = (
     "The amount on that scan is 1840.00 USD for INV-20260816."
 )
 
+_PNG_B64 = (
+    "iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mP8/x8AAwMCAO+"
+    "ip1sAAAAASUVORK5CYII="
+)
+
+INVOICE_IMAGE_RFC2045_WRAP = (
+    "See the scanned invoice below.\n"
+    f"data:image/png;base64,{_PNG_B64[:76]}\n"
+    f"{_PNG_B64[76:]}\n"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
+INVOICE_IMAGE_SHORT_LAST_LINE_4 = (
+    "See the scanned invoice below.\n"
+    f"data:image/png;base64,{_PNG_B64[:88]}\n"
+    f"{_PNG_B64[88:]}\n"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
+INVOICE_IMAGE_SHORT_LAST_LINE_8 = (
+    "See the scanned invoice below.\n"
+    f"data:image/png;base64,{_PNG_B64[:84]}\n"
+    f"{_PNG_B64[84:]}\n"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
+INVOICE_IMAGE_SAME_LINE_PROSE = (
+    f"data:image/png;base64,{_PNG_B64}"
+    "The amount on that scan is 1840.00 USD for INV-20260816."
+)
+
+INVOICE_IMAGE_FOLLOWING_ALNUM = (
+    f"data:image/png;base64,{_PNG_B64}\n"
+    "PleaseRemitInvoiceINV20260816Now\n"
+)
+
+INVOICE_BODY_SUBJECT_LINE = """From: alice.billing@acme.example
+To: ap@buyer.example
+Subject: Invoice INV-20260816 is due
+
+Subject: see attached SKU-77 packing list.
+
+Invoice INV-20260816 remains open.
+"""
+
 INVOICE_QUERY = "invoice INV-20260816 balance due 1840.00 USD"
 
 
@@ -239,6 +284,99 @@ def test_mime_wrapped_data_image_keeps_full_payload() -> None:
     assert image.chunk_text.endswith("=")
 
 
+def test_rfc2045_column_76_wrap_keeps_invoice_out_of_the_image() -> None:
+    _assert_image_isolated(INVOICE_IMAGE_RFC2045_WRAP, "data:image/png;base64,")
+    image = next(
+        unit
+        for unit in meaning_unit_chunks(INVOICE_IMAGE_RFC2045_WRAP)
+        if unit.chunk_kind == "embedded_image"
+    )
+    assert _PNG_B64[76:] in image.chunk_text
+    invoice = next(
+        unit
+        for unit in meaning_unit_chunks(INVOICE_IMAGE_RFC2045_WRAP)
+        if "INV-20260816" in unit.chunk_text
+    )
+    assert "AAAASUVORK5CYII" not in invoice.chunk_text
+    assert "SUVORK5CYII" not in invoice.chunk_text
+
+
+def test_short_padded_last_line_of_four_stays_in_the_image() -> None:
+    _assert_image_isolated(INVOICE_IMAGE_SHORT_LAST_LINE_4, "data:image/png;base64,")
+    image = next(
+        unit
+        for unit in meaning_unit_chunks(INVOICE_IMAGE_SHORT_LAST_LINE_4)
+        if unit.chunk_kind == "embedded_image"
+    )
+    assert image.chunk_text.endswith(_PNG_B64[88:])
+    assert len(_PNG_B64[88:]) == 4
+
+
+def test_short_padded_last_line_of_eight_stays_in_the_image() -> None:
+    _assert_image_isolated(INVOICE_IMAGE_SHORT_LAST_LINE_8, "data:image/png;base64,")
+    image = next(
+        unit
+        for unit in meaning_unit_chunks(INVOICE_IMAGE_SHORT_LAST_LINE_8)
+        if unit.chunk_kind == "embedded_image"
+    )
+    assert image.chunk_text.endswith(_PNG_B64[84:])
+    assert len(_PNG_B64[84:]) == 8
+
+
+def test_same_line_prose_after_padding_is_not_in_the_image() -> None:
+    units = meaning_unit_chunks(INVOICE_IMAGE_SAME_LINE_PROSE)
+    image = next(unit for unit in units if unit.chunk_kind == "embedded_image")
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert image.chunk_text.endswith("=")
+    assert "The amount" not in image.chunk_text
+    assert "data:image" not in invoice.chunk_text
+
+
+def test_following_alnum_line_is_not_swallowed_by_the_image() -> None:
+    units = meaning_unit_chunks(INVOICE_IMAGE_FOLLOWING_ALNUM)
+    image = next(unit for unit in units if unit.chunk_kind == "embedded_image")
+    follow = next(unit for unit in units if "INV20260816" in unit.chunk_text)
+    assert image.chunk_text.endswith("=")
+    assert "PleaseRemit" not in image.chunk_text
+    assert follow.chunk_kind != "embedded_image"
+
+
+def test_body_subject_line_is_not_a_second_email_header() -> None:
+    units = meaning_unit_chunks(INVOICE_BODY_SUBJECT_LINE)
+    for unit in units:
+        _assert_span(INVOICE_BODY_SUBJECT_LINE, unit)
+    subjects = [unit for unit in units if unit.chunk_kind == "email_subject"]
+    assert len(subjects) == 1
+    assert "INV-20260816" in subjects[0].chunk_text
+    sku = next(unit for unit in units if "SKU-77" in unit.chunk_text)
+    assert sku.chunk_kind == "body_paragraph"
+    assert sku.chunk_kind != "email_subject"
+
+
+def test_chunk_units_serialize_position_and_chunk_text_only() -> None:
+    unit = meaning_unit_chunks(INVOICE_WITH_IMAGE)[0]
+    payload = unit.to_dict()
+    assert set(payload) == {
+        "chunk_kind",
+        "source_offset",
+        "source_length",
+        "chunk_text",
+        "input_index",
+        "chunk_index",
+    }
+    assert "media_type" not in payload
+
+
+def test_sentence_grain_keeps_exact_source_spans() -> None:
+    units = meaning_unit_chunks(INVOICE_EMAIL, unit_grain="body_sentence")
+    assert units
+    for unit in units:
+        _assert_span(INVOICE_EMAIL, unit)
+    spans = sorted((unit.source_offset, unit.source_offset + unit.source_length) for unit in units)
+    for previous, current in zip(spans, spans[1:]):
+        assert previous[1] <= current[0]
+
+
 def test_expand_embedding_inputs_preserves_input_index() -> None:
     texts, units = expand_embedding_inputs(
         [INVOICE_EMAIL, "single note"],
@@ -346,6 +484,14 @@ if __name__ == "__main__":
     test_charset_data_image_is_its_own_unit()
     test_urlsafe_data_image_keeps_full_payload()
     test_mime_wrapped_data_image_keeps_full_payload()
+    test_rfc2045_column_76_wrap_keeps_invoice_out_of_the_image()
+    test_short_padded_last_line_of_four_stays_in_the_image()
+    test_short_padded_last_line_of_eight_stays_in_the_image()
+    test_same_line_prose_after_padding_is_not_in_the_image()
+    test_following_alnum_line_is_not_swallowed_by_the_image()
+    test_body_subject_line_is_not_a_second_email_header()
+    test_chunk_units_serialize_position_and_chunk_text_only()
+    test_sentence_grain_keeps_exact_source_spans()
     test_expand_embedding_inputs_preserves_input_index()
     test_expand_omitted_strategy_keeps_one_document_unit()
     test_units_do_not_overlap()
