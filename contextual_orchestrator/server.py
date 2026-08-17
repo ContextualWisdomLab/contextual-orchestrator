@@ -335,10 +335,16 @@ def _coerce_optional_float(
 def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
     """Legacy Completions ``prompt`` → single user message list.
 
-    Accepts a non-empty string or an array of strings (at most 128 items). OpenAI
-    also allows arrays of token IDs (integers); this gateway rejects token-id
-    prompts fail-closed with ``invalid_prompt`` so SDKs get a clear migration
-    path to string prompts.
+    Accepts OpenAI shapes:
+
+    - non-empty string
+    - non-empty array of non-empty strings (at most 128 items; joined with newlines)
+    - non-empty array of non-negative token integers
+    - non-empty array of token-integer arrays (joined like string arrays)
+
+    Token sequences are re-encoded to a stable text surrogate for string
+    completion backends (same encoding as embeddings). Bools, negatives, and
+    mixed token/string batches fail closed.
     """
     if isinstance(prompt, str):
         if not prompt.strip():
@@ -355,20 +361,33 @@ def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
                 "invalid_prompt",
                 "prompt array must contain at most 128 items",
             )
-        # Token-id form: list of ints, or list of list of ints (batch of token sequences).
-        if all(isinstance(item, int) and not isinstance(item, bool) for item in prompt):
+        # Single token sequence: [1, 2, 3] → one user message via text surrogate.
+        if _is_embedding_token_sequence(prompt):
+            text = _embedding_token_sequence_to_text(prompt)
+            if len(text) > 32_000:
+                raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+            return [{"role": "user", "content": text}]
+        # Batch of token sequences: [[1,2],[3]] — join surrogates like string arrays.
+        if isinstance(prompt[0], list):
+            if not all(_is_embedding_token_sequence(item) for item in prompt):
+                raise RequestError(
+                    400,
+                    "invalid_prompt",
+                    "token-id prompt arrays must contain non-negative token integers",
+                )
+            parts = [_embedding_token_sequence_to_text(item) for item in prompt]
+            joined = "\n".join(parts)
+            if len(joined) > 32_000:
+                raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+            return [{"role": "user", "content": joined}]
+        # Apparent token sequence with bools/negatives — fail closed (not strings).
+        if all(isinstance(item, int) for item in prompt):
             raise RequestError(
                 400,
                 "invalid_prompt",
-                "token-id prompts are not supported; pass a string or array of strings",
+                "token-id prompts must be non-negative integers",
             )
-        if all(isinstance(item, list) for item in prompt):
-            raise RequestError(
-                400,
-                "invalid_prompt",
-                "token-id prompts are not supported; pass a string or array of strings",
-            )
-        parts: list[str] = []
+        parts = []
         for item in prompt:
             if not isinstance(item, str):
                 raise RequestError(400, "invalid_prompt", "prompt array items must be strings")
@@ -2505,7 +2524,7 @@ def _is_embedding_token_sequence(value: Any) -> bool:
 
 
 def _embedding_token_sequence_to_text(tokens: list[int]) -> str:
-    """Stable text surrogate for token-id inputs on string embedding backends."""
+    """Stable text surrogate for token-id inputs on string embedding/completion backends."""
     return "\x1etokens:" + ",".join(str(token) for token in tokens)
 
 
