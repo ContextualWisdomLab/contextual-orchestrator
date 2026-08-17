@@ -201,6 +201,17 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+def allowed_provider_hosts() -> set[str]:
+    """Return the operator host allowlist used by chat and catalog discovery.
+
+    This is the pre-existing ``CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS``
+    bootstrap transport. Discovery must honor the same list so compose cannot
+    bypass the chat allowlist.
+    """
+    raw = os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "")
+    return {host.strip().lower() for host in raw.split(",") if host.strip()}
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -313,6 +324,29 @@ class ModelClient:
             timeout=self.timeout,
             context=self._ssl_context,
         )
+
+    def fetch_provider_json(self, agent: ModelAgent, path: str) -> Any:
+        """GET JSON from a validated provider path (catalog discovery).
+
+        Reuses ``_validate_provider`` / ``_provider_url`` / ``_open_provider``
+        so discovery does not grow a second urllib client.
+        """
+        self._validate_provider(agent)
+        api_key = get_credential(agent.credential_name)
+        if not api_key:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV"
+            )
+        request = urllib.request.Request(
+            self._provider_url(agent, path),
+            headers={
+                "authorization": f"Bearer {api_key}",
+                "accept": "application/json",
+            },
+            method="GET",
+        )
+        with self._open_provider(request) as response:
+            return json.loads(response.read(1_048_576).decode("utf-8"))
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
@@ -461,7 +495,7 @@ class ModelClient:
                 f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
                 "(this replaces the legacy api_key_env environment pattern)"
             )
-        reason = provider_base_url_rejection(agent.base_url)
+        reason = provider_base_url_rejection(agent.base_url, allowed_hosts=allowed_provider_hosts())
         if reason:
             raise RuntimeError(f"{agent.id} {reason}")
 

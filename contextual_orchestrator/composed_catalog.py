@@ -21,8 +21,8 @@ from urllib.parse import urlparse
 
 from .conventions import require_object_name
 from .credentials import get_credential
-from .orchestrator import ModelAgent
-from .provider_egress import no_redirect_models_fetch, provider_base_url_rejection
+from .orchestrator import ModelAgent, ModelClient, allowed_provider_hosts
+from .provider_egress import provider_base_url_rejection
 
 ORG_CREDENTIAL_NAMES: tuple[str, ...] = (
     "NVIDIA_NIM_API_KEY",
@@ -206,8 +206,20 @@ def parse_models_list(payload: Any) -> list[str]:
 
 
 def default_models_fetch(url: str, headers: dict[str, str], timeout: float) -> Any:
-    """GET ``url`` through the shared no-redirect provider egress."""
-    return no_redirect_models_fetch(url, headers, timeout)
+    """FetchFn placeholder: production discover uses ``catalog_models_via_client``."""
+    del url, headers, timeout
+    raise RuntimeError("catalog fetch must go through ModelClient")
+
+
+def catalog_models_via_client(base_url: str, credential_name: str, timeout: float) -> Any:
+    """GET ``{base_url}/models`` through the existing chat egress stack."""
+    agent = ModelAgent(
+        id="catalog_discovery",
+        model="catalog_probe",
+        base_url=base_url,
+        credential_key=credential_name,
+    )
+    return ModelClient(timeout=max(1, int(timeout))).fetch_provider_json(agent, "/models")
 
 
 def discover_provider_models(
@@ -227,7 +239,7 @@ def discover_provider_models(
     The destination is rejected with ``provider_base_url_rejection`` **before**
     the KV credential is read or a Bearer header is built. ``allow_insecure``
     does not weaken that check (it is kept only so callers do not grow a
-    second HTTP stack).
+    second HTTP stack). Production fetch reuses ``ModelClient``.
     """
     del allow_insecure
     if credential_name in FORBIDDEN_CREDENTIAL_NAMES:
@@ -236,18 +248,24 @@ def discover_provider_models(
         return []
     # Injected fetchers stay offline (no DNS). Literal loopback / link-local /
     # private IPs and non-HTTPS schemes still fail closed before the key is read.
-    if provider_base_url_rejection(base_url, resolve_dns=fetch is None):
+    if provider_base_url_rejection(
+        base_url,
+        allowed_hosts=allowed_provider_hosts(),
+        resolve_dns=fetch is None,
+    ):
         return []
-    api_key = get_credential(credential_name)
-    if not api_key:
-        return []
-    fetcher = fetch or default_models_fetch
     try:
-        payload = fetcher(
-            f"{base_url.rstrip('/')}/models",
-            {"authorization": f"Bearer {api_key}", "accept": "application/json"},
-            timeout,
-        )
+        if fetch is not None:
+            api_key = get_credential(credential_name)
+            if not api_key:
+                return []
+            payload = fetch(
+                f"{base_url.rstrip('/')}/models",
+                {"authorization": f"Bearer {api_key}", "accept": "application/json"},
+                timeout,
+            )
+        else:
+            payload = catalog_models_via_client(base_url, credential_name, timeout)
     except Exception:  # noqa: BLE001 - discovery must never break compose
         return []
     return parse_models_list(payload)[:_DISCOVERY_CAP]

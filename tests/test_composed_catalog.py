@@ -182,7 +182,7 @@ def test_loopback_and_metadata_ips_do_not_transmit_kv_key() -> None:
         return {"data": [{"id": "should-not-run"}]}
 
     with fresh_kv():
-        register_credential("OPENAI_API_KEY", "secret-must-not-leak")
+        register_credential("OPENAI_API_KEY", "test-not-a-secret")
         assert discover_provider_models("https://127.0.0.1/v1", "OPENAI_API_KEY", fetch=fetch) == []
         assert discover_provider_models("https://169.254.169.254/latest", "OPENAI_API_KEY", fetch=fetch) == []
         assert discover_provider_models("https://10.0.0.1/v1", "OPENAI_API_KEY", fetch=fetch) == []
@@ -200,7 +200,7 @@ def test_allow_insecure_does_not_weaken_production_rejection() -> None:
         return {"data": [{"id": "should-not-run"}]}
 
     with fresh_kv():
-        register_credential("OPENAI_API_KEY", "secret-must-not-leak")
+        register_credential("OPENAI_API_KEY", "test-not-a-secret")
         models = discover_provider_models(
             "https://127.0.0.1/v1",
             "OPENAI_API_KEY",
@@ -222,10 +222,14 @@ def test_refuse_redirect_handler_does_not_follow() -> None:
 
 
 def test_composed_catalog_does_not_open_urllib_directly() -> None:
-    source = Path(__file__).resolve().parents[1] / "contextual_orchestrator" / "composed_catalog.py"
-    text = source.read_text(encoding="utf-8")
-    assert "urlopen" not in text
-    assert "urllib.request" not in text
+    root = Path(__file__).resolve().parents[1] / "contextual_orchestrator"
+    catalog = (root / "composed_catalog.py").read_text(encoding="utf-8")
+    egress = (root / "provider_egress.py").read_text(encoding="utf-8")
+    assert "urlopen" not in catalog
+    assert "urllib.request" not in catalog
+    assert "build_opener" not in egress
+    assert "os.environ" not in egress
+    assert "Request(" not in egress
 
 
 def test_provider_base_url_rejection_covers_literal_non_public() -> None:

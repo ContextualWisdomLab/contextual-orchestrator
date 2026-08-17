@@ -1,24 +1,19 @@
-"""Shared provider egress policy for chat and catalog discovery.
+"""Shared provider destination policy for chat and catalog discovery.
 
 Chat (``ModelClient._validate_provider``) and default catalog discovery
 must refuse the same destinations before a Bearer credential is attached.
-A second urllib client that only checks ``https`` + hostname is not enough:
-stdlib ``urlopen`` follows redirects and re-sends ``Authorization``.
-
 This module is the extracted second implementation of that check (Ponytail:
-extract when a second real caller exists). See
-``docs/doctoring/priced-selection.md``.
+extract when a second real caller exists). It does **not** open sockets:
+production GET uses ``ModelClient.fetch_provider_json`` so there is no
+second urllib client. See ``docs/doctoring/priced-selection.md``.
 """
 
 from __future__ import annotations
 
 import ipaddress
-import json
-import os
 import socket
-from typing import Any
 from urllib.parse import urlparse
-from urllib.request import HTTPRedirectHandler, Request, build_opener
+from urllib.request import HTTPRedirectHandler
 
 _NON_PUBLIC_FLAGS = (
     "is_private",
@@ -37,17 +32,6 @@ class RefuseRedirectHandler(HTTPRedirectHandler):
         """Refuse the redirect instead of issuing a follow-up request."""
         del req, fp, code, msg, headers, newurl
         raise RuntimeError("provider redirect refused")
-
-
-def allowed_provider_hosts() -> set[str]:
-    """Return the operator host allowlist used by chat validation.
-
-    This is the pre-existing ``CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS``
-    bootstrap transport already read by ``ModelClient``. Discovery must honor
-    the same list so catalog compose cannot bypass the chat allowlist.
-    """
-    raw = os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "")
-    return {host.strip().lower() for host in raw.split(",") if host.strip()}
 
 
 def _non_public_reason(ip_address: ipaddress.IPv4Address | ipaddress.IPv6Address) -> str | None:
@@ -72,6 +56,7 @@ def provider_base_url_rejection(
     Injected test fetchers pass ``resolve_dns=False`` so compose stays offline
     while ``https://127.0.0.1`` and metadata IPs still fail closed. DNS
     failure is a rejection, not a fetch. Does not attach or transmit credentials.
+    Does not read the environment; callers pass the chat allowlist.
     """
     parsed = urlparse(base_url)
     if parsed.scheme != "https" or not parsed.hostname:
@@ -79,7 +64,7 @@ def provider_base_url_rejection(
     hostname = parsed.hostname.lower()
     if hostname in _LOOPBACK_HOSTNAMES:
         return "provider resolves to non-public address"
-    hosts = allowed_hosts if allowed_hosts is not None else allowed_provider_hosts()
+    hosts = allowed_hosts or set()
     if hosts and hostname not in hosts:
         return "provider host is not allowlisted"
     try:
@@ -100,23 +85,3 @@ def provider_base_url_rejection(
         if reason:
             return reason
     return None
-
-
-def no_redirect_models_fetch(url: str, headers: dict[str, str], timeout: float) -> Any:
-    """GET ``url`` without following redirects; JSON-decode a bounded body.
-
-    Callers must run ``provider_base_url_rejection`` on the origin first.
-    ``file://`` and non-HTTPS schemes are refused again here so urllib never
-    sees them. A 3xx response raises ``RuntimeError`` so the KV Bearer is not
-    replayed.
-    """
-    parsed = urlparse(url)
-    if parsed.scheme != "https" or not parsed.hostname:
-        raise RuntimeError("discovery url must use https")
-    reason = provider_base_url_rejection(url)
-    if reason:
-        raise RuntimeError(reason)
-    request = Request(url, headers=headers, method="GET")
-    opener = build_opener(RefuseRedirectHandler)
-    with opener.open(request, timeout=timeout) as response:
-        return json.loads(response.read(1_048_576).decode("utf-8"))
