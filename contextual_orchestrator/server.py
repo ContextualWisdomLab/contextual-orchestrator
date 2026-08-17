@@ -1501,14 +1501,20 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
             )
     if "strict" in fmt:
         strict_value = fmt.get("strict")
-        if strict_value is None:
+        if strict_value is None or (
+            isinstance(strict_value, str) and not strict_value.strip()
+        ):
             fmt.pop("strict")
-        elif not isinstance(strict_value, bool):
-            raise RequestError(
-                400,
-                "invalid_text",
-                "text.format.strict must be a boolean when provided",
+        else:
+            coerced_strict = _coerce_optional_bool(
+                strict_value,
+                error_code="invalid_text",
+                message="text.format.strict must be a boolean when provided",
             )
+            if coerced_strict is None:
+                fmt.pop("strict")
+            else:
+                fmt["strict"] = coerced_strict
     return text
 
 
@@ -1939,41 +1945,49 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
                 )
         if "weight" in message:
             # OpenAI fine-tune style message weight (0 or 1). Explicit null is
-            # treat-as-omit. 0/1 are honest no-ops (no fine-tune plane here).
-            # Other values fail closed so clients never believe weighting applied.
+            # treat-as-omit. 0/1 (int/float/digit strings) are honest no-ops
+            # (no fine-tune plane here). Other values fail closed so clients
+            # never believe weighting applied.
             weight = message.get("weight")
-            if weight is None:
+            if weight is None or (isinstance(weight, str) and not weight.strip()):
                 pass
-            elif isinstance(weight, bool) or not isinstance(weight, (int, float)):
+            elif isinstance(weight, bool):
                 raise RequestError(
                     400,
                     "invalid_message_weight",
                     "message weight must be 0 or 1",
-                )
-            elif float(weight) not in (0.0, 1.0):
-                raise RequestError(
-                    400,
-                    "invalid_message_weight",
-                    "message weight must be 0 or 1",
-                )
-        if "prefix" in message:
-            # OpenAI partial-assistant / predicted-outputs style prefix flag.
-            # null/false are honest no-ops; true fails closed (no prefix plane).
-            prefix = message.get("prefix")
-            if prefix is None or prefix is False:
-                pass
-            elif prefix is True:
-                raise RequestError(
-                    400,
-                    "invalid_message_prefix",
-                    "message prefix=true is not supported on /v1/chat/completions",
                 )
             else:
-                raise RequestError(
-                    400,
-                    "invalid_message_prefix",
-                    "message prefix must be a boolean",
+                coerced_weight = _coerce_optional_int(
+                    weight,
+                    error_code="invalid_message_weight",
+                    message="message weight must be 0 or 1",
                 )
+                if coerced_weight is not None and coerced_weight not in (0, 1):
+                    raise RequestError(
+                        400,
+                        "invalid_message_weight",
+                        "message weight must be 0 or 1",
+                    )
+        if "prefix" in message:
+            # OpenAI partial-assistant / predicted-outputs style prefix flag.
+            # null/false (and 0/"false"/"0.0") are honest no-ops; true fails
+            # closed (no prefix plane).
+            prefix = message.get("prefix")
+            if prefix is None or (isinstance(prefix, str) and not prefix.strip()):
+                pass
+            else:
+                coerced_prefix = _coerce_optional_bool(
+                    prefix,
+                    error_code="invalid_message_prefix",
+                    message="message prefix must be a boolean",
+                )
+                if coerced_prefix is True:
+                    raise RequestError(
+                        400,
+                        "invalid_message_prefix",
+                        "message prefix=true is not supported on /v1/chat/completions",
+                    )
         validated.append(entry)
     return validated
 
@@ -3098,16 +3112,26 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                     "when provided",
                 )
         # Explicit JSON null is omit-equivalent: pop so passthrough matches omit.
+        # Bool, int 0/1, whole-float, and string true/false forms coerce.
         if "strict" in schema:
             strict_value = schema.get("strict")
-            if strict_value is None:
+            if strict_value is None or (
+                isinstance(strict_value, str) and not strict_value.strip()
+            ):
                 schema.pop("strict")
-            elif not isinstance(strict_value, bool):
-                raise RequestError(
-                    400,
-                    "invalid_response_format",
-                    "response_format.json_schema.strict must be a boolean when provided",
+            else:
+                coerced_strict = _coerce_optional_bool(
+                    strict_value,
+                    error_code="invalid_response_format",
+                    message=(
+                        "response_format.json_schema.strict must be a boolean "
+                        "when provided"
+                    ),
                 )
+                if coerced_strict is None:
+                    schema.pop("strict")
+                else:
+                    schema["strict"] = coerced_strict
     return fmt
 
 
@@ -3205,13 +3229,24 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "each tool.function accepts only name, description, parameters, and strict",
                 {"fields": unknown_fn},
             )
-        # Explicit JSON null is popped so proxy_completion forwards omit, not null.
-        _omit_null_tool_function_field(
-            function,
-            "strict",
-            expected_types=(bool,),
-            error_message="each tool.function.strict must be a boolean when provided",
-        )
+        # Explicit JSON null/empty omit; bool, int 0/1, 0.0/1.0, and
+        # "true"/"false"/"0"/"1"/"0.0"/"1.0" coerce (SDK form/JS parity).
+        if "strict" in function:
+            strict_value = function.get("strict")
+            if strict_value is None or (
+                isinstance(strict_value, str) and not strict_value.strip()
+            ):
+                function.pop("strict", None)
+            else:
+                coerced_strict = _coerce_optional_bool(
+                    strict_value,
+                    error_code="invalid_tools",
+                    message="each tool.function.strict must be a boolean when provided",
+                )
+                if coerced_strict is None:
+                    function.pop("strict", None)
+                else:
+                    function["strict"] = coerced_strict
         name = function.get("name")
         if not isinstance(name, str) or not name.strip():
             raise RequestError(

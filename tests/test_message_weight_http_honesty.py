@@ -87,10 +87,27 @@ def test_http_chat_rejects_weight_out_of_range() -> None:
         thread.join(timeout=5)
 
 
+def test_http_chat_accepts_weight_digit_string() -> None:
+    """Digit strings coerce (JS form SDKs); still only 0/1 are valid."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "weight str", "weight": "1"}],
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_chat_rejects_weight_non_number() -> None:
     server, thread, port = _server()
     try:
-        for weight in ("1", True, []):
+        for weight in (True, [], "yes"):
             status, body = _post(
                 port,
                 {
@@ -108,5 +125,6 @@ def test_http_chat_rejects_weight_non_number() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_weight_null_zero_one()
     test_http_chat_rejects_weight_out_of_range()
+    test_http_chat_accepts_weight_digit_string()
     test_http_chat_rejects_weight_non_number()
     print("ok")
