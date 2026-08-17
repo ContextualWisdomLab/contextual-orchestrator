@@ -16,7 +16,11 @@ import sys
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    ModelClient,
+    chat_completion_chunks,
+    chat_completion_response,
+)
 
 
 PLAN = {
@@ -190,6 +194,32 @@ def test_persisted_generated_plan_without_verifier_is_unchecked() -> None:
     assert record["answer_status"] == "unchecked"
     assert record["answer"] == "step-output(2)"
     assert record["verification"]["accepted"] is not True
+
+
+def test_complete_generated_plan_without_verifier_echoes_unchecked() -> None:
+    """Buyer HTTP/SSE must echo unchecked, not drop it to accepted or rejected."""
+    plan = json.dumps({"steps": [
+        {"id": 0, "role": "worker", "agent_id": "general_agent", "subtask": "do the work", "access": []},
+        {"id": 1, "role": "synthesizer", "agent_id": "general_agent", "subtask": "answer", "access": [0]},
+    ]})
+    orchestrator, _ = _orch(plan)
+    result = orchestrator.complete([{"role": "user", "content": "solve"}], mode="conduct")
+    assert result["answer_status"] == "unchecked"
+    assert result["answer"] == "step-output(2)"
+    assert "Verification rejected" not in result["answer"]
+    body = chat_completion_response(result)
+    assert body["orchestration"]["answer_status"] == "unchecked"
+    assert body["orchestration"]["verification"]["accepted"] is not True
+    assert body["choices"][0]["message"]["content"] == "step-output(2)"
+    chunks = chat_completion_chunks(result)
+    streamed = "".join(
+        str(chunk["choices"][0]["delta"].get("content", ""))
+        for chunk in chunks
+    )
+    assert streamed == "step-output(2)"
+    final = chunks[-1]
+    assert final["orchestration"]["answer_status"] == "unchecked"
+    assert final["orchestration"]["verification"]["accepted"] is not True
 
 
 def test_unknown_agent_id_is_reselected_not_fatal() -> None:

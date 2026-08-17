@@ -249,6 +249,7 @@ def test_architecture_note_does_not_claim_per_role_allocation() -> None:
     assert "request-level" in text
     assert "#568" in text or "issue 568" in text.lower()
     assert "unchecked" in text
+    assert "HTTP" in text and "SSE" in text
 
 
 def test_chat_response_echoes_routing_decision_and_redacts_verification() -> None:
