@@ -10,13 +10,15 @@ no list API, the list call 401/403/404/429/5xxs, or the body is empty/malformed
 
 from __future__ import annotations
 
+import http.client
+import ipaddress
 import json
 import os
 import re
+import socket
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 from .credentials import get_credential, register_credential
 from .orchestrator import (
@@ -197,6 +199,42 @@ def parse_models_list(payload: Any) -> list[str]:
     return models
 
 
+def _catalog_list_target(
+    base_url: str, *, allow_insecure: bool
+) -> tuple[str, str, int, str] | None:
+    """Return ``(scheme, hostname, port, path)`` for GET /models, or None if unsafe.
+
+    ``urllib`` is not used: it accepts ``file://``. Only http(s) hosts and a
+    single ``/models`` path are allowed. Private/loopback/reserved addresses
+    are rejected unless ``allow_insecure`` (lab fixtures).
+    """
+    parsed = urlparse(base_url)
+    hostname = parsed.hostname
+    if not hostname or parsed.scheme not in {"https", "http"}:
+        return None
+    if not allow_insecure and parsed.scheme != "https":
+        return None
+    path = parsed.path.rstrip("/") + "/models"
+    if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
+        return None
+    port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    if not allow_insecure:
+        try:
+            for address in socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM):
+                ip_address = ipaddress.ip_address(address[4][0])
+                if (
+                    ip_address.is_private
+                    or ip_address.is_loopback
+                    or ip_address.is_link_local
+                    or ip_address.is_multicast
+                    or ip_address.is_reserved
+                ):
+                    return None
+        except OSError:
+            return None
+    return parsed.scheme, hostname, port, path
+
+
 def discover_provider_models(
     base_url: str,
     credential_name: str,
@@ -212,21 +250,30 @@ def discover_provider_models(
     api_key = get_credential(credential_name)
     if not api_key:
         return []
-    parsed = urlparse(base_url)
-    if not parsed.hostname:
+    target = _catalog_list_target(base_url, allow_insecure=allow_insecure)
+    if target is None:
         return []
-    if not allow_insecure and parsed.scheme != "https":
-        return []
-    request = Request(
-        f"{base_url.rstrip('/')}/models",
-        headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
-        method="GET",
-    )
+    scheme, hostname, port, path = target
+    connection: http.client.HTTPConnection | None = None
     try:
-        with urlopen(request, timeout=timeout) as response:  # nosec B310 - caller supplies a catalog base_url already used for chat.
-            payload = json.loads(response.read().decode("utf-8"))
+        if scheme == "https":
+            connection = http.client.HTTPSConnection(hostname, port, timeout=timeout)
+        else:
+            connection = http.client.HTTPConnection(hostname, port, timeout=timeout)
+        connection.request(
+            "GET",
+            path,
+            headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
+        )
+        response = connection.getresponse()
+        if response.status != 200:
+            return []
+        payload = json.loads(response.read().decode("utf-8"))
     except Exception:  # noqa: BLE001 - discovery must never break bootstrap
         return []
+    finally:
+        if connection is not None:
+            connection.close()
     return _cap_chat_models(parse_models_list(payload), _DISCOVERY_CAP)
 
 

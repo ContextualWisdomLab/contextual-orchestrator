@@ -75,6 +75,7 @@ def test_discover_provider_models_returns_empty_without_key_or_public_https() ->
     register_org_credentials_from_env(skip_missing=True)
     assert discover_provider_models("not-a-url", "OPENAI_API_KEY") == []
     assert discover_provider_models("http://127.0.0.1:9", "OPENAI_API_KEY", allow_insecure=False) == []
+    assert discover_provider_models("file:///etc/passwd", "OPENAI_API_KEY", allow_insecure=True) == []
 
 
 def test_discovered_agent_id_truncates_and_avoids_collisions() -> None:
