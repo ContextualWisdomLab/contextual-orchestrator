@@ -448,6 +448,31 @@ def _validate_completions_echo(body: dict[str, Any]) -> bool | None:
 
 
 
+def _coerce_logit_bias_value(value: Any) -> float:
+    """Coerce a logit_bias map value to float in [-100, 100].
+
+    Accepts int/float and numeric strings (JS form SDKs); bools fail closed.
+    """
+    number = _coerce_optional_float(
+        value,
+        error_code="invalid_logit_bias",
+        message="logit_bias values must be numbers in [-100, 100]",
+    )
+    if number is None or isinstance(value, bool):
+        raise RequestError(
+            400,
+            "invalid_logit_bias",
+            "logit_bias values must be numbers in [-100, 100]",
+        )
+    if number < -100 or number > 100:
+        raise RequestError(
+            400,
+            "invalid_logit_bias",
+            "logit_bias values must be numbers in [-100, 100]",
+        )
+    return float(number)
+
+
 def _validate_completions_logit_bias(body: dict[str, Any]) -> dict[str, float] | None:
     """Legacy Completions ``logit_bias`` — empty object is a no-op; non-empty fails closed.
 
@@ -473,11 +498,7 @@ def _validate_completions_logit_bias(body: dict[str, Any]) -> dict[str, float] |
         token = str(key)
         if not token.isdigit():
             raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be digit token ids")
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
-        number = float(value)
-        if number < -100 or number > 100:
-            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
+        _coerce_logit_bias_value(value)
     raise RequestError(
         400,
         "invalid_logit_bias",
@@ -613,7 +634,7 @@ def _validate_responses_logit_bias(body: dict[str, Any]) -> dict[str, float] | N
     """Responses ``logit_bias`` — digit-token map values in [-100, 100]; pass through.
 
     Invalid shapes fail closed before provider egress. Valid maps (including empty)
-    are forwarded on Responses passthrough.
+    are forwarded on Responses passthrough. Numeric strings coerce (JS form SDKs).
     """
     if "logit_bias" not in body:
         return None
@@ -630,12 +651,8 @@ def _validate_responses_logit_bias(body: dict[str, Any]) -> dict[str, float] | N
         token = str(key)
         if not token.isdigit():
             raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be digit token ids")
-        if isinstance(value, bool) or not isinstance(value, (int, float)):
-            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
-        number = float(value)
-        if number < -100 or number > 100:
-            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
-        cleaned[token] = number
+        cleaned[token] = _coerce_logit_bias_value(value)
+    body["logit_bias"] = cleaned
     return cleaned
 
 
