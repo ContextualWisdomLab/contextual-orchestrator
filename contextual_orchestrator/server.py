@@ -473,6 +473,19 @@ def _coerce_logit_bias_value(value: Any) -> float:
     return float(number)
 
 
+def _coerce_logit_bias_token_key(key: Any) -> str:
+    """Normalize a logit_bias map key to a digit token id string.
+
+    Form/JS SDKs often pad numeric keys with incidental whitespace (``" 100 "``).
+    Strip before the digit check so type validation matches OpenAI token-id
+    maps; empty-after-strip and non-digit keys fail closed.
+    """
+    token = str(key).strip()
+    if not token.isdigit():
+        raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be digit token ids")
+    return token
+
+
 def _validate_completions_logit_bias(body: dict[str, Any]) -> dict[str, float] | None:
     """Legacy Completions ``logit_bias`` — empty object is a no-op; non-empty fails closed.
 
@@ -495,9 +508,7 @@ def _validate_completions_logit_bias(body: dict[str, Any]) -> dict[str, float] |
     if len(bias) > 300:
         raise RequestError(400, "invalid_logit_bias", "logit_bias must contain at most 300 entries")
     for key, value in bias.items():
-        token = str(key)
-        if not token.isdigit():
-            raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be digit token ids")
+        _coerce_logit_bias_token_key(key)
         _coerce_logit_bias_value(value)
     raise RequestError(
         400,
@@ -634,7 +645,8 @@ def _validate_responses_logit_bias(body: dict[str, Any]) -> dict[str, float] | N
     """Responses ``logit_bias`` — digit-token map values in [-100, 100]; pass through.
 
     Invalid shapes fail closed before provider egress. Valid maps (including empty)
-    are forwarded on Responses passthrough. Numeric strings coerce (JS form SDKs).
+    are forwarded on Responses passthrough. Numeric strings coerce (JS form SDKs);
+    padded digit keys strip before write-back so providers see clean token ids.
     """
     if "logit_bias" not in body:
         return None
@@ -648,9 +660,7 @@ def _validate_responses_logit_bias(body: dict[str, Any]) -> dict[str, float] | N
         raise RequestError(400, "invalid_logit_bias", "logit_bias must contain at most 300 entries")
     cleaned: dict[str, float] = {}
     for key, value in bias.items():
-        token = str(key)
-        if not token.isdigit():
-            raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be digit token ids")
+        token = _coerce_logit_bias_token_key(key)
         cleaned[token] = _coerce_logit_bias_value(value)
     body["logit_bias"] = cleaned
     return cleaned
