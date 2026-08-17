@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from pathlib import Path
 import sys
 
@@ -27,6 +28,7 @@ def test_conduct_assigns_trinity_roles_from_discovered_tags() -> None:
         }
 
     apply_discovered_pool(orchestrator, fetcher=fetch)
+    orchestrator.agents = [replace(agent, base_url="mock://local") for agent in orchestrator.agents]
     result = orchestrator.conduct(
         [{"role": "user", "content": "Analyze the architecture, implement the parser, and verify risks."}]
     )
