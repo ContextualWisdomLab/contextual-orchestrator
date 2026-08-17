@@ -243,6 +243,25 @@ def test_sql_ledger_store_on_sqlite_creates_objects_and_rolls_up() -> None:
     assert by_company["acme"]["cost_amount"] == 15.0  # 6 + 9
 
 
+def test_sql_ledger_store_query_windows_use_bound_placeholders() -> None:
+    conn = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(conn, paramstyle="qmark")
+    ledger = _priced_ledger(store=store)
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=0, created_at=100
+    )
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=0, created_at=200
+    )
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=0, created_at=300
+    )
+    assert len(store.query()) == 3
+    assert [row["created_at"] for row in store.query(start=150)] == [200, 300]
+    assert [row["created_at"] for row in store.query(end=250)] == [100, 200]
+    assert [row["created_at"] for row in store.query(start=150, end=300)] == [200]
+
+
 def test_ledger_table_names_follow_two_word_snake_case() -> None:
     for name in ("llm_usage_records", "cost_attribution_dimensions", "llm_price_entries"):
         assert is_two_word_snake_case(name)
