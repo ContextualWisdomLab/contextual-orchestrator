@@ -2634,12 +2634,12 @@ def _validate_completions_chat_era_fields_surface(body: dict[str, Any]) -> None:
             ]
             if stripped_items == ["text"]:
                 continue
-        # reasoning_effort "none" disables extra reasoning — omit-equivalent no-op.
-        # Strip + casefold so " NONE " / "None" match none.
+        # reasoning_effort "none"/"minimal" — omit-equivalent no-ops (no effort plane).
+        # Strip + casefold so " NONE " / "Minimal" match.
         if (
             key == "reasoning_effort"
             and isinstance(value, str)
-            and value.strip().lower() == "none"
+            and value.strip().lower() in {"none", "minimal"}
         ):
             continue
         raise RequestError(
@@ -2709,9 +2709,9 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     path, so non-default present values fail closed rather than silently ignoring
     a buyer-visible reasoning control.
 
-    Explicit JSON null, empty/whitespace string, or ``none`` (whitespace-padded
-    and case-insensitive) is treat-as-omit — ``none`` disables extra reasoning
-    and is an honest no-op here.
+    Explicit JSON null, empty/whitespace string, ``none``, or ``minimal``
+    (whitespace-padded and case-insensitive) is treat-as-omit — those disable
+    or minimize extra reasoning and are honest no-ops here (no effort plane).
     """
     if "reasoning_effort" not in body:
         return
@@ -2719,9 +2719,9 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     if effort is None:
         return
     if isinstance(effort, str):
-        # Strip + casefold so " NONE " / "None" match none omit-equivalent.
+        # Strip + casefold so " NONE " / "Minimal" match omit-equivalent levels.
         stripped = effort.strip().lower()
-        if not stripped or stripped == "none":
+        if not stripped or stripped in {"none", "minimal"}:
             return
     raise RequestError(
         400,
@@ -3707,8 +3707,9 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
     controls, so any non-empty present value fails closed rather than silently
     ignoring a buyer-visible o-series control surface.
     Explicit JSON null, empty object, empty/whitespace string, or
-    ``{"effort": "none"}`` (casefold/pad) is treat-as-omit — ``none`` disables
-    extra reasoning and is an honest no-op here (chat ``reasoning_effort`` parity).
+    ``{"effort": "none"|"minimal"}`` (casefold/pad) is treat-as-omit — those
+    disable or minimize extra reasoning and are honest no-ops here (chat
+    ``reasoning_effort`` parity).
     """
     if "reasoning" not in body:
         return
@@ -3720,7 +3721,7 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
     ):
         return
     if isinstance(value, dict):
-        # effort=none (and null/blank optional siblings) is omit-equivalent.
+        # effort=none|minimal (and null/blank optional siblings) is omit-equivalent.
         unknown = sorted(set(value) - {"effort", "summary"})
         if not unknown:
             effort = value.get("effort") if "effort" in value else None
@@ -3730,7 +3731,10 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
                 or effort is None
                 or (
                     isinstance(effort, str)
-                    and (not effort.strip() or effort.strip().lower() == "none")
+                    and (
+                        not effort.strip()
+                        or effort.strip().lower() in {"none", "minimal"}
+                    )
                 )
             )
             summary_omit = (
