@@ -199,8 +199,13 @@ is read from a **KV config store**, never `os.getenv`.
   `pg_tiktoken` counting, and the production batch backend without adding a
   repository split here.
 
-Grounding papers (LLM cost, routing, load balancing) live in
-[docs/papers](docs/papers/README.md) with citations.
+Grounding papers (APA 7th entries in [docs/papers](docs/papers/README.md)):
+
+- Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large language models while reducing cost and improving performance* (arXiv:2305.05176). https://doi.org/10.48550/arXiv.2305.05176
+- Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with preference data* (arXiv:2406.18665). https://doi.org/10.48550/arXiv.2406.18665
+- Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Rühle, V., Lakshmanan, L. V. S., & Awadallah, A. H. (2024). *Hybrid LLM: Cost-efficient and quality-aware query routing* (arXiv:2404.14618). https://doi.org/10.48550/arXiv.2404.14618
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://doi.org/10.48550/arXiv.2512.04695
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). https://doi.org/10.48550/arXiv.2512.04388
 
 ## Design Artifacts
 

@@ -2,10 +2,12 @@
 
 ## Sources Read
 
-- Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
+APA 7th citations (titles retained for paper-contract search):
+
+- Sakana AI launch article, "Sakana Fugu: One model to command them all" (June 22, 2026): https://sakana.ai/fugu-release/
 - Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-- TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
-- Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+- Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). Trinity: An evolved LLM coordinator (arXiv:2512.04695). https://doi.org/10.48550/arXiv.2512.04695
+- Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). Learning to orchestrate agents in natural language with the Conductor (arXiv:2512.04388). https://doi.org/10.48550/arXiv.2512.04388
 
 ## What The Architecture Is
 
@@ -53,3 +55,18 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+## Research citations (APA 7th)
+
+Chen, L., Zaharia, M., & Zou, J. (2023). *FrugalGPT: How to use large language models while reducing cost and improving performance* (arXiv:2305.05176). https://doi.org/10.48550/arXiv.2305.05176
+
+Ding, D., Mallick, A., Wang, C., Sim, R., Mukherjee, S., Rühle, V., Lakshmanan, L. V. S., & Awadallah, A. H. (2024). *Hybrid LLM: Cost-efficient and quality-aware query routing* (arXiv:2404.14618). https://doi.org/10.48550/arXiv.2404.14618
+
+Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2025). *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388). https://doi.org/10.48550/arXiv.2512.04388
+
+Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E., Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with preference data* (arXiv:2406.18665). https://doi.org/10.48550/arXiv.2406.18665
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://doi.org/10.48550/arXiv.2512.04695
+
+Full entries also live in [papers/README.md](papers/README.md) and the
+citation notes under [doctoring/](doctoring/).
