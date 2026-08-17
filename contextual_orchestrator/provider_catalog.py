@@ -339,6 +339,8 @@ class ProviderCatalogHttpClient:
 
     def _request_json(self, account: ProviderAccount, credential: str) -> dict[str, Any]:
         """GET one catalog document after the existing provider-host safety checks."""
+        if not account.models_path:
+            raise CatalogHttpError("catalog_endpoint_not_configured")
         probe = ModelAgent(
             id="catalog_probe_agent",
             model="catalog_probe",
@@ -346,10 +348,11 @@ class ProviderCatalogHttpClient:
             credential_key=account.credential_name,
             provider_name=account.provider_name,
         )
-        ModelClient(timeout=max(1, int(self.timeout_seconds)))._validate_provider(probe)
-        url = account.models_url or ""
+        client = ModelClient(timeout=max(1, int(self.timeout_seconds)))
+        client._validate_provider(probe)
+        models_path = account.models_path if account.models_path.startswith("/") else f"/{account.models_path}"
         request = urllib.request.Request(
-            url,
+            client._provider_url(probe, models_path),
             headers={
                 account.auth_header_name: f"{account.auth_prefix} {credential}".strip(),
                 "Accept": "application/json",
@@ -357,7 +360,7 @@ class ProviderCatalogHttpClient:
             method="GET",
         )
         try:
-            with urllib.request.urlopen(request, timeout=self.timeout_seconds) as response:  # nosec B310
+            with client._open_provider(request) as response:
                 raw_payload = response.read(CATALOG_RESPONSE_MAX_BYTES + 1)
         except urllib.error.HTTPError as exc:
             if exc.code in {401, 403}:
@@ -435,9 +438,8 @@ class ProviderAwareModelClient(ModelClient):
     ) -> Mapping[str, Any]:  # pragma: no cover - real Bytez network boundary
         self._validate_provider(agent)
         model_path = quote(agent.model, safe="")
-        url = f"{agent.base_url.rstrip('/')}/models/v2/{model_path}"
         request = urllib.request.Request(
-            url,
+            self._provider_url(agent, f"/models/v2/{model_path}"),
             data=json.dumps({"input": messages}).encode("utf-8"),
             headers={
                 "Authorization": f"Key {credential}",
@@ -446,7 +448,7 @@ class ProviderAwareModelClient(ModelClient):
             },
             method="POST",
         )
-        with urllib.request.urlopen(request, timeout=self.timeout) as response:  # nosec B310
+        with self._open_provider(request) as response:
             document = json.loads(response.read().decode("utf-8"))
         if not isinstance(document, dict):
             raise ProviderCatalogUnavailable("Bytez response shape is unsupported")

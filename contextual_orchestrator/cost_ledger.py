@@ -583,14 +583,14 @@ class SqlLedgerStore:
         ph = self._placeholder()
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
-                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
+            cur.execute(  # nosec B608 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- ph is a DB-API placeholder.
+                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",
                 (name,),
             )
             if cur.fetchone() is None:
-                cur.execute(
+                cur.execute(  # nosec B608 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- ph is a DB-API placeholder.
                     "INSERT INTO cost_attribution_dimensions "
-                    f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
+                    f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",
                     (name, label, order),
                 )
         self._conn.commit()
@@ -602,8 +602,8 @@ class SqlLedgerStore:
         placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(
-            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
+        cur.execute(  # nosec B608 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- columns are fixed _USAGE_COLUMNS.
+            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
         self._conn.commit()
@@ -622,7 +622,7 @@ class SqlLedgerStore:
         where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
         columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query -- columns and clauses are fixed.
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 
