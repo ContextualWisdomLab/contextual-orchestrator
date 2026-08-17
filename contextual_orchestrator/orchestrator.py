@@ -230,6 +230,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
+            # nosemgrep: python.lang.security.unverified-ssl-context.unverified-ssl-context
             return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
@@ -307,6 +308,7 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
+        # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
             request,
             timeout=self.timeout,
