@@ -240,11 +240,13 @@ def _coerce_optional_bool(
     error_code: str,
     message: str,
 ) -> bool | None:
-    """Treat null/empty as omit; accept bool, int 0/1, and "true"/"false" strings.
+    """Treat null/empty as omit; accept bool, 0/1 int or whole float, and true/false strings.
 
     ``True``/``False`` are not accepted via the int branch (``bool`` is a
-    subclass of ``int`` in Python), so only bare ``0``/``1`` coerce. String
-    forms are case-insensitive and strip incidental whitespace (form/query SDKs).
+    subclass of ``int`` in Python), so only bare ``0``/``1`` coerce. Whole
+    floats (``0.0``/``1.0``) and whole-float strings (``"0.0"``/``"1.0"``) from
+    form/JS SDKs coerce the same way. Other strings are case-insensitive
+    ``true``/``false`` (with incidental whitespace stripped).
     """
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
@@ -252,12 +254,21 @@ def _coerce_optional_bool(
         return value
     if type(value) is int and value in (0, 1):
         return bool(value)
+    if type(value) is float and value in (0.0, 1.0):
+        return bool(int(value))
     if isinstance(value, str):
         lowered = value.strip().lower()
         if lowered in {"true", "1"}:
             return True
         if lowered in {"false", "0"}:
             return False
+        # Whole-float digit strings ("0.0", "1.00") from form encodings.
+        try:
+            as_float = float(lowered)
+        except ValueError as exc:
+            raise RequestError(400, error_code, message) from exc
+        if as_float in (0.0, 1.0) and as_float.is_integer():
+            return bool(int(as_float))
     raise RequestError(400, error_code, message)
 
 
