@@ -76,6 +76,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** â
 
 One public interface:
 
+- `/v1/models` lists `contextual-orchestrator` plus the current worker ids (live discovery from KV-registered `NVIDIA_NIM_*` / `BYTEZ_API_KEY` / `OPENROUTER_API_KEY` / `OPENAI_API_KEY`, or the two NIM nemotron ids only when that catalog is empty). See [docs/model_discovery.md](docs/model_discovery.md).
 - `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline â€” per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
@@ -252,6 +253,10 @@ python -m pip install --require-hashes -r requirements.lock
 python -m pip install --no-deps -e .
 python tests/test_self_check.py
 python tests/test_paper_contracts.py
+python tests/test_model_discovery.py
+python tests/test_original_list_price.py
+python tests/test_models_list.py
+python tests/test_compute_allocation.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py

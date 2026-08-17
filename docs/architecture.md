@@ -37,6 +37,11 @@ This repository implements the interface and control plane, not the trained coor
 - `WorkflowStep.access`: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
+- `contextual_orchestrator.model_discovery`: live catalog from KV-registered
+  provider keys (`NVIDIA_NIM_*`, `BYTEZ_API_KEY`, `OPENROUTER_API_KEY`,
+  `OPENAI_API_KEY`). The two NIM nemotron ids are a floor only when discovery
+  returns nothing. `GET /v1/models` surfaces the composed pool. Known cost is
+  a capability tie-break; unpriced is never treated as free.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 

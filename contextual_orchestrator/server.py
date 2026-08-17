@@ -17,6 +17,7 @@ from .api_contract import OPENAPI_SPEC
 from .cost_ledger import ATTRIBUTION_DIMENSIONS, dimension_catalog
 from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
+from .model_discovery import apply_discovered_pool, list_served_models
 from .orchestrator import (
     BudgetExceededError,
     TaskOrchestrator,
@@ -63,6 +64,10 @@ ALLOWED_AGENT_CREATE_KEYS = {
     "disabled",
     "provider_name",
     "provider_exclusions",
+    "price_per_million",
+    "original_list_price",
+    "price_status",
+    "discovery_source",
 }
 
 
@@ -356,6 +361,10 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
+                if path == "/v1/models":
+                    self._authorize("inference")
+                    self._send(list_served_models(orchestrator))
+                    return
                 self._authorize("admin")
                 if path == "/api/v1/cost_attribution_dimensions":
                     self._send({"items": dimension_catalog(), "total_count": len(ATTRIBUTION_DIMENSIONS)})
@@ -398,6 +407,18 @@ def build_server(
                         {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
                     )
                     self._send(_response_payload(state, security.expose_trace_by_default))
+                    return
+                if path == "/api/v1/provider_catalogs":
+                    snapshot = orchestrator.discovery_snapshot or {
+                        "source": "seed",
+                        "used_floor": False,
+                        "registered_credentials": [],
+                        "skipped_credentials": [],
+                        "provider_errors": {},
+                        "model_count": 0,
+                        "models": [],
+                    }
+                    self._send(snapshot)
                     return
                 if path == "/api/v1/agent_pools":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=100)
@@ -699,9 +720,24 @@ def build_server(
         def do_POST(self) -> None:  # noqa: N802
             try:
                 path = urllib.parse.urlparse(self.path).path
-                scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
+                scope = (
+                    "admin"
+                    if path == "/admin/simulate"
+                    or path.startswith("/api/v1/agent_pools/")
+                    or path.startswith("/api/v1/provider_catalogs")
+                    else "inference"
+                )
                 self._authorize(scope)
                 body = self._read_json()
+
+                if path == "/api/v1/provider_catalogs/refresh":
+                    snapshot = apply_discovered_pool(
+                        orchestrator,
+                        fetcher=getattr(orchestrator, "catalog_fetcher", None),
+                        replace_unregistered=True,
+                    )
+                    self._send(snapshot.as_dict())
+                    return
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]

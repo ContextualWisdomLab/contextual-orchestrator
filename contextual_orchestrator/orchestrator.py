@@ -48,6 +48,37 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
+def _optional_finite_price(value: Any) -> float | None:
+    """Parse a ranking price. Missing/non-finite/negative values stay unknown."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed or parsed in (float("inf"), float("-inf")) or parsed < 0:
+        return None
+    return parsed
+
+
+def known_agent_comparison_cost(agent: "ModelAgent") -> float | None:
+    """Return the known ranking cost for ``agent``, or ``None`` if unpriced.
+
+    Promotional-free workers with ``original_list_price`` compare at that list
+    price. Unpriced is never treated as ``0`` / free.
+    """
+    billed = _optional_finite_price(getattr(agent, "price_per_million", None))
+    listed = _optional_finite_price(getattr(agent, "original_list_price", None))
+    status = str(getattr(agent, "price_status", "unknown") or "unknown")
+    if status == "unknown" and billed is None and listed is None:
+        return None
+    if billed == 0.0 and listed is not None:
+        return listed
+    if billed is not None:
+        return billed
+    return listed
+
+
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
     "commercial_report_cache",
     default=None,
@@ -79,6 +110,13 @@ class ModelAgent:
     disabled: bool = False
     provider_name: str = ""
     provider_exclusions: tuple[str, ...] = ()
+    # Known billed USD/million tokens used for ranking. None means unpriced
+    # (unknown), never "free". Promotional $0 with a published list price
+    # stores that list on ``original_list_price``.
+    price_per_million: float | None = None
+    original_list_price: float | None = None
+    price_status: str = "unknown"
+    discovery_source: str = ""
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -96,6 +134,10 @@ class ModelAgent:
             "disabled": self.disabled,
             "provider_name": self.provider_name,
             "provider_exclusions": list(self.provider_exclusions),
+            "price_per_million": self.price_per_million,
+            "original_list_price": self.original_list_price,
+            "price_status": self.price_status,
+            "discovery_source": self.discovery_source,
         }
 
     @property
@@ -123,6 +165,10 @@ class ModelAgent:
             disabled=bool(value.get("disabled", False)),
             provider_name=value.get("provider_name", ""),
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
+            price_per_million=_optional_finite_price(value.get("price_per_million")),
+            original_list_price=_optional_finite_price(value.get("original_list_price")),
+            price_status=str(value.get("price_status") or "unknown"),
+            discovery_source=str(value.get("discovery_source") or ""),
         )
 
 
@@ -856,6 +902,9 @@ class TaskOrchestrator:
         # (zero behavior change). When set, runs/audit/analytics survive restart.
         self._store = _StateStore(state_db) if state_db else None
         self._commercial_report_cache_local = threading.local()
+        # Last auto-discovery snapshot (secret-redacted). Empty until compose runs.
+        self.discovery_snapshot: dict[str, Any] | None = None
+        self.catalog_fetcher = None
         if self._store is not None:
             self._reload_state()
 
@@ -1357,6 +1406,7 @@ class TaskOrchestrator:
         if served_id != agent.id:  # pragma: no cover
             row["served_agent_id"] = served_id
             row["failover_from"] = agent.id
+        row["selection_reason"] = "capability_then_known_cost"
         return {
             "mode": "route",
             "answer": answer,
@@ -1525,9 +1575,26 @@ class TaskOrchestrator:
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
     def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
-        """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
+        """Agents sorted best-first for a role; the head is the primary, the tail are failovers.
+
+        Capability (role tags, domain hints, priority) wins. Known cost is a
+        same-capability tie-break only. Unpriced workers lose the cost
+        tie-break — they are never treated as free.
+        """
         lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        return sorted(
+            self.agents,
+            key=lambda agent: self._rank_key(agent, role, lowered),
+            reverse=True,
+        )
+
+    def _rank_key(self, agent: ModelAgent, role: str, lowered: str) -> tuple[Any, ...]:
+        """Sort tuple: higher capability, then known cheaper cost, then id."""
+        capability, tag_len, agent_id = self._score_agent(agent, role, lowered)
+        cost = known_agent_comparison_cost(agent)
+        known = 1 if cost is not None else 0
+        cost_rank = -(cost) if cost is not None else 0.0
+        return (capability, known, cost_rank, tag_len, agent_id)
 
     def _select_agent(self, text: str, role: str) -> ModelAgent:
         selected = self._ranked_agents(text, role)[0]

@@ -67,6 +67,19 @@ _DIMENSION_TO_COLUMN["provider"] = "upstream_api"
 UNATTRIBUTED = "unattributed"
 
 
+def _optional_price(value: Any) -> Optional[float]:
+    """Parse an original-list price. Missing or non-finite values stay unknown."""
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError):
+        return None
+    if parsed != parsed or parsed in (float("inf"), float("-inf")) or parsed < 0:
+        return None
+    return parsed
+
+
 @dataclass
 class AttributionDimensions:
     """Multi-dimensional attribution for a single usage record."""
@@ -114,6 +127,8 @@ class PriceEntry:
     prompt_price_per_1k: float
     completion_price_per_1k: float
     currency_code: str = "USD"
+    original_list_prompt_per_1k: float | None = None
+    original_list_completion_per_1k: float | None = None
 
     def as_dict(self) -> Dict[str, Any]:
         """Serialize the price entry for KV storage / reporting."""
@@ -123,6 +138,8 @@ class PriceEntry:
             "prompt_price_per_1k": self.prompt_price_per_1k,
             "completion_price_per_1k": self.completion_price_per_1k,
             "currency_code": self.currency_code,
+            "original_list_prompt_per_1k": self.original_list_prompt_per_1k,
+            "original_list_completion_per_1k": self.original_list_completion_per_1k,
         }
 
 
@@ -162,12 +179,20 @@ class PriceBook:
             raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, "*"), None)
         if raw is None:
             return None
+        if not isinstance(raw, dict):
+            return None
+        billed_keys = ("prompt_price_per_1k", "completion_price_per_1k")
+        if not any(key in raw for key in billed_keys):
+            # A stub without billed-rate keys is unpriced, not promotional-free.
+            return None
         return PriceEntry(
             provider_name=raw.get("provider_name", provider),
             model_name=raw.get("model_name", model),
             prompt_price_per_1k=float(raw.get("prompt_price_per_1k", 0.0)),
             completion_price_per_1k=float(raw.get("completion_price_per_1k", 0.0)),
             currency_code=raw.get("currency_code", self.default_currency),
+            original_list_prompt_per_1k=_optional_price(raw.get("original_list_prompt_per_1k")),
+            original_list_completion_per_1k=_optional_price(raw.get("original_list_completion_per_1k")),
         )
 
     def compute_cost(
@@ -190,6 +215,43 @@ class PriceBook:
         )
         completion_cost = (Decimal(completion_tokens) / Decimal(1000)) * Decimal(
             str(entry.completion_price_per_1k)
+        )
+        total = (prompt_cost + completion_cost).quantize(
+            Decimal("0.000001"), rounding=ROUND_HALF_UP
+        )
+        return float(total), entry.currency_code
+
+    def known_compute_cost(
+        self,
+        provider: str,
+        model: str,
+        prompt_tokens: int,
+        completion_tokens: int,
+    ) -> tuple[float | None, str]:
+        """Return a known cost, or ``None`` when the model is unpriced.
+
+        Selection must call this — not :meth:`compute_cost`, which records
+        unpriced usage as ``0.0`` so the ledger never fails. A promotional
+        billed rate of ``0`` with ``original_list_*`` uses the list price.
+        """
+        entry = self.get_price(provider, model)
+        if entry is None:
+            return None, self.default_currency
+        billed_prompt = entry.prompt_price_per_1k
+        billed_completion = entry.completion_price_per_1k
+        if (
+            billed_prompt == 0.0
+            and billed_completion == 0.0
+            and (
+                entry.original_list_prompt_per_1k is not None
+                or entry.original_list_completion_per_1k is not None
+            )
+        ):
+            billed_prompt = entry.original_list_prompt_per_1k or 0.0
+            billed_completion = entry.original_list_completion_per_1k or 0.0
+        prompt_cost = (Decimal(prompt_tokens) / Decimal(1000)) * Decimal(str(billed_prompt))
+        completion_cost = (Decimal(completion_tokens) / Decimal(1000)) * Decimal(
+            str(billed_completion)
         )
         total = (prompt_cost + completion_cost).quantize(
             Decimal("0.000001"), rounding=ROUND_HALF_UP

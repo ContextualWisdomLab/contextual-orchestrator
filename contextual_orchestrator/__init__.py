@@ -37,7 +37,15 @@ from .cost_ledger import (
 from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
-from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
+from .model_discovery import (
+    DISCOVERY_CREDENTIAL_NAMES,
+    FLOOR_DEFAULT_MODEL_ID,
+    FLOOR_SMALL_MODEL_ID,
+    apply_discovered_pool,
+    discover_model_catalog,
+    list_served_models,
+)
+from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents, known_agent_comparison_cost
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 __all__ = [
@@ -48,6 +56,13 @@ __all__ = [
     "get_credential",
     "register_credential",
     "NotConfigured",
+    "DISCOVERY_CREDENTIAL_NAMES",
+    "FLOOR_DEFAULT_MODEL_ID",
+    "FLOOR_SMALL_MODEL_ID",
+    "apply_discovered_pool",
+    "discover_model_catalog",
+    "list_served_models",
+    "known_agent_comparison_cost",
     # cost review
     "ATTRIBUTION_DIMENSIONS",
     "AttributionDimensions",

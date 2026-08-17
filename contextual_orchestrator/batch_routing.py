@@ -126,9 +126,10 @@ def cheapest_upstream(
 
     Cost-optimising upstream selection for load balancing: given candidate
     provider/model pairs, price each against the configurable price table for a
-    representative request shape and return the cheapest. Unpriced candidates
-    cost ``0`` and are treated as free (explicit, so a missing price is visible
-    rather than silently expensive). Ties keep input order.
+    representative request shape and return the cheapest **known-cost**
+    candidate. Unpriced models are skipped — unknown is never treated as
+    free. Ties keep input order. If every candidate is unpriced, return
+    ``None``.
     """
     if not candidates:
         return None
@@ -137,9 +138,16 @@ def cheapest_upstream(
     for candidate in candidates:
         provider = candidate.get("provider", "")
         model = candidate.get("model", "")
-        cost, _currency = price_book.compute_cost(
-            provider, model, assumed_prompt_tokens, assumed_completion_tokens
-        )
+        if hasattr(price_book, "known_compute_cost"):
+            cost, _currency = price_book.known_compute_cost(
+                provider, model, assumed_prompt_tokens, assumed_completion_tokens
+            )
+        else:
+            cost, _currency = price_book.compute_cost(
+                provider, model, assumed_prompt_tokens, assumed_completion_tokens
+            )
+        if cost is None:
+            continue
         if best_cost is None or cost < best_cost:
             best_cost = cost
             best = candidate

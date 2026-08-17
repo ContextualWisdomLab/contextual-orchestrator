@@ -18,6 +18,7 @@ consume untrusted bytes/JSON:
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
+5. ``model_discovery.normalize_catalog_payload`` -- provider catalog JSON.
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -28,6 +29,10 @@ import json
 from typing import Any
 
 from contextual_orchestrator import server
+from contextual_orchestrator.model_discovery import (
+    PROVIDER_ENDPOINTS,
+    normalize_catalog_payload,
+)
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
@@ -123,6 +128,30 @@ def exercise_agent_config(value: Any) -> None:
     assert isinstance(agent.provider_exclusions, tuple)
     assert isinstance(agent.priority, int)
     assert isinstance(agent.disabled, bool)
+
+
+def exercise_catalog_payload(value: Any) -> None:
+    """Drive catalog normalization over arbitrary decoded JSON.
+
+    Invariants: never invents a model id, never treats junk prices as free,
+    and never raises unexpected exceptions.
+    """
+    try:
+        models = normalize_catalog_payload(value, PROVIDER_ENDPOINTS["OPENROUTER_API_KEY"])
+    except (TypeError, ValueError, KeyError):
+        return
+    assert isinstance(models, list)
+    seen: set[str] = set()
+    for model in models:
+        assert model.model_id
+        assert model.model_id not in seen
+        seen.add(model.model_id)
+        assert model.price_status in {"known", "promotional_free", "unknown"}
+        if model.price_status == "unknown":
+            assert model.comparison_cost() is None
+        else:
+            cost = model.comparison_cost()
+            assert cost is None or cost >= 0
 
 
 def exercise_redaction(text: str) -> None:

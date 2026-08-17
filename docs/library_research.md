@@ -53,6 +53,18 @@ Extraction triggers:
 Until those triggers exist, Ponytail recommends strengthening the current
 single-repo product instead of splitting it.
 
+## Model auto-discovery
+
+Researched before adding a catalog composer:
+
+| Library | Decision | Evidence |
+|---|---|---|
+| [LiteLLM](https://github.com/BerriAI/litellm) | Skip as a runtime dependency. | Covers multi-provider `GET /v1/models` and price tables, but pulls a large SDK graph this stdlib lab does not need. Reuse `ModelClient` egress + official OpenAI-compatible list endpoints instead. |
+| [instructor](https://github.com/instructor-ai/instructor) / provider SDKs | Skip. | Catalog JSON is a list payload, not a structured completion. Stdlib `json` + injectable `CatalogFetcher` is enough. |
+| NVIDIA NIM / OpenRouter / OpenAI / Bytez official list APIs | Selected. | Each registered KV key hits that vendor's public catalog. Bytez stays native (`/models/v2`, `Authorization: Key`); the others are OpenAI `GET /models`. |
+
+Skipped: a static two-model catalog, request-time `os.getenv` as “key registered,” and a second HTTP stack beside `ModelClient`.
+
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.

@@ -83,6 +83,19 @@ def test_cheapest_upstream_picks_lowest_priced_candidate() -> None:
     assert best == {"provider": "cheap_co", "model": "small"}
 
 
+def test_cheapest_upstream_skips_unpriced_instead_of_treating_as_free() -> None:
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("priced_co", "known", prompt_price_per_1k=2.0, completion_price_per_1k=2.0))
+    candidates = [
+        {"provider": "mystery_co", "model": "unpriced"},
+        {"provider": "priced_co", "model": "known"},
+    ]
+    best = cheapest_upstream(candidates, price_book)
+    assert best == {"provider": "priced_co", "model": "known"}
+    assert cheapest_upstream([{"provider": "mystery_co", "model": "unpriced"}], price_book) is None
+
+
 # ---------------------------------------------------------------------------
 # Local (mock/standalone) backend
 # ---------------------------------------------------------------------------

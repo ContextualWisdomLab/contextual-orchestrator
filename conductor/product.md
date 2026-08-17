@@ -24,7 +24,8 @@ Provide one API and one domain model:
 - route simple work to one selected worker;
 - conduct complex work through planner, worker, verifier, and synthesizer steps;
 - keep worker visibility explicit with access lists;
-- make the agent pool configurable data.
+- make the agent pool configurable data, composed by live auto-discovery
+  from registered provider keys (two NIM ids are a floor only).
 - expose an admin console for operators to inspect agents, policy, workflow trace, and audit state.
 
 ## Source-backed Product Bets

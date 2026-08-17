@@ -17,6 +17,30 @@ OPENAPI_SPEC = {
         }
     },
     "paths": {
+        "/v1/models": {
+            "get": {
+                "operationId": "list_served_models",
+                "summary": "List the gateway model plus discovered or floor worker ids",
+                "security": [{"inference_bearer_auth": []}],
+                "responses": {"200": {"description": "OpenAI-compatible model list"}},
+            }
+        },
+        "/api/v1/provider_catalogs": {
+            "get": {
+                "operationId": "get_provider_catalogs",
+                "summary": "Read the last secret-redacted discovery snapshot",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Provider catalog snapshot"}},
+            }
+        },
+        "/api/v1/provider_catalogs/refresh": {
+            "post": {
+                "operationId": "refresh_provider_catalogs",
+                "summary": "Re-run live discovery from KV-registered provider keys",
+                "security": [{"admin_bearer_auth": []}],
+                "responses": {"200": {"description": "Refreshed catalog snapshot"}},
+            }
+        },
         "/api/v1/agent_pools": {
             "get": {
                 "operationId": "list_agent_pools",

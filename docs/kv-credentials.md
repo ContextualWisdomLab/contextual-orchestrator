@@ -18,6 +18,14 @@ get_credential("OPENAI_API_KEY")        # -> "sk-..." | None (from the KV)
 register_credential("OPENAI_API_KEY", value)   # writes into the KV
 ```
 
+Model auto-discovery uses the same seam for these names only — a KV miss
+skips that upstream and never falls back to `os.getenv`:
+
+`NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`, `BYTEZ_API_KEY`,
+`OPENROUTER_API_KEY`, `OPENAI_API_KEY`.
+
+See [model_discovery.md](model_discovery.md).
+
 The orchestrator resolves an agent's provider key through this seam only:
 
 - `ModelClient.chat()` calls `get_credential(agent.credential_name)`.

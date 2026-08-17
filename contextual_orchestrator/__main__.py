@@ -8,6 +8,7 @@ import os
 import sys
 
 from .credentials import register_credential
+from .model_discovery import apply_discovered_pool
 from .orchestrator import ModelClient, TaskOrchestrator, load_agents
 from .server import SecurityConfig, serve
 
@@ -104,6 +105,10 @@ def main() -> None:
         budget_max_cost_usd=args.budget_max_cost_usd,
         cache_ttl=args.cache_ttl,
     )
+    # Product auto-discovery: when any of the five provider keys is in the KV,
+    # replace the seed pool with the live catalog (NIM floor only if empty).
+    # Unregistered keys are skipped — never os.getenv as a "key exists" signal.
+    apply_discovered_pool(orchestrator)
 
     if args.eval:
         print(json.dumps(orchestrator.compare_to_baseline(args.eval, mode=args.mode), ensure_ascii=False, indent=2))
