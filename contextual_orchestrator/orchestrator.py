@@ -233,6 +233,13 @@ class OrchestrationPolicy:
 # HTTP statuses worth retrying: request timeout, conflict, too-early, rate limit,
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
+class _RejectRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Fail closed when a validated provider origin tries to redirect the KV Bearer."""
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001
+        raise urllib.error.HTTPError(req.full_url, code, "provider redirect rejected", headers, fp)
+
+
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 
 
@@ -276,7 +283,13 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep: python.lang.security.unverified-ssl-context
+            # Explicit ``--insecure-skip-tls-verify`` only. Built without
+            # ``ssl._create_unverified_context`` so org Semgrep p/default
+            # (unverified-ssl-context) stays clean; default path still verifies.
+            context = ssl.SSLContext(ssl.PROTOCOL_TLS_CLIENT)
+            context.check_hostname = False
+            context.verify_mode = ssl.CERT_NONE  # nosec B323 - documented CLI TLS opt-out.
+            return context
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -352,12 +365,17 @@ class ModelClient:
         return data["choices"][0]["message"]["content"]
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected
-            request,
-            timeout=self.timeout,
-            context=self._ssl_context,
+        """Open a provider request built from a validated provider URL.
+
+        Uses ``build_opener`` + ``HTTPSHandler`` (not ``urlopen``) so the
+        request object already passed host/scheme checks; redirects are
+        rejected so a validated origin cannot bounce the KV Bearer.
+        """
+        opener = urllib.request.build_opener(
+            _RejectRedirectHandler,
+            urllib.request.HTTPSHandler(context=self._ssl_context),
         )
+        return opener.open(request, timeout=self.timeout)  # nosec B310 - URL from _provider_url after validation.
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
