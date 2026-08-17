@@ -2,10 +2,29 @@
 
 ## Sources Read
 
-- Sakana AI launch article, "Sakana Fugu: One Model to Command Them All" (June 22, 2026): https://sakana.ai/fugu-release/
-- Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
-- TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
-- Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+Verified citations use APA 7th edition. arXiv “to appear” comments are not
+treated as a final proceedings record. Full entries live in
+[REFERENCES.md](REFERENCES.md) and the decisions they drive live in
+[adr/README.md](adr/README.md).
+
+Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*.
+https://sakana.ai/fugu-release/
+
+Tang, Y., Cetin, E., Xu, J., Sun, Q., Nielsen, S., Richard, V., Goda, H.,
+Tymchenko, I., Nguyen, N., Lee, H., Ashiga, M., Kotyan, S., Kuroki, S., &
+Clanuwat, T. (2026). *Sakana Fugu technical report* (arXiv:2606.21228,
+Version 2) [Preprint]. arXiv. https://doi.org/10.48550/arXiv.2606.21228
+
+Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2026).
+*TRINITY: An evolved LLM coordinator* (arXiv:2512.04695, Version 3)
+[Preprint]. arXiv. https://doi.org/10.48550/arXiv.2512.04695
+
+Nielsen, S., Cetin, E., Schwendeman, P., Sun, Q., Xu, J., & Tang, Y. (2026).
+*Learning to orchestrate agents in natural language with the Conductor*
+(arXiv:2512.04388, Version 5) [Preprint]. arXiv.
+https://doi.org/10.48550/arXiv.2512.04388
+
+Do not invent authors. TRINITY is Xu et al.; Conductor is Nielsen et al.
 
 ## What The Architecture Is
 
@@ -16,11 +35,11 @@ The useful split is quality-latency, not separate products:
 - Low-latency routing: select one worker for the current query or turn.
 - Deep orchestration: create a multi-step workflow when the task needs decomposition, independent attempts, verification, or synthesis.
 
-TRINITY contributes the compact coordinator idea: a small model representation plus a lightweight head can choose agent and role over multiple turns. Its Thinker, Worker, and Verifier contracts are practical enough to implement directly.
+TRINITY (Xu et al., 2026) contributes the compact coordinator idea: a small model representation plus a lightweight head can choose agent and role over multiple turns. Its Thinker, Worker, and Verifier contracts are practical enough to implement directly. The cited work is a versioned preprint; this repository does not implement the trained coordinator.
 
-Conductor contributes the workflow representation: each step is a natural-language subtask, an assigned worker, and an access list of prior step outputs. This is the key piece for preventing every worker from being dragged into the same transcript while still allowing deliberate collaboration.
+Conductor (Nielsen et al., 2026) contributes the workflow representation: each step is a natural-language subtask, an assigned worker, and an access list of prior step outputs. This is the key piece for preventing every worker from being dragged into the same transcript while still allowing deliberate collaboration. The cited work is a versioned preprint.
 
-The Fugu report combines these ideas into production constraints:
+The Fugu report (Tang et al., 2026) combines these ideas into production constraints:
 
 - Fugu is optimized for latency by selecting a worker without expensive coordinator generation.
 - Fugu-Ultra is optimized for quality by generating deeper workflows over a broader agent pool.
@@ -31,16 +50,18 @@ The Fugu report combines these ideas into production constraints:
 
 This repository implements the interface and control plane, not the trained coordinator.
 
-- `contextual_orchestrator.orchestrator.Agent`: one configured worker model.
-- `Orchestrator.route_once`: the low-latency routing path.
-- `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
-- `WorkflowStep.access`: Conductor-style visibility control.
+- `contextual_orchestrator.orchestrator.ModelAgent`: one configured worker model.
+- `TaskOrchestrator.complete()` / route path: the low-latency routing path.
+- `TaskOrchestrator.conduct`: the workflow path with thinker, worker, verifier, and synthesizer steps.
+- `WorkflowStep` access lists: Conductor-style visibility control.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses deterministic keyword scoring so the repo runs without training data, GPUs, or vendor credentials.
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
+
+Naruon and gyeot are composition hubs and may call this gateway. That is not an MSA violation. Sibling links stay; see [ADR-0012](adr/0012-standalone-and-cwl-boundary.md).
 
 ## Product Planning Interpretation
 

@@ -117,7 +117,7 @@ One fused orchestration loop:
 - Agent definitions are data, so provider preference, exclusions, privacy constraints, and mock testing do not require code changes.
 - Provider calls are resilient: transient failures (timeouts, 429, 5xx) retry with full-jitter exponential backoff, while caller errors (4xx) fail fast. If an agent still fails, the request fails over to the next capability-matched agent in the pool, and a per-agent circuit breaker skips a persistently failing provider until it cools down. Failover is recorded in the trace (`served_agent_id`, `failover_from`).
 
-See [docs/architecture.md](docs/architecture.md) for the source-backed analysis.
+See [docs/architecture.md](docs/architecture.md) for the source-backed analysis and [docs/adr/README.md](docs/adr/README.md) for architecture decision records. Naruon and gyeot may call this gateway; that composition is intentional.
 
 ## Observability & spend
 
@@ -204,6 +204,8 @@ Grounding papers (LLM cost, routing, load balancing) live in
 
 ## Design Artifacts
 
+- [Architecture decision records](docs/adr/README.md)
+- [Verified references (APA 7th)](docs/REFERENCES.md)
 - [Library research](docs/library_research.md)
 - [Product planning](docs/product_planning.md)
 - [Screen design](docs/screen_design.md)
@@ -252,6 +254,7 @@ python -m pip install --require-hashes -r requirements.lock
 python -m pip install --no-deps -e .
 python tests/test_self_check.py
 python tests/test_paper_contracts.py
+python tests/test_adr_citations.py
 python tests/test_admin_contract.py
 python tests/test_conventions.py
 python tests/test_api_contract.py

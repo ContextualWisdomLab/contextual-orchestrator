@@ -6,12 +6,18 @@ Re-plan Contextual Orchestrator as an enterprise orchestration control plane, no
 
 ## Sources Re-read
 
+Citations are APA 7th. Xu et al. (TRINITY) and Nielsen et al. (Conductor) are
+versioned arXiv preprints. Their arXiv comments say “to appear” at ICLR 2026;
+that comment is not treated as a final proceedings record. Do not invent
+Zhang or Li as authors. Full entries: [REFERENCES.md](REFERENCES.md),
+[adr/README.md](adr/README.md).
+
 | Source | Product Signal |
 |---|---|
-| Sakana Fugu launch article, June 22, 2026 | One API hides model selection, delegation, verification, and synthesis. Fugu is the everyday low-latency mode; Fugu Ultra is the high-quality deep-workflow mode. Early user value clusters around code review, security analysis, research, and long messy workflows. |
-| Sakana Fugu Technical Report, 2026 | The product must expose a single model interface, a configurable worker pool, provider preference/exclusion, privacy and compliance constraints, and the latency-quality frontier. |
-| TRINITY: An Evolved LLM Coordinator, ICLR 2026 | The operator-facing trace should show Thinker, Worker, and Verifier contracts, turn budgets, and why verification accepted or revised the accumulated answer. |
-| Learning to Orchestrate Agents in Natural Language with the Conductor, ICLR 2026 | Workflow runs should be represented as natural-language subtasks, assigned workers, and access lists. Harder tasks should visibly allocate more work than simple tasks. |
+| Sakana AI (2026, June 22), launch article, https://sakana.ai/fugu-release/ | One API hides model selection, delegation, verification, and synthesis. Fugu is the everyday low-latency mode; Fugu Ultra is the high-quality deep-workflow mode. Early user value clusters around code review, security analysis, research, and long messy workflows. |
+| Tang et al. (2026), Sakana Fugu Technical Report (arXiv:2606.21228v2), https://doi.org/10.48550/arXiv.2606.21228 | The product must expose a single model interface, a configurable worker pool, provider preference/exclusion, privacy and compliance constraints, and the latency-quality frontier. |
+| Xu et al. (2026), *TRINITY: An evolved LLM coordinator* (arXiv:2512.04695v3) [Preprint], https://doi.org/10.48550/arXiv.2512.04695 | The operator-facing trace should show Thinker, Worker, and Verifier contracts, turn budgets, and why verification accepted or revised the accumulated answer. |
+| Nielsen et al. (2026), *Learning to orchestrate agents in natural language with the Conductor* (arXiv:2512.04388v5) [Preprint], https://doi.org/10.48550/arXiv.2512.04388 | Workflow runs should be represented as natural-language subtasks, assigned workers, and access lists. Harder tasks should visibly allocate more work than simple tasks. |
 
 ## Product Thesis
 
