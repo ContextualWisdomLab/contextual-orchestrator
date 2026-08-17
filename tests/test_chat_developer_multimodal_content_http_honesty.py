@@ -65,7 +65,8 @@ def test_http_chat_accepts_string_content() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_developer_role() -> None:
+def test_http_chat_accepts_developer_role_as_system() -> None:
+    """Modern OpenAI SDKs send developer; alias to system for instruction plane."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -78,11 +79,8 @@ def test_http_chat_rejects_developer_role() -> None:
                 ],
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_message_role" in blob
-        assert "developer" in blob
-        assert "system" in blob
+        assert status == 200, body
+        assert "choices" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -163,7 +161,7 @@ def test_http_chat_rejects_non_string_non_array_content() -> None:
 
 if __name__ == "__main__":
     test_http_chat_accepts_string_content()
-    test_http_chat_rejects_developer_role()
+    test_http_chat_accepts_developer_role_as_system()
     test_http_chat_accepts_multipart_image_content()
     test_http_chat_rejects_input_audio_content_part()
     test_http_chat_rejects_non_string_non_array_content()

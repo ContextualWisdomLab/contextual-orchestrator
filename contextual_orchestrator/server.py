@@ -1811,13 +1811,11 @@ def _validate_messages(messages: Any) -> list[dict[str, Any]]:
             role = role.strip().lower()
             message["role"] = role
         if isinstance(role, str) and role == "developer":
-            # Newer OpenAI clients send developer in place of system; this gateway
-            # does not apply a separate developer plane — fail closed with migration.
-            raise RequestError(
-                400,
-                "invalid_message_role",
-                "developer role is not supported on /v1/chat/completions; use system instead",
-            )
+            # Newer OpenAI clients send developer in place of system. This
+            # gateway has no separate developer plane — alias to system so
+            # instructions still apply (parity with common OpenAI gateways).
+            role = "system"
+            message["role"] = "system"
         if isinstance(role, str) and role == "function":
             # Legacy Completions function-calling role; tool replaces it.
             raise RequestError(

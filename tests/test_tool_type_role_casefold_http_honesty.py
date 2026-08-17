@@ -70,7 +70,7 @@ def test_http_chat_accepts_message_role_casefold() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_developer_role_casefold() -> None:
+def test_http_chat_accepts_developer_role_casefold_as_system() -> None:
     server, thread, port = _server()
     try:
         for role in ("developer", "Developer", " DEVELOPER "):
@@ -79,12 +79,14 @@ def test_http_chat_still_rejects_developer_role_casefold() -> None:
                 "/v1/chat/completions",
                 {
                     "model": "mock-planner",
-                    "messages": [{"role": role, "content": "dev plane"}],
+                    "messages": [
+                        {"role": role, "content": "dev plane"},
+                        {"role": "user", "content": "hi"},
+                    ],
                 },
             )
-            assert status == 400, (role, body)
-            assert "invalid_message_role" in json.dumps(body)
-            assert "system" in json.dumps(body).lower()
+            assert status == 200, (role, body)
+            assert "choices" in body
     finally:
         server.shutdown()
         thread.join(timeout=5)
