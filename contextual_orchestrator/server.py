@@ -3197,17 +3197,92 @@ def _omit_null_tool_function_field(
         raise RequestError(400, "invalid_tools", error_message)
 
 
-def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
-    """OpenAI chat ``tools`` — array of function tool objects (empty = honest no-op).
+def _coerce_tool_function_strict(function: dict[str, Any], *, name_prefix: str) -> None:
+    """Null/empty omit; bool and form/JS 0/1/"true" forms coerce for ``strict``."""
+    if "strict" not in function:
+        return
+    strict_value = function.get("strict")
+    if strict_value is None or (isinstance(strict_value, str) and not strict_value.strip()):
+        function.pop("strict", None)
+        return
+    coerced_strict = _coerce_optional_bool(
+        strict_value,
+        error_code="invalid_tools",
+        message=f"{name_prefix}.strict must be a boolean when provided",
+    )
+    if coerced_strict is None:
+        function.pop("strict", None)
+    else:
+        function["strict"] = coerced_strict
 
-    An empty array is treated as omit: many SDKs send ``tools: []`` when no tools
-    are configured. Non-empty entries must be objects with ``type`` == ``function``
-    and a ``function`` object that has a non-empty ``name`` matching
-    ``[a-zA-Z0-9_-]{1,64}`` (ASCII only — ``str.isalnum()`` is not
-    sufficient). Explicit JSON ``null`` on optional ``description``,
-    ``parameters``, and ``strict`` is popped in place so passthrough
-    matches omit. Shape-only validation before passthrough; provider
-    schema depth is not re-checked here.
+
+def _validate_tool_function_fields(
+    function: dict[str, Any],
+    *,
+    name_prefix: str,
+) -> None:
+    """Shared name/description/parameters/strict checks for chat or flat tools."""
+    unknown_fn = sorted(set(function) - {"name", "description", "parameters", "strict"})
+    if unknown_fn:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{name_prefix} accepts only name, description, parameters, and strict",
+            {"fields": unknown_fn},
+        )
+    _coerce_tool_function_strict(function, name_prefix=name_prefix)
+    name = function.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{name_prefix}.name must be a non-empty string",
+        )
+    name = name.strip()
+    if len(name) > 64:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{name_prefix}.name must be at most 64 characters",
+        )
+    if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{name_prefix}.name must match [a-zA-Z0-9_-]",
+        )
+    function["name"] = name
+    _omit_null_tool_function_field(
+        function,
+        "parameters",
+        expected_types=(dict,),
+        error_message=f"{name_prefix}.parameters must be an object",
+    )
+    _omit_null_tool_function_field(
+        function,
+        "description",
+        expected_types=(str,),
+        error_message=f"{name_prefix}.description must be a string when provided",
+    )
+    description = function.get("description")
+    if isinstance(description, str) and len(description) > 1024:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            f"{name_prefix}.description must be at most 1024 characters",
+        )
+
+
+def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """OpenAI chat/Responses ``tools`` — nested or flat function tool objects.
+
+    Empty array is omit-equivalent. Accepts:
+
+    - Chat nested: ``{"type":"function","function":{"name":...}}``
+    - Responses flat: ``{"type":"function","name":...,"parameters":...}``
+
+    Shape is preserved for passthrough (nested stays nested; flat stays flat).
+    Optional ``description`` / ``parameters`` / ``strict`` nulls are popped.
     """
     if "tools" not in body:
         return None
@@ -3234,16 +3309,6 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
     for item in tools:
         if not isinstance(item, dict):
             raise RequestError(400, "invalid_tools", "each tool must be an object")
-        # OpenAI tool objects are type + function only; extra siblings fail closed
-        # so clients cannot smuggle uninterpreted fields through passthrough.
-        unknown_tool = sorted(set(item) - {"type", "function"})
-        if unknown_tool:
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool accepts only type and function fields",
-                {"fields": unknown_tool},
-            )
         tool_type = item.get("type")
         # Strip + casefold so "Function" / " FUNCTION " match OpenAI type.
         if isinstance(tool_type, str):
@@ -3255,84 +3320,66 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
                 "invalid_tools",
                 "each tool type must be function",
             )
-        function = item.get("function")
-        if not isinstance(function, dict):
+        # Responses flat shape: name/parameters at top level (no nested function).
+        flat_keys = {"name", "description", "parameters", "strict"} & set(item)
+        if "function" in item and flat_keys:
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool must use either nested function or flat name/parameters, not both",
+            )
+        if "function" in item:
+            # Chat nested shape: type + function only.
+            unknown_tool = sorted(set(item) - {"type", "function"})
+            if unknown_tool:
+                raise RequestError(
+                    400,
+                    "invalid_tools",
+                    "each tool accepts only type and function fields",
+                    {"fields": unknown_tool},
+                )
+            function = item.get("function")
+            if not isinstance(function, dict):
+                raise RequestError(
+                    400,
+                    "invalid_tools",
+                    "each tool.function must be an object",
+                )
+            _validate_tool_function_fields(function, name_prefix="each tool.function")
+        elif flat_keys or "name" in item:
+            # Official Responses flat function tool.
+            unknown_tool = sorted(
+                set(item) - {"type", "name", "description", "parameters", "strict"}
+            )
+            if unknown_tool:
+                raise RequestError(
+                    400,
+                    "invalid_tools",
+                    "each flat function tool accepts only type, name, description, "
+                    "parameters, and strict",
+                    {"fields": unknown_tool},
+                )
+            # Validate name/description/parameters/strict without treating type as a
+            # function field (type stays on the tool object for passthrough).
+            function_fields = {
+                key: item[key]
+                for key in ("name", "description", "parameters", "strict")
+                if key in item
+            }
+            _validate_tool_function_fields(
+                function_fields, name_prefix="each tool"
+            )
+            # Write stripped/coerced fields back onto the flat tool object.
+            for key, value in function_fields.items():
+                item[key] = value
+            for key in ("name", "description", "parameters", "strict"):
+                if key not in function_fields and key in item:
+                    item.pop(key, None)
+        else:
             raise RequestError(
                 400,
                 "invalid_tools",
                 "each tool.function must be an object",
-            )
-        unknown_fn = sorted(set(function) - {"name", "description", "parameters", "strict"})
-        if unknown_fn:
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function accepts only name, description, parameters, and strict",
-                {"fields": unknown_fn},
-            )
-        # Explicit JSON null/empty omit; bool, int 0/1, 0.0/1.0, and
-        # "true"/"false"/"0"/"1"/"0.0"/"1.0" coerce (SDK form/JS parity).
-        if "strict" in function:
-            strict_value = function.get("strict")
-            if strict_value is None or (
-                isinstance(strict_value, str) and not strict_value.strip()
-            ):
-                function.pop("strict", None)
-            else:
-                coerced_strict = _coerce_optional_bool(
-                    strict_value,
-                    error_code="invalid_tools",
-                    message="each tool.function.strict must be a boolean when provided",
-                )
-                if coerced_strict is None:
-                    function.pop("strict", None)
-                else:
-                    function["strict"] = coerced_strict
-        name = function.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.name must be a non-empty string",
-            )
-        # Strip incidental whitespace before length/charset (SDK pad).
-        name = name.strip()
-        # OpenAI function names: [a-zA-Z0-9_-]{1,64}. Fail closed so buyers
-        # get invalid_tools instead of a provider 400.
-        # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
-        if len(name) > 64:
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.name must be at most 64 characters",
-            )
-        if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.name must match [a-zA-Z0-9_-]",
-            )
-        function["name"] = name
-        # OpenAI function tools require parameters as a JSON Schema object when present.
-        # Explicit JSON null is popped so proxy_completion forwards omit, not null.
-        _omit_null_tool_function_field(
-            function,
-            "parameters",
-            expected_types=(dict,),
-            error_message="each tool.function.parameters must be an object",
-        )
-        _omit_null_tool_function_field(
-            function,
-            "description",
-            expected_types=(str,),
-            error_message="each tool.function.description must be a string when provided",
-        )
-        description = function.get("description")
-        if isinstance(description, str) and len(description) > 1024:
-            raise RequestError(
-                400,
-                "invalid_tools",
-                "each tool.function.description must be at most 1024 characters",
             )
         validated.append(item)
     return validated
@@ -3435,6 +3482,9 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
                     tool_name = fn.get("name")
                     if isinstance(tool_name, str):
                         tool_names.add(tool_name.strip())
+                # Responses flat function tools put name at the top level.
+                elif isinstance(item.get("name"), str):
+                    tool_names.add(item["name"].strip())
         if name not in tool_names:
             raise RequestError(
                 400,
