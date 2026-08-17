@@ -120,22 +120,38 @@ def test_http_responses_rejects_instructions_too_long() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_reasoning_object() -> None:
-    """Buyers must not believe o-series reasoning controls were applied on passthrough."""
+def test_http_responses_accepts_reasoning_effort_known_levels() -> None:
+    """Known effort levels are default-effort no-ops (no effort plane)."""
+    server, thread, port = _server()
+    try:
+        for effort in ("low", "medium", "HIGH", "minimal", "none"):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "input": f"think carefully {effort!r}",
+                    "reasoning": {"effort": effort},
+                },
+            )
+            assert status == 200, (effort, body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_still_rejects_unknown_reasoning_effort() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "input": "think carefully",
-                "reasoning": {"effort": "high"},
+                "input": "think carefully max",
+                "reasoning": {"effort": "max"},
             },
         )
         assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_reasoning" in blob
-        assert "not supported" in blob
+        assert "invalid_reasoning" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -162,6 +178,7 @@ if __name__ == "__main__":
     test_http_responses_accepts_blank_instructions_as_omit()
     test_http_responses_rejects_instructions_non_string()
     test_http_responses_rejects_instructions_too_long()
-    test_http_responses_rejects_reasoning_object()
+    test_http_responses_accepts_reasoning_effort_known_levels()
+    test_http_responses_still_rejects_unknown_reasoning_effort()
     test_http_responses_accepts_instructions_omitted()
     print("ok")

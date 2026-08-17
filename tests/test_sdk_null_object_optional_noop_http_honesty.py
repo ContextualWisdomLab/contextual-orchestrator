@@ -150,7 +150,7 @@ def test_http_responses_accepts_null_instructions_metadata_tools() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_nonzero_reasoning_effort() -> None:
+def test_http_chat_accepts_known_reasoning_effort_levels() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -162,8 +162,7 @@ def test_http_chat_still_rejects_nonzero_reasoning_effort() -> None:
                 "reasoning_effort": "high",
             },
         )
-        assert status == 400, body
-        assert "invalid_reasoning_effort" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)

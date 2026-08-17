@@ -86,7 +86,7 @@ def test_http_responses_accepts_reasoning_null_and_empty() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_still_rejects_nonempty_reasoning() -> None:
+def test_http_responses_accepts_known_reasoning_effort() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -96,6 +96,24 @@ def test_http_responses_still_rejects_nonempty_reasoning() -> None:
                 "model": "mock-planner",
                 "input": "reasoning effort",
                 "reasoning": {"effort": "high"},
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_still_rejects_unknown_reasoning_effort() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/responses",
+            {
+                "model": "mock-planner",
+                "input": "reasoning effort max",
+                "reasoning": {"effort": "max"},
             },
         )
         assert status == 400, body

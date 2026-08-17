@@ -120,15 +120,33 @@ def test_http_completions_rejects_prediction() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_rejects_reasoning_effort() -> None:
+def test_http_completions_accepts_reasoning_effort_known_levels() -> None:
+    server, thread, port = _server()
+    try:
+        for effort in ("low", "medium", "HIGH", " minimal "):
+            status, body = _post(
+                port,
+                {
+                    "model": "mock-planner",
+                    "prompt": f"hello reasoning {effort!r}",
+                    "reasoning_effort": effort,
+                },
+            )
+            assert status == 200, (effort, body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_completions_still_rejects_unknown_reasoning_effort() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "prompt": "hello reasoning",
-                "reasoning_effort": "high",
+                "prompt": "hello reasoning max",
+                "reasoning_effort": "max",
             },
         )
         assert status == 400, body

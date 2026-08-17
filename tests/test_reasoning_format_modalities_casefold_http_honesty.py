@@ -90,7 +90,7 @@ def test_http_completions_accepts_reasoning_effort_none_padded_casefold() -> Non
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_non_none_reasoning_effort() -> None:
+def test_http_chat_accepts_known_reasoning_effort_casefold() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -100,6 +100,24 @@ def test_http_chat_still_rejects_non_none_reasoning_effort() -> None:
                 "model": "mock-planner",
                 "messages": [{"role": "user", "content": "effort high"}],
                 "reasoning_effort": "HIGH",
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_still_rejects_unknown_reasoning_effort() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "effort max"}],
+                "reasoning_effort": "max",
             },
         )
         assert status == 400, body
@@ -248,7 +266,8 @@ def test_http_chat_still_rejects_non_text_modalities() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_reasoning_effort_none_padded_casefold()
     test_http_completions_accepts_reasoning_effort_none_padded_casefold()
-    test_http_chat_still_rejects_non_none_reasoning_effort()
+    test_http_chat_accepts_known_reasoning_effort_casefold()
+    test_http_chat_still_rejects_unknown_reasoning_effort()
     test_http_chat_accepts_response_format_type_padded_casefold()
     test_http_chat_accepts_response_format_json_schema_type_casefold()
     test_http_responses_accepts_text_format_type_padded_casefold()

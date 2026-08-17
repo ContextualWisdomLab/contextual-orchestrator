@@ -81,7 +81,7 @@ def test_http_responses_accepts_reasoning_effort_none_omit() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_still_rejects_reasoning_effort_low() -> None:
+def test_http_responses_accepts_reasoning_effort_low_noop() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -93,8 +93,7 @@ def test_http_responses_still_rejects_reasoning_effort_low() -> None:
                 "reasoning": {"effort": "low"},
             },
         )
-        assert status == 400, body
-        assert "invalid_reasoning" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -174,7 +173,7 @@ def test_http_embeddings_still_rejects_dimensions_nonzero() -> None:
 
 if __name__ == "__main__":
     test_http_responses_accepts_reasoning_effort_none_omit()
-    test_http_responses_still_rejects_reasoning_effort_low()
+    test_http_responses_accepts_reasoning_effort_low_noop()
     test_http_responses_accepts_text_format_empty_type_omit()
     test_http_completions_accepts_logprobs_zero_float_string_omit()
     test_http_embeddings_accepts_dimensions_zero_omit()

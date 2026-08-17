@@ -145,7 +145,7 @@ def test_http_chat_still_rejects_stream_options_true_without_stream() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_nonempty_reasoning_effort() -> None:
+def test_http_chat_accepts_nonempty_known_reasoning_effort() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -155,6 +155,24 @@ def test_http_chat_still_rejects_nonempty_reasoning_effort() -> None:
                 "model": "mock-planner",
                 "messages": [{"role": "user", "content": "effort high"}],
                 "reasoning_effort": "high",
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_still_rejects_unknown_reasoning_effort() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "effort max"}],
+                "reasoning_effort": "max",
             },
         )
         assert status == 400, body

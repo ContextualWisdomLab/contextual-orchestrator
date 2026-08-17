@@ -77,3 +77,6 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 - replayable evaluation runs before any learned coordinator replaces the deterministic policy.
 
 See [product_planning.md](product_planning.md) for the product reboot.
+
+
+OpenAI o-series `reasoning_effort` (chat/Completions) and Responses `reasoning.effort` accept known levels `none`/`minimal`/`low`/`medium`/`high` (casefold, strip) as default-effort no-ops when this gateway has no effort plane; unknown levels fail closed with named errors. Locked by `tests/test_reasoning_effort_low_medium_high_noop_http_honesty.py` on tip ≥ #738.

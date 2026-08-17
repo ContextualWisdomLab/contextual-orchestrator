@@ -2936,13 +2936,14 @@ def _validate_completions_chat_era_fields_surface(body: dict[str, Any]) -> None:
             ]
             if stripped_items == ["text"]:
                 continue
-        # reasoning_effort "none"/"minimal" — omit-equivalent no-ops (no effort plane).
-        # Strip + casefold so " NONE " / "Minimal" match.
+        # Known reasoning_effort levels are default-effort no-ops (no effort plane).
+        # Strip + casefold so " NONE " / " Medium " match (chat parity).
         if (
             key == "reasoning_effort"
             and isinstance(value, str)
-            and value.strip().lower() in {"none", "minimal"}
+            and value.strip().lower() in _OPENAI_REASONING_EFFORT_LEVELS
         ):
+            body["reasoning_effort"] = value.strip().lower()
             continue
         raise RequestError(
             400,
@@ -3003,17 +3004,21 @@ def _validate_responses_store(body: dict[str, Any]) -> bool | None:
 
 
 
+# OpenAI o-series reasoning_effort levels. Without an effort plane this gateway
+# treats known levels as default-effort no-ops (parity with verbosity low/medium/high).
+_OPENAI_REASONING_EFFORT_LEVELS = frozenset(
+    {"none", "minimal", "low", "medium", "high"}
+)
+
+
 def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
-    """Chat Completions ``reasoning_effort`` — not applied on multi-agent route.
+    """Chat Completions ``reasoning_effort`` — known levels are default-effort no-ops.
 
-    OpenAI o-series models accept ``reasoning_effort`` (e.g. none/low/medium/high).
+    OpenAI o-series models accept ``reasoning_effort`` (none/minimal/low/medium/high).
     This gateway never threads the knob into ``ModelClient`` on the orchestration
-    path, so non-default present values fail closed rather than silently ignoring
-    a buyer-visible reasoning control.
-
-    Explicit JSON null, empty/whitespace string, ``none``, or ``minimal``
-    (whitespace-padded and case-insensitive) is treat-as-omit — those disable
-    or minimize extra reasoning and are honest no-ops here (no effort plane).
+    path. Known levels are accepted as default-effort no-ops (no effort plane) so
+    o-series SDK defaults (often ``medium``) do not 400; unknown values fail closed.
+    Explicit JSON null or empty/whitespace string is treat-as-omit.
     """
     if "reasoning_effort" not in body:
         return
@@ -3021,14 +3026,18 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     if effort is None:
         return
     if isinstance(effort, str):
-        # Strip + casefold so " NONE " / "Minimal" match omit-equivalent levels.
+        # Strip + casefold so " NONE " / " Medium " match known levels.
         stripped = effort.strip().lower()
-        if not stripped or stripped in {"none", "minimal"}:
+        if not stripped:
+            return
+        if stripped in _OPENAI_REASONING_EFFORT_LEVELS:
+            body["reasoning_effort"] = stripped
             return
     raise RequestError(
         400,
         "invalid_reasoning_effort",
-        "reasoning_effort is not supported on /v1/chat/completions",
+        "reasoning_effort must be one of none, minimal, low, medium, high "
+        "on /v1/chat/completions",
     )
 
 
@@ -4014,16 +4023,14 @@ def _validate_responses_instructions(body: dict[str, Any]) -> str | None:
 
 
 def _validate_responses_reasoning(body: dict[str, Any]) -> None:
-    """Responses API ``reasoning`` — not applied on single-agent passthrough.
+    """Responses API ``reasoning`` — known effort levels are default-effort no-ops.
 
     OpenAI Responses accepts a ``reasoning`` object (effort/summary controls).
     This gateway proxies Responses but does not interpret or enforce reasoning
-    controls, so any non-empty present value fails closed rather than silently
-    ignoring a buyer-visible o-series control surface.
-    Explicit JSON null, empty object, empty/whitespace string, or
-    ``{"effort": "none"|"minimal"}`` (casefold/pad) is treat-as-omit — those
-    disable or minimize extra reasoning and are honest no-ops here (chat
-    ``reasoning_effort`` parity).
+    controls. Known ``effort`` levels (none/minimal/low/medium/high) with blank
+    or omit ``summary`` are accepted as default-effort no-ops (chat
+    ``reasoning_effort`` parity). Explicit JSON null, empty object, or empty
+    string is treat-as-omit. Unknown effort/summary values fail closed.
     """
     if "reasoning" not in body:
         return
@@ -4035,19 +4042,19 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
     ):
         return
     if isinstance(value, dict):
-        # effort=none|minimal (and null/blank optional siblings) is omit-equivalent.
+        # Known effort levels + null/blank summary are default-effort no-ops.
         unknown = sorted(set(value) - {"effort", "summary"})
         if not unknown:
             effort = value.get("effort") if "effort" in value else None
             summary = value.get("summary") if "summary" in value else None
-            effort_omit = (
+            effort_ok = (
                 "effort" not in value
                 or effort is None
                 or (
                     isinstance(effort, str)
                     and (
                         not effort.strip()
-                        or effort.strip().lower() in {"none", "minimal"}
+                        or effort.strip().lower() in _OPENAI_REASONING_EFFORT_LEVELS
                     )
                 )
             )
@@ -4056,12 +4063,16 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
                 or summary is None
                 or (isinstance(summary, str) and not summary.strip())
             )
-            if effort_omit and summary_omit:
+            if effort_ok and summary_omit:
+                if isinstance(effort, str) and effort.strip():
+                    value["effort"] = effort.strip().lower()
+                    body["reasoning"] = value
                 return
     raise RequestError(
         400,
         "invalid_reasoning",
-        "reasoning is not supported on /v1/responses",
+        "reasoning.effort must be one of none, minimal, low, medium, high "
+        "on /v1/responses",
     )
 
 
