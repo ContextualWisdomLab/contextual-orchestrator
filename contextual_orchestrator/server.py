@@ -1680,6 +1680,11 @@ def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
         # Strip + casefold so " TEXT " / "Image_Url" match official part types.
         if isinstance(part_type, str):
             part_type = part_type.strip().lower()
+            # Responses-style aliases used by some SDKs on chat histories.
+            if part_type in {"input_text", "output_text"}:
+                part_type = "text"
+            elif part_type == "input_image":
+                part_type = "image_url"
             if part.get("type") != part_type:
                 part = {**part, "type": part_type}
         if part_type == "text":
@@ -2714,7 +2719,26 @@ def _validate_chat_audio_web_search_surface(
             )
     if "web_search_options" in body:
         web = body.get("web_search_options")
-        if web is not None and not (isinstance(web, dict) and not web):
+        # Explicit JSON null or empty object is treat-as-omit.
+        if web is None or (isinstance(web, dict) and not web):
+            pass
+        elif isinstance(web, dict):
+            # Nested null/empty/blank values are SDK optional defaults — drop them;
+            # when nothing remains, treat the whole object as omit.
+            cleaned = {
+                key: value
+                for key, value in web.items()
+                if value is not None
+                and not (isinstance(value, str) and not value.strip())
+                and not (isinstance(value, dict) and not value)
+            }
+            if cleaned:
+                raise RequestError(
+                    400,
+                    "invalid_web_search_options",
+                    f"web_search_options is not supported on {endpoint_path}",
+                )
+        else:
             raise RequestError(
                 400,
                 "invalid_web_search_options",
