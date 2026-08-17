@@ -15,7 +15,11 @@ selection of **one** worker, and this gateway's own `GET /v1/models`.
    fallback row is used **only** when that GET fails or returns no chat
    models (Chen et al., 2023, on pricing unknown upstreams honestly).
 2. **Exception isolation.** A timeout, 5xx, or malformed JSON from one
-   provider never aborts compose for the others.
+   provider never aborts compose for the others. Discovery reuses chat
+   egress (`provider_base_url_rejection`) **before** a KV Bearer is
+   attached, and the production fetch refuses redirects so
+   `Authorization` is never replayed. `allow_insecure` does not weaken
+   that check.
 3. **Cost honesty (issue #86).** Actual free-to-caller (explicit billed
    rates, including `0`) and hypothetical/original list price
    (`original_list_price`) are separate fields. A missing price row is

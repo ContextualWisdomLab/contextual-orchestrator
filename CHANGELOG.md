@@ -11,6 +11,8 @@ failover. This release does **not** duplicate that work.
 - **Default discovery.** When an org KV credential is present, compose
   chat models from `GET {base_url}/models`. Static fallback only if that
   GET fails. Exception-isolated per provider. No `--discover-models` flag.
+  Discovery reuses chat egress: reject loopback/private/reserved
+  destinations before attaching a KV Bearer, and do not follow redirects.
 - **`original_list_price`.** Hypothetical/published list, stored beside
   billed rates. Explicit billed `0` is actual free-to-caller. A missing
   price row is `unknown` (`None`) — never converted to `0` / “free”

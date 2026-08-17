@@ -10,6 +10,7 @@ from __future__ import annotations
 from contextlib import contextmanager
 from pathlib import Path
 import sys
+from urllib.parse import urlparse
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,10 +19,15 @@ from contextual_orchestrator.composed_catalog import (  # noqa: E402
     ORG_CREDENTIAL_NAMES,
     ProviderProfile,
     compose_default_catalog,
+    discover_provider_models,
     merge_agent_pools,
     models_list_payload,
     parse_models_list,
     present_org_credentials,
+)
+from contextual_orchestrator.provider_egress import (  # noqa: E402
+    RefuseRedirectHandler,
+    provider_base_url_rejection,
 )
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
@@ -52,10 +58,14 @@ def test_org_credential_names_are_the_five_actions_secrets() -> None:
     assert "COPILOT_GITHUB_TOKEN" in FORBIDDEN_CREDENTIAL_NAMES
 
 
+def _provider_hostname(url: str) -> str:
+    return (urlparse(url).hostname or "").lower()
+
+
 def test_compose_discovers_when_credential_present_without_flag() -> None:
     def fetch(url: str, headers: dict, timeout: float):
         assert "authorization" in headers
-        if "api.openai.com" in url:
+        if _provider_hostname(url) == "api.openai.com":
             return {"data": [{"id": "gpt-4o-mini"}, {"id": "text-embedding-3-small"}]}
         raise AssertionError(f"unexpected url {url}")
 
@@ -98,9 +108,10 @@ def test_malformed_models_payload_is_fallback_not_crash() -> None:
 
 def test_one_provider_failure_does_not_abort_compose() -> None:
     def mixed_fetch(url: str, headers: dict, timeout: float):
-        if "openrouter" in url:
+        host = _provider_hostname(url)
+        if host == "openrouter.ai":
             raise RuntimeError("openrouter 500")
-        if "api.openai.com" in url:
+        if host == "api.openai.com":
             return {"data": [{"id": "gpt-4o-mini"}]}
         raise TimeoutError("other")
 
@@ -161,6 +172,68 @@ def test_merge_agent_pools_does_not_duplicate_base_url_model() -> None:
     extra = [ModelAgent("openai_mini_dup", "gpt-4o-mini", base_url="https://api.openai.com/v1")]
     merged = merge_agent_pools(existing, extra)
     assert len(merged) == 1
+
+
+def test_loopback_and_metadata_ips_do_not_transmit_kv_key() -> None:
+    called: list[dict] = []
+
+    def fetch(url: str, headers: dict, timeout: float):
+        called.append(headers)
+        return {"data": [{"id": "should-not-run"}]}
+
+    with fresh_kv():
+        register_credential("OPENAI_API_KEY", "secret-must-not-leak")
+        assert discover_provider_models("https://127.0.0.1/v1", "OPENAI_API_KEY", fetch=fetch) == []
+        assert discover_provider_models("https://169.254.169.254/latest", "OPENAI_API_KEY", fetch=fetch) == []
+        assert discover_provider_models("https://10.0.0.1/v1", "OPENAI_API_KEY", fetch=fetch) == []
+        assert discover_provider_models("file:///etc/passwd", "OPENAI_API_KEY", fetch=fetch) == []
+        assert discover_provider_models("http://api.openai.com/v1", "OPENAI_API_KEY", fetch=fetch) == []
+        assert discover_provider_models("https://localhost/v1", "OPENAI_API_KEY", fetch=fetch) == []
+    assert called == []
+
+
+def test_allow_insecure_does_not_weaken_production_rejection() -> None:
+    called: list[str] = []
+
+    def fetch(url: str, headers: dict, timeout: float):
+        called.append(url)
+        return {"data": [{"id": "should-not-run"}]}
+
+    with fresh_kv():
+        register_credential("OPENAI_API_KEY", "secret-must-not-leak")
+        models = discover_provider_models(
+            "https://127.0.0.1/v1",
+            "OPENAI_API_KEY",
+            fetch=fetch,
+            allow_insecure=True,
+        )
+    assert models == []
+    assert called == []
+
+
+def test_refuse_redirect_handler_does_not_follow() -> None:
+    handler = RefuseRedirectHandler()
+    try:
+        handler.redirect_request(None, None, 302, "Found", {}, "https://127.0.0.1/steal")
+    except RuntimeError as exc:
+        assert "redirect refused" in str(exc)
+    else:
+        raise AssertionError("3xx must not be followed")
+
+
+def test_composed_catalog_does_not_open_urllib_directly() -> None:
+    source = Path(__file__).resolve().parents[1] / "contextual_orchestrator" / "composed_catalog.py"
+    text = source.read_text(encoding="utf-8")
+    assert "urlopen" not in text
+    assert "urllib.request" not in text
+
+
+def test_provider_base_url_rejection_covers_literal_non_public() -> None:
+    assert provider_base_url_rejection("https://127.0.0.1/v1", resolve_dns=False)
+    assert provider_base_url_rejection("https://169.254.169.254/", resolve_dns=False)
+    assert provider_base_url_rejection("file:///etc/passwd", resolve_dns=False)
+    assert provider_base_url_rejection("http://api.openai.com/v1", resolve_dns=False) == "base_url must use https"
+    assert provider_base_url_rejection("https://api.openai.com/v1", resolve_dns=False) is None
 
 
 if __name__ == "__main__":

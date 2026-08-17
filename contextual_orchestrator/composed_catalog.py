@@ -14,16 +14,15 @@ Runtime keys resolve only through ``get_credential``. GitHub Models hosts and
 
 from __future__ import annotations
 
-import json
 import re
 from dataclasses import dataclass, field
 from typing import Any, Callable, Iterable
 from urllib.parse import urlparse
-from urllib.request import Request, urlopen
 
 from .conventions import require_object_name
 from .credentials import get_credential
 from .orchestrator import ModelAgent
+from .provider_egress import no_redirect_models_fetch, provider_base_url_rejection
 
 ORG_CREDENTIAL_NAMES: tuple[str, ...] = (
     "NVIDIA_NIM_API_KEY",
@@ -207,10 +206,8 @@ def parse_models_list(payload: Any) -> list[str]:
 
 
 def default_models_fetch(url: str, headers: dict[str, str], timeout: float) -> Any:
-    """GET ``url`` and JSON-decode the body (stdlib; caller handles errors)."""
-    request = Request(url, headers=headers, method="GET")
-    with urlopen(request, timeout=timeout) as response:  # nosec B310 - URL is a catalog profile base.
-        return json.loads(response.read().decode("utf-8"))
+    """GET ``url`` through the shared no-redirect provider egress."""
+    return no_redirect_models_fetch(url, headers, timeout)
 
 
 def discover_provider_models(
@@ -226,18 +223,23 @@ def discover_provider_models(
     Any missing credential, transport, HTTP, or parse failure returns ``[]``
     so the caller can apply the static fallback. Discovery is the default
     path — there is no flag to opt in.
+
+    The destination is rejected with ``provider_base_url_rejection`` **before**
+    the KV credential is read or a Bearer header is built. ``allow_insecure``
+    does not weaken that check (it is kept only so callers do not grow a
+    second HTTP stack).
     """
+    del allow_insecure
     if credential_name in FORBIDDEN_CREDENTIAL_NAMES:
-        return []
-    api_key = get_credential(credential_name)
-    if not api_key:
-        return []
-    parsed = urlparse(base_url)
-    if not parsed.hostname:
         return []
     if not catalog_allows_fields(base_url, "", credential_name):
         return []
-    if not allow_insecure and parsed.scheme != "https":
+    # Injected fetchers stay offline (no DNS). Literal loopback / link-local /
+    # private IPs and non-HTTPS schemes still fail closed before the key is read.
+    if provider_base_url_rejection(base_url, resolve_dns=fetch is None):
+        return []
+    api_key = get_credential(credential_name)
+    if not api_key:
         return []
     fetcher = fetch or default_models_fetch
     try:
