@@ -518,7 +518,9 @@ def _validate_completions_user(body: dict[str, Any]) -> str | None:
 
     Explicit JSON null is treat-as-omit (SDK optional default). Empty or
     whitespace-only strings still fail closed so clients cannot attribute spend
-    to a blank identity.
+    to a blank identity. Scalar bool/int/float values coerce to strings (JS/form
+    SDKs often send numeric account ids); objects/arrays fail closed. Coerced
+    values are written back so proxy/egress sees an honest string identity.
     """
     if "user" not in body:
         return None
@@ -526,12 +528,24 @@ def _validate_completions_user(body: dict[str, Any]) -> str | None:
     # Explicit JSON null is treat-as-omit (SDK optional default).
     if user is None:
         return None
-    if not isinstance(user, str):
+    if isinstance(user, bool):
+        # JSON bool → lowercase OpenAI-style string form (parity with metadata).
+        user = "true" if user else "false"
+    elif type(user) is int:
+        user = str(user)
+    elif isinstance(user, float):
+        # Whole floats stringify compactly (1.0 → "1"); others use str().
+        if user.is_integer() and abs(user) <= 2**53:
+            user = str(int(user))
+        else:
+            user = str(user)
+    elif not isinstance(user, str):
         raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
     if not user.strip():
         raise RequestError(400, "invalid_user", "user must be a non-empty string of at most 64 characters")
     if len(user) > 64:
         raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
+    body["user"] = user
     return user
 
 def _validate_completions_n(body: dict[str, Any]) -> int | None:
@@ -4596,7 +4610,7 @@ def build_server(
                     attribution = dict(attribution or {})
                     # OpenAI chat ``user`` → account when unset.
                     # Same fail-closed rules as Completions: present key must be a
-                    # non-empty string ≤64 chars (null/empty/non-string rejected).
+                    # non-empty string ≤64 chars (null omit; scalars coerce; empty reject).
                     end_user_id = _validate_completions_user(body)
                     if end_user_id is not None and not attribution.get("account"):
                         attribution["account"] = end_user_id

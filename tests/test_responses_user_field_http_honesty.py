@@ -92,12 +92,26 @@ def test_http_responses_accepts_null_user_as_omit() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_non_string_user() -> None:
+def test_http_responses_accepts_user_int_scalar_coerce() -> None:
+    """JS/form SDKs may send numeric user ids; coerce to string."""
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {"model": "mock-planner", "input": "hello", "user": 99},
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_rejects_user_object() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {"model": "mock-planner", "input": "hello", "user": {"id": "x"}},
         )
         assert status == 400, body
         assert "user" in json.dumps(body)
@@ -124,6 +138,7 @@ if __name__ == "__main__":
     test_http_responses_accepts_valid_user()
     test_http_responses_rejects_empty_user()
     test_http_responses_accepts_null_user_as_omit()
-    test_http_responses_rejects_non_string_user()
+    test_http_responses_accepts_user_int_scalar_coerce()
+    test_http_responses_rejects_user_object()
     test_http_responses_rejects_overlong_user()
     print("ok")

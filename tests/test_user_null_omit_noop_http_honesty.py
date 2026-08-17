@@ -146,7 +146,8 @@ def test_http_chat_still_rejects_empty_user() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_non_string_user() -> None:
+def test_http_chat_accepts_user_int_scalar_coerce() -> None:
+    """JS/form SDKs may send numeric user ids; coerce to string."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -156,6 +157,24 @@ def test_http_chat_still_rejects_non_string_user() -> None:
                 "model": "mock-planner",
                 "messages": [{"role": "user", "content": "int user"}],
                 "user": 42,
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_still_rejects_user_object() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "object user"}],
+                "user": {"id": "x"},
             },
         )
         assert status == 400, body
@@ -190,6 +209,7 @@ if __name__ == "__main__":
     test_http_embeddings_accepts_user_null_as_omit()
     test_http_batch_embeddings_accepts_user_null_as_omit()
     test_http_chat_still_rejects_empty_user()
-    test_http_chat_still_rejects_non_string_user()
+    test_http_chat_accepts_user_int_scalar_coerce()
+    test_http_chat_still_rejects_user_object()
     test_http_chat_still_accepts_valid_user()
     print("ok")
