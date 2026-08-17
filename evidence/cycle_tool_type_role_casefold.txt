@@ -1,0 +1,8 @@
+cycle: tool type + message role casefold HTTP honesty
+tip_base: #715 feat/weight-strict-prefix-bool-coerce-http-honesty-20260817103805
+change:
+  - message role strip+casefold (User/ASSISTANT → user/assistant); developer/function still fail-closed after casefold
+  - tools[].type, tool_choice.type, tool_calls[].type strip+casefold to function
+  - HTTP honesty tests cover chat + responses tool type casefold
+local: 1192 passed
+product_gates: Full unit + Semgrep only (Strix ignored)

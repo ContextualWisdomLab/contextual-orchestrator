@@ -1,0 +1,3 @@
+Responses reasoning.effort=none (casefold) omit; text.format empty/null type omit;
+completions logprobs "0.0" omit; embeddings dimensions 0 omit.
+Local: 1167 passed.
