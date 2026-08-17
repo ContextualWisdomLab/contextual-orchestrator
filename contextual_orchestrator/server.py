@@ -1567,10 +1567,10 @@ def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
             )
     if "include" in body:
         include = body.get("include")
-        # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
+        # Explicit JSON null, empty/omit-only array, or empty/whitespace string.
         if (
             include is None
-            or (isinstance(include, list) and not include)
+            or (isinstance(include, list) and _is_omit_equivalent_list(include))
             or (isinstance(include, str) and not include.strip())
         ):
             pass
@@ -2581,10 +2581,12 @@ def _validate_completions_chat_era_fields_surface(body: dict[str, Any]) -> None:
         if key not in body:
             continue
         value = body.get(key)
-        # Explicit JSON null, empty list/object, or empty string is treat-as-omit.
+        # Explicit JSON null, empty list/object, nested-omit object, or empty string.
         if value is None:
             continue
-        if isinstance(value, (list, dict)) and not value:
+        if isinstance(value, list) and not value:
+            continue
+        if isinstance(value, dict) and not _non_omit_object_entries(value):
             continue
         if isinstance(value, str) and not value.strip():
             continue
@@ -2696,6 +2698,31 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
 
 
 
+
+def _non_omit_object_entries(value: dict[str, Any]) -> dict[str, Any]:
+    """Drop nested null / blank / empty-object entries (SDK optional defaults).
+
+    Parity with ``web_search_options`` nested omit: when every entry is an omit
+    equivalent, the parent object is treat-as-omit rather than a present value.
+    """
+    return {
+        key: item
+        for key, item in value.items()
+        if item is not None
+        and not (isinstance(item, str) and not item.strip())
+        and not (isinstance(item, dict) and not item)
+    }
+
+
+def _is_omit_equivalent_list(value: list[Any]) -> bool:
+    """True when list is empty or every item is null / blank string."""
+    if not value:
+        return True
+    return all(
+        item is None or (isinstance(item, str) and not item.strip()) for item in value
+    )
+
+
 def _validate_chat_audio_web_search_surface(
     body: dict[str, Any],
     *,
@@ -2706,12 +2733,18 @@ def _validate_chat_audio_web_search_surface(
     This text gateway has no speech synthesis plane and no web-search tool
     harness on chat or Completions. Named unsupported errors beat opaque
     ``unknown_fields`` so SDK clients can migrate deliberately.
-    Explicit JSON null or empty object for either field is treat-as-omit
+    Explicit JSON null, empty object, or nested-omit-only object is treat-as-omit
     (SDK optional default).
     """
     if "audio" in body:
         audio = body.get("audio")
-        if audio is not None and not (isinstance(audio, dict) and not audio):
+        # Explicit JSON null, empty object, or object of only nested omit
+        # values (voice/format null) is treat-as-omit (SDK optional default).
+        if audio is None or (
+            isinstance(audio, dict) and not _non_omit_object_entries(audio)
+        ):
+            pass
+        else:
             raise RequestError(
                 400,
                 "invalid_audio",
@@ -2719,25 +2752,17 @@ def _validate_chat_audio_web_search_surface(
             )
     if "web_search_options" in body:
         web = body.get("web_search_options")
-        # Explicit JSON null or empty object is treat-as-omit.
-        if web is None or (isinstance(web, dict) and not web):
+        # Explicit JSON null, empty object, or nested-omit-only object.
+        if web is None or (
+            isinstance(web, dict) and not _non_omit_object_entries(web)
+        ):
             pass
         elif isinstance(web, dict):
-            # Nested null/empty/blank values are SDK optional defaults — drop them;
-            # when nothing remains, treat the whole object as omit.
-            cleaned = {
-                key: value
-                for key, value in web.items()
-                if value is not None
-                and not (isinstance(value, str) and not value.strip())
-                and not (isinstance(value, dict) and not value)
-            }
-            if cleaned:
-                raise RequestError(
-                    400,
-                    "invalid_web_search_options",
-                    f"web_search_options is not supported on {endpoint_path}",
-                )
+            raise RequestError(
+                400,
+                "invalid_web_search_options",
+                f"web_search_options is not supported on {endpoint_path}",
+            )
         else:
             raise RequestError(
                 400,
@@ -2752,13 +2777,15 @@ def _validate_tool_resources(body: dict[str, Any], *, endpoint_path: str) -> Non
 
     OpenAI Assistants/Responses SDKs may send ``tool_resources`` (file_search,
     code_interpreter bindings). This gateway has no tool-resource plane, so any
-    non-omit value fails closed. Explicit JSON null or empty object is treat-as-omit.
+    non-omit value fails closed. Nested null/blank/empty-object entries are omit.
     """
     if "tool_resources" not in body:
         return
     value = body.get("tool_resources")
-    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
-    if value is None or (isinstance(value, dict) and not value):
+    # Explicit JSON null, empty object, or nested-omit-only object is treat-as-omit.
+    if value is None or (
+        isinstance(value, dict) and not _non_omit_object_entries(value)
+    ):
         return
     raise RequestError(
         400,
@@ -2822,10 +2849,10 @@ def _validate_chat_reasoning_object(body: dict[str, Any]) -> None:
     if "reasoning" not in body:
         return
     value = body.get("reasoning")
-    # Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+    # Explicit JSON null, empty/nested-omit object, or empty/whitespace string.
     if (
         value is None
-        or (isinstance(value, dict) and not value)
+        or (isinstance(value, dict) and not _non_omit_object_entries(value))
         or (isinstance(value, str) and not value.strip())
     ):
         return
@@ -2873,10 +2900,10 @@ def _validate_chat_include_field(body: dict[str, Any], *, endpoint_path: str = "
     if "include" not in body:
         return
     include = body.get("include")
-    # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
+    # Explicit JSON null, empty/omit-only array, or empty/whitespace string.
     if (
         include is None
-        or (isinstance(include, list) and not include)
+        or (isinstance(include, list) and _is_omit_equivalent_list(include))
         or (isinstance(include, str) and not include.strip())
     ):
         return
@@ -2898,7 +2925,7 @@ def _validate_completions_reasoning_object(body: dict[str, Any]) -> None:
     value = body.get("reasoning")
     if (
         value is None
-        or (isinstance(value, dict) and not value)
+        or (isinstance(value, dict) and not _non_omit_object_entries(value))
         or (isinstance(value, str) and not value.strip())
     ):
         return
@@ -2947,14 +2974,14 @@ def _validate_responses_modalities(body: dict[str, Any]) -> list[str] | None:
 def _validate_responses_prediction(body: dict[str, Any]) -> None:
     """Responses ``prediction`` (Predicted Outputs) — not supported on this gateway.
 
-    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+    Explicit JSON null, empty/nested-omit object, or empty/whitespace string is omit.
     """
     if "prediction" not in body:
         return
     value = body.get("prediction")
     if (
         value is None
-        or (isinstance(value, dict) and not value)
+        or (isinstance(value, dict) and not _non_omit_object_entries(value))
         or (isinstance(value, str) and not value.strip())
     ):
         return
@@ -3019,7 +3046,7 @@ def _validate_chat_prediction(body: dict[str, Any]) -> None:
     value = body.get("prediction")
     if (
         value is None
-        or (isinstance(value, dict) and not value)
+        or (isinstance(value, dict) and not _non_omit_object_entries(value))
         or (isinstance(value, str) and not value.strip())
     ):
         return
