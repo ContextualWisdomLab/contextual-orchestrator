@@ -3385,13 +3385,38 @@ def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
     return validated
 
 
+def _tool_choice_declared_names(tools: Any) -> set[str]:
+    """Collect stripped tool names from nested or flat ``tools`` entries."""
+    tool_names: set[str] = set()
+    if not isinstance(tools, list):
+        return tool_names
+    for item in tools:
+        if not isinstance(item, dict):
+            continue
+        fn = item.get("function")
+        if isinstance(fn, dict):
+            tool_name = fn.get("name")
+            if isinstance(tool_name, str):
+                tool_names.add(tool_name.strip())
+        # Responses flat function tools put name at the top level.
+        elif isinstance(item.get("name"), str):
+            tool_names.add(item["name"].strip())
+    return tool_names
+
+
 def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | None:
-    """OpenAI chat ``tool_choice`` — none/auto/required or named function object.
+    """OpenAI chat/Responses ``tool_choice`` — none/auto/required or named function.
 
     ``none`` / ``auto`` without tools remain honest no-ops. ``required`` demands
     a non-empty ``tools`` array (parity with ``parallel_tool_calls=true``).
-    When ``type`` is ``function``, ``function.name`` must match a tools entry
-    so clients cannot force a tool the request did not declare.
+
+    Named selection accepts both wire shapes (shape preserved for passthrough):
+
+    - Chat nested: ``{"type":"function","function":{"name":...}}``
+    - Responses flat: ``{"type":"function","name":...}``
+
+    Mixed nested+flat on one object fails closed. The resolved name must match
+    a tools entry so clients cannot force a tool the request did not declare.
     """
     if "tool_choice" not in body:
         return None
@@ -3426,14 +3451,49 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
                 )
         return choice
     if isinstance(choice, dict):
-        # OpenAI named tool_choice is {type, function}; extra siblings fail closed.
-        unknown = sorted(set(choice) - {"type", "function"})
-        if unknown:
+        has_function = "function" in choice
+        has_flat_name = "name" in choice
+        if has_function and has_flat_name:
             raise RequestError(
                 400,
                 "invalid_tool_choice",
-                "tool_choice object accepts only type and function fields",
-                {"fields": unknown},
+                "tool_choice must use either nested function or flat name, not both",
+            )
+        if has_function:
+            # Chat nested: {type, function}; extra siblings fail closed.
+            unknown = sorted(set(choice) - {"type", "function"})
+            if unknown:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice object accepts only type and function fields",
+                    {"fields": unknown},
+                )
+        elif has_flat_name:
+            # Responses flat: {type, name}; extra siblings fail closed.
+            unknown = sorted(set(choice) - {"type", "name"})
+            if unknown:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "flat tool_choice object accepts only type and name fields",
+                    {"fields": unknown},
+                )
+        else:
+            # type-only or other keys without a name source.
+            unknown = sorted(set(choice) - {"type", "function", "name"})
+            if unknown:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice object accepts only type and function fields, "
+                    "or type and name for the flat shape",
+                    {"fields": unknown},
+                )
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function must be an object with a name",
             )
         choice_type = choice.get("type")
         # Strip + casefold so "Function" / " FUNCTION " match OpenAI type.
@@ -3446,50 +3506,50 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
                 "invalid_tool_choice",
                 "tool_choice object type must be function",
             )
-        function = choice.get("function")
-        if not isinstance(function, dict):
-            raise RequestError(
-                400,
-                "invalid_tool_choice",
-                "tool_choice.function must be an object with a name",
-            )
-        unknown_fn = sorted(set(function) - {"name"})
-        if unknown_fn:
-            raise RequestError(
-                400,
-                "invalid_tool_choice",
-                "tool_choice.function accepts only name",
-                {"fields": unknown_fn},
-            )
-        name = function.get("name")
-        if not isinstance(name, str) or not name.strip():
-            raise RequestError(
-                400,
-                "invalid_tool_choice",
-                "tool_choice.function.name must be a non-empty string",
-            )
-        # Strip so padded names match tools[].function.name after tools strip.
-        name = name.strip()
-        function["name"] = name
-        tools = body.get("tools")
-        tool_names: set[str] = set()
-        if isinstance(tools, list):
-            for item in tools:
-                if not isinstance(item, dict):
-                    continue
-                fn = item.get("function")
-                if isinstance(fn, dict):
-                    tool_name = fn.get("name")
-                    if isinstance(tool_name, str):
-                        tool_names.add(tool_name.strip())
-                # Responses flat function tools put name at the top level.
-                elif isinstance(item.get("name"), str):
-                    tool_names.add(item["name"].strip())
+        if has_function:
+            function = choice.get("function")
+            if not isinstance(function, dict):
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.function must be an object with a name",
+                )
+            unknown_fn = sorted(set(function) - {"name"})
+            if unknown_fn:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.function accepts only name",
+                    {"fields": unknown_fn},
+                )
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.function.name must be a non-empty string",
+                )
+            # Strip so padded names match tools[].function.name after tools strip.
+            name = name.strip()
+            function["name"] = name
+            name_error = "tool_choice.function.name must match a tools entry"
+        else:
+            name = choice.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice.name must be a non-empty string",
+                )
+            name = name.strip()
+            choice["name"] = name
+            name_error = "tool_choice.name must match a tools entry"
+        tool_names = _tool_choice_declared_names(body.get("tools"))
         if name not in tool_names:
             raise RequestError(
                 400,
                 "invalid_tool_choice",
-                "tool_choice.function.name must match a tools entry",
+                name_error,
             )
         return choice
     raise RequestError(
