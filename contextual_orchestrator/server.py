@@ -2262,12 +2262,12 @@ def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
 def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
     """OpenAI ``metadata`` — object of string pairs, at most 16 entries.
 
-    Keys must be non-empty (after strip) and ≤64 characters; values ≤512
-    characters. Explicit JSON null values are treat-as-omit for that key and
-    written back onto ``body`` so ``proxy_completion`` does not forward
-    non-string values. Non-objects and other non-string entries fail closed so
-    clients cannot store untyped junk that cost or observability consumers
-    would silently drop.
+    Keys must be non-empty (no leading/trailing pad) and ≤64 characters; values
+    ≤512 characters. Explicit JSON null values are treat-as-omit for that key
+    and written back onto ``body`` so ``proxy_completion`` does not forward
+    non-string values. Scalar bool/int/float values coerce to strings (JS SDK
+    form encodings often send numbers); objects/arrays fail closed so clients
+    cannot store nested junk that cost or observability consumers would drop.
     """
     if "metadata" not in body:
         return None
@@ -2305,8 +2305,23 @@ def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
         # Explicit JSON null value is treat-as-omit for that key (SDK optional).
         if value is None:
             continue
-        if not isinstance(value, str):
-            raise RequestError(400, "invalid_metadata", "metadata values must be strings")
+        if isinstance(value, bool):
+            # JSON bool → lowercase OpenAI-style string form.
+            value = "true" if value else "false"
+        elif type(value) is int:
+            value = str(value)
+        elif isinstance(value, float):
+            # Whole floats stringify compactly (1.0 → "1"); others use str().
+            if value.is_integer() and abs(value) <= 2**53:
+                value = str(int(value))
+            else:
+                value = str(value)
+        elif not isinstance(value, str):
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                "metadata values must be strings (or scalar bool/number)",
+            )
         if len(value) > 512:
             raise RequestError(
                 400,

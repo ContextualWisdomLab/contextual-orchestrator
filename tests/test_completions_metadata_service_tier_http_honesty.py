@@ -84,7 +84,7 @@ def test_http_completions_rejects_metadata_non_object() -> None:
         thread.join(timeout=5)
 
 
-def test_http_completions_rejects_metadata_non_string_value() -> None:
+def test_http_completions_accepts_metadata_scalar_values() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -95,8 +95,7 @@ def test_http_completions_rejects_metadata_non_string_value() -> None:
                 "metadata": {"count": 3},
             },
         )
-        assert status == 400, body
-        assert "invalid_metadata" in json.dumps(body)
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)

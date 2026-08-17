@@ -86,8 +86,8 @@ def test_http_chat_rejects_metadata_non_object() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_metadata_non_string_value() -> None:
-    """Buyers must not store untyped junk that observability would silently drop."""
+def test_http_chat_accepts_metadata_scalar_values_as_strings() -> None:
+    """JS SDKs often send bool/int/float; coerce to OpenAI string values."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -95,14 +95,32 @@ def test_http_chat_rejects_metadata_non_string_value() -> None:
             "/v1/chat/completions",
             {
                 "model": "mock-planner",
-                "messages": [{"role": "user", "content": "meta int value"}],
-                "metadata": {"count": 3},
+                "messages": [{"role": "user", "content": "meta scalars"}],
+                "metadata": {"count": 3, "ok": True, "ratio": 1.5, "whole": 2.0},
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_chat_rejects_metadata_nested_object_value() -> None:
+    """Nested objects/arrays are not OpenAI metadata values — fail closed."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            "/v1/chat/completions",
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "meta nested"}],
+                "metadata": {"nested": {"a": 1}},
             },
         )
         assert status == 400, body
         blob = json.dumps(body)
         assert "invalid_metadata" in blob
-        assert "strings" in blob
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -207,7 +225,8 @@ def test_http_chat_accepts_metadata_omitted() -> None:
 if __name__ == "__main__":
     test_http_chat_accepts_string_metadata()
     test_http_chat_rejects_metadata_non_object()
-    test_http_chat_rejects_metadata_non_string_value()
+    test_http_chat_accepts_metadata_scalar_values_as_strings()
+    test_http_chat_rejects_metadata_nested_object_value()
     test_http_chat_rejects_metadata_too_many_entries()
     test_http_chat_rejects_metadata_key_too_long()
     test_http_chat_rejects_metadata_value_too_long()
