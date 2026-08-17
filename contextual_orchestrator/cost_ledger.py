@@ -554,13 +554,8 @@ _USAGE_COLUMNS = (
     "currency_code",
 )
 
-_USAGE_COLUMN_LIST = ", ".join(_USAGE_COLUMNS)
-_QMARK_VALUES = ", ".join("?" for _ in _USAGE_COLUMNS)
-_PYFORMAT_VALUES = ", ".join("%s" for _ in _USAGE_COLUMNS)
-
-# Complete statements only — Semgrep's SQLAlchemy raw-query rule flags f-string
-# execute() even when the interpolated pieces are DB-API placeholders / fixed
-# column names, not caller input.
+# Parameterized statements only. Bind values are passed to cursor.execute as
+# a separate tuple; nothing from a caller is interpolated into the SQL text.
 _SQL_SELECT_DIMENSION = {
     "qmark": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?",
     "pyformat": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s",
@@ -576,21 +571,77 @@ _SQL_INSERT_DIMENSION = {
     ),
 }
 _SQL_INSERT_USAGE = {
-    "qmark": f"INSERT INTO llm_usage_records ({_USAGE_COLUMN_LIST}) VALUES ({_QMARK_VALUES})",
-    "pyformat": f"INSERT INTO llm_usage_records ({_USAGE_COLUMN_LIST}) VALUES ({_PYFORMAT_VALUES})",
+    "qmark": (
+        "INSERT INTO llm_usage_records ("
+        "usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code"
+        ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+    ),
+    "pyformat": (
+        "INSERT INTO llm_usage_records ("
+        "usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code"
+        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+    ),
 }
-_SQL_SELECT_USAGE = f"SELECT {_USAGE_COLUMN_LIST} FROM llm_usage_records"
+_SQL_SELECT_USAGE = (
+    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+    "route_mode, provider_name, model_name, account_name, service_name, "
+    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+    "completion_tokens, total_tokens, cost_amount, currency_code "
+    "FROM llm_usage_records"
+)
 _SQL_SELECT_USAGE_SINCE = {
-    "qmark": f"{_SQL_SELECT_USAGE} WHERE created_at >= ?",
-    "pyformat": f"{_SQL_SELECT_USAGE} WHERE created_at >= %s",
+    "qmark": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at >= ?"
+    ),
+    "pyformat": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at >= %s"
+    ),
 }
 _SQL_SELECT_USAGE_UNTIL = {
-    "qmark": f"{_SQL_SELECT_USAGE} WHERE created_at < ?",
-    "pyformat": f"{_SQL_SELECT_USAGE} WHERE created_at < %s",
+    "qmark": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at < ?"
+    ),
+    "pyformat": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at < %s"
+    ),
 }
 _SQL_SELECT_USAGE_WINDOW = {
-    "qmark": f"{_SQL_SELECT_USAGE} WHERE created_at >= ? AND created_at < ?",
-    "pyformat": f"{_SQL_SELECT_USAGE} WHERE created_at >= %s AND created_at < %s",
+    "qmark": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at >= ? AND created_at < ?"
+    ),
+    "pyformat": (
+        "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+        "route_mode, provider_name, model_name, account_name, service_name, "
+        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+        "completion_tokens, total_tokens, cost_amount, currency_code "
+        "FROM llm_usage_records WHERE created_at >= %s AND created_at < %s"
+    ),
 }
 
 
