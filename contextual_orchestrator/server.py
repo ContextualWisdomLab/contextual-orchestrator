@@ -880,6 +880,7 @@ def _validate_completions_frequency_penalty(body: dict[str, Any]) -> float | Non
     number = float(value)
     if number < -2 or number > 2:
         raise RequestError(400, "invalid_frequency_penalty", "frequency_penalty must be a number in [-2, 2]")
+    body["frequency_penalty"] = number
     return number
 
 def _validate_completions_presence_penalty(body: dict[str, Any]) -> float | None:
@@ -897,6 +898,7 @@ def _validate_completions_presence_penalty(body: dict[str, Any]) -> float | None
     number = float(value)
     if number < -2 or number > 2:
         raise RequestError(400, "invalid_presence_penalty", "presence_penalty must be a number in [-2, 2]")
+    body["presence_penalty"] = number
     return number
 
 def _validate_completions_temperature(body: dict[str, Any]) -> float | None:
@@ -914,6 +916,7 @@ def _validate_completions_temperature(body: dict[str, Any]) -> float | None:
     value = float(temperature)
     if value < 0 or value > 2:
         raise RequestError(400, "invalid_temperature", "temperature must be a number in [0, 2]")
+    body["temperature"] = value
     return value
 
 def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
@@ -931,6 +934,7 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     value = float(top_p)
     if value <= 0 or value > 1:
         raise RequestError(400, "invalid_top_p", "top_p must be a number in (0, 1]")
+    body["top_p"] = value
     return value
 
 def _validate_completions_model(body: dict[str, Any]) -> str:
@@ -971,6 +975,7 @@ def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
             "invalid_max_tokens",
             "max_tokens must be at most 1048576",
         )
+    body["max_tokens"] = max_tokens
     return max_tokens
 
 def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
@@ -1001,6 +1006,7 @@ def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
             "invalid_max_completion_tokens",
             "max_completion_tokens must be at most 1048576",
         )
+    body["max_completion_tokens"] = max_completion_tokens
     return max_completion_tokens
 
 
@@ -2542,6 +2548,134 @@ def _validate_chat_store(body: dict[str, Any]) -> bool | None:
         )
     return store
 
+
+
+
+def _validate_chat_sampling_and_control_fields(
+    body: dict[str, Any],
+    *,
+    stream: bool = False,
+) -> dict[str, Any]:
+    """Validate chat sampling knobs and fail-closed unsupported controls.
+
+    Must run before tools/response_format ``proxy_completion`` passthrough so
+    buyers never receive 200 when invalid or unsupported OpenAI controls would
+    only have been checked on the multi-agent route path.
+    """
+    sampling: dict[str, Any] = {
+        "temperature": None,
+        "top_p": None,
+        "max_tokens": None,
+        "presence_penalty": None,
+        "frequency_penalty": None,
+    }
+    if "temperature" in body:
+        sampling["temperature"] = _validate_completions_temperature(body)
+    if "top_p" in body:
+        sampling["top_p"] = _validate_completions_top_p(body)
+    # OpenAI: max_completion_tokens takes precedence over max_tokens.
+    if "max_completion_tokens" in body:
+        sampling["max_tokens"] = _validate_chat_max_completion_tokens(body)
+    elif "max_tokens" in body:
+        sampling["max_tokens"] = _validate_completions_max_tokens(body)
+    if "presence_penalty" in body:
+        sampling["presence_penalty"] = _validate_completions_presence_penalty(body)
+    if "frequency_penalty" in body:
+        sampling["frequency_penalty"] = _validate_completions_frequency_penalty(body)
+    if "seed" in body:
+        # Type-check then fail closed: chat route does not apply seed.
+        # Explicit JSON null or empty/whitespace string is treat-as-omit.
+        seed_raw = body.get("seed")
+        if seed_raw is not None and not (
+            isinstance(seed_raw, str) and not seed_raw.strip()
+        ):
+            try:
+                _validate_completions_seed(body)
+            except RequestError as exc:
+                if exc.code == "invalid_seed" and "not supported" in exc.message:
+                    raise RequestError(
+                        400,
+                        "invalid_seed",
+                        "seed is not supported on /v1/chat/completions",
+                    ) from exc
+                raise
+            raise RequestError(
+                400,
+                "invalid_seed",
+                "seed is not supported on /v1/chat/completions",
+            )
+    if "logit_bias" in body:
+        # Empty {} is an honest no-op (shared Completions helper).
+        # Non-empty maps fail closed with a chat-path message.
+        try:
+            _validate_completions_logit_bias(body)
+        except RequestError as exc:
+            if (
+                exc.code == "invalid_logit_bias"
+                and "not supported" in exc.message
+            ):
+                raise RequestError(
+                    400,
+                    "invalid_logit_bias",
+                    "logit_bias is not supported on /v1/chat/completions",
+                ) from exc
+            raise
+    if "stop" in body:
+        # Explicit JSON null, empty/whitespace string, empty [], or
+        # all-whitespace array items is treat-as-omit (SDK optional default).
+        stop_val = body.get("stop")
+        if isinstance(stop_val, str) and not stop_val.strip():
+            stop_val = ""
+        if isinstance(stop_val, list):
+            stop_val = [
+                s for s in stop_val if not (isinstance(s, str) and not s.strip())
+            ]
+            if not stop_val:
+                stop_val = []
+        if stop_val is not None and stop_val != [] and stop_val != "":
+            try:
+                _validate_completions_stop(body)
+            except RequestError as exc:
+                # Completions helper fails closed with a Completions path message;
+                # re-surface for chat with the chat endpoint string.
+                if exc.code == "invalid_stop" and "not supported" in exc.message:
+                    raise RequestError(
+                        400,
+                        "invalid_stop",
+                        "stop sequences are not supported on /v1/chat/completions",
+                    ) from exc
+                raise
+            raise RequestError(
+                400,
+                "invalid_stop",
+                "stop sequences are not supported on /v1/chat/completions",
+            )
+    if "n" in body:
+        try:
+            _validate_completions_n(body)
+        except RequestError as exc:
+            if exc.code == "invalid_n" and "not supported" in exc.message:
+                raise RequestError(
+                    400,
+                    "invalid_n",
+                    "n greater than 1 is not supported on /v1/chat/completions",
+                ) from exc
+            raise
+    if "store" in body:
+        _validate_chat_store(body)
+    if "modalities" in body:
+        _validate_chat_modalities(body)
+    if "prediction" in body:
+        _validate_chat_prediction(body)
+    if "reasoning_effort" in body:
+        _validate_chat_reasoning_effort(body)
+    if "service_tier" in body:
+        _validate_service_tier(body, endpoint_path="/v1/chat/completions")
+    if "user" in body:
+        _validate_completions_user(body)
+    if "stream_options" in body:
+        _validate_chat_stream_options(body, stream)
+    return sampling
 
 
 def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
@@ -4612,6 +4746,29 @@ def build_server(
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
                     _validate_completions_model(body)
+                    # Coerce stream early so stream_options fail-closed matches route path
+                    # and tools/response_format passthrough cannot skip type checks.
+                    stream = body.get("stream", False)
+                    if stream is None or (isinstance(stream, str) and not stream.strip()):
+                        stream = False
+                    else:
+                        coerced_stream = _coerce_optional_bool(
+                            stream,
+                            error_code="invalid_request",
+                            message="stream must be a boolean",
+                        )
+                        stream = False if coerced_stream is None else coerced_stream
+                    body["stream"] = stream
+                    # Sampling + unsupported controls before passthrough (honesty parity
+                    # with the multi-agent route path).
+                    sampling = _validate_chat_sampling_and_control_fields(
+                        body, stream=bool(stream)
+                    )
+                    temperature = sampling["temperature"]
+                    top_p = sampling["top_p"]
+                    max_tokens = sampling["max_tokens"]
+                    presence_penalty = sampling["presence_penalty"]
+                    frequency_penalty = sampling["frequency_penalty"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
                     if any(
@@ -4651,19 +4808,7 @@ def build_server(
                             include_trace = coerced_trace
                     else:
                         include_trace = bool(security.expose_trace_by_default)
-                    stream = body.get("stream", False)
-                    # Explicit JSON null/empty or int 0/1 (JS SDK) coerce; default non-stream.
-                    if stream is None or (isinstance(stream, str) and not stream.strip()):
-                        stream = False
-                    else:
-                        coerced = _coerce_optional_bool(
-                            stream,
-                            error_code="invalid_request",
-                            message="stream must be a boolean",
-                        )
-                        stream = False if coerced is None else coerced
-                    if "stream_options" in body:
-                        _validate_chat_stream_options(body, stream)
+                    # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
                     # Require model — silent default to contextual-orchestrator hid
@@ -4681,111 +4826,7 @@ def build_server(
                         attribution["model_name"] = model_name
                     if not attribution.get("service"):
                         attribution["service"] = "chat_completions_api"
-                    temperature = None
-                    top_p = None
-                    max_tokens = None
-                    presence_penalty = None
-                    frequency_penalty = None
-                    if "temperature" in body:
-                        temperature = _validate_completions_temperature(body)
-                    if "top_p" in body:
-                        top_p = _validate_completions_top_p(body)
-                    # OpenAI: max_completion_tokens takes precedence over max_tokens.
-                    if "max_completion_tokens" in body:
-                        max_tokens = _validate_chat_max_completion_tokens(body)
-                    elif "max_tokens" in body:
-                        max_tokens = _validate_completions_max_tokens(body)
-                    if "presence_penalty" in body:
-                        presence_penalty = _validate_completions_presence_penalty(body)
-                    if "frequency_penalty" in body:
-                        frequency_penalty = _validate_completions_frequency_penalty(body)
-                    if "seed" in body:
-                        # Type-check then fail closed: chat route does not apply seed.
-                        # Explicit JSON null or empty/whitespace string is treat-as-omit.
-                        seed_raw = body.get("seed")
-                        if seed_raw is not None and not (
-                            isinstance(seed_raw, str) and not seed_raw.strip()
-                        ):
-                            try:
-                                _validate_completions_seed(body)
-                            except RequestError as exc:
-                                if exc.code == "invalid_seed" and "not supported" in exc.message:
-                                    raise RequestError(
-                                        400,
-                                        "invalid_seed",
-                                        "seed is not supported on /v1/chat/completions",
-                                    ) from exc
-                                raise
-                            raise RequestError(
-                                400,
-                                "invalid_seed",
-                                "seed is not supported on /v1/chat/completions",
-                            )
-                    if "logit_bias" in body:
-                        # Empty {} is an honest no-op (shared Completions helper).
-                        # Non-empty maps fail closed with a chat-path message.
-                        try:
-                            _validate_completions_logit_bias(body)
-                        except RequestError as exc:
-                            if (
-                                exc.code == "invalid_logit_bias"
-                                and "not supported" in exc.message
-                            ):
-                                raise RequestError(
-                                    400,
-                                    "invalid_logit_bias",
-                                    "logit_bias is not supported on /v1/chat/completions",
-                                ) from exc
-                            raise
-                    if "stop" in body:
-                        # Explicit JSON null, empty/whitespace string, empty [], or
-                        # all-whitespace array items is treat-as-omit (SDK optional default).
-                        stop_val = body.get("stop")
-                        if isinstance(stop_val, str) and not stop_val.strip():
-                            stop_val = ""
-                        if isinstance(stop_val, list):
-                            stop_val = [s for s in stop_val if not (isinstance(s, str) and not s.strip())]
-                            if not stop_val:
-                                stop_val = []
-                        if stop_val is not None and stop_val != [] and stop_val != "":
-                            try:
-                                _validate_completions_stop(body)
-                            except RequestError as exc:
-                                # Completions helper fails closed with a Completions path message;
-                                # re-surface for chat with the chat endpoint string.
-                                if exc.code == "invalid_stop" and "not supported" in exc.message:
-                                    raise RequestError(
-                                        400,
-                                        "invalid_stop",
-                                        "stop sequences are not supported on /v1/chat/completions",
-                                    ) from exc
-                                raise
-                            raise RequestError(
-                                400,
-                                "invalid_stop",
-                                "stop sequences are not supported on /v1/chat/completions",
-                            )
-                    if "n" in body:
-                        try:
-                            _validate_completions_n(body)
-                        except RequestError as exc:
-                            if exc.code == "invalid_n" and "not supported" in exc.message:
-                                raise RequestError(
-                                    400,
-                                    "invalid_n",
-                                    "n greater than 1 is not supported on /v1/chat/completions",
-                                ) from exc
-                            raise
-                    if "store" in body:
-                        _validate_chat_store(body)
-                    if "modalities" in body:
-                        _validate_chat_modalities(body)
-                    if "prediction" in body:
-                        _validate_chat_prediction(body)
-                    if "reasoning_effort" in body:
-                        _validate_chat_reasoning_effort(body)
-                    if "service_tier" in body:
-                        _validate_service_tier(body, endpoint_path="/v1/chat/completions")
+                    # sampling/controls already validated before passthrough branch.
                     if "metadata" in body:
                         _validate_openai_metadata(body)
                     started_at = time.perf_counter()
