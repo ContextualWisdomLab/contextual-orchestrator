@@ -1,0 +1,2 @@
+max_tool_calls: 0 / "0" / 0.0 omit; digit strings coerce then nonzero named-reject; bool fail-closed.
+Local: 1152 passed.

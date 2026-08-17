@@ -22,6 +22,7 @@ from .orchestrator import (
     TaskOrchestrator,
     chat_completion_chunks,
     chat_completion_response,
+    text_completion_response,
     redact_value,
     sse_stream_body,
 )
@@ -32,21 +33,81 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "seed", "presence_penalty", "frequency_penalty", "logit_bias", "logprobs",
     "top_logprobs", "user", "metadata", "parallel_tool_calls", "reasoning_effort",
     "response_format", "tools", "tool_choice", "functions", "function_call",
-    "modalities", "prediction", "store", "service_tier",
+    "modalities", "prediction", "store", "service_tier", "stream_options",
+    # Chat-era surfaces accepted only for explicit unsupported errors.
+    "audio", "web_search_options",
+    # Modern OpenAI SDK control fields — accepted only for named unsupported errors.
+    "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
+    # Responses-style reasoning object on chat — named unsupported (not effort string).
+    "reasoning",
+    # Async background mode — not supported on this gateway.
+    "background",
+    "include",
+    # Assistants-style tool_resources — named unsupported (not unknown_fields).
+    "tool_resources",
 }
 # Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
     "include_orchestration_trace", "stream", "attribution", "routing",
+    # Tool-loop budget — accepted only for named unsupported error (no multi-step tool loop).
+    "max_tool_calls",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    # OpenAI Responses native output budget (not max_tokens on this surface).
+    "max_output_tokens",
+    # Tool-loop budget — accepted only for explicit unsupported error (no multi-step tool loop).
+    "max_tool_calls",
+    # Gateway cost/routing control plane (stripped before provider passthrough).
+    "attribution", "routing",
+    # previous_response_id / conversation / truncation / include fail closed
+    # with named unsupported errors. Official text.format is validated
+    # (omit-real optionals), not rejected wholesale.
+    "previous_response_id", "conversation", "truncation", "include", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
-ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
+ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution", "user", "encoding_format", "dimensions", "routing"}
+ALLOWED_EMBEDDINGS_KEYS = {
+    "model", "input", "encoding_format", "dimensions", "user", "metadata", "attribution", "routing",
+}
+ALLOWED_COMPLETIONS_KEYS = {
+    "model", "prompt", "stream", "stream_options", "echo", "suffix", "best_of",
+    "logprobs", "top_logprobs", "n", "max_tokens", "max_completion_tokens", "temperature", "top_p", "stop", "user", "seed",
+    "presence_penalty", "frequency_penalty", "logit_bias", "service_tier", "metadata",
+    "store",
+    # Chat-era tool surfaces — accepted only for explicit unsupported errors.
+    "tools", "tool_choice", "functions", "function_call", "parallel_tool_calls",
+    # Tool-loop budget (chat/Responses-native) — named unsupported, not unknown_fields.
+    "max_tool_calls",
+    "response_format",
+    # Chat-era structured/output controls — accepted only for explicit migration errors.
+    "modalities", "prediction", "reasoning_effort",
+    # Chat-era multimodal/search — accepted only for named unsupported errors.
+    "audio", "web_search_options",
+    # Modern OpenAI SDK control fields — named unsupported errors.
+    "prompt_cache_key", "safety_identifier", "verbosity", "prompt_cache_retention",
+    "reasoning", "background", "include",
+    "tool_resources",
+} | {"attribution", "routing"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
+# Chat message object keys this gateway interprets. Anything else fails closed
+# with unknown_message_fields (named error, not silent strip/smuggle).
+ALLOWED_MESSAGE_KEYS = {
+    "role",
+    "content",
+    "name",
+    "tool_call_id",
+    "tool_calls",
+    "refusal",
+    "annotations",
+    "audio",
+    "function_call",
+    "weight",
+    "prefix",
+}
 ALLOWED_MODES = {"auto", "route", "conduct"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
@@ -171,30 +232,1991 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
     return value
 
 
+
+
+def _coerce_optional_bool(
+    value: Any,
+    *,
+    error_code: str,
+    message: str,
+) -> bool | None:
+    """Treat null/empty as omit; accept bool, int 0/1, and "true"/"false" strings.
+
+    ``True``/``False`` are not accepted via the int branch (``bool`` is a
+    subclass of ``int`` in Python), so only bare ``0``/``1`` coerce. String
+    forms are case-insensitive and strip incidental whitespace (form/query SDKs).
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        return value
+    if type(value) is int and value in (0, 1):
+        return bool(value)
+    if isinstance(value, str):
+        lowered = value.strip().lower()
+        if lowered in {"true", "1"}:
+            return True
+        if lowered in {"false", "0"}:
+            return False
+    raise RequestError(400, error_code, message)
+
+
+def _coerce_optional_int(
+    value: Any,
+    *,
+    error_code: str,
+    message: str,
+) -> int | None:
+    """Treat null/empty as omit; accept int, digit strings, and whole-number floats.
+
+    JS JSON and some SDKs serialize integers as strings (``"1"``), whole floats
+    (``1.0``), or whole-float *strings* (``"1.0"`` / ``"0.0"`` from form encodings).
+    All coerce to ``int``; non-integral floats/strings and bools fail closed.
+    """
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise RequestError(400, error_code, message)
+    if isinstance(value, str):
+        stripped = value.strip()
+        if stripped.lstrip("-").isdigit() and stripped not in {"-", ""}:
+            return int(stripped)
+        # Whole-number float strings ("1.0", "0.0", " 2.00 ") from JS form SDKs.
+        try:
+            as_float = float(stripped)
+        except ValueError as exc:
+            raise RequestError(400, error_code, message) from exc
+        if as_float.is_integer() and abs(as_float) <= 2**53:
+            return int(as_float)
+        raise RequestError(400, error_code, message)
+    if isinstance(value, int):
+        return value
+    if isinstance(value, float):
+        if value.is_integer() and abs(value) <= 2**53:
+            return int(value)
+        raise RequestError(400, error_code, message)
+    raise RequestError(400, error_code, message)
+
+
+def _coerce_optional_float(
+    value: Any,
+    *,
+    error_code: str,
+    message: str,
+) -> float | None:
+    """Treat null/empty as omit; accept int/float and numeric strings."""
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if isinstance(value, bool):
+        raise RequestError(400, error_code, message)
+    if isinstance(value, (int, float)):
+        return float(value)
+    if isinstance(value, str):
+        try:
+            return float(value.strip())
+        except ValueError as exc:
+            raise RequestError(400, error_code, message) from exc
+    raise RequestError(400, error_code, message)
+
+
+def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
+    """Legacy Completions ``prompt`` → single user message list.
+
+    Accepts a non-empty string or an array of strings (at most 128 items). OpenAI
+    also allows arrays of token IDs (integers); this gateway rejects token-id
+    prompts fail-closed with ``invalid_prompt`` so SDKs get a clear migration
+    path to string prompts.
+    """
+    if isinstance(prompt, str):
+        if not prompt.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        if len(prompt) > 32_000:
+            raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+        return [{"role": "user", "content": prompt}]
+    if isinstance(prompt, list):
+        if not prompt:
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        if len(prompt) > 128:
+            raise RequestError(
+                400,
+                "invalid_prompt",
+                "prompt array must contain at most 128 items",
+            )
+        # Token-id form: list of ints, or list of list of ints (batch of token sequences).
+        if all(isinstance(item, int) and not isinstance(item, bool) for item in prompt):
+            raise RequestError(
+                400,
+                "invalid_prompt",
+                "token-id prompts are not supported; pass a string or array of strings",
+            )
+        if all(isinstance(item, list) for item in prompt):
+            raise RequestError(
+                400,
+                "invalid_prompt",
+                "token-id prompts are not supported; pass a string or array of strings",
+            )
+        parts: list[str] = []
+        for item in prompt:
+            if not isinstance(item, str):
+                raise RequestError(400, "invalid_prompt", "prompt array items must be strings")
+            if not item.strip():
+                raise RequestError(
+                    400,
+                    "invalid_prompt",
+                    "prompt array items must be non-empty strings",
+                )
+            parts.append(item)
+        joined = "\n".join(parts)
+        if not joined.strip():
+            raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+        if len(joined) > 32_000:
+            raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
+        return [{"role": "user", "content": joined}]
+    raise RequestError(400, "invalid_prompt", "prompt must be a non-empty string or array")
+
+
+def _validate_completions_stream(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``stream`` — strict boolean honesty contract.
+
+    OpenAI Completions accepts streaming. This gateway:
+    - accepts omit and ``stream=false`` as the non-streaming text_completion path
+    - rejects ``stream=true`` with a clear redirect to chat completions
+    - rejects non-boolean values fail-closed (no silent coercion)
+    """
+    if "stream" not in body:
+        return None
+    stream = body.get("stream")
+    stream = _coerce_optional_bool(
+        stream, error_code="invalid_stream", message="stream must be a boolean"
+    )
+    if stream is None:
+        return None
+    if stream is True:
+        raise RequestError(
+            400,
+            "invalid_stream",
+            "stream is not supported on /v1/completions; use /v1/chat/completions",
+        )
+    return stream
+
+
+def _validate_completions_echo(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``echo`` — boolean / JS 0/1; ``true`` is not supported.
+
+    OpenAI can prepend the prompt to the completion when ``echo`` is true. This
+    gateway does not implement that behaviour, so ``echo=true`` fails closed with
+    a clear ``invalid_echo`` error. ``false``/``0`` and omit remain valid.
+    """
+    if "echo" not in body:
+        return None
+    echo = _coerce_optional_bool(
+        body.get("echo"),
+        error_code="invalid_echo",
+        message="echo must be a boolean",
+    )
+    if echo is None:
+        return None
+    if echo is True:
+        raise RequestError(
+            400,
+            "invalid_echo",
+            "echo=true is not supported on /v1/completions",
+        )
+    return echo
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+def _validate_completions_logit_bias(body: dict[str, Any]) -> dict[str, float] | None:
+    """Legacy Completions ``logit_bias`` — empty object is a no-op; non-empty fails closed.
+
+    OpenAI uses logit_bias to bias token sampling. This gateway does not apply
+    token biases on the Completions route. An empty object is an honest no-op
+    (SDK clients often send ``{}``). Any non-empty map is type-checked then
+    rejected so clients never believe sampling bias was applied.
+    """
+    if "logit_bias" not in body:
+        return None
+    bias = body.get("logit_bias")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if bias is None:
+        return None
+    if not isinstance(bias, dict):
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must be an object of token biases")
+    # Empty object: no tokens to bias — treat as omit (honest no-op).
+    if len(bias) == 0:
+        return {}
+    if len(bias) > 300:
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must contain at most 300 entries")
+    for key, value in bias.items():
+        token = str(key)
+        if not token.isdigit():
+            raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be digit token ids")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
+        number = float(value)
+        if number < -100 or number > 100:
+            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
+    raise RequestError(
+        400,
+        "invalid_logit_bias",
+        "logit_bias is not supported on /v1/completions",
+    )
+
+
+
+def _validate_service_tier(body: dict[str, Any], *, endpoint_path: str) -> str | None:
+    """OpenAI ``service_tier`` — accept omit/auto/default as no-ops; reject others.
+
+    OpenAI uses service_tier for capacity priority (auto/default/flex/priority).
+    This gateway has no tiered capacity plane, so only auto/default (or omit/null)
+    are honest no-ops. Other values fail closed so clients cannot silently
+    believe flex/priority processing was applied.
+    """
+    if "service_tier" not in body:
+        return None
+    service_tier = body.get("service_tier")
+    # Explicit JSON null or empty string is treat-as-omit (SDK optional default).
+    if service_tier is None or (isinstance(service_tier, str) and not service_tier.strip()):
+        return None
+    if not isinstance(service_tier, str):
+        raise RequestError(400, "invalid_service_tier", "service_tier must be a string")
+    # Strip incidental whitespace and casefold so " AUTO " matches auto.
+    service_tier = service_tier.strip().lower()
+    if service_tier not in ("auto", "default"):
+        raise RequestError(
+            400,
+            "invalid_service_tier",
+            f"service_tier values other than auto or default are not supported on {endpoint_path}",
+        )
+    return service_tier
+
+
+def _validate_completions_user(body: dict[str, Any]) -> str | None:
+    """OpenAI ``user`` end-user id — optional string, max 64 characters.
+
+    Explicit JSON null is treat-as-omit (SDK optional default). Empty or
+    whitespace-only strings still fail closed so clients cannot attribute spend
+    to a blank identity.
+    """
+    if "user" not in body:
+        return None
+    user = body.get("user")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if user is None:
+        return None
+    if not isinstance(user, str):
+        raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
+    if not user.strip():
+        raise RequestError(400, "invalid_user", "user must be a non-empty string of at most 64 characters")
+    if len(user) > 64:
+        raise RequestError(400, "invalid_user", "user must be a string of at most 64 characters")
+    return user
+
+def _validate_completions_n(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``n`` — positive integer; only ``n=1`` is supported.
+
+    OpenAI can return multiple completions when ``n > 1``. This gateway always
+    returns a single choice, so ``n > 1`` fails closed. ``n=1`` and omit remain
+    valid. Cap 128 is retained for clear range errors before the support check.
+    Digit strings and whole-number floats (JS JSON) coerce.
+    """
+    if "n" not in body:
+        return None
+    n = _coerce_optional_int(
+        body.get("n"),
+        error_code="invalid_n",
+        message="n must be a positive integer",
+    )
+    if n is None:
+        return None
+    body["n"] = n
+    if n < 1:
+        raise RequestError(400, "invalid_n", "n must be a positive integer")
+    if n > 128:
+        raise RequestError(400, "invalid_n", "n must be at most 128")
+    if n > 1:
+        raise RequestError(
+            400,
+            "invalid_n",
+            "n greater than 1 is not supported on /v1/completions",
+        )
+    return n
+
+
+def _validate_responses_n(body: dict[str, Any]) -> int | None:
+    """Responses ``n`` — only omit or 1; multi-choice is not framed on passthrough.
+
+    OpenAI may request multiple samples via ``n``. This gateway's Responses
+    passthrough returns a single completion shape, so ``n`` greater than 1
+    fails closed. ``n=1`` and omit remain valid.
+    Digit strings and whole-number floats (JS JSON) coerce.
+    """
+    if "n" not in body:
+        return None
+    n = _coerce_optional_int(
+        body.get("n"),
+        error_code="invalid_n",
+        message="n must be an integer",
+    )
+    if n is None:
+        return None
+    body["n"] = n
+    if n < 1:
+        raise RequestError(400, "invalid_n", "n must be a positive integer")
+    if n > 1:
+        raise RequestError(
+            400,
+            "invalid_n",
+            "n greater than 1 is not supported on /v1/responses",
+        )
+    return n
+
+
+
+def _validate_responses_logit_bias(body: dict[str, Any]) -> dict[str, float] | None:
+    """Responses ``logit_bias`` — digit-token map values in [-100, 100]; pass through.
+
+    Invalid shapes fail closed before provider egress. Valid maps (including empty)
+    are forwarded on Responses passthrough.
+    """
+    if "logit_bias" not in body:
+        return None
+    bias = body.get("logit_bias")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if bias is None:
+        return None
+    if not isinstance(bias, dict):
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must be an object of token biases")
+    if len(bias) > 300:
+        raise RequestError(400, "invalid_logit_bias", "logit_bias must contain at most 300 entries")
+    cleaned: dict[str, float] = {}
+    for key, value in bias.items():
+        token = str(key)
+        if not token.isdigit():
+            raise RequestError(400, "invalid_logit_bias", "logit_bias keys must be digit token ids")
+        if isinstance(value, bool) or not isinstance(value, (int, float)):
+            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
+        number = float(value)
+        if number < -100 or number > 100:
+            raise RequestError(400, "invalid_logit_bias", "logit_bias values must be numbers in [-100, 100]")
+        cleaned[token] = number
+    return cleaned
+
+
+def _validate_responses_logprobs(body: dict[str, Any]) -> None:
+    """Responses ``logprobs`` / ``top_logprobs`` — OpenAI shape; invalid fail closed.
+
+    ``logprobs`` must be boolean when present. ``top_logprobs`` requires
+    ``logprobs=true`` and must be an integer in [0, 20].
+    Explicit JSON null for either field is treat-as-omit (SDK optional default).
+    """
+    if "logprobs" in body:
+        lp = body.get("logprobs")
+        if lp is not None:
+            coerced = _coerce_optional_bool(
+                lp,
+                error_code="invalid_logprobs",
+                message="logprobs must be a boolean",
+            )
+            if coerced is None:
+                pass
+            else:
+                body["logprobs"] = coerced
+    if "top_logprobs" in body:
+        tlp = body.get("top_logprobs")
+        if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
+            return
+        if body.get("logprobs") is not True:
+            raise RequestError(
+                400,
+                "invalid_top_logprobs",
+                "top_logprobs requires logprobs=true on /v1/responses",
+            )
+        # Digit strings / whole floats coerce (JS JSON integer-as-string).
+        coerced_tlp = _coerce_optional_int(
+            tlp,
+            error_code="invalid_top_logprobs",
+            message="top_logprobs must be an integer in [0, 20]",
+        )
+        if coerced_tlp is None:
+            return
+        if coerced_tlp < 0 or coerced_tlp > 20:
+            raise RequestError(400, "invalid_top_logprobs", "top_logprobs must be an integer in [0, 20]")
+        body["top_logprobs"] = coerced_tlp
+
+
+
+def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None:
+    """Responses ``parallel_tool_calls`` — strict boolean when present.
+
+    OpenAI uses this flag to allow concurrent tool invocations. Invalid types
+    fail closed before provider passthrough so clients never believe a coerced
+    value was applied. ``true`` requires a non-empty ``tools`` array (chat parity).
+    """
+    if "parallel_tool_calls" not in body:
+        return None
+    value = body.get("parallel_tool_calls")
+    value = _coerce_optional_bool(
+        value,
+        error_code="invalid_parallel_tool_calls",
+        message="parallel_tool_calls must be a boolean",
+    )
+    if value is None:
+        return None
+    if value is True:
+        tools = body.get("tools") if "tools" in body else None
+        if not isinstance(tools, list) or not tools:
+            raise RequestError(
+                400,
+                "invalid_parallel_tool_calls",
+                "parallel_tool_calls=true requires tools on /v1/responses",
+            )
+    return value
+
+
+def _validate_responses_seed(body: dict[str, Any]) -> int | None:
+    """Responses ``seed`` — signed int64; valid values pass through to the provider.
+
+    Unlike Completions (where seed is not applied), Responses passthrough forwards
+    seed to the selected agent. Invalid types/ranges fail closed before egress.
+    Digit strings and whole-number floats (JS JSON) coerce.
+    """
+    if "seed" not in body:
+        return None
+    seed = _coerce_optional_int(
+        body.get("seed"),
+        error_code="invalid_seed",
+        message="seed must be an integer",
+    )
+    if seed is None:
+        return None
+    body["seed"] = seed
+    if seed < -(2**63) or seed > (2**63 - 1):
+        raise RequestError(400, "invalid_seed", "seed must fit in a signed 64-bit integer")
+    return seed
+
+
+def _validate_responses_stop(body: dict[str, Any]) -> str | list[str] | None:
+    """Responses ``stop`` — string or ≤4 non-empty strings (≤256 chars); pass through.
+
+    Shape matches OpenAI. Valid stop values are forwarded on Responses passthrough;
+    invalid shapes fail closed so clients never believe a broken stop list was applied.
+    """
+    if "stop" not in body:
+        return None
+    stop = body.get("stop")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if stop is None:
+        return None
+    if isinstance(stop, str):
+        # Empty/whitespace string is omit-equivalent (no stop sequences).
+        if not stop.strip():
+            return None
+        if len(stop) > 256:
+            raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+        return stop
+    if isinstance(stop, list):
+        # Drop whitespace-only items; empty result is omit-equivalent.
+        stop = [item for item in stop if not (isinstance(item, str) and not item.strip())]
+        if not stop:
+            return None
+        if len(stop) > 4:
+            raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+        for item in stop:
+            if not isinstance(item, str) or not item:
+                raise RequestError(400, "invalid_stop", "stop sequences must be non-empty strings")
+            if len(item) > 256:
+                raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+        return stop
+    raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+
+
+def _validate_completions_stop(body: dict[str, Any]) -> str | list[str] | None:
+    """Legacy Completions ``stop`` — type-checked then rejected (not applied).
+
+    OpenAI uses stop sequences to cut generation early. This gateway validates
+    shape (string or ≤4 non-empty strings, each ≤256 chars) but does not apply
+    stop sequences on the Completions path, so any provided non-empty ``stop`` fails closed. Empty string/array/null are omit no-ops.
+    """
+    if "stop" not in body:
+        return None
+    stop = body.get("stop")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if stop is None:
+        return None
+    if isinstance(stop, str):
+        # Empty/whitespace string is omit-equivalent (no stop sequences).
+        if not stop.strip():
+            return None
+        if len(stop) > 256:
+            raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+    elif isinstance(stop, list):
+        # Drop whitespace-only items; empty result is omit-equivalent.
+        stop = [item for item in stop if not (isinstance(item, str) and not item.strip())]
+        if not stop:
+            return None
+        if len(stop) > 4:
+            raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+        for item in stop:
+            if not isinstance(item, str) or not item:
+                raise RequestError(400, "invalid_stop", "stop sequences must be non-empty strings")
+            if len(item) > 256:
+                raise RequestError(400, "invalid_stop", "each stop sequence must be at most 256 characters")
+    else:
+        raise RequestError(400, "invalid_stop", "stop must be a string or array of up to 4 non-empty strings")
+    raise RequestError(
+        400,
+        "invalid_stop",
+        "stop sequences are not supported on /v1/completions",
+    )
+
+
+
+def _validate_completions_seed(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``seed`` — type-checked then rejected (not applied).
+
+    OpenAI uses seed for best-effort deterministic sampling. This gateway validates
+    signed int64 integers but does not apply seed on the Completions route path,
+    so any provided ``seed`` fails closed. Omit remains valid.
+    Digit strings and whole-number floats (JS JSON) coerce before the support reject.
+    """
+    if "seed" not in body:
+        return None
+    seed = _coerce_optional_int(
+        body.get("seed"),
+        error_code="invalid_seed",
+        message="seed must be an integer",
+    )
+    if seed is None:
+        return None
+    body["seed"] = seed
+    if seed < -(2**63) or seed > (2**63 - 1):
+        raise RequestError(400, "invalid_seed", "seed must fit in a signed 64-bit integer")
+    raise RequestError(
+        400,
+        "invalid_seed",
+        "seed is not supported on /v1/completions",
+    )
+
+
+
+def _validate_completions_frequency_penalty(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``frequency_penalty`` — number in [-2, 2]."""
+    if "frequency_penalty" not in body:
+        return None
+    value = body.get("frequency_penalty")
+    value = _coerce_optional_float(
+        value,
+        error_code="invalid_frequency_penalty",
+        message="frequency_penalty must be a number in [-2, 2]",
+    )
+    if value is None:
+        return None
+    number = float(value)
+    if number < -2 or number > 2:
+        raise RequestError(400, "invalid_frequency_penalty", "frequency_penalty must be a number in [-2, 2]")
+    return number
+
+def _validate_completions_presence_penalty(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``presence_penalty`` — number in [-2, 2]."""
+    if "presence_penalty" not in body:
+        return None
+    value = body.get("presence_penalty")
+    value = _coerce_optional_float(
+        value,
+        error_code="invalid_presence_penalty",
+        message="presence_penalty must be a number in [-2, 2]",
+    )
+    if value is None:
+        return None
+    number = float(value)
+    if number < -2 or number > 2:
+        raise RequestError(400, "invalid_presence_penalty", "presence_penalty must be a number in [-2, 2]")
+    return number
+
+def _validate_completions_temperature(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``temperature`` — number in [0, 2]."""
+    if "temperature" not in body:
+        return None
+    temperature = body.get("temperature")
+    temperature = _coerce_optional_float(
+        temperature,
+        error_code="invalid_temperature",
+        message="temperature must be a number in [0, 2]",
+    )
+    if temperature is None:
+        return None
+    value = float(temperature)
+    if value < 0 or value > 2:
+        raise RequestError(400, "invalid_temperature", "temperature must be a number in [0, 2]")
+    return value
+
+def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
+    """Legacy Completions ``top_p`` — number in (0, 1] (OpenAI nucleus sampling)."""
+    if "top_p" not in body:
+        return None
+    top_p = body.get("top_p")
+    top_p = _coerce_optional_float(
+        top_p,
+        error_code="invalid_top_p",
+        message="top_p must be a number in (0, 1]",
+    )
+    if top_p is None:
+        return None
+    value = float(top_p)
+    if value <= 0 or value > 1:
+        raise RequestError(400, "invalid_top_p", "top_p must be a number in (0, 1]")
+    return value
+
+def _validate_completions_model(body: dict[str, Any]) -> str:
+    """Legacy Completions ``model`` — required non-empty string (OpenAI parity)."""
+    if "model" not in body:
+        raise RequestError(400, "invalid_model", "model is required")
+    model = body.get("model")
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    return model
+
+def _validate_completions_max_tokens(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``max_tokens`` — positive integer capped at 1_048_576."""
+    if "max_tokens" not in body:
+        return None
+    max_tokens = body.get("max_tokens")
+    max_tokens = _coerce_optional_int(
+        max_tokens,
+        error_code="invalid_max_tokens",
+        message="max_tokens must be a positive integer",
+    )
+    if max_tokens is None:
+        return None
+    if max_tokens < 1:
+        raise RequestError(400, "invalid_max_tokens", "max_tokens must be a positive integer")
+    if max_tokens > 1_048_576:
+        raise RequestError(
+            400,
+            "invalid_max_tokens",
+            "max_tokens must be at most 1048576",
+        )
+    return max_tokens
+
+def _validate_chat_max_completion_tokens(body: dict[str, Any]) -> int | None:
+    """Chat Completions ``max_completion_tokens`` — positive integer capped at 1_048_576.
+
+    OpenAI prefers this over legacy ``max_tokens`` for chat. When both are set,
+    ``max_completion_tokens`` wins so clients get a single honest budget.
+    """
+    if "max_completion_tokens" not in body:
+        return None
+    max_completion_tokens = body.get("max_completion_tokens")
+    max_completion_tokens = _coerce_optional_int(
+        max_completion_tokens,
+        error_code="invalid_max_completion_tokens",
+        message="max_completion_tokens must be a positive integer",
+    )
+    if max_completion_tokens is None:
+        return None
+    if max_completion_tokens < 1:
+        raise RequestError(
+            400,
+            "invalid_max_completion_tokens",
+            "max_completion_tokens must be a positive integer",
+        )
+    if max_completion_tokens > 1_048_576:
+        raise RequestError(
+            400,
+            "invalid_max_completion_tokens",
+            "max_completion_tokens must be at most 1048576",
+        )
+    return max_completion_tokens
+
+
+def _validate_responses_max_output_tokens(body: dict[str, Any]) -> int | None:
+    """Responses ``max_output_tokens`` — OpenAI-native output budget (positive int).
+
+    Official Responses clients send ``max_output_tokens`` rather than chat-era
+    ``max_tokens``. Accept and type-check so the field is not opaque
+    ``unknown_fields``; value is left on the body for provider passthrough.
+    Cap matches ``max_tokens`` (1_048_576). Digit strings and whole-number
+    floats (JS JSON) coerce.
+    """
+    if "max_output_tokens" not in body:
+        return None
+    value = _coerce_optional_int(
+        body.get("max_output_tokens"),
+        error_code="invalid_max_output_tokens",
+        message="max_output_tokens must be a positive integer",
+    )
+    if value is None:
+        return None
+    body["max_output_tokens"] = value
+    if value < 1:
+        raise RequestError(
+            400,
+            "invalid_max_output_tokens",
+            "max_output_tokens must be a positive integer",
+        )
+    if value > 1_048_576:
+        raise RequestError(
+            400,
+            "invalid_max_output_tokens",
+            "max_output_tokens must be at most 1048576",
+        )
+    return value
+
+
+
+def _validate_max_tool_calls(
+    body: dict[str, Any],
+    *,
+    endpoint_path: str,
+) -> None:
+    """Reject ``max_tool_calls`` — no multi-step tool loop on this gateway.
+
+    OpenAI may cap tool-call rounds via ``max_tool_calls`` (Responses-native;
+    some chat SDKs also send it). This gateway proxies a single completion and
+    does not run a tool loop, so any provided value fails closed with a named
+    error rather than opaque ``unknown_fields``. Explicit JSON null, empty
+    / whitespace strings, and zero (int/float/digit or whole-float string
+    ``"0"`` / ``"0.0"``) are treat-as-omit (SDK optional defaults / no tool
+    rounds requested).
+    """
+    if "max_tool_calls" not in body:
+        return
+    value = body.get("max_tool_calls")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    # Zero is omit-equivalent (no tool-call rounds). Digit/"0"/0.0/"0.0" coerce first.
+    if type(value) is int and value == 0:
+        return
+    if isinstance(value, float) and value == 0.0:
+        return
+    if isinstance(value, str) and value.strip() == "0":
+        return
+    coerced = _coerce_optional_int(
+        value,
+        error_code="invalid_max_tool_calls",
+        message="max_tool_calls must be an integer",
+    )
+    if coerced is None or coerced == 0:
+        return
+    raise RequestError(
+        400,
+        "invalid_max_tool_calls",
+        f"max_tool_calls is not supported on {endpoint_path}",
+    )
+
+
+def _validate_responses_max_tool_calls(body: dict[str, Any]) -> None:
+    """Responses ``max_tool_calls`` — named reject; null/empty omit."""
+    _validate_max_tool_calls(body, endpoint_path="/v1/responses")
+
+
+def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
+    """Legacy Completions ``logprobs`` — token logprobs are not supported.
+
+    This gateway always returns ``logprobs: null`` on text completions, so
+    boolean ``true`` and nonzero integer logprobs fail closed. ``false``, omit,
+    integer ``0``, and string ``false``/``0`` (JS form defaults) are
+    omit-equivalent no-ops.
+    """
+    if "logprobs" not in body:
+        return None
+    logprobs = body.get("logprobs")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if logprobs is None:
+        return None
+    # Integer 0 is historical OpenAI "no logprobs" — omit-equivalent.
+    if type(logprobs) is int and logprobs == 0:
+        return None
+    # Whole-float 0.0 (JS) is omit-equivalent.
+    if isinstance(logprobs, float) and logprobs == 0.0:
+        return None
+    coerced = _coerce_optional_bool(
+        logprobs,
+        error_code="invalid_logprobs",
+        message="logprobs must be false; token logprobs are not supported on /v1/completions",
+    )
+    if coerced is None or coerced is False:
+        return None if coerced is None else False
+    raise RequestError(
+        400,
+        "invalid_logprobs",
+        "logprobs must be false; token logprobs are not supported on /v1/completions",
+    )
+
+
+def _validate_completions_top_logprobs(body: dict[str, Any]) -> None:
+    """Reject non-zero ``top_logprobs`` on legacy Completions.
+
+    OpenAI Completions historically used integer ``logprobs`` (0–5); modern
+    chat uses boolean ``logprobs`` + ``top_logprobs``. This gateway never returns
+    token logprobs on /v1/completions, so non-zero ``top_logprobs`` fails closed
+    with ``invalid_top_logprobs`` rather than opaque ``unknown_fields``.
+    Explicit JSON null, empty/whitespace string, or zero (int/float/digit or
+    whole-float string ``"0"`` / ``"0.0"``) is treat-as-omit — digit coerce
+    then nonzero reject (parity with ``max_tool_calls``).
+    """
+    if "top_logprobs" not in body:
+        return
+    value = body.get("top_logprobs")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    # Digit / whole-float coerce first; zero is omit-equivalent (no top alts).
+    coerced = _coerce_optional_int(
+        value,
+        error_code="invalid_top_logprobs",
+        message="top_logprobs must be an integer",
+    )
+    if coerced is None or coerced == 0:
+        return
+    raise RequestError(
+        400,
+        "invalid_top_logprobs",
+        "top_logprobs is not supported on /v1/completions",
+    )
+
+
+def _validate_completions_suffix(body: dict[str, Any]) -> str | None:
+    """Legacy Completions ``suffix`` — optional string; non-empty is not supported.
+
+    OpenAI appends ``suffix`` after the model completion. This gateway does not
+    implement that insertion, so a non-empty suffix fails closed. Empty string
+    and omit remain valid. Non-string values and oversized strings still fail.
+    """
+    if "suffix" not in body:
+        return None
+    suffix = body.get("suffix")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if suffix is None:
+        return None
+    if not isinstance(suffix, str):
+        raise RequestError(400, "invalid_suffix", "suffix must be a string")
+    # Empty/whitespace-only is treat-as-omit (SDK optional blank).
+    if not suffix.strip():
+        return None
+    if len(suffix) > 8_000:
+        raise RequestError(400, "invalid_suffix", "suffix must be at most 8000 characters")
+    raise RequestError(
+        400,
+        "invalid_suffix",
+        "non-empty suffix is not supported on /v1/completions",
+    )
+
+
+def _validate_completions_best_of(body: dict[str, Any]) -> int | None:
+    """Legacy Completions ``best_of`` — positive integer, ``best_of >= n``, max 1.
+
+    OpenAI generates ``best_of`` candidates server-side and returns the top ``n``.
+    This gateway runs a single completion path, so ``best_of > 1`` fails closed
+    rather than silently returning one unranked candidate. ``best_of=1`` (and
+    omit) remain valid. Boolean ``True``/``False`` are rejected.
+    Digit strings and whole-number floats (JS JSON) coerce.
+    """
+    if "best_of" not in body:
+        return None
+    best_of = _coerce_optional_int(
+        body.get("best_of"),
+        error_code="invalid_best_of",
+        message="best_of must be a positive integer",
+    )
+    if best_of is None:
+        return None
+    body["best_of"] = best_of
+    if best_of < 1:
+        raise RequestError(400, "invalid_best_of", "best_of must be a positive integer")
+    if best_of > 128:
+        raise RequestError(400, "invalid_best_of", "best_of must be at most 128")
+    if best_of > 1:
+        raise RequestError(
+            400,
+            "invalid_best_of",
+            "best_of greater than 1 is not supported on /v1/completions",
+        )
+    n = body.get("n", 1)
+    if n is None or (isinstance(n, str) and not str(n).strip()):
+        n = 1
+    else:
+        n = _coerce_optional_int(
+            n,
+            error_code="invalid_n",
+            message="n must be a positive integer",
+        )
+        if n is None:
+            n = 1
+    body["n"] = n
+    if n < 1:
+        raise RequestError(400, "invalid_n", "n must be a positive integer")
+    if best_of < n:
+        raise RequestError(
+            400,
+            "invalid_best_of",
+            "best_of must be greater than or equal to n",
+        )
+    return best_of
+
+
+def _validate_completions_stream_options(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Legacy Completions ``stream_options`` — object with boolean flags; requires stream=true.
+
+    Mirrors OpenAI chat Completions: ``stream_options`` is only valid when streaming.
+    This gateway rejects Completions streaming, so a well-formed ``stream_options``
+    still fails closed once ``stream`` is checked (or here if ``stream`` is not true).
+    Explicit JSON null on *allowed* flag keys is treat-as-omit (SDK optional defaults).
+    Unknown keys fail closed even when their value is null so clients cannot smuggle
+    unsupported flags past the allow-list via null serialization.
+    """
+    if "stream_options" not in body:
+        return None
+    opts = body.get("stream_options")
+    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    if opts is None:
+        return None
+    if not isinstance(opts, dict):
+        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    if not opts:
+        return None
+    allowed = {"include_usage", "include_obfuscation"}
+    # Reject unknown keys before dropping nulls (null is not a free pass for unknowns).
+    unknown = sorted(set(opts) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported fields",
+            {"fields": unknown},
+        )
+    # Drop null flag values (SDK optional defaults) before further checks.
+    opts = {key: value for key, value in opts.items() if value is not None}
+    if not opts:
+        return None
+    # Coerce string/0-1 bool forms before all-false omit checks.
+    coerced_opts: dict[str, Any] = {}
+    for key, value in opts.items():
+        coerced = _coerce_optional_bool(
+            value,
+            error_code="invalid_stream_options",
+            message=f"stream_options.{key} must be a boolean",
+        )
+        if coerced is not None:
+            coerced_opts[key] = coerced
+    opts = coerced_opts
+    if not opts:
+        return None
+    # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
+    if set(opts) <= allowed and all(v is False for v in opts.values()):
+        return None
+    if body.get("stream") is not True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options requires stream=true",
+        )
+    return opts
+
+
+
+
+def _validate_chat_stream_options(body: dict[str, Any], stream: bool) -> dict[str, Any] | None:
+    """Chat Completions ``stream_options`` — requires stream=true; include_usage unsupported.
+
+    Shape matches OpenAI (include_usage / include_obfuscation booleans). This
+    gateway's SSE route path does not emit a final usage chunk and does not
+    apply stream obfuscation, so include_usage/include_obfuscation=true fail closed.
+    Explicit JSON null on *allowed* flag keys is treat-as-omit (SDK optional defaults).
+    Unknown keys fail closed even when their value is null so clients cannot smuggle
+    unsupported flags past the allow-list via null serialization.
+    """
+    if "stream_options" not in body:
+        return None
+    opts = body.get("stream_options")
+    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    if opts is None:
+        return None
+    if not isinstance(opts, dict):
+        raise RequestError(400, "invalid_stream_options", "stream_options must be an object")
+    if not opts:
+        return None
+    allowed = {"include_usage", "include_obfuscation"}
+    # Reject unknown keys before dropping nulls (null is not a free pass for unknowns).
+    unknown = sorted(set(opts) - allowed)
+    if unknown:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options contains unsupported fields",
+            {"fields": unknown},
+        )
+    # Drop null flag values (SDK optional defaults) before further checks.
+    opts = {key: value for key, value in opts.items() if value is not None}
+    if not opts:
+        return None
+    # Coerce string/0-1 bool forms before all-false omit and true reject.
+    coerced_opts: dict[str, Any] = {}
+    for key, value in opts.items():
+        coerced = _coerce_optional_bool(
+            value,
+            error_code="invalid_stream_options",
+            message=f"stream_options.{key} must be a boolean",
+        )
+        if coerced is not None:
+            coerced_opts[key] = coerced
+    opts = coerced_opts
+    if not opts:
+        return None
+    # All-false boolean flags are omit-equivalent no-ops (SDK optional defaults).
+    if set(opts) <= allowed and all(v is False for v in opts.values()):
+        return None
+    if stream is not True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options requires stream=true on /v1/chat/completions",
+        )
+    if opts.get("include_usage") is True:
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_usage=true is not supported on /v1/chat/completions",
+        )
+    if opts.get("include_obfuscation") is True:
+        # SSE obfuscation is not applied by this gateway; fail closed.
+        raise RequestError(
+            400,
+            "invalid_stream_options",
+            "stream_options.include_obfuscation=true is not supported on /v1/chat/completions",
+        )
+    return opts
+
+
 def _reject_unknown_keys(body: dict[str, Any], allowed: set[str]) -> None:
     unknown = sorted(set(body) - allowed)
     if unknown:
         raise RequestError(400, "unknown_fields", "request contains unsupported fields", {"fields": unknown})
 
 
+
+def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
+    """Official Responses ``text`` — ``format`` shapes, omit-real optionals.
+
+    Official SDKs send ``text: {format: {type: text}}`` as the default
+    structured-output plane (OpenAI, 2024). Accept ``text`` / ``json_object``
+    / ``json_schema`` formats, pop JSON-null or blank ``description`` and
+    JSON-null ``strict`` so passthrough matches omit, and fail closed on
+    unknown keys. ``verbosity`` is not applied: JSON null / blank is popped;
+    any other value is ``invalid_text``. ``text`` and ``response_format``
+    cannot both be set — accepting the official default must not open a
+    dual-plane passthrough. Flat ``json_schema`` ``name`` matches
+    ``[a-zA-Z0-9_-]{1,64}`` (ASCII only).
+    """
+    if "text" not in body:
+        return None
+    text = body.get("text")
+    # Explicit JSON null, empty object, or empty/whitespace string is omit.
+    if (
+        text is None
+        or (isinstance(text, dict) and not text)
+        or (isinstance(text, str) and not text.strip())
+    ):
+        return None
+    if not isinstance(text, dict):
+        raise RequestError(400, "invalid_text", "text must be an object")
+    unknown_text = sorted(set(text) - {"format", "verbosity"})
+    if unknown_text:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text accepts only format and verbosity",
+            {"fields": unknown_text},
+        )
+    if "verbosity" in text:
+        verbosity = text.get("verbosity")
+        if verbosity is None or (isinstance(verbosity, str) and not verbosity.strip()):
+            text.pop("verbosity")
+        else:
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.verbosity is not supported on /v1/responses",
+            )
+    response_format = body.get("response_format")
+    response_format_present = not (
+        response_format is None
+        or (isinstance(response_format, dict) and not response_format)
+        or (isinstance(response_format, str) and not response_format.strip())
+    )
+    if "format" not in text:
+        if not text:
+            return None
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format is required when text is provided",
+        )
+    fmt = text.get("format")
+    if (
+        fmt is None
+        or (isinstance(fmt, dict) and not fmt)
+        or (isinstance(fmt, str) and not fmt.strip())
+    ):
+        text.pop("format", None)
+        if not text:
+            return None
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format is required when text is provided",
+        )
+    if not isinstance(fmt, dict):
+        raise RequestError(400, "invalid_text", "text.format must be an object")
+    if response_format_present:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text and response_format cannot both be set on /v1/responses; "
+            "use official text.format only",
+        )
+    fmt_type = fmt.get("type")
+    # Strip + casefold so " JSON_OBJECT " / "Text" match official types; write back.
+    if isinstance(fmt_type, str):
+        fmt_type = fmt_type.strip().lower()
+        fmt["type"] = fmt_type
+    if fmt_type not in ("text", "json_object", "json_schema"):
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.type must be one of text, json_object, json_schema",
+        )
+    if fmt_type in ("text", "json_object"):
+        unknown_fmt = sorted(set(fmt) - {"type"})
+        if unknown_fmt:
+            raise RequestError(
+                400,
+                "invalid_text",
+                f"text.format with type {fmt_type} accepts only the type field",
+                {"fields": unknown_fmt},
+            )
+        return text
+    unknown_fmt = sorted(set(fmt) - {"type", "name", "schema", "description", "strict"})
+    if unknown_fmt:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format json_schema accepts only type, name, schema, description, and strict",
+            {"fields": unknown_fmt},
+        )
+    name = fmt.get("name")
+    if not isinstance(name, str) or not name.strip():
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.name must be a non-empty string",
+        )
+    # OpenAI Structured Outputs: name is [a-zA-Z0-9_-]{1,64}. Fail closed
+    # so buyers get invalid_text instead of a provider 400.
+    if len(name) > 64:
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.name must be at most 64 characters",
+        )
+    if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.name must match [a-zA-Z0-9_-]",
+        )
+    schema_body = fmt.get("schema")
+    if not isinstance(schema_body, dict):
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.schema must be an object",
+        )
+    if "description" in fmt:
+        description_value = fmt.get("description")
+        if description_value is None or (
+            isinstance(description_value, str) and not description_value.strip()
+        ):
+            fmt.pop("description")
+        elif not isinstance(description_value, str):
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.format.description must be a string when provided",
+            )
+    if "strict" in fmt:
+        strict_value = fmt.get("strict")
+        if strict_value is None:
+            fmt.pop("strict")
+        elif not isinstance(strict_value, bool):
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.format.strict must be a boolean when provided",
+            )
+    return text
+
+
+def _validate_responses_conversation_controls(body: dict[str, Any]) -> None:
+    """Fail closed on OpenAI conversation-control fields this gateway does not apply.
+
+    ``previous_response_id``, ``conversation``, ``truncation``, and
+    ``include`` are real OpenAI Responses controls this gateway does not
+    apply. Accepting them as unknown fields yields opaque 400s; named
+    unsupported errors let buyers migrate cleanly. Explicit JSON null or
+    empty string for string fields is treat-as-omit (SDK optional default).
+    Empty include structures remain omit no-ops. Official ``text.format``
+    is validated by ``_validate_responses_text`` (OpenAI, 2024).
+    """
+    def _present_nonempty(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str) and not value.strip():
+            return False
+        return True
+
+    if "previous_response_id" in body and _present_nonempty(body.get("previous_response_id")):
+        raise RequestError(
+            400,
+            "invalid_previous_response_id",
+            "previous_response_id is not supported on /v1/responses",
+        )
+    if "conversation" in body and _present_nonempty(body.get("conversation")):
+        raise RequestError(
+            400,
+            "invalid_conversation",
+            "conversation is not supported on /v1/responses",
+        )
+    if "truncation" in body and _present_nonempty(body.get("truncation")):
+        trunc = body.get("truncation")
+        # OpenAI truncation auto|disabled are honest no-ops here: this gateway
+        # has no multi-turn conversation window to truncate. Other values fail
+        # closed so clients never believe an unsupported policy applied.
+        if isinstance(trunc, str) and trunc.strip().lower() in {"auto", "disabled"}:
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_truncation",
+                "truncation must be auto or disabled on /v1/responses "
+                "(or omit; multi-turn truncation is not applied)",
+            )
+    if "include" in body:
+        include = body.get("include")
+        # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
+        if (
+            include is None
+            or (isinstance(include, list) and not include)
+            or (isinstance(include, str) and not include.strip())
+        ):
+            pass
+        else:
+            raise RequestError(
+                400,
+                "invalid_include",
+                "include is not supported on /v1/responses",
+            )
+    _validate_responses_text(body)
+
+
+def _validate_responses_stream_options(body: dict[str, Any]) -> None:
+    """Responses ``stream_options`` — not supported (Responses streaming is off).
+
+    OpenAI pairs stream_options with stream=true. This gateway rejects
+    stream=true on /v1/responses, so any present stream_options would be a
+    silent no-op; fail closed instead. Explicit JSON null (object or *allowed*
+    flag values) is treat-as-omit. Unknown keys fail closed even when null so
+    clients cannot smuggle unsupported flags past the allow-list via nulls.
+    """
+    if "stream_options" not in body:
+        return
+    opts = body.get("stream_options")
+    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    if opts is None or (isinstance(opts, dict) and not opts):
+        return
+    if isinstance(opts, dict):
+        allowed_flags = {"include_usage", "include_obfuscation"}
+        # Reject unknown keys before treating null flags as omit.
+        unknown = sorted(set(opts) - allowed_flags)
+        if unknown:
+            raise RequestError(
+                400,
+                "invalid_stream_options",
+                "stream_options contains unsupported fields",
+                {"fields": unknown},
+            )
+        # Null flag values alone are omit-equivalent (SDK optional defaults).
+        non_null = {key: value for key, value in opts.items() if value is not None}
+        if not non_null:
+            return
+        # All-false allowed flags are also omit-equivalent.
+        if set(non_null) <= allowed_flags and all(v is False for v in non_null.values()):
+            return
+    raise RequestError(
+        400,
+        "invalid_stream_options",
+        "stream_options is not supported on /v1/responses (stream is not supported)",
+    )
+
+
 def _validate_mode(mode: Any) -> str:
+    # Strip + casefold so " ROUTE " / "Conduct" match official aliases.
+    if isinstance(mode, str):
+        mode = mode.strip().lower()
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
     return mode
 
 
-def _validate_messages(messages: Any) -> list[dict[str, str]]:
+
+def _require_pool_model(orchestrator: Any, model_name: str) -> None:
+    """Fail closed when ``model_name`` is not served by any enabled agent.
+
+    OpenAI clients treat ``model`` as the deployment they paid for. Silently
+    answering with a different pool agent hides capacity/routing mismatches.
+    """
+    agents = getattr(orchestrator, "agents", None) or []
+    for agent in agents:
+        if getattr(agent, "disabled", False):
+            continue
+        if getattr(agent, "model", None) == model_name:
+            return
+    raise RequestError(
+        400,
+        "invalid_model",
+        f"model {model_name!r} is not available in the agent pool",
+    )
+
+
+
+def _validate_message_content_parts(content: list[Any]) -> list[dict[str, Any]]:
+    """OpenAI multimodal content-parts array (text + image_url) for vision callers.
+
+    Parts are shape-checked and returned for provider passthrough. Unsupported
+    part types fail closed with a named error so clients never believe audio or
+    other modalities were processed. Empty/whitespace text and image URLs fail
+    closed; bare-string ``image_url`` is normalized to ``{"url": ...}``; optional
+    ``detail`` must be auto/low/high when present.
+    """
+    if not content:
+        raise RequestError(
+            400,
+            "invalid_message_content",
+            "multipart content arrays must be non-empty",
+        )
+    parts: list[dict[str, Any]] = []
+    for part in content:
+        if not isinstance(part, dict):
+            raise RequestError(
+                400,
+                "invalid_message_content",
+                "message content part must be an object",
+            )
+        part_type = part.get("type")
+        if part_type == "text":
+            text = part.get("text")
+            if not isinstance(text, str):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "text content part requires a string text field",
+                )
+            if not text.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "text content part text must be a non-empty string",
+                )
+            parts.append(part)
+        elif part_type == "image_url":
+            image_url = part.get("image_url")
+            # OpenAI SDKs occasionally send image_url as a bare URL string.
+            if isinstance(image_url, str):
+                if not image_url.strip():
+                    raise RequestError(
+                        400,
+                        "invalid_message_content",
+                        "image_url content part requires a non-empty url string",
+                    )
+                image_url = {"url": image_url}
+                part = {**part, "image_url": image_url}
+            if not isinstance(image_url, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "image_url content part requires image_url.url as a string",
+                )
+            url = image_url.get("url")
+            if not isinstance(url, str) or not url.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message_content",
+                    "image_url content part requires image_url.url as a non-empty string",
+                )
+            if "detail" in image_url:
+                detail = image_url.get("detail")
+                # Explicit null / empty string: treat as omit (SDK optional default).
+                if detail is None or (isinstance(detail, str) and not detail.strip()):
+                    cleaned = {key: value for key, value in image_url.items() if key != "detail"}
+                    part = {**part, "image_url": cleaned}
+                else:
+                    if not isinstance(detail, str):
+                        raise RequestError(
+                            400,
+                            "invalid_message_content",
+                            "image_url.detail must be a string",
+                        )
+                    detail_normalized = detail.strip().lower()
+                    if detail_normalized not in {"auto", "low", "high"}:
+                        raise RequestError(
+                            400,
+                            "invalid_message_content",
+                            "image_url.detail must be one of auto, low, high",
+                        )
+                    if detail != detail_normalized:
+                        part = {
+                            **part,
+                            "image_url": {**image_url, "detail": detail_normalized},
+                        }
+            parts.append(part)
+        else:
+            raise RequestError(
+                400,
+                "invalid_message_content",
+                "content part type must be text or image_url",
+            )
+    return parts
+
+
+def _reject_unknown_message_keys(message: dict[str, Any]) -> None:
+    """Fail closed on chat message keys outside the OpenAI surface we honor.
+
+    Named ``unknown_message_fields`` (with the key list) beats silent strip on
+    the orchestration path or silent smuggle on tools passthrough.
+    """
+    unknown = sorted(set(message) - ALLOWED_MESSAGE_KEYS)
+    if unknown:
+        raise RequestError(
+            400,
+            "unknown_message_fields",
+            "message contains unsupported fields",
+            {"fields": unknown},
+        )
+
+
+def _validate_chat_message_known_fields(body: dict[str, Any]) -> None:
+    """Reject unknown message keys and legacy function role before passthrough."""
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        role = message.get("role")
+        if isinstance(role, str) and role == "function":
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "function role is not supported on /v1/chat/completions; use tool instead",
+            )
+        _reject_unknown_message_keys(message)
+
+
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
-    validated: list[dict[str, str]] = []
+    validated: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
         content = message.get("content")
-        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        if isinstance(role, str) and role == "developer":
+            # Newer OpenAI clients send developer in place of system; this gateway
+            # does not apply a separate developer plane — fail closed with migration.
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "developer role is not supported on /v1/chat/completions; use system instead",
+            )
+        if isinstance(role, str) and role == "function":
+            # Legacy Completions function-calling role; tool replaces it.
+            raise RequestError(
+                400,
+                "invalid_message_role",
+                "function role is not supported on /v1/chat/completions; use tool instead",
+            )
+        # Named error for unsupported keys — never silent strip or passthrough smuggle.
+        _reject_unknown_message_keys(message)
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        validated.append({"role": role, "content": content})
+        # OpenAI assistant tool turns often send content:null with tool_calls; treat
+        # explicit JSON null as empty string on assistant/tool (SDK optional default).
+        if content is None and role in {"assistant", "tool"}:
+            content = ""
+        if isinstance(content, list):
+            # Vision/omni callers send OpenAI content-parts arrays. Shape-check and
+            # passthrough text+image_url; other part types fail closed.
+            content = _validate_message_content_parts(content)
+        elif not isinstance(content, str):
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        # User/system turns drive the prompt — empty string content is never applied.
+        # Multimodal arrays are non-empty after parts validation.
+        if role in {"user", "system"} and isinstance(content, str) and not content.strip():
+            raise RequestError(
+                400,
+                "invalid_message_content",
+                "user and system message content must be a non-empty string",
+            )
+        entry: dict[str, Any] = {"role": role, "content": content}
+        if role == "tool":
+            # OpenAI tool messages bind results to a prior tool_call via tool_call_id.
+            tool_call_id = message.get("tool_call_id")
+            if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "tool messages require a non-empty tool_call_id string",
+                )
+            if len(tool_call_id) > 128:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "tool_call_id must be at most 128 characters",
+                )
+            entry["tool_call_id"] = tool_call_id
+        if "name" in message:
+            # OpenAI optional participant name on system/user/assistant (not tool).
+            msg_name = message.get("name")
+            # Explicit JSON null or empty/whitespace string is treat-as-omit
+            # (SDK optional default / blank participant).
+            if msg_name is None or (isinstance(msg_name, str) and not msg_name.strip()):
+                pass
+            else:
+                if role == "tool":
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "name is not valid on tool role messages",
+                    )
+                if not isinstance(msg_name, str):
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "message name must be a non-empty string",
+                    )
+                if len(msg_name) > 64:
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "message name must be at most 64 characters",
+                    )
+                # OpenAI participant names: [a-zA-Z0-9_-]{1,64}.
+                # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+                if not msg_name.isascii() or not all(
+                    ch.isalnum() or ch in "_-" for ch in msg_name
+                ):
+                    raise RequestError(
+                        400,
+                        "invalid_message_name",
+                        "message name must match [a-zA-Z0-9_-]",
+                    )
+                entry["name"] = msg_name
+        if "refusal" in message:
+            # OpenAI assistant refusal plane — null/empty omit; non-empty fails closed
+            # (this gateway does not surface or apply refusal content).
+            refusal = message.get("refusal")
+            if refusal is None or (isinstance(refusal, str) and not refusal.strip()):
+                pass
+            elif role != "assistant":
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "refusal is only valid on assistant messages",
+                )
+            elif not isinstance(refusal, str):
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "refusal must be a string",
+                )
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_refusal",
+                    "non-empty refusal is not supported on /v1/chat/completions",
+                )
+        if "annotations" in message:
+            # OpenAI message annotations — null/empty omit; non-empty fails closed.
+            annotations = message.get("annotations")
+            if annotations is None or (isinstance(annotations, list) and not annotations):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_annotations",
+                    "non-empty annotations are not supported on /v1/chat/completions",
+                )
+        if "audio" in message:
+            # OpenAI assistant audio payload — null/empty omit; non-empty fails closed
+            # (this text gateway has no speech plane on chat message history).
+            audio = message.get("audio")
+            if audio is None or (isinstance(audio, dict) and not audio):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_audio",
+                    "non-empty message audio is not supported on /v1/chat/completions",
+                )
+        if "function_call" in message:
+            # Legacy assistant function_call on messages — null/empty omit; non-empty
+            # fails closed (use tool_calls; body-level function_call is also rejected).
+            function_call = message.get("function_call")
+            if function_call is None or (isinstance(function_call, dict) and not function_call):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_function_call",
+                    "non-empty message function_call is not supported on /v1/chat/completions; "
+                    "use tool_calls instead",
+                )
+        if "weight" in message:
+            # OpenAI fine-tune style message weight (0 or 1). Explicit null is
+            # treat-as-omit. 0/1 are honest no-ops (no fine-tune plane here).
+            # Other values fail closed so clients never believe weighting applied.
+            weight = message.get("weight")
+            if weight is None:
+                pass
+            elif isinstance(weight, bool) or not isinstance(weight, (int, float)):
+                raise RequestError(
+                    400,
+                    "invalid_message_weight",
+                    "message weight must be 0 or 1",
+                )
+            elif float(weight) not in (0.0, 1.0):
+                raise RequestError(
+                    400,
+                    "invalid_message_weight",
+                    "message weight must be 0 or 1",
+                )
+        if "prefix" in message:
+            # OpenAI partial-assistant / predicted-outputs style prefix flag.
+            # null/false are honest no-ops; true fails closed (no prefix plane).
+            prefix = message.get("prefix")
+            if prefix is None or prefix is False:
+                pass
+            elif prefix is True:
+                raise RequestError(
+                    400,
+                    "invalid_message_prefix",
+                    "message prefix=true is not supported on /v1/chat/completions",
+                )
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_prefix",
+                    "message prefix must be a boolean",
+                )
+        validated.append(entry)
+    return validated
+
+
+def _validate_chat_message_audio_function_call(body: dict[str, Any]) -> None:
+    """Message-level ``audio`` / ``function_call`` — null/empty omit; else fail closed.
+
+    Runs before tools passthrough so multi-turn histories with SDK-default
+    null slots stay honest even when the body is proxied verbatim.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if "audio" in message:
+            audio = message.get("audio")
+            if audio is None or (isinstance(audio, dict) and not audio):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_audio",
+                    "non-empty message audio is not supported on /v1/chat/completions",
+                )
+        if "function_call" in message:
+            function_call = message.get("function_call")
+            if function_call is None or (isinstance(function_call, dict) and not function_call):
+                pass
+            else:
+                raise RequestError(
+                    400,
+                    "invalid_message_function_call",
+                    "non-empty message function_call is not supported on /v1/chat/completions; "
+                    "use tool_calls instead",
+                )
+
+
+def _validate_chat_tool_message_ids(body: dict[str, Any]) -> None:
+    """Fail closed on role=tool messages missing a usable tool_call_id.
+
+    Runs before tools passthrough so multi-turn tool results are shape-checked
+    even when the body is proxied verbatim to a single provider agent.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if message.get("role") != "tool":
+            continue
+        tool_call_id = message.get("tool_call_id")
+        if not isinstance(tool_call_id, str) or not tool_call_id.strip():
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool messages require a non-empty tool_call_id string",
+            )
+        if len(tool_call_id) > 128:
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_call_id must be at most 128 characters",
+            )
+
+
+def _validate_chat_logprobs_surface(body: dict[str, Any]) -> None:
+    """Fail-closed chat ``logprobs`` / ``top_logprobs`` before any proxy.
+
+    Chat route and tools passthrough do not return token logprobs. Explicit
+    JSON null, empty/whitespace string, or zero (int/float/digit or
+    whole-float string) on ``top_logprobs`` is treat-as-omit and popped so the
+    upstream payload matches an omitted field. ``logprobs=true`` and nonzero
+    ``top_logprobs`` stay named 400s even when ``tools`` would otherwise take
+    the passthrough return.
+    """
+    if "logprobs" not in body and "top_logprobs" not in body:
+        return
+    if "logprobs" in body:
+        lp = body.get("logprobs")
+        if isinstance(lp, str) and not lp.strip():
+            lp = None
+        if lp is not None:
+            coerced = _coerce_optional_bool(
+                lp,
+                error_code="invalid_logprobs",
+                message="logprobs must be a boolean",
+            )
+            if coerced is None:
+                pass
+            elif coerced is True:
+                raise RequestError(
+                    400,
+                    "invalid_logprobs",
+                    "logprobs=true is not supported on /v1/chat/completions",
+                )
+            else:
+                body["logprobs"] = False
+    if "top_logprobs" in body:
+        tlp = body.get("top_logprobs")
+        # Explicit JSON null or empty/whitespace string is treat-as-omit.
+        if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
+            body.pop("top_logprobs", None)
+            return
+        # Digit / whole-float coerce first; zero is omit-equivalent (no top alts).
+        coerced = _coerce_optional_int(
+            tlp,
+            error_code="invalid_top_logprobs",
+            message="top_logprobs must be an integer",
+        )
+        if coerced is None or coerced == 0:
+            body.pop("top_logprobs", None)
+            return
+        raise RequestError(
+            400,
+            "invalid_top_logprobs",
+            "top_logprobs is not supported on /v1/chat/completions",
+        )
+
+
+def _validate_chat_assistant_tool_calls(body: dict[str, Any]) -> None:
+    """OpenAI assistant ``tool_calls`` array shape on chat messages.
+
+    Each entry must be a function tool call with non-empty ``id``,
+    ``function.name``, and string ``function.arguments`` (JSON text).
+    Explicit JSON null or empty ``tool_calls`` arrays are treat-as-omit.
+    Validated before passthrough so multi-turn tool histories fail closed.
+    """
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        return
+    for message in messages:
+        if not isinstance(message, dict):
+            continue
+        if "tool_calls" not in message:
+            continue
+        if message.get("role") != "assistant":
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_calls is only valid on assistant messages",
+            )
+        tool_calls = message.get("tool_calls")
+        # Explicit JSON null or empty array is treat-as-omit (SDK optional default /
+        # no-op history slot). Non-empty arrays are shape-checked below.
+        if tool_calls is None or (isinstance(tool_calls, list) and not tool_calls):
+            continue
+        if not isinstance(tool_calls, list):
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_calls must be a non-empty array",
+            )
+        if len(tool_calls) > 128:
+            raise RequestError(
+                400,
+                "invalid_message",
+                "tool_calls must contain at most 128 entries",
+            )
+        for call in tool_calls:
+            if not isinstance(call, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry must be an object",
+                )
+            call_id = call.get("id")
+            if not isinstance(call_id, str) or not call_id.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry requires a non-empty id string",
+                )
+            if len(call_id) > 128:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls id must be at most 128 characters",
+                )
+            if call.get("type") != "function":
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry type must be function",
+                )
+            function = call.get("function")
+            if not isinstance(function, dict):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls entry requires a function object",
+                )
+            name = function.get("name")
+            if not isinstance(name, str) or not name.strip():
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.name must be a non-empty string",
+                )
+            if len(name) > 64:
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.name must be at most 64 characters",
+                )
+            # OpenAI function names: [a-zA-Z0-9_-]{1,64}. Fail closed so buyers
+            # get invalid_message instead of a provider 400.
+            # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+            if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.name must match [a-zA-Z0-9_-]",
+                )
+            arguments = function.get("arguments")
+            # Explicit JSON null / missing is treat-as-omit → empty JSON-text.
+            # Write back so proxy_completion forwards a string, not JSON null.
+            if arguments is None:
+                function["arguments"] = ""
+                arguments = ""
+            if not isinstance(arguments, str):
+                raise RequestError(
+                    400,
+                    "invalid_message",
+                    "each tool_calls function.arguments must be a string",
+                )
+
+
+def _validate_openai_metadata(body: dict[str, Any]) -> dict[str, str] | None:
+    """OpenAI ``metadata`` — object of string pairs, at most 16 entries.
+
+    Keys must be non-empty (after strip) and ≤64 characters; values ≤512
+    characters. Explicit JSON null values are treat-as-omit for that key and
+    written back onto ``body`` so ``proxy_completion`` does not forward
+    non-string values. Non-objects and other non-string entries fail closed so
+    clients cannot store untyped junk that cost or observability consumers
+    would silently drop.
+    """
+    if "metadata" not in body:
+        return None
+    metadata = body.get("metadata")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if metadata is None:
+        body.pop("metadata", None)
+        return None
+    if not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_metadata", "metadata must be an object")
+    if len(metadata) > 16:
+        raise RequestError(400, "invalid_metadata", "metadata must contain at most 16 entries")
+    validated: dict[str, str] = {}
+    for key, value in metadata.items():
+        if not isinstance(key, str):
+            raise RequestError(400, "invalid_metadata", "metadata keys must be strings")
+        # Empty/whitespace keys are not omit-equivalent attribute names — fail
+        # closed so cost/observability consumers never index blank labels.
+        if not key.strip():
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                "metadata keys must be non-empty strings",
+            )
+        if len(key) > 64:
+            raise RequestError(400, "invalid_metadata", "metadata keys must be at most 64 characters")
+        # Explicit JSON null value is treat-as-omit for that key (SDK optional).
+        if value is None:
+            continue
+        if not isinstance(value, str):
+            raise RequestError(400, "invalid_metadata", "metadata values must be strings")
+        if len(value) > 512:
+            raise RequestError(
+                400,
+                "invalid_metadata",
+                "metadata values must be at most 512 characters",
+            )
+        validated[key] = value
+    if not validated:
+        if any(value is None for value in metadata.values()):
+            body.pop("metadata", None)
+        return None
+    body["metadata"] = validated
     return validated
 
 
@@ -207,10 +2229,23 @@ def _validate_attribution(attribution: Any) -> dict[str, Any] | None:
     unknown = sorted(set(attribution) - allowed)
     if unknown:
         raise RequestError(400, "invalid_attribution", "attribution contains unsupported dimensions", {"fields": unknown})
-    return {key: str(value) for key, value in attribution.items()}
+    # Explicit JSON null or empty/whitespace values are treat-as-omit for each
+    # known dimension (SDK optional keys); non-empty values stringify.
+    cleaned: dict[str, Any] = {}
+    for key, value in attribution.items():
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        cleaned[key] = str(value)
+    return cleaned or None
 
 
 def _validate_routing(routing: Any) -> dict[str, Any] | None:
+    """OpenAI-adjacent routing hints for sync vs batch channel selection.
+
+    Fail closed on shape so callers cannot smuggle non-boolean latency flags or
+    free-form priority values that RoutingPolicy would silently misread via
+    loose coercion (``bool(x)`` / ``str(x)``).
+    """
     if routing is None:
         return None
     if not isinstance(routing, dict):
@@ -219,9 +2254,47 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
     if unknown:
         raise RequestError(400, "invalid_routing", "routing contains unsupported keys", {"fields": unknown})
     channel = routing.get("channel")
-    if channel is not None and channel not in {"sync", "batch"}:
+    # Explicit JSON null or empty/whitespace is treat-as-omit for optional keys.
+    if channel is None or (isinstance(channel, str) and not channel.strip()):
+        channel = None
+    elif not isinstance(channel, str) or channel.strip().lower() not in {"sync", "batch"}:
         raise RequestError(400, "invalid_routing", "routing.channel must be sync or batch")
-    return routing
+    else:
+        channel = channel.strip().lower()
+    latency_tolerant: bool | None = None
+    if "latency_tolerant" in routing:
+        # Null/empty omit; bool, int 0/1, and "true"/"false" strings coerce
+        # (SDK form/query parity with stream/store).
+        latency_tolerant = _coerce_optional_bool(
+            routing.get("latency_tolerant"),
+            error_code="invalid_routing",
+            message="routing.latency_tolerant must be a boolean",
+        )
+    if "priority" in routing:
+        priority = routing.get("priority")
+        if priority is None or (isinstance(priority, str) and not priority.strip()):
+            pass  # omit
+        elif not isinstance(priority, str) or priority.strip().lower() not in {
+            "interactive",
+            "normal",
+            "bulk",
+        }:
+            raise RequestError(
+                400,
+                "invalid_routing",
+                "routing.priority must be one of interactive, normal, bulk",
+            )
+    # Rebuild without omitted null optional keys for honest passthrough shape.
+    cleaned: dict[str, Any] = {}
+    if channel is not None:
+        cleaned["channel"] = channel
+    if latency_tolerant is not None:
+        cleaned["latency_tolerant"] = latency_tolerant
+    if "priority" in routing:
+        priority = routing.get("priority")
+        if isinstance(priority, str) and priority.strip():
+            cleaned["priority"] = priority.strip().lower()
+    return cleaned if cleaned else {}
 
 
 def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[BatchRequest]:
@@ -248,20 +2321,1203 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
 
 
 def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
-    """Validate the embeddings batch inputs (accepts ``inputs`` or ``input``)."""
+    """Validate embeddings ``input``/``inputs`` for sync and batch paths.
+
+    Accepts a non-empty string or a non-empty array of non-empty strings.
+    Blank items fail closed: empty vectors pollute semantic search and cost
+    rollups without giving buyers a usable meaning unit.
+    """
     raw = body.get("inputs")
     if raw is None:
         raw = body.get("input")
     if isinstance(raw, str):
         raw = [raw]
     if not isinstance(raw, list) or not raw:
-        raise RequestError(400, "invalid_request", "input/inputs must be a non-empty array of strings")
+        raise RequestError(
+            400,
+            "invalid_input",
+            "input/inputs must be a non-empty string or non-empty array of strings",
+        )
     inputs: list[str] = []
     for item in raw:
         if not isinstance(item, str):
-            raise RequestError(400, "invalid_request", "each embedding input must be a string")
+            raise RequestError(400, "invalid_input", "each embedding input must be a string")
+        if not item.strip():
+            raise RequestError(
+                400,
+                "invalid_input",
+                "each embedding input must be a non-empty string",
+            )
         inputs.append(item)
     return inputs
+
+
+
+def _validate_chat_store(body: dict[str, Any]) -> bool | None:
+    """Chat Completions ``store`` — strict boolean; ``true`` is not supported.
+
+    OpenAI can persist completions when ``store=true``. This gateway does not
+    implement that persistence surface, so ``store=true`` fails closed.
+    ``store=false`` and omit remain valid (explicit no-store is honest).
+    """
+    if "store" not in body:
+        return None
+    store = body.get("store")
+    store = _coerce_optional_bool(
+        store, error_code="invalid_store", message="store must be a boolean"
+    )
+    if store is None:
+        return None
+    if store is True:
+        raise RequestError(
+            400,
+            "invalid_store",
+            "store=true is not supported on /v1/chat/completions",
+        )
+    return store
+
+
+
+def _validate_completions_tools_surface(body: dict[str, Any]) -> None:
+    """Reject chat-era tool fields on legacy Completions with a migration path.
+
+    OpenAI Completions has no tools surface. Clients migrating from chat often
+    still send tools/tool_choice. Named unsupported errors beat opaque
+    unknown_fields for commercial honesty.
+
+    Honest no-ops (omit-equivalent SDK defaults):
+    - empty ``tools: []``
+    - empty ``functions: []``
+    - ``parallel_tool_calls=false`` / null
+    - ``tool_choice`` none/auto/empty-string/empty-object/null
+    - ``function_call`` none/auto/empty-string/null
+
+    Non-empty tools/functions, non-default tool_choice/function_call, or
+    ``parallel_tool_calls=true`` fail closed with a chat migration path.
+    """
+    tools = body.get("tools") if "tools" in body else None
+    # Empty array and explicit JSON null are omit-equivalent SDK defaults.
+    if tools is None or (isinstance(tools, list) and not tools):
+        tools_present = False
+    else:
+        tools_present = "tools" in body
+
+    functions = body.get("functions") if "functions" in body else None
+    if functions is None or (isinstance(functions, list) and not functions):
+        functions_present = False
+    else:
+        functions_present = "functions" in body
+
+    parallel = body.get("parallel_tool_calls") if "parallel_tool_calls" in body else None
+    if "parallel_tool_calls" in body:
+        parallel = _coerce_optional_bool(
+            parallel,
+            error_code="invalid_parallel_tool_calls",
+            message="parallel_tool_calls must be a boolean",
+        )
+    if parallel is False or parallel is None:
+        # false or omit-equivalent SDK defaults (no-ops).
+        parallel_present = False
+    else:
+        parallel_present = True
+
+    def _tool_control_present(key: str) -> bool:
+        if key not in body:
+            return False
+        value = body.get(key)
+        # null, empty string, empty object, none/auto (whitespace-padded) are omit-equivalent.
+        if value is None:
+            return False
+        if isinstance(value, str):
+            stripped = value.strip().lower()
+            if not stripped or stripped in ("none", "auto"):
+                return False
+        if isinstance(value, dict) and not value:
+            return False
+        return True
+
+    if (
+        tools_present
+        or functions_present
+        or parallel_present
+        or _tool_control_present("tool_choice")
+        or _tool_control_present("function_call")
+    ):
+        raise RequestError(
+            400,
+            "invalid_tools",
+            "tools, tool_choice, functions, function_call, and parallel_tool_calls "
+            "are not supported on /v1/completions; use /v1/chat/completions instead",
+        )
+
+
+def _validate_completions_response_format_surface(body: dict[str, Any]) -> None:
+    """Reject response_format on legacy Completions with a migration path.
+
+    Structured outputs are a chat/Responses surface. Completions has no
+    response_format plane — fail closed so clients migrate to chat.
+    """
+    if "response_format" in body:
+        fmt = body.get("response_format")
+        # Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+        if (
+            fmt is None
+            or (isinstance(fmt, dict) and not fmt)
+            or (isinstance(fmt, str) and not fmt.strip())
+        ):
+            return
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format is not supported on /v1/completions; use /v1/chat/completions instead",
+        )
+
+
+def _validate_completions_chat_era_fields_surface(body: dict[str, Any]) -> None:
+    """Reject chat-era modalities/prediction/reasoning_effort on Completions.
+
+    Legacy Completions has no multi-modal output, Predicted Outputs, or o-series
+    reasoning_effort plane. Named unsupported errors beat opaque unknown_fields
+    so clients migrate to /v1/chat/completions.
+    Explicit JSON null, empty list/object, or empty/whitespace string is treat-as-omit.
+    """
+    for key in ("modalities", "prediction", "reasoning_effort"):
+        if key not in body:
+            continue
+        value = body.get(key)
+        # Explicit JSON null, empty list/object, or empty string is treat-as-omit.
+        if value is None:
+            continue
+        if isinstance(value, (list, dict)) and not value:
+            continue
+        if isinstance(value, str) and not value.strip():
+            continue
+        # Text-only modalities ["text"] is an honest no-op on this text gateway
+        # (parity with chat Completions allowing modalities ["text"]).
+        # Strip + casefold so [" TEXT "] matches text-only.
+        if key == "modalities" and isinstance(value, list):
+            stripped_items = [
+                item.strip().lower() if isinstance(item, str) else item for item in value
+            ]
+            if stripped_items == ["text"]:
+                continue
+        # reasoning_effort "none" disables extra reasoning — omit-equivalent no-op.
+        # Strip + casefold so " NONE " / "None" match none.
+        if (
+            key == "reasoning_effort"
+            and isinstance(value, str)
+            and value.strip().lower() == "none"
+        ):
+            continue
+        raise RequestError(
+            400,
+            "invalid_chat_era_field",
+            "modalities, prediction, and reasoning_effort are not supported on "
+            "/v1/completions; use /v1/chat/completions instead",
+        )
+
+
+def _validate_completions_store(body: dict[str, Any]) -> bool | None:
+    """Legacy Completions ``store`` — strict boolean; ``true`` is not supported.
+
+    OpenAI may persist completions when ``store=true``. This gateway has no
+    Completions persistence surface, so ``store=true`` fails closed rather than
+    silently ignoring a buyer-visible storage control. ``store=false``/omit stay valid.
+    """
+    if "store" not in body:
+        return None
+    store = body.get("store")
+    store = _coerce_optional_bool(
+        store, error_code="invalid_store", message="store must be a boolean"
+    )
+    if store is None:
+        return None
+    if store is True:
+        raise RequestError(
+            400,
+            "invalid_store",
+            "store=true is not supported on /v1/completions",
+        )
+    return store
+
+
+def _validate_responses_store(body: dict[str, Any]) -> bool | None:
+    """Responses API ``store`` — strict boolean; ``true`` is not supported.
+
+    OpenAI may persist Responses when ``store=true``. This gateway's Responses
+    path is a single-agent passthrough without a persistence plane, so
+    ``store=true`` fails closed rather than silently dropping a buyer-visible
+    storage control. ``store=false`` and omit remain valid.
+    """
+    if "store" not in body:
+        return None
+    store = body.get("store")
+    store = _coerce_optional_bool(
+        store, error_code="invalid_store", message="store must be a boolean"
+    )
+    if store is None:
+        return None
+    if store is True:
+        raise RequestError(
+            400,
+            "invalid_store",
+            "store=true is not supported on /v1/responses",
+        )
+    return store
+
+
+
+
+def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
+    """Chat Completions ``reasoning_effort`` — not applied on multi-agent route.
+
+    OpenAI o-series models accept ``reasoning_effort`` (e.g. none/low/medium/high).
+    This gateway never threads the knob into ``ModelClient`` on the orchestration
+    path, so non-default present values fail closed rather than silently ignoring
+    a buyer-visible reasoning control.
+
+    Explicit JSON null, empty/whitespace string, or ``none`` (whitespace-padded
+    and case-insensitive) is treat-as-omit — ``none`` disables extra reasoning
+    and is an honest no-op here.
+    """
+    if "reasoning_effort" not in body:
+        return
+    effort = body.get("reasoning_effort")
+    if effort is None:
+        return
+    if isinstance(effort, str):
+        # Strip + casefold so " NONE " / "None" match none omit-equivalent.
+        stripped = effort.strip().lower()
+        if not stripped or stripped == "none":
+            return
+    raise RequestError(
+        400,
+        "invalid_reasoning_effort",
+        "reasoning_effort is not supported on /v1/chat/completions",
+    )
+
+
+
+
+
+def _validate_chat_audio_web_search_surface(
+    body: dict[str, Any],
+    *,
+    endpoint_path: str = "/v1/chat/completions",
+) -> None:
+    """Reject ``audio`` / ``web_search_options`` with named migration errors.
+
+    This text gateway has no speech synthesis plane and no web-search tool
+    harness on chat or Completions. Named unsupported errors beat opaque
+    ``unknown_fields`` so SDK clients can migrate deliberately.
+    Explicit JSON null or empty object for either field is treat-as-omit
+    (SDK optional default).
+    """
+    if "audio" in body:
+        audio = body.get("audio")
+        if audio is not None and not (isinstance(audio, dict) and not audio):
+            raise RequestError(
+                400,
+                "invalid_audio",
+                f"audio is not supported on {endpoint_path}",
+            )
+    if "web_search_options" in body:
+        web = body.get("web_search_options")
+        if web is not None and not (isinstance(web, dict) and not web):
+            raise RequestError(
+                400,
+                "invalid_web_search_options",
+                f"web_search_options is not supported on {endpoint_path}",
+            )
+
+
+
+def _validate_tool_resources(body: dict[str, Any], *, endpoint_path: str) -> None:
+    """Reject Assistants-style ``tool_resources`` with a named unsupported error.
+
+    OpenAI Assistants/Responses SDKs may send ``tool_resources`` (file_search,
+    code_interpreter bindings). This gateway has no tool-resource plane, so any
+    non-omit value fails closed. Explicit JSON null or empty object is treat-as-omit.
+    """
+    if "tool_resources" not in body:
+        return
+    value = body.get("tool_resources")
+    # Explicit JSON null or empty object is treat-as-omit (SDK optional default).
+    if value is None or (isinstance(value, dict) and not value):
+        return
+    raise RequestError(
+        400,
+        "invalid_tool_resources",
+        f"tool_resources is not supported on {endpoint_path}",
+    )
+
+
+def _validate_openai_sdk_control_fields(body: dict[str, Any], *, endpoint_path: str) -> None:
+    """Reject modern OpenAI SDK control fields not applied on this gateway.
+
+    ``prompt_cache_key``, ``safety_identifier``, ``verbosity``, and ``prompt_cache_retention`` appear in
+    recent OpenAI SDK clients. This gateway has no prompt-cache affinity plane,
+    no safety-identifier side channel, and no verbosity sampling control — named
+    unsupported errors beat opaque ``unknown_fields``.
+    """
+    def _sdk_control_present(value: Any) -> bool:
+        if value is None:
+            return False
+        if isinstance(value, str) and not value.strip():
+            return False
+        return True
+
+    # Explicit JSON null or empty string is treat-as-omit (SDK optional default).
+    if "prompt_cache_key" in body and _sdk_control_present(body.get("prompt_cache_key")):
+        raise RequestError(
+            400,
+            "invalid_prompt_cache_key",
+            f"prompt_cache_key is not supported on {endpoint_path}",
+        )
+    if "safety_identifier" in body and _sdk_control_present(body.get("safety_identifier")):
+        raise RequestError(
+            400,
+            "invalid_safety_identifier",
+            f"safety_identifier is not supported on {endpoint_path}",
+        )
+    if "verbosity" in body and _sdk_control_present(body.get("verbosity")):
+        raise RequestError(
+            400,
+            "invalid_verbosity",
+            f"verbosity is not supported on {endpoint_path}",
+        )
+    if "prompt_cache_retention" in body and _sdk_control_present(body.get("prompt_cache_retention")):
+        raise RequestError(
+            400,
+            "invalid_prompt_cache_retention",
+            f"prompt_cache_retention is not supported on {endpoint_path}",
+        )
+
+
+
+def _validate_chat_reasoning_object(body: dict[str, Any]) -> None:
+    """Reject Responses-style ``reasoning`` object on chat Completions.
+
+    OpenAI Responses accepts a ``reasoning`` object; chat Completions uses
+    ``reasoning_effort`` (already fail-closed). Clients that send ``reasoning``
+    on chat must get a named error, not opaque unknown_fields.
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit
+    (SDK optional default / stringified empty control).
+    """
+    if "reasoning" not in body:
+        return
+    value = body.get("reasoning")
+    # Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_reasoning",
+        "reasoning is not supported on /v1/chat/completions; use /v1/responses or omit",
+    )
+
+
+
+def _validate_openai_background(body: dict[str, Any], *, endpoint_path: str) -> bool | None:
+    """OpenAI ``background`` — ``false``/omit are honest no-ops; ``true`` fails closed.
+
+    OpenAI may run long jobs asynchronously when ``background=true``. This
+    gateway is request-scoped with no background job plane, so ``true`` fails
+    closed. ``false`` is a deliberate no-op (SDK defaults often send it).
+    """
+    if "background" not in body:
+        return None
+    value = _coerce_optional_bool(
+        body.get("background"),
+        error_code="invalid_background",
+        message="background must be a boolean",
+    )
+    if value is None:
+        return None
+    if value is True:
+        raise RequestError(
+            400,
+            "invalid_background",
+            f"background=true is not supported on {endpoint_path}",
+        )
+    return False
+
+
+
+def _validate_chat_include_field(body: dict[str, Any], *, endpoint_path: str = "/v1/chat/completions") -> None:
+    """Reject OpenAI ``include`` outside Responses (where it is also unsupported).
+
+    Some SDKs send ``include`` on chat/Completions. Named error beats opaque
+    unknown_fields so clients know the surface is unsupported here.
+    Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
+    """
+    if "include" not in body:
+        return
+    include = body.get("include")
+    # Explicit JSON null, empty array, or empty/whitespace string is treat-as-omit.
+    if (
+        include is None
+        or (isinstance(include, list) and not include)
+        or (isinstance(include, str) and not include.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_include",
+        f"include is not supported on {endpoint_path}",
+    )
+
+
+def _validate_completions_reasoning_object(body: dict[str, Any]) -> None:
+    """Reject Responses-style ``reasoning`` object on legacy Completions.
+
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit
+    (SDK optional default / stringified empty control).
+    """
+    if "reasoning" not in body:
+        return
+    value = body.get("reasoning")
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_reasoning",
+        "reasoning is not supported on /v1/completions; use /v1/responses or omit",
+    )
+
+
+def _validate_responses_modalities(body: dict[str, Any]) -> list[str] | None:
+    """Responses ``modalities`` — omit or ``["text"]`` only (text gateway)."""
+    if "modalities" not in body:
+        return None
+    modalities = body.get("modalities")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if modalities is None or (isinstance(modalities, str) and not modalities.strip()):
+        return None
+    if not isinstance(modalities, list):
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            "modalities must be a non-empty array of strings",
+        )
+    # Empty array is omit-equivalent (SDK optional default).
+    if not modalities:
+        return None
+    if any(not isinstance(item, str) for item in modalities):
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            "modalities must be a non-empty array of strings",
+        )
+    # Strip + casefold so [" TEXT "] matches text-only; write back lowercased.
+    modalities = [item.strip().lower() for item in modalities]
+    if modalities != ["text"]:
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            'only modalities ["text"] is supported on /v1/responses',
+        )
+    body["modalities"] = modalities
+    return modalities
+
+
+def _validate_responses_prediction(body: dict[str, Any]) -> None:
+    """Responses ``prediction`` (Predicted Outputs) — not supported on this gateway.
+
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+    """
+    if "prediction" not in body:
+        return
+    value = body.get("prediction")
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_prediction",
+        "prediction is not supported on /v1/responses",
+    )
+
+
+def _validate_chat_modalities(body: dict[str, Any]) -> list[str] | None:
+    """Chat Completions ``modalities`` — omit or ``["text"]`` only.
+
+    OpenAI selects output types (text/audio) via modalities. This gateway is
+    text-only; non-text modalities fail closed so clients cannot silently
+    believe audio (or other) output was applied.
+    """
+    if "modalities" not in body:
+        return None
+    modalities = body.get("modalities")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if modalities is None or (isinstance(modalities, str) and not modalities.strip()):
+        return None
+    if not isinstance(modalities, list):
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            "modalities must be a non-empty array of strings",
+        )
+    # Empty array is omit-equivalent (SDK optional default).
+    if not modalities:
+        return None
+    if any(not isinstance(item, str) for item in modalities):
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            "modalities must be a non-empty array of strings",
+        )
+    # Strip + casefold so [" TEXT "] matches text-only; write back lowercased.
+    modalities = [item.strip().lower() for item in modalities]
+    if modalities != ["text"]:
+        raise RequestError(
+            400,
+            "invalid_modalities",
+            'only modalities ["text"] is supported on /v1/chat/completions',
+        )
+    body["modalities"] = modalities
+    return modalities
+
+
+def _validate_chat_prediction(body: dict[str, Any]) -> None:
+    """Chat Completions ``prediction`` (Predicted Outputs) — not supported.
+
+    OpenAI Predicted Outputs lets clients supply expected completion content for
+    latency wins. This gateway does not apply ``prediction`` on the multi-agent
+    route path, so any non-empty present value fails closed rather than silently
+    ignoring a buyer-visible optimization hint.
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+    """
+    if "prediction" not in body:
+        return
+    value = body.get("prediction")
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_prediction",
+        "prediction is not supported on /v1/chat/completions",
+    )
+
+
+def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | None:
+    """OpenAI chat ``response_format`` — object with type text/json_object/json_schema.
+
+    Shape is validated before passthrough so malformed payloads fail closed
+    rather than reaching a provider with an unusable format object.
+
+    OpenAI type-only forms are strict: ``text`` and ``json_object`` accept only
+    the ``type`` key. ``json_schema`` accepts only ``type`` and ``json_schema``.
+    Extra sibling keys fail closed so clients cannot smuggle unsupported fields
+    into a provider-shaped object that this gateway never interpreted.
+    Inside ``json_schema``, ``name`` must match ``[a-zA-Z0-9_-]{1,64}``
+    (ASCII only — ``str.isalnum()`` is not sufficient). Nested keys are
+    limited to ``name`` / ``schema`` / ``description`` / ``strict``;
+    JSON-null or blank ``description`` and JSON-null ``strict`` are popped
+    omit-real before passthrough (parity with Responses ``text.format``).
+    """
+    if "response_format" not in body:
+        return None
+    fmt = body.get("response_format")
+    # Explicit JSON null, empty object, or empty string is treat-as-omit
+    # (SDK optional default / stringified empty control).
+    if (
+        fmt is None
+        or (isinstance(fmt, dict) and not fmt)
+        or (isinstance(fmt, str) and not fmt.strip())
+    ):
+        return None
+    if not isinstance(fmt, dict):
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format must be an object",
+        )
+    fmt_type = fmt.get("type")
+    # Explicit JSON null or blank type is treat-as-omit when no other payload
+    # remains (SDK optional default). Non-empty unknown types still fail closed.
+    if fmt_type is None or (isinstance(fmt_type, str) and not fmt_type.strip()):
+        remaining = {key: value for key, value in fmt.items() if key != "type"}
+        if not remaining:
+            return None
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.type must be one of text, json_object, json_schema",
+        )
+    # Strip + casefold so " JSON_OBJECT " / "Text" match official types; write back.
+    if isinstance(fmt_type, str):
+        fmt_type = fmt_type.strip().lower()
+        fmt["type"] = fmt_type
+    if fmt_type not in ("text", "json_object", "json_schema"):
+        raise RequestError(
+            400,
+            "invalid_response_format",
+            "response_format.type must be one of text, json_object, json_schema",
+        )
+    if fmt_type in ("text", "json_object"):
+        # OpenAI: {"type": "json_object"} / {"type": "text"} — no siblings.
+        unknown = sorted(set(fmt) - {"type"})
+        if unknown:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                f"response_format with type {fmt_type} accepts only the type field",
+                {"fields": unknown},
+            )
+        return fmt
+    if fmt_type == "json_schema":
+        unknown = sorted(set(fmt) - {"type", "json_schema"})
+        if unknown:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format with type json_schema accepts only type and json_schema",
+                {"fields": unknown},
+            )
+        schema = fmt.get("json_schema")
+        if not isinstance(schema, dict):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema must be an object when type is json_schema",
+            )
+        name = schema.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must be a non-empty string",
+            )
+        # OpenAI Structured Outputs: name is [a-zA-Z0-9_-]{1,64}. Fail closed
+        # so buyers get invalid_response_format instead of a provider 400.
+        # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+        if len(name) > 64:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must be at most 64 characters",
+            )
+        if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.name must match [a-zA-Z0-9_-]",
+            )
+        # Nested json_schema accepts only the official Structured Outputs keys.
+        # Unknown siblings fail closed so clients cannot smuggle unsupported
+        # fields into a provider-shaped object this gateway never interpreted.
+        unknown_schema = sorted(
+            set(schema) - {"name", "schema", "description", "strict"}
+        )
+        if unknown_schema:
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema accepts only name, schema, "
+                "description, and strict",
+                {"fields": unknown_schema},
+            )
+        # OpenAI requires json_schema.schema as the actual JSON Schema object.
+        # Fail closed when missing or non-object so clients cannot silently
+        # believe structured-output enforcement applied without a schema body.
+        schema_body = schema.get("schema")
+        if not isinstance(schema_body, dict):
+            raise RequestError(
+                400,
+                "invalid_response_format",
+                "response_format.json_schema.schema must be an object",
+            )
+        # Explicit JSON null / blank description is omit-equivalent: pop so
+        # passthrough matches omit (parity with Responses text.format).
+        if "description" in schema:
+            description_value = schema.get("description")
+            if description_value is None or (
+                isinstance(description_value, str) and not description_value.strip()
+            ):
+                schema.pop("description")
+            elif not isinstance(description_value, str):
+                raise RequestError(
+                    400,
+                    "invalid_response_format",
+                    "response_format.json_schema.description must be a string "
+                    "when provided",
+                )
+        # Explicit JSON null is omit-equivalent: pop so passthrough matches omit.
+        if "strict" in schema:
+            strict_value = schema.get("strict")
+            if strict_value is None:
+                schema.pop("strict")
+            elif not isinstance(strict_value, bool):
+                raise RequestError(
+                    400,
+                    "invalid_response_format",
+                    "response_format.json_schema.strict must be a boolean when provided",
+                )
+    return fmt
+
+
+def _omit_null_tool_function_field(
+    function: dict[str, Any],
+    field_name: str,
+    *,
+    expected_types: tuple[type, ...],
+    error_message: str,
+) -> None:
+    """Drop a JSON-null optional ``tool.function`` field or fail-closed.
+
+    Official OpenAI SDKs serialize omitted optional fields as JSON ``null``.
+    Leaving those keys on the body is not omit-equivalent: ``proxy_completion``
+    forwards the request verbatim and several providers reject ``null``
+    ``parameters``, ``description``, or ``strict``. Pop the key in place so the
+    upstream payload matches an omitted field. Non-null values of the wrong
+    type stay ``invalid_tools``.
+    """
+    if field_name not in function:
+        return
+    value = function.get(field_name)
+    if value is None:
+        function.pop(field_name)
+        return
+    if not isinstance(value, expected_types):
+        raise RequestError(400, "invalid_tools", error_message)
+
+
+def _validate_chat_tools(body: dict[str, Any]) -> list[dict[str, Any]] | None:
+    """OpenAI chat ``tools`` — array of function tool objects (empty = honest no-op).
+
+    An empty array is treated as omit: many SDKs send ``tools: []`` when no tools
+    are configured. Non-empty entries must be objects with ``type`` == ``function``
+    and a ``function`` object that has a non-empty ``name`` matching
+    ``[a-zA-Z0-9_-]{1,64}`` (ASCII only — ``str.isalnum()`` is not
+    sufficient). Explicit JSON ``null`` on optional ``description``,
+    ``parameters``, and ``strict`` is popped in place so passthrough
+    matches omit. Shape-only validation before passthrough; provider
+    schema depth is not re-checked here.
+    """
+    if "tools" not in body:
+        return None
+    tools = body.get("tools")
+    # Explicit JSON null is treat-as-omit (SDK optional default).
+    if tools is None:
+        return None
+    if not isinstance(tools, list):
+        raise RequestError(
+            400,
+            "invalid_tools",
+            "tools must be an array",
+        )
+    # Empty array: honest no-op (same as omitting tools).
+    if not tools:
+        return []
+    if len(tools) > 128:
+        raise RequestError(
+            400,
+            "invalid_tools",
+            "tools must contain at most 128 entries",
+        )
+    validated: list[dict[str, Any]] = []
+    for item in tools:
+        if not isinstance(item, dict):
+            raise RequestError(400, "invalid_tools", "each tool must be an object")
+        # OpenAI tool objects are type + function only; extra siblings fail closed
+        # so clients cannot smuggle uninterpreted fields through passthrough.
+        unknown_tool = sorted(set(item) - {"type", "function"})
+        if unknown_tool:
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool accepts only type and function fields",
+                {"fields": unknown_tool},
+            )
+        if item.get("type") != "function":
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool type must be function",
+            )
+        function = item.get("function")
+        if not isinstance(function, dict):
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.function must be an object",
+            )
+        unknown_fn = sorted(set(function) - {"name", "description", "parameters", "strict"})
+        if unknown_fn:
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.function accepts only name, description, parameters, and strict",
+                {"fields": unknown_fn},
+            )
+        # Explicit JSON null is popped so proxy_completion forwards omit, not null.
+        _omit_null_tool_function_field(
+            function,
+            "strict",
+            expected_types=(bool,),
+            error_message="each tool.function.strict must be a boolean when provided",
+        )
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.function.name must be a non-empty string",
+            )
+        # OpenAI function names: [a-zA-Z0-9_-]{1,64}. Fail closed so buyers
+        # get invalid_tools instead of a provider 400.
+        # str.isalnum() alone accepts Unicode letters/digits (café, 名前, ١٢٣).
+        if len(name) > 64:
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.function.name must be at most 64 characters",
+            )
+        if not name.isascii() or not all(ch.isalnum() or ch in "_-" for ch in name):
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.function.name must match [a-zA-Z0-9_-]",
+            )
+        # OpenAI function tools require parameters as a JSON Schema object when present.
+        # Explicit JSON null is popped so proxy_completion forwards omit, not null.
+        _omit_null_tool_function_field(
+            function,
+            "parameters",
+            expected_types=(dict,),
+            error_message="each tool.function.parameters must be an object",
+        )
+        _omit_null_tool_function_field(
+            function,
+            "description",
+            expected_types=(str,),
+            error_message="each tool.function.description must be a string when provided",
+        )
+        description = function.get("description")
+        if isinstance(description, str) and len(description) > 1024:
+            raise RequestError(
+                400,
+                "invalid_tools",
+                "each tool.function.description must be at most 1024 characters",
+            )
+        validated.append(item)
+    return validated
+
+
+def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | None:
+    """OpenAI chat ``tool_choice`` — none/auto/required or named function object.
+
+    ``none`` / ``auto`` without tools remain honest no-ops. ``required`` demands
+    a non-empty ``tools`` array (parity with ``parallel_tool_calls=true``).
+    When ``type`` is ``function``, ``function.name`` must match a tools entry
+    so clients cannot force a tool the request did not declare.
+    """
+    if "tool_choice" not in body:
+        return None
+    choice = body.get("tool_choice")
+    # Explicit JSON null, empty object, or empty/whitespace string is
+    # treat-as-omit (SDK optional default / stringified empty control).
+    if (
+        choice is None
+        or (isinstance(choice, dict) and not choice)
+        or (isinstance(choice, str) and not choice.strip())
+    ):
+        return None
+    if isinstance(choice, str):
+        # Strip + casefold so " REQUIRED " / " Auto " match honest controls.
+        choice = choice.strip().lower()
+        if choice not in ("none", "auto", "required"):
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice string must be one of none, auto, required",
+            )
+        # required forces at least one tool call — meaningless without tools.
+        # Fail closed (parity with parallel_tool_calls=true) so clients cannot
+        # believe tool use was mandated when no tools were declared.
+        if choice == "required":
+            tools = body.get("tools") if "tools" in body else None
+            if not isinstance(tools, list) or not tools:
+                raise RequestError(
+                    400,
+                    "invalid_tool_choice",
+                    "tool_choice=required requires a non-empty tools array",
+                )
+        return choice
+    if isinstance(choice, dict):
+        # OpenAI named tool_choice is {type, function}; extra siblings fail closed.
+        unknown = sorted(set(choice) - {"type", "function"})
+        if unknown:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice object accepts only type and function fields",
+                {"fields": unknown},
+            )
+        if choice.get("type") != "function":
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice object type must be function",
+            )
+        function = choice.get("function")
+        if not isinstance(function, dict):
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function must be an object with a name",
+            )
+        unknown_fn = sorted(set(function) - {"name"})
+        if unknown_fn:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function accepts only name",
+                {"fields": unknown_fn},
+            )
+        name = function.get("name")
+        if not isinstance(name, str) or not name.strip():
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function.name must be a non-empty string",
+            )
+        tools = body.get("tools")
+        tool_names: set[str] = set()
+        if isinstance(tools, list):
+            for item in tools:
+                if not isinstance(item, dict):
+                    continue
+                fn = item.get("function")
+                if isinstance(fn, dict):
+                    tool_name = fn.get("name")
+                    if isinstance(tool_name, str):
+                        tool_names.add(tool_name)
+        if name not in tool_names:
+            raise RequestError(
+                400,
+                "invalid_tool_choice",
+                "tool_choice.function.name must match a tools entry",
+            )
+        return choice
+    raise RequestError(
+        400,
+        "invalid_tool_choice",
+        "tool_choice must be a string or object",
+    )
+
+
+
+
+
+
+def _validate_responses_model(body: dict[str, Any]) -> str:
+    """Responses API ``model`` — required non-empty string ≤256 chars.
+
+    OpenAI requires model on Responses. Missing/empty/non-string values fail
+    closed so clients cannot hit passthrough with an implicit mock default and
+    believe a named deployment was selected.
+    """
+    model = body.get("model")
+    if model is None:
+        raise RequestError(400, "invalid_model", "model is required on /v1/responses")
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    return model
+
+
+def _validate_responses_instructions(body: dict[str, Any]) -> str | None:
+    """Responses API ``instructions`` — optional non-empty string ≤32000 chars.
+
+    OpenAI system-style instructions for the Responses surface. Explicit
+    JSON null or empty/whitespace strings are treat-as-omit and popped so
+    ``proxy_completion`` does not forward a blank system prompt. Non-strings
+    fail closed so clients cannot ship a silent no-op that looks like a
+    configured system prompt.
+    """
+    if "instructions" not in body:
+        return None
+    value = body.get("instructions")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        body.pop("instructions", None)
+        return None
+    if not isinstance(value, str):
+        raise RequestError(400, "invalid_instructions", "instructions must be a string")
+    if len(value) > 32_000:
+        raise RequestError(
+            400,
+            "invalid_instructions",
+            "instructions must be at most 32000 characters",
+        )
+    return value
+
+
+def _validate_responses_reasoning(body: dict[str, Any]) -> None:
+    """Responses API ``reasoning`` — not applied on single-agent passthrough.
+
+    OpenAI Responses accepts a ``reasoning`` object (effort/summary controls).
+    This gateway proxies Responses but does not interpret or enforce reasoning
+    controls, so any non-empty present value fails closed rather than silently
+    ignoring a buyer-visible o-series control surface.
+    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+    """
+    if "reasoning" not in body:
+        return
+    value = body.get("reasoning")
+    if (
+        value is None
+        or (isinstance(value, dict) and not value)
+        or (isinstance(value, str) and not value.strip())
+    ):
+        return
+    raise RequestError(
+        400,
+        "invalid_reasoning",
+        "reasoning is not supported on /v1/responses",
+    )
+
+
+
+def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
+    """Batch embeddings ``endpoint`` — optional non-empty string alias ≤256 chars.
+
+    naruon and OpenAI-compatible clients may tag the upstream embeddings route
+    (e.g. ``/v1/embeddings``). Explicit JSON null or empty/whitespace string is
+    treat-as-omit (SDK optional default). Non-string values fail closed so the
+    gateway never records a blank endpoint alias as if a route was selected.
+    """
+    if "endpoint" not in body:
+        return None
+    value = body.get("endpoint")
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise RequestError(
+            400,
+            "invalid_endpoint",
+            "endpoint must be a non-empty string on /v1/batch/embeddings",
+        )
+    if len(value) > 256:
+        raise RequestError(
+            400,
+            "invalid_endpoint",
+            "endpoint must be at most 256 characters",
+        )
+    return value
+
+
+def _validate_embeddings_model(body: dict[str, Any]) -> str:
+    """OpenAI embeddings ``model`` — required non-empty string ≤256 chars."""
+    model = body.get("model")
+    if model is None:
+        raise RequestError(400, "invalid_model", "model is required")
+    if not isinstance(model, str) or not model.strip():
+        raise RequestError(400, "invalid_model", "model must be a non-empty string")
+    model = model.strip()
+    if len(model) > 256:
+        raise RequestError(400, "invalid_model", "model must be at most 256 characters")
+    return model
+
+
+def _validate_embeddings_encoding_format(body: dict[str, Any]) -> str | None:
+    """OpenAI ``encoding_format`` — omit/null/empty or ``float`` only; base64 fail-closed.
+
+    This gateway returns float vectors on the OpenAI list shape. ``base64`` is
+    not produced, so requesting it fails closed rather than silently returning
+    floats. Explicit JSON ``null`` or empty/whitespace string is treated as omit
+    (SDK optional default / stringified empty control). Case-insensitive
+    ``float`` (e.g. ``FLOAT``) is accepted and written back lowercased.
+    """
+    if "encoding_format" not in body:
+        return None
+    value = body.get("encoding_format")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return None
+    if not isinstance(value, str):
+        raise RequestError(400, "invalid_encoding_format", "encoding_format must be a string")
+    # Strip incidental whitespace and casefold so " FLOAT " matches float.
+    value = value.strip().lower()
+    if value != "float":
+        raise RequestError(
+            400,
+            "invalid_encoding_format",
+            'only encoding_format "float" is supported on embeddings endpoints',
+        )
+    body["encoding_format"] = value
+    return value
+
+
+def _validate_embeddings_dimensions(body: dict[str, Any]) -> None:
+    """OpenAI ``dimensions`` — not applied; non-null values fail closed.
+
+    Explicit JSON ``null`` or empty/whitespace string is treat-as-omit. Digit
+    strings and whole floats coerce to int for type honesty, then still fail
+    closed so clients cannot believe reduced dimensionality was applied.
+    """
+    if "dimensions" not in body:
+        return
+    value = body.get("dimensions")
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    # Coerce digit/float forms so type errors surface as invalid_dimensions with
+    # the same unsupported message (not a silent string-vs-int split).
+    coerced = _coerce_optional_int(
+        value,
+        error_code="invalid_dimensions",
+        message="dimensions must be an integer",
+    )
+    if coerced is None:
+        return
+    raise RequestError(
+        400,
+        "invalid_dimensions",
+        "dimensions is not supported on embeddings endpoints",
+    )
+
+
+def _openai_embeddings_response(document: dict[str, Any], *, model: str) -> dict[str, Any]:
+    """Map batch document vectors to the OpenAI ``/v1/embeddings`` list shape."""
+    items = document.get("embeddings") or []
+    data = []
+    for item in items:
+        data.append(
+            {
+                "object": "embedding",
+                "index": int(item.get("index", 0)),
+                "embedding": list(item.get("embedding") or []),
+            }
+        )
+    total_tokens = int(document.get("total_tokens") or 0)
+    return {
+        "object": "list",
+        "data": data,
+        "model": model or document.get("model") or "contextual-orchestrator",
+        "usage": {
+            "prompt_tokens": total_tokens,
+            "total_tokens": total_tokens,
+        },
+    }
 
 
 def _embeddings_attribution(body: dict[str, Any]) -> dict[str, Any]:
@@ -345,6 +3601,20 @@ def build_server(
                         "embedding_batch_backend": coordinator.embedding_batch_backend.name,
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
+                    return
+                if path == "/v1/models" or path.startswith("/v1/models/"):
+                    # OpenAI model discovery is inference-scope (same bearer as chat).
+                    self._authorize("inference")
+                    if path == "/v1/models":
+                        self._send(orchestrator.list_openai_models())
+                        return
+                    model_id = urllib.parse.unquote(path[len("/v1/models/") :])
+                    if not model_id or "/" in model_id:
+                        raise RequestError(400, "invalid_model", "model id path must be a single segment")
+                    try:
+                        self._send(orchestrator.get_openai_model(model_id))
+                    except KeyError:
+                        self._send_error(404, "model_not_found", f"model {model_id!r} not found")
                     return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
@@ -711,9 +3981,229 @@ def build_server(
                     self._send(orchestrator.add_agent(segments[3], body), 201)
                     return
 
+                if path == "/v1/completions":
+                    # Legacy OpenAI Completions: prompt → route → text_completion.
+                    _reject_unknown_keys(body, ALLOWED_COMPLETIONS_KEYS)
+                    _validate_completions_tools_surface(body)
+                    _validate_completions_response_format_surface(body)
+                    _validate_completions_chat_era_fields_surface(body)
+                    _validate_chat_audio_web_search_surface(
+                        body, endpoint_path="/v1/completions"
+                    )
+                    _validate_openai_sdk_control_fields(body, endpoint_path="/v1/completions")
+                    _validate_tool_resources(body, endpoint_path="/v1/completions")
+                    _validate_max_tool_calls(body, endpoint_path="/v1/completions")
+                    _validate_completions_reasoning_object(body)
+                    _validate_openai_background(body, endpoint_path="/v1/completions")
+                    _validate_chat_include_field(body, endpoint_path="/v1/completions")
+                    _validate_completions_stream(body)
+                    _validate_completions_stream_options(body)
+                    _validate_completions_best_of(body)
+                    _validate_completions_echo(body)
+                    _validate_completions_suffix(body)
+                    _validate_completions_logprobs(body)
+                    _validate_completions_top_logprobs(body)
+                    # OpenAI chat-era clients sometimes send max_completion_tokens
+                    # on Completions; prefer it over legacy max_tokens when both set.
+                    if "max_completion_tokens" in body:
+                        max_tokens = _validate_chat_max_completion_tokens(body)
+                    else:
+                        max_tokens = _validate_completions_max_tokens(body)
+                    model_name = _validate_completions_model(body)
+                    _require_pool_model(orchestrator, model_name)
+                    if "store" in body:
+                        _validate_completions_store(body)
+                    top_p = _validate_completions_top_p(body)
+                    temperature = _validate_completions_temperature(body)
+                    presence_penalty = _validate_completions_presence_penalty(body)
+                    frequency_penalty = _validate_completions_frequency_penalty(body)
+                    _validate_completions_seed(body)
+                    _validate_completions_stop(body)
+                    _validate_completions_n(body)
+                    end_user_id = _validate_completions_user(body)
+                    _validate_completions_logit_bias(body)
+                    _validate_service_tier(body, endpoint_path="/v1/completions")
+                    if "metadata" in body:
+                        _validate_openai_metadata(body)
+                    if "prompt" not in body:
+                        raise RequestError(400, "invalid_prompt", "prompt is required")
+                    messages = _validate_completion_prompt(body.get("prompt"))
+                    attribution = _validate_attribution(body.get("attribution"))
+                    attribution = dict(attribution or {})
+                    # OpenAI ``user`` → cost-ledger account when attribution.account is unset.
+                    if end_user_id is not None and not attribution.get("account"):
+                        attribution["account"] = end_user_id
+                    # Request model id → model_name dimension when unset (cost rollups).
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    # Endpoint product surface → service dimension when unset.
+                    if not attribution.get("service"):
+                        attribution["service"] = "completions_api"
+                    routing = _validate_routing(body.get("routing"))
+                    started_at = time.perf_counter()
+                    # Apply request sampling knobs to the provider client for this call.
+                    model_client = orchestrator.client
+                    previous_max_tokens = model_client.max_output_tokens
+                    previous_temperature = model_client.default_temperature
+                    previous_top_p = model_client.default_top_p
+                    previous_presence = model_client.default_presence_penalty
+                    previous_frequency = model_client.default_frequency_penalty
+                    if max_tokens is not None:
+                        model_client.max_output_tokens = max_tokens
+                    if temperature is not None:
+                        model_client.default_temperature = temperature
+                    if top_p is not None:
+                        model_client.default_top_p = top_p
+                    if presence_penalty is not None:
+                        model_client.default_presence_penalty = presence_penalty
+                    if frequency_penalty is not None:
+                        model_client.default_frequency_penalty = frequency_penalty
+                    try:
+                        result = self._run(lambda: coordinator.complete(
+                            messages,
+                            mode="route",
+                            attribution=attribution,
+                            hints=routing,
+                            model_name=model_name,
+                            workflow_run_id=f"run_{uuid.uuid4().hex}",
+                        ))
+                    finally:
+                        model_client.max_output_tokens = previous_max_tokens
+                        model_client.default_temperature = previous_temperature
+                        model_client.default_top_p = previous_top_p
+                        model_client.default_presence_penalty = previous_presence
+                        model_client.default_frequency_penalty = previous_frequency
+                    # Batch-channel Completions return a job handle (202), not a
+                    # text_completion body — match chat Completions honesty so
+                    # clients never receive a 500 on a valid batch routing hint.
+                    if isinstance(result, dict) and result.get("channel") == "batch":
+                        orchestrator.record_analytics_event(
+                            "text_completion_batched",
+                            {
+                                "endpoint_path": "/v1/completions",
+                                "actor_scope": "inference",
+                                "status_code": 202,
+                                "batch_job_id": result.get("job_id"),
+                                "batch_backend": result.get("backend"),
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(result, 202)
+                        return
+                    orchestrator.record_analytics_event(
+                        "text_completion_requested",
+                        {
+                            "endpoint_path": "/v1/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "run_mode": "route",
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(text_completion_response(
+                        result, model=model_name, usage=result.get("usage"),
+                    ))
+                    return
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
-                    if PASSTHROUGH_TRIGGER_KEYS & set(body):
+                    _validate_chat_audio_web_search_surface(body)
+                    _validate_openai_sdk_control_fields(body, endpoint_path="/v1/chat/completions")
+                    _validate_tool_resources(body, endpoint_path="/v1/chat/completions")
+                    _validate_chat_reasoning_object(body)
+                    _validate_openai_background(body, endpoint_path="/v1/chat/completions")
+                    _validate_chat_include_field(body)
+                    _validate_max_tool_calls(body, endpoint_path="/v1/chat/completions")
+                    # functions/function_call: null or empty functions[] are omit no-ops
+                    # (SDK optional defaults); non-empty or any function_call fail closed.
+                    functions_raw = body.get("functions") if "functions" in body else None
+                    function_call_raw = body.get("function_call") if "function_call" in body else None
+                    functions_present = (
+                        "functions" in body
+                        and functions_raw is not None
+                        and not (isinstance(functions_raw, list) and not functions_raw)
+                    )
+                    # function_call none/auto/empty-string (whitespace-padded) without functions
+                    # are omit-equivalent no-ops; any other function_call or non-empty functions
+                    # fail closed.
+                    function_call_present = (
+                        "function_call" in body
+                        and function_call_raw is not None
+                        and not (
+                            isinstance(function_call_raw, str)
+                            and (
+                                not function_call_raw.strip()
+                                or function_call_raw.strip().lower() in ("none", "auto")
+                            )
+                        )
+                    )
+                    if functions_present or function_call_present:
+                        # OpenAI deprecated functions/function_call in favor of tools/tool_choice.
+                        # Fail closed with a migration message rather than silent passthrough of
+                        # a deprecated surface clients may still send from old SDKs.
+                        raise RequestError(
+                            400,
+                            "invalid_functions",
+                            "functions and function_call are not supported on /v1/chat/completions; "
+                            "use tools and tool_choice instead",
+                        )
+                    tools_list = body.get("tools") if isinstance(body.get("tools"), list) else None
+                    # tool_choice null is omit-equivalent; alone / empty tools: only "none" is a valid no-op.
+                    if (
+                        "tool_choice" in body
+                        and body.get("tool_choice") is not None
+                        and not tools_list
+                    ):
+                        tc = body.get("tool_choice")
+                        tc_norm = tc.strip().lower() if isinstance(tc, str) else tc
+                        # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
+                        if (
+                            tc_norm not in ("none", "auto")
+                            and not (isinstance(tc, dict) and not tc)
+                            and not (isinstance(tc, str) and not tc.strip())
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_tool_choice",
+                                "tool_choice requires tools on /v1/chat/completions",
+                            )
+                    # Shape-check tool results and message audio/function_call before
+                    # passthrough or orchestration (named errors, not silent drop).
+                    _validate_chat_message_known_fields(body)
+                    _validate_chat_tool_message_ids(body)
+                    _validate_chat_assistant_tool_calls(body)
+                    _validate_chat_message_audio_function_call(body)
+                    _validate_chat_logprobs_surface(body)
+                    if "metadata" in body:
+                        _validate_openai_metadata(body)
+                    if "response_format" in body:
+                        _validate_chat_response_format(body)
+                    if "tools" in body:
+                        _validate_chat_tools(body)
+                    if "tool_choice" in body:
+                        _validate_chat_tool_choice(body)
+                    if "parallel_tool_calls" in body:
+                        # Always type-check. With tools, true/false both valid for
+                        # provider passthrough; without tools, true fails closed.
+                        # Explicit JSON null is treat-as-omit (SDK optional default).
+                        ptc = body.get("parallel_tool_calls")
+                        ptc = _coerce_optional_bool(
+                            ptc,
+                            error_code="invalid_parallel_tool_calls",
+                            message="parallel_tool_calls must be a boolean",
+                        )
+                        if ptc is not None:
+                            if ptc is True and not tools_list:
+                                raise RequestError(
+                                    400,
+                                    "invalid_parallel_tool_calls",
+                                    "parallel_tool_calls=true requires tools on /v1/chat/completions",
+                                )
+                    # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
+                    # defaults) — do not force single-agent passthrough for null-only keys.
+                    if any(
+                        key in body and body.get(key) is not None
+                        for key in PASSTHROUGH_TRIGGER_KEYS
+                    ):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
                         started_at = time.perf_counter()
@@ -733,36 +4223,203 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    if "include_orchestration_trace" in body:
+                        # Null/empty omit; bool, int 0/1, and "true"/"false"/"0"/"1"
+                        # strings coerce (SDK form/query parity with stream/store).
+                        coerced_trace = _coerce_optional_bool(
+                            body.get("include_orchestration_trace"),
+                            error_code="invalid_include_orchestration_trace",
+                            message="include_orchestration_trace must be a boolean",
+                        )
+                        if coerced_trace is None:
+                            include_trace = bool(security.expose_trace_by_default)
+                        else:
+                            include_trace = coerced_trace
+                    else:
+                        include_trace = bool(security.expose_trace_by_default)
                     stream = body.get("stream", False)
-                    if not isinstance(stream, bool):
-                        raise RequestError(400, "invalid_request", "stream must be a boolean")
+                    # Explicit JSON null/empty or int 0/1 (JS SDK) coerce; default non-stream.
+                    if stream is None or (isinstance(stream, str) and not stream.strip()):
+                        stream = False
+                    else:
+                        coerced = _coerce_optional_bool(
+                            stream,
+                            error_code="invalid_request",
+                            message="stream must be a boolean",
+                        )
+                        stream = False if coerced is None else coerced
+                    if "stream_options" in body:
+                        _validate_chat_stream_options(body, stream)
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
-                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    # Require model — silent default to contextual-orchestrator hid
+                    # which deployment the buyer selected on the chat Completions path.
+                    model_name = _validate_completions_model(body)
+                    _require_pool_model(orchestrator, model_name)
+                    attribution = dict(attribution or {})
+                    # OpenAI chat ``user`` → account when unset.
+                    # Same fail-closed rules as Completions: present key must be a
+                    # non-empty string ≤64 chars (null/empty/non-string rejected).
+                    end_user_id = _validate_completions_user(body)
+                    if end_user_id is not None and not attribution.get("account"):
+                        attribution["account"] = end_user_id
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    if not attribution.get("service"):
+                        attribution["service"] = "chat_completions_api"
+                    temperature = None
+                    top_p = None
+                    max_tokens = None
+                    presence_penalty = None
+                    frequency_penalty = None
+                    if "temperature" in body:
+                        temperature = _validate_completions_temperature(body)
+                    if "top_p" in body:
+                        top_p = _validate_completions_top_p(body)
+                    # OpenAI: max_completion_tokens takes precedence over max_tokens.
+                    if "max_completion_tokens" in body:
+                        max_tokens = _validate_chat_max_completion_tokens(body)
+                    elif "max_tokens" in body:
+                        max_tokens = _validate_completions_max_tokens(body)
+                    if "presence_penalty" in body:
+                        presence_penalty = _validate_completions_presence_penalty(body)
+                    if "frequency_penalty" in body:
+                        frequency_penalty = _validate_completions_frequency_penalty(body)
+                    if "seed" in body:
+                        # Type-check then fail closed: chat route does not apply seed.
+                        # Explicit JSON null or empty/whitespace string is treat-as-omit.
+                        seed_raw = body.get("seed")
+                        if seed_raw is not None and not (
+                            isinstance(seed_raw, str) and not seed_raw.strip()
+                        ):
+                            try:
+                                _validate_completions_seed(body)
+                            except RequestError as exc:
+                                if exc.code == "invalid_seed" and "not supported" in exc.message:
+                                    raise RequestError(
+                                        400,
+                                        "invalid_seed",
+                                        "seed is not supported on /v1/chat/completions",
+                                    ) from exc
+                                raise
+                            raise RequestError(
+                                400,
+                                "invalid_seed",
+                                "seed is not supported on /v1/chat/completions",
+                            )
+                    if "logit_bias" in body:
+                        # Empty {} is an honest no-op (shared Completions helper).
+                        # Non-empty maps fail closed with a chat-path message.
+                        try:
+                            _validate_completions_logit_bias(body)
+                        except RequestError as exc:
+                            if (
+                                exc.code == "invalid_logit_bias"
+                                and "not supported" in exc.message
+                            ):
+                                raise RequestError(
+                                    400,
+                                    "invalid_logit_bias",
+                                    "logit_bias is not supported on /v1/chat/completions",
+                                ) from exc
+                            raise
+                    if "stop" in body:
+                        # Explicit JSON null, empty/whitespace string, empty [], or
+                        # all-whitespace array items is treat-as-omit (SDK optional default).
+                        stop_val = body.get("stop")
+                        if isinstance(stop_val, str) and not stop_val.strip():
+                            stop_val = ""
+                        if isinstance(stop_val, list):
+                            stop_val = [s for s in stop_val if not (isinstance(s, str) and not s.strip())]
+                            if not stop_val:
+                                stop_val = []
+                        if stop_val is not None and stop_val != [] and stop_val != "":
+                            try:
+                                _validate_completions_stop(body)
+                            except RequestError as exc:
+                                # Completions helper fails closed with a Completions path message;
+                                # re-surface for chat with the chat endpoint string.
+                                if exc.code == "invalid_stop" and "not supported" in exc.message:
+                                    raise RequestError(
+                                        400,
+                                        "invalid_stop",
+                                        "stop sequences are not supported on /v1/chat/completions",
+                                    ) from exc
+                                raise
+                            raise RequestError(
+                                400,
+                                "invalid_stop",
+                                "stop sequences are not supported on /v1/chat/completions",
+                            )
+                    if "n" in body:
+                        try:
+                            _validate_completions_n(body)
+                        except RequestError as exc:
+                            if exc.code == "invalid_n" and "not supported" in exc.message:
+                                raise RequestError(
+                                    400,
+                                    "invalid_n",
+                                    "n greater than 1 is not supported on /v1/chat/completions",
+                                ) from exc
+                            raise
+                    if "store" in body:
+                        _validate_chat_store(body)
+                    if "modalities" in body:
+                        _validate_chat_modalities(body)
+                    if "prediction" in body:
+                        _validate_chat_prediction(body)
+                    if "reasoning_effort" in body:
+                        _validate_chat_reasoning_effort(body)
+                    if "service_tier" in body:
+                        _validate_service_tier(body, endpoint_path="/v1/chat/completions")
+                    if "metadata" in body:
+                        _validate_openai_metadata(body)
                     started_at = time.perf_counter()
-                    if stream and orchestrator.would_route(messages, mode):
-                        self._stream_route_completion(orchestrator, security, messages, model_name)
-                        orchestrator.record_analytics_event(
-                            "chat_completion_requested",
-                            {
-                                "endpoint_path": "/v1/chat/completions",
-                                "actor_scope": "inference",
-                                "status_code": 200,
-                                "run_mode": "route",
-                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                                "response_streamed": True,
-                            },
-                        )
-                        return
-                    result = self._run(lambda: coordinator.complete(
-                        messages,
-                        mode=mode,
-                        attribution=attribution,
-                        hints=routing,
-                        model_name=model_name,
-                        workflow_run_id=f"run_{uuid.uuid4().hex}",
-                    ))
+                    model_client = orchestrator.client
+                    previous_max_tokens = model_client.max_output_tokens
+                    previous_temperature = model_client.default_temperature
+                    previous_top_p = model_client.default_top_p
+                    previous_presence = model_client.default_presence_penalty
+                    previous_frequency = model_client.default_frequency_penalty
+                    if max_tokens is not None:
+                        model_client.max_output_tokens = max_tokens
+                    if temperature is not None:
+                        model_client.default_temperature = temperature
+                    if top_p is not None:
+                        model_client.default_top_p = top_p
+                    if presence_penalty is not None:
+                        model_client.default_presence_penalty = presence_penalty
+                    if frequency_penalty is not None:
+                        model_client.default_frequency_penalty = frequency_penalty
+                    try:
+                        if stream and orchestrator.would_route(messages, mode):
+                            self._stream_route_completion(orchestrator, security, messages, model_name)
+                            orchestrator.record_analytics_event(
+                                "chat_completion_requested",
+                                {
+                                    "endpoint_path": "/v1/chat/completions",
+                                    "actor_scope": "inference",
+                                    "status_code": 200,
+                                    "run_mode": "route",
+                                    "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                                    "response_streamed": True,
+                                },
+                            )
+                            return
+                        result = self._run(lambda: coordinator.complete(
+                            messages,
+                            mode=mode,
+                            attribution=attribution,
+                            hints=routing,
+                            model_name=model_name,
+                            workflow_run_id=f"run_{uuid.uuid4().hex}",
+                        ))
+                    finally:
+                        model_client.max_output_tokens = previous_max_tokens
+                        model_client.default_temperature = previous_temperature
+                        model_client.default_top_p = previous_top_p
+                        model_client.default_presence_penalty = previous_presence
+                        model_client.default_frequency_penalty = previous_frequency
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(
@@ -797,15 +4454,123 @@ def build_server(
                         result, model=model_name, include_trace=include_trace, usage=result.get("usage"),
                     ))
                     return
+                if path == "/v1/embeddings":
+                    # OpenAI sync embeddings: input → vectors as list object.
+                    # Reuses the embedding batch backend (local path completes
+                    # synchronously) and frames an OpenAI-shaped response so
+                    # SDKs that call /v1/embeddings work without the batch path.
+                    _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
+                    model_name = _validate_embeddings_model(body)
+                    # Same pool honesty as chat/Completions: do not silently serve
+                    # a different embedding deployment than the client requested.
+                    _require_pool_model(orchestrator, model_name)
+                    _validate_embeddings_encoding_format(body)
+                    _validate_embeddings_dimensions(body)
+                    end_user_id = _validate_completions_user(body)
+                    if "routing" in body:
+                        routing = _validate_routing(body.get("routing"))
+                        # Sync embeddings has no batch channel job plane.
+                        if routing and routing.get("channel") == "batch":
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.channel=batch is not supported on /v1/embeddings; use /v1/batch/embeddings",
+                            )
+                        if routing and routing.get("latency_tolerant") is True:
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.latency_tolerant=true is not supported on /v1/embeddings; use /v1/batch/embeddings",
+                            )
+                    if "metadata" in body and not isinstance(body.get("metadata"), dict):
+                        # OpenAI-shaped string metadata is preferred for this
+                        # surface; non-objects fail closed before attribution merge.
+                        raise RequestError(400, "invalid_metadata", "metadata must be an object")
+                    if "metadata" in body:
+                        # When all values are strings, enforce OpenAI ≤16 pairs;
+                        # naruon-style attribution-in-metadata still uses
+                        # _embeddings_attribution below for known dimensions.
+                        meta = body.get("metadata") or {}
+                        if meta and all(isinstance(v, str) for v in meta.values()):
+                            _validate_openai_metadata(body)
+                    if "input" not in body and "inputs" not in body:
+                        # OpenAI only documents ``input``; accept nothing else.
+                        raise RequestError(400, "invalid_input", "input is required on /v1/embeddings")
+                    # Prefer OpenAI ``input``; do not accept ``inputs`` on this path
+                    # (batch endpoint owns ``inputs``) so clients get a clear split.
+                    if "inputs" in body and "input" not in body:
+                        raise RequestError(
+                            400,
+                            "invalid_input",
+                            "use input on /v1/embeddings; inputs is only for /v1/batch/embeddings",
+                        )
+                    inputs = _validate_embeddings_inputs({"input": body.get("input")})
+                    attribution = _embeddings_attribution(body)
+                    attribution = dict(attribution or {})
+                    if end_user_id is not None and not attribution.get("account"):
+                        attribution["account"] = end_user_id
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    if not attribution.get("service"):
+                        attribution["service"] = "embeddings_api"
+                    started_at = time.perf_counter()
+                    document = self._run(lambda: coordinator.complete_embeddings_batch(
+                        inputs,
+                        model=model_name,
+                        attribution=attribution,
+                        metadata={"actor_scope": "inference", "endpoint_alias": "embeddings"},
+                    ))
+                    if document.get("status") != "completed" or document.get("embeddings") is None:
+                        # Async backends return a job handle; fail closed on the
+                        # sync OpenAI path rather than inventing vectors.
+                        raise RequestError(
+                            503,
+                            "embeddings_unavailable",
+                            "sync /v1/embeddings is unavailable for this backend; use /v1/batch/embeddings",
+                        )
+                    orchestrator.record_analytics_event(
+                        "embeddings_requested",
+                        {
+                            "endpoint_path": "/v1/embeddings",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "input_count": len(inputs),
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        },
+                    )
+                    self._send(_openai_embeddings_response(document, model=model_name))
+                    return
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    model_name = str(body.get("model", "contextual-orchestrator"))
+                    # Require model — silent default to contextual-orchestrator was an
+                    # honesty gap for naruon/batch clients that omit the field.
+                    if "model" not in body:
+                        raise RequestError(
+                            400,
+                            "invalid_model",
+                            "model is required on /v1/batch/embeddings",
+                        )
+                    model_name = _validate_embeddings_model(body)
+                    _require_pool_model(orchestrator, model_name)
+                    _validate_embeddings_encoding_format(body)
+                    _validate_embeddings_dimensions(body)
+                    # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
+                    end_user_id = _validate_completions_user(body)
+                    if "routing" in body:
+                        _validate_routing(body.get("routing"))
                     attribution = _embeddings_attribution(body)
+                    attribution = dict(attribution or {})
+                    if end_user_id is not None and not attribution.get("account"):
+                        attribution["account"] = end_user_id
+                    if model_name and not attribution.get("model_name"):
+                        attribution["model_name"] = model_name
+                    if not attribution.get("service"):
+                        attribution["service"] = "embeddings_batch_api"
                     submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
-                    endpoint_alias = body.get("endpoint")
-                    if endpoint_alias:
-                        submit_metadata["endpoint_alias"] = str(endpoint_alias)
+                    endpoint_alias = _validate_batch_embeddings_endpoint(body)
+                    if endpoint_alias is not None:
+                        submit_metadata["endpoint_alias"] = endpoint_alias
                     document = self._run(lambda: coordinator.complete_embeddings_batch(
                         inputs,
                         model=model_name,
@@ -862,6 +4627,164 @@ def build_server(
                     # The Responses API has no chat-completions verifier equivalent,
                     # so every request is proxied to one agent verbatim.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
+                    # Fail-closed shape checks before passthrough so buyers never
+                    # get a 200 after shipping invalid OpenAI-shaped metadata/input.
+                    _validate_responses_model(body)
+                    _validate_responses_conversation_controls(body)
+                    if "store" in body:
+                        _validate_responses_store(body)
+                    # OpenAI ``user`` end-user id — same fail-closed shape as chat/Completions.
+                    if "user" in body:
+                        _validate_completions_user(body)
+                    if "service_tier" in body:
+                        _validate_service_tier(body, endpoint_path="/v1/responses")
+                    if "stream_options" in body:
+                        _validate_responses_stream_options(body)
+                    # Sampling knobs: type/range fail-closed before provider passthrough.
+                    if "temperature" in body:
+                        _validate_completions_temperature(body)
+                    if "top_p" in body:
+                        _validate_completions_top_p(body)
+                    if "presence_penalty" in body:
+                        _validate_completions_presence_penalty(body)
+                    if "frequency_penalty" in body:
+                        _validate_completions_frequency_penalty(body)
+                    if "n" in body:
+                        _validate_responses_n(body)
+                    if "seed" in body:
+                        _validate_responses_seed(body)
+                    if "stop" in body:
+                        _validate_responses_stop(body)
+                    if "logit_bias" in body:
+                        _validate_responses_logit_bias(body)
+                    if "logprobs" in body or "top_logprobs" in body:
+                        _validate_responses_logprobs(body)
+                    if "max_tokens" in body:
+                        _validate_completions_max_tokens(body)
+                    if "max_completion_tokens" in body:
+                        _validate_chat_max_completion_tokens(body)
+                    if "max_output_tokens" in body:
+                        _validate_responses_max_output_tokens(body)
+                    if "max_tool_calls" in body:
+                        _validate_responses_max_tool_calls(body)
+                    _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
+                    _validate_tool_resources(body, endpoint_path="/v1/responses")
+                    _validate_openai_background(body, endpoint_path="/v1/responses")
+                    if "parallel_tool_calls" in body:
+                        _validate_responses_parallel_tool_calls(body)
+                    # Tools surface: same OpenAI function-tool shape as chat; fail closed.
+                    functions_raw = body.get("functions") if "functions" in body else None
+                    function_call_raw = body.get("function_call") if "function_call" in body else None
+                    functions_present = (
+                        "functions" in body
+                        and functions_raw is not None
+                        and not (isinstance(functions_raw, list) and not functions_raw)
+                    )
+                    # function_call none/auto/empty-string (whitespace-padded) without functions
+                    # are omit-equivalent no-ops.
+                    function_call_present = (
+                        "function_call" in body
+                        and function_call_raw is not None
+                        and not (
+                            isinstance(function_call_raw, str)
+                            and (
+                                not function_call_raw.strip()
+                                or function_call_raw.strip().lower() in ("none", "auto")
+                            )
+                        )
+                    )
+                    if functions_present or function_call_present:
+                        raise RequestError(
+                            400,
+                            "invalid_functions",
+                            "functions and function_call are not supported on /v1/responses; "
+                            "use tools and tool_choice instead",
+                        )
+                    tools_list = body.get("tools") if isinstance(body.get("tools"), list) else None
+                    # tool_choice null is omit-equivalent; alone / empty tools: only "none" is a valid no-op.
+                    if (
+                        "tool_choice" in body
+                        and body.get("tool_choice") is not None
+                        and not tools_list
+                    ):
+                        tc = body.get("tool_choice")
+                        tc_norm = tc.strip().lower() if isinstance(tc, str) else tc
+                        # none/auto/empty-object/empty-string without tools are omit-equivalent no-ops.
+                        if (
+                            tc_norm not in ("none", "auto")
+                            and not (isinstance(tc, dict) and not tc)
+                            and not (isinstance(tc, str) and not tc.strip())
+                        ):
+                            raise RequestError(
+                                400,
+                                "invalid_tool_choice",
+                                "tool_choice requires tools on /v1/responses",
+                            )
+                    if "tools" in body:
+                        _validate_chat_tools(body)
+                    if "tool_choice" in body:
+                        _validate_chat_tool_choice(body)
+                    if "response_format" in body:
+                        _validate_chat_response_format(body)
+                    if "modalities" in body:
+                        _validate_responses_modalities(body)
+                    if "prediction" in body:
+                        _validate_responses_prediction(body)
+                    if "reasoning_effort" in body and body.get("reasoning_effort") is not None:
+                        raise RequestError(
+                            400,
+                            "invalid_reasoning_effort",
+                            "reasoning_effort is not supported on /v1/responses",
+                        )
+                    if "reasoning" in body:
+                        _validate_responses_reasoning(body)
+                    if "instructions" in body:
+                        _validate_responses_instructions(body)
+                    if "metadata" in body:
+                        _validate_openai_metadata(body)
+                    if "attribution" in body:
+                        _validate_attribution(body.get("attribution"))
+                    if "routing" in body:
+                        routing = _validate_routing(body.get("routing"))
+                        # Responses passthrough has no batch channel plane yet.
+                        if routing and routing.get("channel") == "batch":
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.channel=batch is not supported on /v1/responses",
+                            )
+                        if routing and routing.get("latency_tolerant") is True:
+                            raise RequestError(
+                                400,
+                                "invalid_routing",
+                                "routing.latency_tolerant=true is not supported on /v1/responses",
+                            )
+                    if "input" not in body:
+                        raise RequestError(400, "invalid_input", "input is required on /v1/responses")
+                    input_value = body.get("input")
+                    if not isinstance(input_value, (str, list)) or (
+                        isinstance(input_value, str) and not input_value.strip()
+                    ) or (isinstance(input_value, list) and len(input_value) == 0):
+                        raise RequestError(
+                            400,
+                            "invalid_input",
+                            "input must be a non-empty string or non-empty array on /v1/responses",
+                        )
+                    # stream=false / omit → non-SSE JSON response (honest no-stream path).
+                    # stream=true is not implemented for Responses passthrough.
+                    # String/0-1 forms coerce via shared bool helper (parity with chat).
+                    if "stream" in body:
+                        stream = _coerce_optional_bool(
+                            body.get("stream"),
+                            error_code="invalid_stream",
+                            message="stream must be a boolean",
+                        )
+                        if stream is True:
+                            raise RequestError(
+                                400,
+                                "invalid_stream",
+                                "stream is not supported on /v1/responses",
+                            )
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
