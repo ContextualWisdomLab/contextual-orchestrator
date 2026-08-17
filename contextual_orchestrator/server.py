@@ -269,9 +269,9 @@ def _coerce_optional_int(
 ) -> int | None:
     """Treat null/empty as omit; accept int, digit strings, and whole-number floats.
 
-    JS JSON and some SDKs serialize integers as strings (``"1"``) or as
-    whole floats (``1.0``). Both coerce to ``int``; non-integral floats and
-    bools fail closed.
+    JS JSON and some SDKs serialize integers as strings (``"1"``), whole floats
+    (``1.0``), or whole-float *strings* (``"1.0"`` / ``"0.0"`` from form encodings).
+    All coerce to ``int``; non-integral floats/strings and bools fail closed.
     """
     if value is None or (isinstance(value, str) and not value.strip()):
         return None
@@ -281,6 +281,13 @@ def _coerce_optional_int(
         stripped = value.strip()
         if stripped.lstrip("-").isdigit() and stripped not in {"-", ""}:
             return int(stripped)
+        # Whole-number float strings ("1.0", "0.0", " 2.00 ") from JS form SDKs.
+        try:
+            as_float = float(stripped)
+        except ValueError as exc:
+            raise RequestError(400, error_code, message) from exc
+        if as_float.is_integer() and abs(as_float) <= 2**53:
+            return int(as_float)
         raise RequestError(400, error_code, message)
     if isinstance(value, int):
         return value
@@ -983,8 +990,9 @@ def _validate_max_tool_calls(
     some chat SDKs also send it). This gateway proxies a single completion and
     does not run a tool loop, so any provided value fails closed with a named
     error rather than opaque ``unknown_fields``. Explicit JSON null, empty
-    / whitespace strings, and zero (int/float/digit string ``"0"``) are
-    treat-as-omit (SDK optional defaults / no tool rounds requested).
+    / whitespace strings, and zero (int/float/digit or whole-float string
+    ``"0"`` / ``"0.0"``) are treat-as-omit (SDK optional defaults / no tool
+    rounds requested).
     """
     if "max_tool_calls" not in body:
         return
@@ -992,7 +1000,7 @@ def _validate_max_tool_calls(
     # Explicit JSON null or empty/whitespace string is treat-as-omit.
     if value is None or (isinstance(value, str) and not value.strip()):
         return
-    # Zero is omit-equivalent (no tool-call rounds). Digit/"0"/0.0 coerce first.
+    # Zero is omit-equivalent (no tool-call rounds). Digit/"0"/0.0/"0.0" coerce first.
     if type(value) is int and value == 0:
         return
     if isinstance(value, float) and value == 0.0:
@@ -1059,16 +1067,23 @@ def _validate_completions_top_logprobs(body: dict[str, Any]) -> None:
     chat uses boolean ``logprobs`` + ``top_logprobs``. This gateway never returns
     token logprobs on /v1/completions, so non-zero ``top_logprobs`` fails closed
     with ``invalid_top_logprobs`` rather than opaque ``unknown_fields``.
-    Explicit JSON null or ``0`` is treat-as-omit (SDK optional default / no top alts).
+    Explicit JSON null, empty/whitespace string, or zero (int/float/digit or
+    whole-float string ``"0"`` / ``"0.0"``) is treat-as-omit — digit coerce
+    then nonzero reject (parity with ``max_tool_calls``).
     """
     if "top_logprobs" not in body:
         return
     value = body.get("top_logprobs")
-    # Explicit JSON null, empty/whitespace string, or zero is treat-as-omit.
-    # Digit string "0" is omit-equivalent (JS JSON integer-as-string).
-    if isinstance(value, str) and value.strip() == "0":
-        value = 0
-    if value is None or value == 0 or (isinstance(value, str) and not value.strip()):
+    # Explicit JSON null or empty/whitespace string is treat-as-omit.
+    if value is None or (isinstance(value, str) and not value.strip()):
+        return
+    # Digit / whole-float coerce first; zero is omit-equivalent (no top alts).
+    coerced = _coerce_optional_int(
+        value,
+        error_code="invalid_top_logprobs",
+        message="top_logprobs must be an integer",
+    )
+    if coerced is None or coerced == 0:
         return
     raise RequestError(
         400,
@@ -1992,10 +2007,11 @@ def _validate_chat_logprobs_surface(body: dict[str, Any]) -> None:
     """Fail-closed chat ``logprobs`` / ``top_logprobs`` before any proxy.
 
     Chat route and tools passthrough do not return token logprobs. Explicit
-    JSON null, empty/whitespace string, or ``0`` on ``top_logprobs`` is
-    treat-as-omit and popped so the upstream payload matches an omitted
-    field. ``logprobs=true`` and nonzero ``top_logprobs`` stay named 400s
-    even when ``tools`` would otherwise take the passthrough return.
+    JSON null, empty/whitespace string, or zero (int/float/digit or
+    whole-float string) on ``top_logprobs`` is treat-as-omit and popped so the
+    upstream payload matches an omitted field. ``logprobs=true`` and nonzero
+    ``top_logprobs`` stay named 400s even when ``tools`` would otherwise take
+    the passthrough return.
     """
     if "logprobs" not in body and "top_logprobs" not in body:
         return
@@ -2021,10 +2037,17 @@ def _validate_chat_logprobs_surface(body: dict[str, Any]) -> None:
                 body["logprobs"] = False
     if "top_logprobs" in body:
         tlp = body.get("top_logprobs")
-        # Digit string "0" is omit-equivalent (JS JSON integer-as-string).
-        if isinstance(tlp, str) and tlp.strip() == "0":
-            tlp = 0
-        if tlp is None or tlp == 0 or (isinstance(tlp, str) and not tlp.strip()):
+        # Explicit JSON null or empty/whitespace string is treat-as-omit.
+        if tlp is None or (isinstance(tlp, str) and not tlp.strip()):
+            body.pop("top_logprobs", None)
+            return
+        # Digit / whole-float coerce first; zero is omit-equivalent (no top alts).
+        coerced = _coerce_optional_int(
+            tlp,
+            error_code="invalid_top_logprobs",
+            message="top_logprobs must be an integer",
+        )
+        if coerced is None or coerced == 0:
             body.pop("top_logprobs", None)
             return
         raise RequestError(
