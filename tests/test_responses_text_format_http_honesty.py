@@ -189,22 +189,19 @@ def test_http_responses_omits_json_schema_null_optionals_on_text_format() -> Non
         thread.join(timeout=5)
 
 
-def test_http_responses_rejects_text_verbosity() -> None:
-    """verbosity is not applied; named invalid_text is the next action."""
+def test_http_responses_accepts_text_verbosity() -> None:
+    """Known text.verbosity levels are default-length no-ops."""
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {
                 "model": "mock-planner",
-                "input": "verbosity not applied",
+                "input": "verbosity noop",
                 "text": {"format": {"type": "text"}, "verbosity": "high"},
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_text" in blob
-        assert "unknown_fields" not in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -255,7 +252,7 @@ if __name__ == "__main__":
     test_http_responses_rejects_unknown_text_format_type()
     test_http_responses_accepts_text_format_json_object()
     test_http_responses_omits_json_schema_null_optionals_on_text_format()
-    test_http_responses_rejects_text_verbosity()
+    test_http_responses_accepts_text_verbosity()
     test_http_responses_rejects_unknown_text_format_key()
     test_http_responses_rejects_text_plus_response_format()
     print("ok")

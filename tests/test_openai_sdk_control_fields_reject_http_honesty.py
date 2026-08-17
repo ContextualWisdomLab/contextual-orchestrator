@@ -90,7 +90,8 @@ def test_http_chat_rejects_safety_identifier() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_rejects_verbosity() -> None:
+def test_http_chat_accepts_verbosity_high() -> None:
+    """Known OpenAI verbosity levels are default-length no-ops."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -102,10 +103,7 @@ def test_http_chat_rejects_verbosity() -> None:
                 "verbosity": "high",
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_verbosity" in blob
-        assert "unknown_fields" not in blob
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)

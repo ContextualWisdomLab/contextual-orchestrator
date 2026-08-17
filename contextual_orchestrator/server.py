@@ -1452,11 +1452,18 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
         verbosity = text.get("verbosity")
         if verbosity is None or (isinstance(verbosity, str) and not verbosity.strip()):
             text.pop("verbosity")
+        elif isinstance(verbosity, str) and verbosity.strip().lower() in {
+            "low",
+            "medium",
+            "high",
+        }:
+            # Known OpenAI levels are default-length no-ops (no verbosity plane).
+            text["verbosity"] = verbosity.strip().lower()
         else:
             raise RequestError(
                 400,
                 "invalid_text",
-                "text.verbosity is not supported on /v1/responses",
+                "text.verbosity must be one of low, medium, high",
             )
     response_format = body.get("response_format")
     response_format_present = not (
@@ -3153,11 +3160,21 @@ def _validate_openai_sdk_control_fields(body: dict[str, Any], *, endpoint_path: 
             f"safety_identifier is not supported on {endpoint_path}",
         )
     if "verbosity" in body and _sdk_control_present(body.get("verbosity")):
-        raise RequestError(
-            400,
-            "invalid_verbosity",
-            f"verbosity is not supported on {endpoint_path}",
-        )
+        verbosity = body.get("verbosity")
+        # Known OpenAI verbosity levels are default-length no-ops (no sampling plane).
+        if isinstance(verbosity, str) and verbosity.strip().lower() in {
+            "low",
+            "medium",
+            "high",
+        }:
+            body["verbosity"] = verbosity.strip().lower()
+        else:
+            raise RequestError(
+                400,
+                "invalid_verbosity",
+                "verbosity must be one of low, medium, high "
+                f"on {endpoint_path}",
+            )
     if "prompt_cache_retention" in body and _sdk_control_present(body.get("prompt_cache_retention")):
         raise RequestError(
             400,
