@@ -339,12 +339,12 @@ def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
 
     - non-empty string
     - non-empty array of non-empty strings (at most 128 items; joined with newlines)
-    - non-empty array of non-negative token integers
+    - non-empty array of non-negative token integers (whole floats like ``1.0`` ok)
     - non-empty array of token-integer arrays (joined like string arrays)
 
     Token sequences are re-encoded to a stable text surrogate for string
-    completion backends (same encoding as embeddings). Bools, negatives, and
-    mixed token/string batches fail closed.
+    completion backends (same encoding as embeddings). Bools, negatives,
+    non-integral floats, and mixed token/string batches fail closed.
     """
     if isinstance(prompt, str):
         if not prompt.strip():
@@ -361,27 +361,32 @@ def _validate_completion_prompt(prompt: Any) -> list[dict[str, str]]:
                 "invalid_prompt",
                 "prompt array must contain at most 128 items",
             )
-        # Single token sequence: [1, 2, 3] → one user message via text surrogate.
-        if _is_embedding_token_sequence(prompt):
-            text = _embedding_token_sequence_to_text(prompt)
+        # Single token sequence: [1, 2, 3] / [1.0, 2.0] → one user message.
+        coerced_tokens = _coerce_embedding_token_sequence(prompt)
+        if coerced_tokens is not None:
+            text = _embedding_token_sequence_to_text(coerced_tokens)
             if len(text) > 32_000:
                 raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
             return [{"role": "user", "content": text}]
         # Batch of token sequences: [[1,2],[3]] — join surrogates like string arrays.
         if isinstance(prompt[0], list):
-            if not all(_is_embedding_token_sequence(item) for item in prompt):
-                raise RequestError(
-                    400,
-                    "invalid_prompt",
-                    "token-id prompt arrays must contain non-negative token integers",
-                )
-            parts = [_embedding_token_sequence_to_text(item) for item in prompt]
+            batch_tokens: list[list[int]] = []
+            for item in prompt:
+                coerced = _coerce_embedding_token_sequence(item)
+                if coerced is None:
+                    raise RequestError(
+                        400,
+                        "invalid_prompt",
+                        "token-id prompt arrays must contain non-negative token integers",
+                    )
+                batch_tokens.append(coerced)
+            parts = [_embedding_token_sequence_to_text(item) for item in batch_tokens]
             joined = "\n".join(parts)
             if len(joined) > 32_000:
                 raise RequestError(400, "invalid_prompt", "prompt must be at most 32000 characters")
             return [{"role": "user", "content": joined}]
-        # Apparent token sequence with bools/negatives — fail closed (not strings).
-        if all(isinstance(item, int) for item in prompt):
+        # Apparent token sequence with bools/negatives/non-integral floats — fail closed.
+        if all(_is_token_id_shaped(item) for item in prompt):
             raise RequestError(
                 400,
                 "invalid_prompt",
@@ -2514,16 +2519,54 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     return batch
 
 
-def _is_embedding_token_sequence(value: Any) -> bool:
-    """True when value is a non-empty list of non-bool integers (OpenAI token ids)."""
+def _is_token_id_shaped(value: Any) -> bool:
+    """True for numeric token-id shapes (int / whole float), including negatives and bools.
+
+    Used to distinguish failed token sequences from string arrays so clients get a
+    named token-id error instead of a string-item error.
+    """
+    if isinstance(value, bool):
+        return True
+    if type(value) is int:
+        return True
+    if type(value) is float and value.is_integer():
+        return True
+    return False
+
+
+def _coerce_token_id(value: Any) -> int | None:
+    """Coerce one non-negative OpenAI token id, or None if not a valid token id.
+
+    Accepts bare ``int`` and whole floats (``1.0``) from JS/form SDKs. Bools,
+    negatives, and non-integral floats are not valid token ids.
+    """
+    if isinstance(value, bool):
+        return None
+    if type(value) is int:
+        return value if value >= 0 else None
+    if type(value) is float:
+        if value < 0 or not value.is_integer():
+            return None
+        return int(value)
+    return None
+
+
+def _coerce_embedding_token_sequence(value: Any) -> list[int] | None:
+    """Coerce a non-empty list of non-negative token ids, or None if not a sequence."""
     if not isinstance(value, list) or not value:
-        return False
+        return None
+    tokens: list[int] = []
     for item in value:
-        if isinstance(item, bool) or type(item) is not int:
-            return False
-        if item < 0:
-            return False
-    return True
+        token_id = _coerce_token_id(item)
+        if token_id is None:
+            return None
+        tokens.append(token_id)
+    return tokens
+
+
+def _is_embedding_token_sequence(value: Any) -> bool:
+    """True when value is a non-empty list of non-negative token ids (int/whole float)."""
+    return _coerce_embedding_token_sequence(value) is not None
 
 
 def _embedding_token_sequence_to_text(tokens: list[int]) -> str:
@@ -2541,8 +2584,9 @@ def _normalize_embedding_input_item(item: Any) -> str:
                 "each embedding input must be a non-empty string",
             )
         return item
-    if _is_embedding_token_sequence(item):
-        return _embedding_token_sequence_to_text(item)
+    coerced = _coerce_embedding_token_sequence(item)
+    if coerced is not None:
+        return _embedding_token_sequence_to_text(coerced)
     raise RequestError(
         400,
         "invalid_input",
@@ -2557,7 +2601,7 @@ def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
 
     - non-empty string
     - non-empty array of non-empty strings
-    - non-empty array of non-negative token integers (one embedding)
+    - non-empty array of non-negative token integers / whole floats (one embedding)
     - non-empty array of token-integer arrays (batch)
 
     Token arrays are re-encoded to a stable text surrogate for string embedding
@@ -2575,19 +2619,31 @@ def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
             "input/inputs must be a non-empty string, string array, token array, "
             "or array of token arrays",
         )
-    # Single token sequence: [1, 2, 3] → one embedding unit.
-    if _is_embedding_token_sequence(raw):
-        return [_embedding_token_sequence_to_text(raw)]
+    # Single token sequence: [1, 2, 3] / [1.0, 2.0] → one embedding unit.
+    coerced_tokens = _coerce_embedding_token_sequence(raw)
+    if coerced_tokens is not None:
+        return [_embedding_token_sequence_to_text(coerced_tokens)]
     # Batch of token sequences: [[1,2],[3]] — first element is a list.
     if isinstance(raw[0], list):
-        if not all(_is_embedding_token_sequence(item) for item in raw):
-            raise RequestError(
-                400,
-                "invalid_input",
-                "each embedding input must be a string or array of non-negative "
-                "token integers",
-            )
-        return [_embedding_token_sequence_to_text(item) for item in raw]
+        batch_tokens: list[list[int]] = []
+        for item in raw:
+            coerced = _coerce_embedding_token_sequence(item)
+            if coerced is None:
+                raise RequestError(
+                    400,
+                    "invalid_input",
+                    "each embedding input must be a string or array of non-negative "
+                    "token integers",
+                )
+            batch_tokens.append(coerced)
+        return [_embedding_token_sequence_to_text(item) for item in batch_tokens]
+    # Apparent flat token sequence with invalid ids (negatives/bools/1.5).
+    if all(_is_token_id_shaped(item) for item in raw):
+        raise RequestError(
+            400,
+            "invalid_input",
+            "token-id inputs must be non-negative integers",
+        )
     inputs: list[str] = []
     for item in raw:
         inputs.append(_normalize_embedding_input_item(item))
