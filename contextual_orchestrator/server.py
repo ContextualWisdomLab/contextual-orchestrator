@@ -1043,9 +1043,20 @@ def _validate_completions_logprobs(body: dict[str, Any]) -> int | bool | None:
     # Integer 0 is historical OpenAI "no logprobs" — omit-equivalent.
     if type(logprobs) is int and logprobs == 0:
         return None
-    # Whole-float 0.0 (JS) is omit-equivalent.
+    # Whole-float 0.0 (JS) and digit/float-string "0"/"0.0" are omit-equivalent.
     if isinstance(logprobs, float) and logprobs == 0.0:
         return None
+    if isinstance(logprobs, str) and logprobs.strip():
+        try:
+            as_zero = _coerce_optional_int(
+                logprobs,
+                error_code="invalid_logprobs",
+                message="logprobs must be false; token logprobs are not supported on /v1/completions",
+            )
+            if as_zero == 0:
+                return None
+        except RequestError:
+            pass  # fall through to bool coerce / fail-closed
     coerced = _coerce_optional_bool(
         logprobs,
         error_code="invalid_logprobs",
@@ -1392,6 +1403,23 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
             "use official text.format only",
         )
     fmt_type = fmt.get("type")
+    # Explicit JSON null or blank type alone is treat-as-omit (SDK optional default).
+    if fmt_type is None or (isinstance(fmt_type, str) and not fmt_type.strip()):
+        remaining_fmt = {key: value for key, value in fmt.items() if key != "type"}
+        if not remaining_fmt:
+            text.pop("format", None)
+            if not text:
+                return None
+            raise RequestError(
+                400,
+                "invalid_text",
+                "text.format is required when text is provided",
+            )
+        raise RequestError(
+            400,
+            "invalid_text",
+            "text.format.type must be one of text, json_object, json_schema",
+        )
     # Strip + casefold so " JSON_OBJECT " / "Text" match official types; write back.
     if isinstance(fmt_type, str):
         fmt_type = fmt_type.strip().lower()
@@ -3379,7 +3407,9 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
     This gateway proxies Responses but does not interpret or enforce reasoning
     controls, so any non-empty present value fails closed rather than silently
     ignoring a buyer-visible o-series control surface.
-    Explicit JSON null, empty object, or empty/whitespace string is treat-as-omit.
+    Explicit JSON null, empty object, empty/whitespace string, or
+    ``{"effort": "none"}`` (casefold/pad) is treat-as-omit — ``none`` disables
+    extra reasoning and is an honest no-op here (chat ``reasoning_effort`` parity).
     """
     if "reasoning" not in body:
         return
@@ -3390,6 +3420,27 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
         or (isinstance(value, str) and not value.strip())
     ):
         return
+    if isinstance(value, dict):
+        # effort=none (and null/blank optional siblings) is omit-equivalent.
+        unknown = sorted(set(value) - {"effort", "summary"})
+        if not unknown:
+            effort = value.get("effort") if "effort" in value else None
+            summary = value.get("summary") if "summary" in value else None
+            effort_omit = (
+                "effort" not in value
+                or effort is None
+                or (
+                    isinstance(effort, str)
+                    and (not effort.strip() or effort.strip().lower() == "none")
+                )
+            )
+            summary_omit = (
+                "summary" not in value
+                or summary is None
+                or (isinstance(summary, str) and not summary.strip())
+            )
+            if effort_omit and summary_omit:
+                return
     raise RequestError(
         400,
         "invalid_reasoning",
@@ -3487,7 +3538,8 @@ def _validate_embeddings_dimensions(body: dict[str, Any]) -> None:
         error_code="invalid_dimensions",
         message="dimensions must be an integer",
     )
-    if coerced is None:
+    if coerced is None or coerced == 0:
+        # Zero is omit-equivalent (no reduced-dimension request).
         return
     raise RequestError(
         400,
