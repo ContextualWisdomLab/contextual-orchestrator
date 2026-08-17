@@ -2492,12 +2492,54 @@ def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[B
     return batch
 
 
+def _is_embedding_token_sequence(value: Any) -> bool:
+    """True when value is a non-empty list of non-bool integers (OpenAI token ids)."""
+    if not isinstance(value, list) or not value:
+        return False
+    for item in value:
+        if isinstance(item, bool) or type(item) is not int:
+            return False
+        if item < 0:
+            return False
+    return True
+
+
+def _embedding_token_sequence_to_text(tokens: list[int]) -> str:
+    """Stable text surrogate for token-id inputs on string embedding backends."""
+    return "\x1etokens:" + ",".join(str(token) for token in tokens)
+
+
+def _normalize_embedding_input_item(item: Any) -> str:
+    """Normalize one embeddings unit to a non-empty string for the backend."""
+    if isinstance(item, str):
+        if not item.strip():
+            raise RequestError(
+                400,
+                "invalid_input",
+                "each embedding input must be a non-empty string",
+            )
+        return item
+    if _is_embedding_token_sequence(item):
+        return _embedding_token_sequence_to_text(item)
+    raise RequestError(
+        400,
+        "invalid_input",
+        "each embedding input must be a string or array of non-negative token integers",
+    )
+
+
 def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
     """Validate embeddings ``input``/``inputs`` for sync and batch paths.
 
-    Accepts a non-empty string or a non-empty array of non-empty strings.
-    Blank items fail closed: empty vectors pollute semantic search and cost
-    rollups without giving buyers a usable meaning unit.
+    Accepts OpenAI shapes:
+
+    - non-empty string
+    - non-empty array of non-empty strings
+    - non-empty array of non-negative token integers (one embedding)
+    - non-empty array of token-integer arrays (batch)
+
+    Token arrays are re-encoded to a stable text surrogate for string embedding
+    backends. Blank string items fail closed.
     """
     raw = body.get("inputs")
     if raw is None:
@@ -2508,19 +2550,25 @@ def _validate_embeddings_inputs(body: dict[str, Any]) -> list[str]:
         raise RequestError(
             400,
             "invalid_input",
-            "input/inputs must be a non-empty string or non-empty array of strings",
+            "input/inputs must be a non-empty string, string array, token array, "
+            "or array of token arrays",
         )
-    inputs: list[str] = []
-    for item in raw:
-        if not isinstance(item, str):
-            raise RequestError(400, "invalid_input", "each embedding input must be a string")
-        if not item.strip():
+    # Single token sequence: [1, 2, 3] → one embedding unit.
+    if _is_embedding_token_sequence(raw):
+        return [_embedding_token_sequence_to_text(raw)]
+    # Batch of token sequences: [[1,2],[3]] — first element is a list.
+    if isinstance(raw[0], list):
+        if not all(_is_embedding_token_sequence(item) for item in raw):
             raise RequestError(
                 400,
                 "invalid_input",
-                "each embedding input must be a non-empty string",
+                "each embedding input must be a string or array of non-negative "
+                "token integers",
             )
-        inputs.append(item)
+        return [_embedding_token_sequence_to_text(item) for item in raw]
+    inputs: list[str] = []
+    for item in raw:
+        inputs.append(_normalize_embedding_input_item(item))
     return inputs
 
 
