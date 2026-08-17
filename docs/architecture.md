@@ -44,7 +44,7 @@ Add learned routing only when there is an evaluation set and logs proving the he
 
 ## SDK omit-real persist
 
-Official OpenAI SDKs serialize omitted optional fields as JSON `null` or as empty/whitespace strings. Returning HTTP 200 while leaving those keys on the proxied body is not omit: providers then reject `tool_calls[].function.arguments: null`, blank Responses `instructions`, and non-string `metadata` values after this gateway already accepted the request.
+Official OpenAI SDKs serialize omitted optional fields as JSON `null` or as empty/whitespace strings. Returning HTTP 200 while leaving those keys on the proxied body is not omit: providers then reject `tool_calls[].function.arguments: null`, blank Responses `instructions`, and non-string `metadata` values after this gateway already accepted the request. OpenAI `metadata` keys must be non-empty and must not include leading/trailing whitespace (`key == key.strip()`); padded keys return named `invalid_metadata` so attribution joins cannot diverge from strip()-normalized labels. Locked by `tests/test_metadata_key_no_padding_http_honesty.py` on tip ≥ #724 (re-land of #695).
 
 Buyer next action: send the same payload the SDK emits. Expect the upstream echo to match an omitted field (key absent, or `arguments` as `""`), and expect `tools` + nonzero `top_logprobs` to return `invalid_top_logprobs` instead of a silent passthrough.
 
