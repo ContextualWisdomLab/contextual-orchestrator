@@ -35,10 +35,6 @@ _HTML_OPEN = re.compile(
     r"<(p|div|li|h[1-6]|tr|td|section|article|blockquote)\b",
     re.IGNORECASE,
 )
-_HTML_BLOCK = re.compile(
-    r"<(p|div|li|h[1-6]|tr|td|section|article|blockquote)\b[^>]*>.*?</\1>",
-    re.IGNORECASE | re.DOTALL,
-)
 _TAG_ONLY = re.compile(r"^(?:\s*</?[A-Za-z][^>]*>\s*)+$")
 _PARAGRAPH_BREAK = re.compile(r"\n\s*\n+")
 _SENTENCE_CUT = re.compile(r"(?<=[.!?。！？])(?=\s+(?:[A-Z\"'(가-힣]))")
@@ -218,6 +214,25 @@ def _looks_like_email(text: str) -> bool:
     return bool({"from", "to", "subject"} & set(headers))
 
 
+def _html_block_span(
+    text: str, lowered: str, opener_start: int, tag: str
+) -> tuple[int, int] | None:
+    """Return ``[opener_start, close_end)`` for the first matching close tag.
+
+    A linear ``find`` replaces ``.*?`` plus a backreference. Nested
+    ``<div> <div> <div>`` prefixes made that matcher explode; the first
+    same-tag close is the previous non-greedy behavior and stays O(n).
+    """
+    gt = text.find(">", opener_start)
+    if gt < 0:
+        return None
+    needle = f"</{tag}>"
+    close_at = lowered.find(needle, gt + 1)
+    if close_at < 0:
+        return None
+    return opener_start, close_at + len(needle)
+
+
 def _html_leaf_spans(text: str) -> list[tuple[int, int, str]]:
     """Return innermost HTML blocks so a wrapper div does not hide inner ``<p>``.
 
@@ -226,11 +241,13 @@ def _html_leaf_spans(text: str) -> list[tuple[int, int, str]]:
     walks each opener, then drops a match that strictly contains another.
     """
     found: list[tuple[int, int, str]] = []
+    lowered = text.lower()
     for opener in _HTML_OPEN.finditer(text):
-        block = _HTML_BLOCK.match(text, opener.start())
-        if block is None:
+        span = _html_block_span(text, lowered, opener.start(), opener.group(1).lower())
+        if span is None:
             continue
-        found.append((block.start(), block.end(), block.group(0)))
+        start, end = span
+        found.append((start, end, text[start:end]))
     leaves: list[tuple[int, int, str]] = []
     for start, end, piece in found:
         contained = any(

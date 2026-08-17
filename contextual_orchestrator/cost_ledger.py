@@ -554,6 +554,54 @@ _USAGE_COLUMNS = (
     "currency_code",
 )
 
+_USAGE_COLUMN_SQL = ", ".join(_USAGE_COLUMNS)
+_QMARK_USAGE_VALUES = ", ".join("?" for _ in _USAGE_COLUMNS)
+_PYFORMAT_USAGE_VALUES = ", ".join("%s" for _ in _USAGE_COLUMNS)
+
+# Complete statements, not f-strings at execute time. Values are always bound.
+_SELECT_DIMENSION_SQL = {
+    "qmark": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?",
+    "pyformat": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s",
+}
+_INSERT_DIMENSION_SQL = {
+    "qmark": (
+        "INSERT INTO cost_attribution_dimensions "
+        "(dimension_name, dimension_label, dimension_order) VALUES (?, ?, ?)"
+    ),
+    "pyformat": (
+        "INSERT INTO cost_attribution_dimensions "
+        "(dimension_name, dimension_label, dimension_order) VALUES (%s, %s, %s)"
+    ),
+}
+_INSERT_USAGE_SQL = {
+    "qmark": f"INSERT INTO llm_usage_records ({_USAGE_COLUMN_SQL}) VALUES ({_QMARK_USAGE_VALUES})",
+    "pyformat": (
+        f"INSERT INTO llm_usage_records ({_USAGE_COLUMN_SQL}) VALUES ({_PYFORMAT_USAGE_VALUES})"
+    ),
+}
+_SELECT_USAGE_SQL = {
+    "qmark": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records",
+    "pyformat": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records",
+}
+_SELECT_USAGE_SINCE_SQL = {
+    "qmark": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records WHERE created_at >= ?",
+    "pyformat": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records WHERE created_at >= %s",
+}
+_SELECT_USAGE_UNTIL_SQL = {
+    "qmark": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records WHERE created_at < ?",
+    "pyformat": f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records WHERE created_at < %s",
+}
+_SELECT_USAGE_WINDOW_SQL = {
+    "qmark": (
+        f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records "
+        "WHERE created_at >= ? AND created_at < ?"
+    ),
+    "pyformat": (
+        f"SELECT {_USAGE_COLUMN_SQL} FROM llm_usage_records "
+        "WHERE created_at >= %s AND created_at < %s"
+    ),
+}
+
 
 class SqlLedgerStore:
     """PEP-249 SQL ledger store (stdlib ``sqlite3`` or ``psycopg``).
@@ -569,10 +617,14 @@ class SqlLedgerStore:
         self._create_schema()
         self._seed_dimension_catalog()
 
-    def _placeholder(self) -> str:
-        return "?" if self._paramstyle == "qmark" else "%s"
+    def _bound_sql(self, statements: dict[str, str]) -> str:
+        """Return the statement whose placeholders match this store's paramstyle."""
+        if self._paramstyle == "qmark":
+            return statements["qmark"]
+        return statements["pyformat"]
 
     def _create_schema(self) -> None:
+        """Create the ledger tables if they do not already exist."""
         cur = self._conn.cursor()
         for statement in SCHEMA_SQL.strip().split(";"):
             if statement.strip():
@@ -580,49 +632,44 @@ class SqlLedgerStore:
         self._conn.commit()
 
     def _seed_dimension_catalog(self) -> None:
-        ph = self._placeholder()
+        """Insert the fixed attribution-dimension catalog rows once."""
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
-                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
-                (name,),
-            )
+            # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            cur.execute(self._bound_sql(_SELECT_DIMENSION_SQL), (name,))
             if cur.fetchone() is None:
-                cur.execute(
-                    "INSERT INTO cost_attribution_dimensions "
-                    f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
-                    (name, label, order),
-                )
+                # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+                cur.execute(self._bound_sql(_INSERT_DIMENSION_SQL), (name, label, order))
         self._conn.commit()
 
     def append(self, record: UsageRecord) -> None:
         """Insert a usage record row."""
         row = record.as_dict()
-        ph = self._placeholder()
-        placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
-        columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
         cur.execute(
-            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
+            self._bound_sql(_INSERT_USAGE_SQL),
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
         self._conn.commit()
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return record rows in the optional half-open window."""
-        ph = self._placeholder()
-        clauses: List[str] = []
-        params: List[Any] = []
-        if start is not None:
-            clauses.append(f"created_at >= {ph}")
-            params.append(start)
-        if end is not None:
-            clauses.append(f"created_at < {ph}")
-            params.append(end)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        columns = ", ".join(_USAGE_COLUMNS)
+        if start is not None and end is not None:
+            sql = self._bound_sql(_SELECT_USAGE_WINDOW_SQL)
+            params: tuple[Any, ...] = (start, end)
+        elif start is not None:
+            sql = self._bound_sql(_SELECT_USAGE_SINCE_SQL)
+            params = (start,)
+        elif end is not None:
+            sql = self._bound_sql(_SELECT_USAGE_UNTIL_SQL)
+            params = (end,)
+        else:
+            sql = self._bound_sql(_SELECT_USAGE_SQL)
+            params = ()
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        # nosemgrep: python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+        cur.execute(sql, params)
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 

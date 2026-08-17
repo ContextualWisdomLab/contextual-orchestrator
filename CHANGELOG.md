@@ -23,3 +23,8 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   `-_`, and MIME line wraps so a scanned invoice does not glue onto the
   balance paragraph. Next action: POST the raw Gmail HTML or MIME-wrapped
   scan with `chunking_strategy=meaning_units` and search `chunk_units`.
+- HTML meaning-unit cuts walk to the first matching close tag instead of a
+  backtracking `.*?` matcher, so nested unclosed wrappers cannot stall a
+  batch. Ledger SQL uses complete bind-parameter statements (no execute-time
+  concatenation). Provider TLS opt-out and validated `urlopen` keep audited
+  Semgrep annotations.

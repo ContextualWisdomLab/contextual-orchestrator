@@ -125,6 +125,34 @@ def test_html_blocks_keep_invoice_out_of_the_greeting() -> None:
     assert "Good morning" not in invoice.chunk_text
 
 
+def test_truncated_html_opener_does_not_claim_the_invoice() -> None:
+    text = "<div Invoice INV-20260816 remains open."
+    units = meaning_unit_chunks(text)
+    for unit in units:
+        _assert_span(text, unit)
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert invoice.chunk_kind != "html_block"
+
+
+def test_unclosed_wrapper_divs_do_not_hide_the_invoice() -> None:
+    text = "<div>" * 40 + "<p>Invoice INV-20260816 balance due is 1840.00 USD.</p>"
+    units = meaning_unit_chunks(text)
+    for unit in units:
+        _assert_span(text, unit)
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert invoice.chunk_kind == "html_block"
+    assert invoice.chunk_text.startswith("<p>")
+
+
+def test_case_insensitive_html_close_still_isolates_the_invoice() -> None:
+    text = "<DIV><P>Good morning from support.</P><P>Invoice INV-20260816.</P></DIV>"
+    units = meaning_unit_chunks(text)
+    greeting = next(unit for unit in units if "Good morning" in unit.chunk_text)
+    invoice = next(unit for unit in units if "INV-20260816" in unit.chunk_text)
+    assert greeting is not invoice
+    assert "INV-20260816" not in greeting.chunk_text
+
+
 def test_wrapped_div_keeps_invoice_out_of_the_greeting() -> None:
     units = meaning_unit_chunks(INVOICE_WRAPPED_HTML)
     for unit in units:
@@ -286,6 +314,9 @@ if __name__ == "__main__":
     test_invoice_email_isolates_sender_subject_and_balance_line()
     test_invoice_query_ranks_the_balance_unit_first()
     test_html_blocks_keep_invoice_out_of_the_greeting()
+    test_truncated_html_opener_does_not_claim_the_invoice()
+    test_unclosed_wrapper_divs_do_not_hide_the_invoice()
+    test_case_insensitive_html_close_still_isolates_the_invoice()
     test_wrapped_div_keeps_invoice_out_of_the_greeting()
     test_embedded_image_keeps_source_offset_and_neighbors()
     test_charset_data_image_is_its_own_unit()

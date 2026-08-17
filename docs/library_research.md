@@ -65,7 +65,11 @@ Researched before adding `contextual_orchestrator/semantic_chunking.py`:
 | Similarity-breakpoint “semantic chunking” (LangChain / LlamaIndex) | Skip. | Qu et al. (2025) found computational cost is not justified by consistent retrieval gains. |
 | [RFC 2397 data URL scheme](https://www.rfc-editor.org/rfc/rfc2397) | Cite as the `data:image` authority; accept optional `;k=v` parameters, URL-safe `-_`, and MIME line wraps in the payload. | Masinter (1998). A parser library is not justified for span isolation. |
 
-Selected: stdlib regular expressions plus paragraph/email/HTML/image detectors. Custom code that was deliberately skipped: LLM-as-chunker, perplexity chunking, and any new pip dependency.
+Selected: stdlib regular expressions plus a linear HTML closer walk (first
+same-tag close, then innermost-leaf filter) and paragraph/email/image
+detectors. Custom code that was deliberately skipped: LLM-as-chunker,
+perplexity chunking, a backtracking ``.*?`` HTML matcher, and any new pip
+dependency.
 
 ## Required For New Designs
 

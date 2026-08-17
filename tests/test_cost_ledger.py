@@ -16,6 +16,11 @@ from contextual_orchestrator.cost_ledger import (  # noqa: E402
     PriceBook,
     PriceEntry,
     SqlLedgerStore,
+    _SELECT_DIMENSION_SQL,
+    _SELECT_USAGE_SINCE_SQL,
+    _SELECT_USAGE_SQL,
+    _SELECT_USAGE_UNTIL_SQL,
+    _SELECT_USAGE_WINDOW_SQL,
     dimension_catalog,
 )
 from contextual_orchestrator.conventions import is_two_word_snake_case  # noqa: E402
@@ -251,6 +256,38 @@ def test_ledger_table_names_follow_two_word_snake_case() -> None:
 def test_dimension_catalog_covers_all_required_dimensions() -> None:
     names = {entry["dimension_name"] for entry in dimension_catalog()}
     assert names == {"account", "service", "upstream_api", "model_name", "team", "group", "company"}
+
+
+def test_sql_ledger_bound_sql_tracks_paramstyle() -> None:
+    conn = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(conn, paramstyle="qmark")
+    assert store._bound_sql(_SELECT_DIMENSION_SQL) == _SELECT_DIMENSION_SQL["qmark"]
+    assert "?" in store._bound_sql(_SELECT_USAGE_WINDOW_SQL)
+    assert store._bound_sql(_SELECT_USAGE_SQL) == _SELECT_USAGE_SQL["qmark"]
+    assert store._bound_sql(_SELECT_USAGE_SINCE_SQL).endswith("?")
+    assert store._bound_sql(_SELECT_USAGE_UNTIL_SQL).endswith("?")
+    store._paramstyle = "pyformat"
+    assert store._bound_sql(_SELECT_DIMENSION_SQL) == _SELECT_DIMENSION_SQL["pyformat"]
+    assert "%s" in store._bound_sql(_SELECT_USAGE_WINDOW_SQL)
+
+
+def test_sql_ledger_store_query_windows_on_sqlite() -> None:
+    conn = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(conn, paramstyle="qmark")
+    ledger = _priced_ledger(store=store)
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=0, created_at=100
+    )
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=0, created_at=200
+    )
+    ledger.record_usage(
+        provider="openai", model="gpt-x", prompt_tokens=1000, completion_tokens=0, created_at=300
+    )
+    assert len(store.query()) == 3
+    assert [row["created_at"] for row in store.query(start=150)] == [200, 300]
+    assert [row["created_at"] for row in store.query(end=250)] == [100, 200]
+    assert [row["created_at"] for row in store.query(start=150, end=300)] == [200]
 
 
 if __name__ == "__main__":  # pragma: no cover
