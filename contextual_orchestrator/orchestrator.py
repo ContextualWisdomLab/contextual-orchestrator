@@ -268,7 +268,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.  # nosemgrep: python.lang.security.unverified-ssl-context.unverified-ssl-context
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -356,11 +356,27 @@ class ModelClient:
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
         """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
             request,
             timeout=self.timeout,
             context=self._ssl_context,
         )
+
+    def fetch_provider_json(self, agent: ModelAgent, path: str) -> Any:
+        """GET JSON from ``agent.base_url`` + ``path`` via the existing provider opener.
+
+        Catalog discovery uses this so live ``GET /models`` shares the same
+        validated urllib seam as chat (no second HTTP client).
+        """
+        api_key = get_credential(agent.credential_name) or ""
+        request = urllib.request.Request(
+            self._provider_url(agent, path),
+            headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
+            method="GET",
+        )
+        with self._open_provider(request) as response:
+            raw = response.read().decode("utf-8")
+        return json.loads(raw)
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.

@@ -35,3 +35,6 @@
   fall back to GitHub Models.
 - Malformed upstream chat.completion bodies raise `ProviderResponseError` so
   the gateway failovers or returns a JSON error instead of crashing.
+- Live catalog discovery reuses `ModelClient.fetch_provider_json` (the existing
+  validated urllib seam) instead of `http.client` or a second `urlopen`.
+  `file://` and private/reserved list targets fail closed.

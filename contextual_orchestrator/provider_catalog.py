@@ -10,9 +10,7 @@ no list API, the list call 401/403/404/429/5xxs, or the body is empty/malformed
 
 from __future__ import annotations
 
-import http.client
 import ipaddress
-import json
 import os
 import re
 import socket
@@ -26,6 +24,7 @@ from .orchestrator import (
     FORBIDDEN_HOST_MARKERS,
     FORBIDDEN_MODEL_MARKERS,
     ModelAgent,
+    ModelClient,
     _AgentPoolStore,
     catalog_allows_fields,
     load_agents,
@@ -202,11 +201,11 @@ def parse_models_list(payload: Any) -> list[str]:
 def _catalog_list_target(
     base_url: str, *, allow_insecure: bool
 ) -> tuple[str, str, int, str] | None:
-    """Return ``(scheme, hostname, port, path)`` for GET /models, or None if unsafe.
+    """Return ``(scheme, hostname, port, prefix)`` for GET /models, or None if unsafe.
 
-    ``urllib`` is not used: it accepts ``file://``. Only http(s) hosts and a
-    single ``/models`` path are allowed. Private/loopback/reserved addresses
-    are rejected unless ``allow_insecure`` (lab fixtures).
+    Only http(s) hosts are allowed. Private/loopback/reserved addresses are
+    rejected unless ``allow_insecure`` (lab fixtures). ``file://`` is never a
+    list target.
     """
     parsed = urlparse(base_url)
     hostname = parsed.hostname
@@ -214,8 +213,8 @@ def _catalog_list_target(
         return None
     if not allow_insecure and parsed.scheme != "https":
         return None
-    path = parsed.path.rstrip("/") + "/models"
-    if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
+    prefix = parsed.path.rstrip("/")
+    if prefix and (not prefix.startswith("/") or prefix.startswith("//") or "\r" in prefix or "\n" in prefix):
         return None
     port = parsed.port or (443 if parsed.scheme == "https" else 80)
     if not allow_insecure:
@@ -232,7 +231,7 @@ def _catalog_list_target(
                     return None
         except OSError:
             return None
-    return parsed.scheme, hostname, port, path
+    return parsed.scheme, hostname, port, prefix
 
 
 def discover_provider_models(
@@ -246,34 +245,28 @@ def discover_provider_models(
 
     Any transport, HTTP, or parse failure returns ``[]`` so the static seed
     stays in force. ``allow_insecure`` is a lab/test hook for loopback fixtures.
+    Uses ``ModelClient.fetch_provider_json`` so discovery does not open a
+    second HTTP client (Semgrep ``httpsconnection-detected`` / dynamic urllib).
     """
-    api_key = get_credential(credential_name)
-    if not api_key:
+    if not get_credential(credential_name):
         return []
     target = _catalog_list_target(base_url, allow_insecure=allow_insecure)
     if target is None:
         return []
-    scheme, hostname, port, path = target
-    connection: http.client.HTTPConnection | None = None
+    scheme, hostname, port, prefix = target
+    agent = ModelAgent(
+        "catalog_discovery_agent",
+        "catalog_list",
+        f"{scheme}://{hostname}:{port}{prefix}",
+        credential_key=credential_name,
+    )
     try:
-        if scheme == "https":
-            connection = http.client.HTTPSConnection(hostname, port, timeout=timeout)
-        else:
-            connection = http.client.HTTPConnection(hostname, port, timeout=timeout)
-        connection.request(
-            "GET",
-            path,
-            headers={"authorization": f"Bearer {api_key}", "accept": "application/json"},
-        )
-        response = connection.getresponse()
-        if response.status != 200:
-            return []
-        payload = json.loads(response.read().decode("utf-8"))
+        payload = ModelClient(
+            timeout=timeout,
+            verify_tls=not allow_insecure,
+        ).fetch_provider_json(agent, "/models")
     except Exception:  # noqa: BLE001 - discovery must never break bootstrap
         return []
-    finally:
-        if connection is not None:
-            connection.close()
     return _cap_chat_models(parse_models_list(payload), _DISCOVERY_CAP)
 
 
