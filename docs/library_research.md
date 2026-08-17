@@ -56,3 +56,7 @@ single-repo product instead of splitting it.
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
+
+## References
+
+OpenAPI Initiative. (2024). *OpenAPI Specification v3.1*. https://spec.openapis.org/oas/v3.1.0.html
