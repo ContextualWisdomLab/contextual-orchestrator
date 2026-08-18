@@ -20,6 +20,7 @@ from fuzz.targets import (
     exercise_agent_config,
     exercise_model_judge_reply,
     exercise_orchestration,
+    exercise_provider_model_payload,
     exercise_redaction,
     exercise_request_body,
 )
@@ -94,6 +95,12 @@ def test_agent_config_parser(value: object) -> None:
 )
 def test_agent_config_parser_shaped(value: dict) -> None:
     exercise_agent_config(value)
+
+
+@_SETTINGS
+@given(_json_values)
+def test_provider_model_payload_parser_never_crashes(value: object) -> None:
+    exercise_provider_model_payload(value)
 
 
 @_SETTINGS

@@ -253,6 +253,9 @@ class ModelAgent:
     # Explicit KV credential for an authenticated loopback gateway. Keep this
     # separate from ``credential_key`` so mlx:// workers remain keyless.
     local_credential_key: str = ""
+    # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
+    # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
+    auth_scheme: str = "Bearer"
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -260,6 +263,8 @@ class ModelAgent:
             raise TypeError("local_credential_key must be a string")
         if self.local_credential_key and urlparse(self.base_url).scheme != "local":
             raise ValueError("local_credential_key requires a local:// gateway URL")
+        if not self.auth_scheme or type(self.auth_scheme) is not str:
+            raise ValueError("auth_scheme must be a non-empty string")
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -275,6 +280,7 @@ class ModelAgent:
             "provider_name": self.provider_name,
             "provider_exclusions": list(self.provider_exclusions),
             "local_credential_key": self.local_credential_key,
+            "auth_scheme": self.auth_scheme,
         }
 
     @property
@@ -303,6 +309,7 @@ class ModelAgent:
             provider_name=value.get("provider_name", ""),
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
             local_credential_key=value.get("local_credential_key", ""),
+            auth_scheme=value.get("auth_scheme", "Bearer"),
         )
 
 
@@ -896,7 +903,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
-            headers["authorization"] = f"Bearer {api_key}"
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1059,7 +1066,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
-            headers["authorization"] = f"Bearer {api_key}"
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1139,7 +1146,7 @@ class ModelClient:
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
-            headers["authorization"] = f"Bearer {api_key}"
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1368,7 +1375,7 @@ class ModelClient:
             self._provider_url(agent, "/files"),
             data=body,
             headers={
-                "authorization": f"Bearer {api_key}",
+                "authorization": f"{agent.auth_scheme} {api_key}",
                 "content-type": f"multipart/form-data; boundary={boundary}",
             },
             method="POST",
@@ -1389,7 +1396,7 @@ class ModelClient:
             self._provider_url(agent, path),
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             headers={
-                "authorization": f"Bearer {api_key}",
+                "authorization": f"{agent.auth_scheme} {api_key}",
                 "content-type": "application/json",
             },
             method=method,
@@ -1401,7 +1408,7 @@ class ModelClient:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
-            headers={"authorization": f"Bearer {api_key}"},
+            headers={"authorization": f"{agent.auth_scheme} {api_key}"},
             method="GET",
         )
         with self._open_provider(request, destination) as response:
@@ -2182,6 +2189,43 @@ class TaskOrchestrator:
             {"agent_pool_id": agent_pool_id, "agent_id": agent.id, "model": agent.model},
         )
         return self._agent_to_admin_payload(agent)
+
+    def sync_discovered_agents(self, discovered_agents: list[ModelAgent]) -> dict[str, list[str]]:
+        """Upsert auto-discovered agents into the pool; persists when agents_db is set.
+
+        Unlike :meth:`add_agent`, an id that already exists is replaced in place
+        (re-running discovery is idempotent) instead of raising. New agents are
+        appended disabled (see ``model_discovery.agent_from_discovered``) so a
+        freshly discovered model never starts serving traffic before an operator
+        (or the cost router) opts it in via ``patch_agent``.
+        """
+        existing_by_id = {agent.id: index for index, agent in enumerate(self.candidates)}
+        updated_candidates = list(self.candidates)
+        added: list[str] = []
+        updated: list[str] = []
+        for agent in discovered_agents:
+            index = existing_by_id.get(agent.id)
+            if index is None:
+                existing_by_id[agent.id] = len(updated_candidates)
+                updated_candidates.append(agent)
+                added.append(agent.id)
+            else:
+                updated_candidates[index] = agent
+                updated.append(agent.id)
+            if self._pool_store is not None:
+                self._pool_store.save(agent)
+        self.candidates = updated_candidates
+        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        if added or updated:
+            self._append_audit_event(
+                "agents_discovered",
+                {"added": added, "updated": updated},
+            )
+            self.record_analytics_event(
+                "agents_discovered",
+                {"added_count": len(added), "updated_count": len(updated)},
+            )
+        return {"added": added, "updated": updated}
 
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
         """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""

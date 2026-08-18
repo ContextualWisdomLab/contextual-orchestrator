@@ -8,10 +8,20 @@ import os
 import sys
 from dataclasses import replace
 
+from .cost_ledger import PriceBook
 from .credentials import get_credential, register_credential
+from .kv_config import InMemoryConfigStore
+from .model_discovery import (
+    agent_from_discovered,
+    agent_id_for,
+    discover_all_models,
+    refresh_price_book,
+    select_top_n_cheapest_discovered_agents,
+)
 from .orchestrator import (
     CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
     MAX_LOCAL_CONCURRENCY,
+    ModelAgent,
     ModelClient,
     TaskOrchestrator,
     load_agents,
@@ -31,6 +41,17 @@ def _positive_int(value: str) -> int:
         raise argparse.ArgumentTypeError("positive integer required") from exc
     if parsed < 1:
         raise argparse.ArgumentTypeError("positive integer required")
+    return parsed
+
+
+def _non_negative_int(value: str) -> int:
+    """Parse a non-negative integer for an argparse option (0 means "off")."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("non-negative integer required") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("non-negative integer required")
     return parsed
 
 
@@ -168,10 +189,73 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+def _discover_models_command(argv: list[str]) -> None:
+    """Query every provider with a KV-registered credential and report the models found.
+
+    Never fabricates a credential: a provider with nothing registered in the KV
+    (see ``register-credential``) is silently skipped, so running this after
+    registering a subset of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY /
+    NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY still works.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator discover-models",
+        description="Discover models from every provider with a KV-registered credential.",
+    )
+    parser.add_argument(
+        "--agents-db",
+        default=None,
+        help="Persist discovered agents (added disabled; enable via the admin API) into this sqlite agent-pool file.",
+    )
+    parser.add_argument(
+        "--enable-cheapest",
+        type=_non_negative_int,
+        default=0,
+        metavar="N",
+        help="Enable the N cheapest discovered agents in --agents-db (auto-optimization bootstrap; "
+        "requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
+    )
+    args = parser.parse_args(argv)
+    if args.enable_cheapest and not args.agents_db:
+        parser.error("--enable-cheapest requires --agents-db")
+
+    discovered, errors = discover_all_models()
+    price_book = PriceBook(InMemoryConfigStore())
+    priced_count = refresh_price_book(discovered, price_book)
+
+    enabled_agent_ids: list[str] = []
+    if args.agents_db:
+        bootstrap = TaskOrchestrator(
+            [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=args.agents_db
+        )
+        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in discovered])
+        if args.enable_cheapest:
+            for model in select_top_n_cheapest_discovered_agents(discovered, price_book, args.enable_cheapest):
+                agent_id = agent_id_for(model)
+                bootstrap.patch_agent("default", agent_id, {"status": "active"})
+                enabled_agent_ids.append(agent_id)
+
+    report = {
+        "discovered_count": len(discovered),
+        "priced_count": priced_count,
+        "providers_with_errors": sorted({error.provider_name for error in errors}),
+        "enabled_agent_ids": enabled_agent_ids,
+        "models": [
+            {"provider": model.provider_name, "model": model.model_id, "agent_id": agent_id_for(model)}
+            for model in discovered
+        ],
+    }
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    if errors and not discovered:
+        raise SystemExit(1)
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
         _register_credential_command(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "discover-models":
+        _discover_models_command(sys.argv[2:])
         return
     if len(sys.argv) > 1 and sys.argv[1] == "check-fast-mlsirm":
         _check_fast_mlsirm_command()

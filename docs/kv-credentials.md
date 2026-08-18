@@ -193,6 +193,54 @@ decode JWTs with a string split or place Keycloak admin credentials in this
 repository. Keyverse RP registration, desired-state reconciliation, and
 confidential-client secret placement remain deployment-controller operations.
 
+## Multi-provider auto-discovery
+
+Once a provider's credential is registered in the KV, `contextual_orchestrator`
+can discover that provider's available models and turn them into agent-pool
+candidates automatically — no hand-written `agents.json` entry required.
+`contextual_orchestrator/model_discovery.py` covers five providers out of the
+box, all resolved through `get_credential` (never fabricated, never read from
+`os.getenv`):
+
+| Provider          | KV credential name       | Auth header       |
+| ------------------ | ------------------------ | ------------------ |
+| OpenAI              | `OPENAI_API_KEY`         | `Bearer <token>`   |
+| OpenRouter          | `OPENROUTER_API_KEY`     | `Bearer <token>`   |
+| NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
+| NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
+| Bytez               | `BYTEZ_API_KEY`          | `Key <token>`      |
+
+Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
+`auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
+doesn't use the OpenAI-compatible default.
+
+Register any subset of the five keys, then discover:
+
+```bash
+echo "$OPENROUTER_API_KEY" | python -m contextual_orchestrator \
+    register-credential --name OPENROUTER_API_KEY --value-stdin
+
+python -m contextual_orchestrator discover-models --agents-db state/pool.db
+```
+
+A provider with nothing registered is silently skipped — registering one key
+or all five both work. `discover-models` prints a JSON report
+(`discovered_count`, `priced_count`, `providers_with_errors`, and each
+`{provider, model, agent_id}` found) and, with `--agents-db`, persists the
+discovered agents into the same sqlite agent-pool file `--serve --agents-db`
+reads — the same durable-overlay mechanism the admin console's "add agent"
+uses (`TaskOrchestrator.sync_discovered_agents`, an idempotent upsert of
+`add_agent`/`patch_agent`'s existing persistence path). Discovered agents are
+added **disabled**, so a newly found model never starts serving traffic
+before an operator opts it in.
+
+Cost-based auto-optimization reuses the existing price-table selector rather
+than adding a new one: `model_discovery.refresh_price_book` writes any
+provider-reported per-token pricing into `PriceBook`, and
+`model_discovery.select_cheapest_discovered_agent` calls
+`batch_routing.cheapest_upstream` to pick the lowest-cost candidate among
+discovered models for a representative request shape.
+
 ## Gateway direction
 
 This credential seam is the durable first step of growing
