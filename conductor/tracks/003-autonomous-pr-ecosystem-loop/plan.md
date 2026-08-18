@@ -155,3 +155,84 @@ gh api repos/ContextualWisdomLab/.github/dispatches -f event_type=merge-schedule
   -f 'client_payload[target_repository]=ContextualWisdomLab/contextual-orchestrator' \
   -f 'client_payload[pr_number]=<N>'
 ```
+
+## Status as of 2026-08-18, iteration 3
+
+Confirmed the throughput fix is doing real work: `org-queue-sweep` runs that
+used to complete in seconds now run 15+ minutes (more PRs actually being
+processed per sweep). Queue count itself hadn't dropped yet at the
+30-minute mark — 213 open, up from 212 (repo is still actively generating
+new PRs faster than one sweep clears; the throughput fix needs several
+sweep cycles to show a net decrease, not just non-negative growth).
+
+**`.github` itself (leverage-order #1) also had the same bottleneck** —
+147 open PRs, 64 open issues, no repo-level `REVIEW_DISPATCH_LIMIT`/
+`BRANCH_UPDATE_LIMIT` override (same default-1 problem). Applied the same
+fix: `REVIEW_DISPATCH_LIMIT=10`, `BRANCH_UPDATE_LIMIT=10` on
+`ContextualWisdomLab/.github` itself.
+
+**Found and fixed a second org-wide root cause while triaging `.github`'s
+own issue queue**: issue #952 (already thoroughly investigated by a prior
+session, not by us) documented that `strix-agent==1.0.4` — the version
+pinned in the central `strix.yml` required check — crashes after printing a
+*complete, valid* vulnerability report (exit 2, sometimes exit 124) before
+the report artifact is durably written, so `strix_quick_gate.sh` correctly
+fails closed on scans that had actually succeeded. Upstream fixed this in
+1.1.0/1.4.0, but upgrading was blocked: strix-agent 1.4.0+ declares
+`cryptography<49`, conflicting with this repo's `cryptography==50.0.0`
+pin (a deliberate CVE-2026-39892 fix — not something to weaken).
+
+Verified the fix is actually safe rather than just forcing past the
+declared range and hoping: strix-agent's installed source has zero direct
+`cryptography` imports (grepped it); the real transitive consumers are
+`pyjwt`/`google-auth` via long-stable JWT-signing APIs; confirmed locally
+that `strix-agent==1.5.3` + `cryptography==50.0.0` import together and a
+`pyjwt` RS256 sign/verify roundtrip succeeds against that `cryptography`
+version. Shipped as `ContextualWisdomLab/.github#1121` (closes #952):
+version bump + a documented `uv pip compile --override`
+(`requirements-strix-ci-overrides.txt`) + regenerated hash lock + updated
+`CLAUDE.md` regen command.
+
+**This matters beyond `.github`'s own queue**: `strix.yml` is the central
+required check every repo inherits, so this crash-after-report bug has
+likely been causing false-closed `strix` failures across many of
+`contextual-orchestrator`'s 81 checks-red PRs too (separate from the two
+genuine findings already fixed — JSON-bomb in #747, SSRF-redirect in
+#749). **Next iteration: once #1121 merges, re-check whether the
+checks-red count on `contextual-orchestrator`'s backlog drops on
+re-scan** — if a PR's `strix` failure disappears on its own after a
+branch update/re-dispatch post-#1121, that confirms it was this bug, not
+a real finding, and it needs no further hand-fixing.
+
+### Next iteration checklist (supersedes the stale one above where it conflicts)
+
+1. Check `ContextualWisdomLab/.github#1121` (strix-agent bump) and #952:
+   did CI pass? Did it merge? Watch the next few real `strix` check runs
+   org-wide for the exit-2/exit-124 crash pattern — if gone, note it in
+   this file and close the loop on that theory.
+2. Re-pull the full `contextual-orchestrator` PR snapshot (paginated
+   GraphQL). Compare checks-red (was 81) and `CHANGES_REQUESTED` (was 119)
+   counts against iteration 2's baseline — both should be trending down
+   now that (a) throughput is 10-15x and (b) strix false-failures should
+   stop recurring once #1121 lands and branches get updated.
+3. If NIM 429s are spiking in Strix/OpenCode logs from the higher
+   throughput, dial `REVIEW_DISPATCH_LIMIT`/`ORG_SWEEP_REVIEW_DISPATCH_LIMIT`
+   back down; otherwise leave as-is or consider one more moderate raise.
+4. Did #747, #746, #748, #749 merge?
+5. Sample more of the 81 checks-red PRs beyond what's covered so far for
+   other shared root causes (the pattern so far: a handful of root causes
+   explain most failures, not 81 distinct bugs) — worth 15-20 minutes of
+   sampling before assuming the rest are genuinely one-off.
+6. GitHub flagged 5 Dependabot vulnerability alerts (3 high, 2 moderate) on
+   `ContextualWisdomLab/.github`'s default branch during this iteration's
+   push — not yet triaged. Check
+   `gh api repos/ContextualWisdomLab/.github/dependabot/alerts` next
+   iteration.
+7. Start the PII-masking-alternative research (governance-risk-compliance +
+   `gyeot`/`naruon`) — still not started, don't let queue-throughput work
+   crowd it out indefinitely; it was authorized to start immediately back
+   in iteration 1.
+8. Once `contextual-orchestrator` and `.github` queues are meaningfully
+   down, move down the leverage order to `noema`/`keyverse`, then check
+   whether other repos in `OPENCODE_REPOSITORY_DISPATCH_TARGETS` have the
+   same backlog-vs-throughput problem these two did.
