@@ -200,6 +200,18 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+class _RefuseRedirectHandler(urllib.request.HTTPRedirectHandler):
+    """Turn every HTTP redirect into an error instead of following it.
+
+    Subclassing HTTPRedirectHandler makes urllib.request.build_opener skip
+    installing its own default redirect handler, so this is the only
+    redirect behavior in effect for openers built with it.
+    """
+
+    def redirect_request(self, req, fp, code, msg, headers, newurl):  # noqa: ANN001 - urllib signature
+        raise urllib.error.HTTPError(newurl, code, f"provider redirect refused: {msg}", headers, fp)
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -226,6 +238,16 @@ class ModelClient:
         # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
         # explicit dev-only opt-out (insecure) for self-signed endpoints.
         self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+        # Refuse provider redirects rather than follow them: urllib's default opener
+        # follows 301/302/303/307/308 without re-running _validate_provider's
+        # private/loopback/link-local IP checks against the redirect target, letting a
+        # compromised or attacker-set base_url pivot into an internal-network request
+        # (SSRF via redirect). Chat-completions endpoints have no legitimate reason to
+        # redirect, so refusing outright is both minimal and correct.
+        self._opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=self._ssl_context),
+            _RefuseRedirectHandler(),
+        )
 
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
@@ -306,12 +328,8 @@ class ModelClient:
         return data["choices"][0]["message"]["content"]
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
-            request,
-            timeout=self.timeout,
-            context=self._ssl_context,
-        )
+        """Open a provider request built from a validated provider URL, refusing redirects."""
+        return self._opener.open(request, timeout=self.timeout)  # nosec B310 - request URL comes from _provider_url after provider validation; opener refuses redirects.
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
