@@ -8,9 +8,12 @@ stay secret-free — credentials are in-memory placeholders, never org keys.
 from __future__ import annotations
 
 from contextlib import contextmanager
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 import sys
+import threading
 from urllib.parse import urlparse
+import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -35,7 +38,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.orchestrator import ModelAgent  # noqa: E402
+from contextual_orchestrator.orchestrator import ModelAgent, ModelClient  # noqa: E402
 
 
 @contextmanager
@@ -210,6 +213,44 @@ def test_allow_insecure_does_not_weaken_production_rejection() -> None:
         )
     assert models == []
     assert called == []
+
+
+def test_open_provider_refuses_redirect_and_does_not_replay_bearer() -> None:
+    captured: list[str | None] = []
+
+    class Handler(BaseHTTPRequestHandler):
+        def do_GET(self) -> None:  # noqa: N802
+            if self.path == "/start":
+                self.send_response(302)
+                self.send_header("Location", "/steal")
+                self.end_headers()
+                return
+            captured.append(self.headers.get("Authorization"))
+            self.send_response(200)
+            self.end_headers()
+            self.wfile.write(b"{}")
+
+        def log_message(self, *_args: object) -> None:
+            return
+
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{server.server_address[1]}/start",
+            headers={"authorization": "Bearer test-not-a-secret"},
+            method="GET",
+        )
+        try:
+            ModelClient()._open_provider(request)
+        except RuntimeError as exc:
+            assert "redirect refused" in str(exc)
+        else:
+            raise AssertionError("provider 3xx must refuse instead of following")
+    finally:
+        server.shutdown()
+    assert captured == []
 
 
 def test_refuse_redirect_handler_does_not_follow() -> None:

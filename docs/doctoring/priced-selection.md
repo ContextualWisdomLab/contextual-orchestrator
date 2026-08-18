@@ -18,13 +18,14 @@ selection of **one** worker, and this gateway's own `GET /v1/models`.
    provider never aborts compose for the others.    Discovery reuses chat
    egress (`provider_base_url_rejection`) **before** a KV Bearer is
    attached, then `GET`s through `ModelClient.fetch_provider_json` (the
-   existing `_open_provider` stack). `allow_insecure` does not weaken
-   that check.
+   existing `_open_provider` stack, which refuses 3xx so Authorization
+   is not replayed). `allow_insecure` does not weaken that check.
 3. **Cost honesty (issue #86).** Actual free-to-caller (explicit billed
    rates, including `0`) and hypothetical/original list price
    (`original_list_price`) are separate fields. A missing price row is
-   `unknown` (`compute_cost` returns `None`). Unknown is never converted
-   to `0` or “free.” `original_list_price` is never used as billed cost.
+   `unknown` (`compute_cost` returns `None`). A present row that omits
+   either billed key is also unknown. Unknown is never converted to `0`
+   or “free.” `original_list_price` is never used as billed cost.
 4. **Single-worker selection.** Fugu's low-latency path selects one worker
    without an expensive coordinator search (Sakana AI, 2026). Among capable
    workers this lab then applies FrugalGPT / Hybrid LLM ranking: minimize

@@ -161,12 +161,23 @@ class PriceBook:
         """Return the price entry for ``provider``+``model``, if configured.
 
         Falls back to a provider-wildcard entry (``"{provider}:*"``) so a
-        provider can set one default price for all of its models.
+        provider can set one default price for all of its models. A row that
+        omits either billed key is unknown, not free-to-caller — so a KV stub
+        that only carries ``original_list_price`` cannot rank as $0.
         """
         raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, model), None)
         if raw is None:
             raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, "*"), None)
         if raw is None:
+            return None
+        prompt_raw = raw.get("prompt_price_per_1k")
+        completion_raw = raw.get("completion_price_per_1k")
+        if prompt_raw is None or completion_raw is None:
+            return None
+        try:
+            prompt_price = float(prompt_raw)
+            completion_price = float(completion_raw)
+        except (TypeError, ValueError):
             return None
         original = raw.get("original_list_price")
         if original is not None and not isinstance(original, dict):
@@ -174,8 +185,8 @@ class PriceBook:
         return PriceEntry(
             provider_name=raw.get("provider_name", provider),
             model_name=raw.get("model_name", model),
-            prompt_price_per_1k=float(raw.get("prompt_price_per_1k", 0.0)),
-            completion_price_per_1k=float(raw.get("completion_price_per_1k", 0.0)),
+            prompt_price_per_1k=prompt_price,
+            completion_price_per_1k=completion_price,
             currency_code=raw.get("currency_code", self.default_currency),
             original_list_price=original,
         )
@@ -569,6 +580,36 @@ _USAGE_COLUMNS = (
     "currency_code",
 )
 
+# Static SQL only: column lists and placeholders are module constants, never
+# caller input. Semgrep/Strix treat f-string execute() as CWE-89 even when the
+# interpolated token is a DB-API placeholder.
+_USAGE_COLUMN_LIST = ", ".join(_USAGE_COLUMNS)
+_QMARK_VALUES = ", ".join("?" for _ in _USAGE_COLUMNS)
+_PYFORMAT_VALUES = ", ".join("%s" for _ in _USAGE_COLUMNS)
+_SELECT_DIMENSION_QMARK = "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?"
+_SELECT_DIMENSION_PYFORMAT = "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s"
+_INSERT_DIMENSION_QMARK = (
+    "INSERT INTO cost_attribution_dimensions "
+    "(dimension_name, dimension_label, dimension_order) VALUES (?, ?, ?)"
+)
+_INSERT_DIMENSION_PYFORMAT = (
+    "INSERT INTO cost_attribution_dimensions "
+    "(dimension_name, dimension_label, dimension_order) VALUES (%s, %s, %s)"
+)
+_INSERT_USAGE_QMARK = (
+    "INSERT INTO llm_usage_records (" + _USAGE_COLUMN_LIST + ") VALUES (" + _QMARK_VALUES + ")"
+)
+_INSERT_USAGE_PYFORMAT = (
+    "INSERT INTO llm_usage_records (" + _USAGE_COLUMN_LIST + ") VALUES (" + _PYFORMAT_VALUES + ")"
+)
+_SELECT_USAGE_ALL = "SELECT " + _USAGE_COLUMN_LIST + " FROM llm_usage_records"
+_SELECT_USAGE_SINCE_QMARK = _SELECT_USAGE_ALL + " WHERE created_at >= ?"
+_SELECT_USAGE_SINCE_PYFORMAT = _SELECT_USAGE_ALL + " WHERE created_at >= %s"
+_SELECT_USAGE_UNTIL_QMARK = _SELECT_USAGE_ALL + " WHERE created_at < ?"
+_SELECT_USAGE_UNTIL_PYFORMAT = _SELECT_USAGE_ALL + " WHERE created_at < %s"
+_SELECT_USAGE_WINDOW_QMARK = _SELECT_USAGE_ALL + " WHERE created_at >= ? AND created_at < ?"
+_SELECT_USAGE_WINDOW_PYFORMAT = _SELECT_USAGE_ALL + " WHERE created_at >= %s AND created_at < %s"
+
 
 class SqlLedgerStore:
     """PEP-249 SQL ledger store (stdlib ``sqlite3`` or ``psycopg``).
@@ -584,8 +625,9 @@ class SqlLedgerStore:
         self._create_schema()
         self._seed_dimension_catalog()
 
-    def _placeholder(self) -> str:
-        return "?" if self._paramstyle == "qmark" else "%s"
+    def _sql(self, qmark: str, pyformat: str) -> str:
+        """Pick the static statement that matches this connection's paramstyle."""
+        return qmark if self._paramstyle == "qmark" else pyformat
 
     def _create_schema(self) -> None:
         cur = self._conn.cursor()
@@ -595,49 +637,41 @@ class SqlLedgerStore:
         self._conn.commit()
 
     def _seed_dimension_catalog(self) -> None:
-        ph = self._placeholder()
+        select_sql = self._sql(_SELECT_DIMENSION_QMARK, _SELECT_DIMENSION_PYFORMAT)
+        insert_sql = self._sql(_INSERT_DIMENSION_QMARK, _INSERT_DIMENSION_PYFORMAT)
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
-                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
-                (name,),
-            )
+            cur.execute(select_sql, (name,))
             if cur.fetchone() is None:
-                cur.execute(
-                    "INSERT INTO cost_attribution_dimensions "
-                    f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
-                    (name, label, order),
-                )
+                cur.execute(insert_sql, (name, label, order))
         self._conn.commit()
 
     def append(self, record: UsageRecord) -> None:
         """Insert a usage record row."""
         row = record.as_dict()
-        ph = self._placeholder()
-        placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
-        columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
         cur.execute(
-            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
+            self._sql(_INSERT_USAGE_QMARK, _INSERT_USAGE_PYFORMAT),
             tuple(row.get(column) for column in _USAGE_COLUMNS),
         )
         self._conn.commit()
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return record rows in the optional half-open window."""
-        ph = self._placeholder()
-        clauses: List[str] = []
-        params: List[Any] = []
-        if start is not None:
-            clauses.append(f"created_at >= {ph}")
-            params.append(start)
-        if end is not None:
-            clauses.append(f"created_at < {ph}")
-            params.append(end)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        columns = ", ".join(_USAGE_COLUMNS)
+        if start is not None and end is not None:
+            statement = self._sql(_SELECT_USAGE_WINDOW_QMARK, _SELECT_USAGE_WINDOW_PYFORMAT)
+            params: List[Any] = [start, end]
+        elif start is not None:
+            statement = self._sql(_SELECT_USAGE_SINCE_QMARK, _SELECT_USAGE_SINCE_PYFORMAT)
+            params = [start]
+        elif end is not None:
+            statement = self._sql(_SELECT_USAGE_UNTIL_QMARK, _SELECT_USAGE_UNTIL_PYFORMAT)
+            params = [end]
+        else:
+            statement = _SELECT_USAGE_ALL
+            params = []
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        cur.execute(statement, tuple(params))
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 

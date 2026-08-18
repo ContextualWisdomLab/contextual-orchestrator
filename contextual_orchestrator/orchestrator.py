@@ -28,7 +28,7 @@ import urllib.request
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .priced_selection import billed_selection_cost, select_min_cost_max_performance
-from .provider_egress import provider_base_url_rejection
+from .provider_egress import RefuseRedirectHandler, provider_base_url_rejection
 
 
 ChatMessage = dict[str, str]
@@ -243,7 +243,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            return ssl._create_unverified_context()  # nosec B323  # nosemgrep: python.lang.security.unverified-ssl-context -- explicit verify_tls=False dev opt-out.
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -319,11 +319,14 @@ class ModelClient:
         return data["choices"][0]["message"]["content"]
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
+        """Open a validated provider request and refuse 3xx so Bearer is not replayed."""
+        opener = urllib.request.build_opener(
+            RefuseRedirectHandler,
+            urllib.request.HTTPSHandler(context=self._ssl_context),
+        )
+        return opener.open(  # nosec B310  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected -- URL is from _provider_url after _validate_provider.
             request,
             timeout=self.timeout,
-            context=self._ssl_context,
         )
 
     def fetch_provider_json(self, agent: ModelAgent, path: str) -> Any:

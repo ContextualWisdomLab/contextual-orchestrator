@@ -80,6 +80,19 @@ def test_unknown_price_is_not_converted_to_free() -> None:
     assert billed != listed.original_list_price
 
 
+def test_list_price_only_stub_is_unknown_not_free() -> None:
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    config.set(
+        "llm_price_entries",
+        "promo_co:stub-model",
+        {"original_list_price": {"prompt_price_per_1k": 2.0, "completion_price_per_1k": 4.0}},
+    )
+    assert price_book.get_price("promo_co", "stub-model") is None
+    cost, _currency = price_book.compute_cost("promo_co", "stub-model", 1000, 1000)
+    assert cost is None
+
+
 def test_unpriced_model_has_null_original_list_price() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("solo_worker", "mystery-model", tags=("reasoning",))])
     orchestrator.run([{"role": "user", "content": "no price"}])

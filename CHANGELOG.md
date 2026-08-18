@@ -17,7 +17,11 @@ failover. This release does **not** duplicate that work.
 - **`original_list_price`.** Hypothetical/published list, stored beside
   billed rates. Explicit billed `0` is actual free-to-caller. A missing
   price row is `unknown` (`None`) — never converted to `0` / “free”
-  (issue #86 honesty bug in `PriceBook.compute_cost`).
+  (issue #86 honesty bug in `PriceBook.compute_cost`). A KV stub that
+  only carries `original_list_price` is also unknown, not billed `0`.
+  Chat and discovery refuse provider 3xx so a Bearer is not replayed.
+  The SQL ledger uses static parameterized statements (no f-string
+  `execute`).
 - **Min-cost / max-performance selection.** One worker per step
   (Fugu / FrugalGPT / Hybrid LLM / Trinity). Transient retry on the chosen
   worker; no sequential next-agent hop. Circuit-open agents are skipped on

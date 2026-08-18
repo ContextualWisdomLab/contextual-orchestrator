@@ -253,6 +253,12 @@ def test_sql_ledger_store_on_sqlite_creates_objects_and_rolls_up() -> None:
 
     by_company = ledger.rollup("company")
     assert by_company["acme"]["cost_amount"] == 15.0  # 6 + 9
+    windowed = store.query(start=0, end=2**31)
+    assert len(windowed) == 2
+    since = store.query(start=0)
+    until = store.query(end=2**31)
+    assert len(since) == 2
+    assert len(until) == 2
 
 
 def test_ledger_table_names_follow_two_word_snake_case() -> None:
