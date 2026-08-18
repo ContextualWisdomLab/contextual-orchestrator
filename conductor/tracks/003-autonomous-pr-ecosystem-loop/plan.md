@@ -236,3 +236,68 @@ a real finding, and it needs no further hand-fixing.
    down, move down the leverage order to `noema`/`keyverse`, then check
    whether other repos in `OPENCODE_REPOSITORY_DISPATCH_TARGETS` have the
    same backlog-vs-throughput problem these two did.
+
+## Status as of 2026-08-18, iteration 4 — biggest single fix yet: Semgrep scans whole tree
+
+While chasing why **PR #748 (docs-only, touches zero Python)** was still
+failing its required Semgrep check, found the real mechanism: the
+`SAST Semgrep` workflow runs `semgrep scan --config=p/default
+--severity=WARNING --severity=ERROR --exclude=.github/workflows
+--exclude='docs/research/**/standards' --error` — **the whole repo tree**,
+not the PR diff. So any pre-existing finding on `main` fails the Semgrep
+gate on literally every open PR, regardless of what that PR touches. This
+likely explains a meaningful slice of both the 81 checks-red PRs and the
+119 `CHANGES_REQUESTED` ones from earlier iterations.
+
+Found 4 real pre-existing findings on `main` (all already-reviewed,
+already-`# nosec`-suppressed false positives — raw parameterized DB-API
+queries misidentified as SQLAlchemy string concatenation, ×3 in
+`cost_ledger.py`; an explicit opt-in-only TLS bypass in `orchestrator.py`;
+a validated-then-urlopen'd URL also in `orchestrator.py`) and shipped the
+fix as **#750**.
+
+**Also found why my own earlier `# nosemgrep` comments (added in iteration
+2, PR #746's `model_discovery.py`) never actually worked**: Semgrep's
+`p/default` rule ids here have a **duplicated suffix** —
+`python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query`,
+not the shorter id shown in the human-readable finding header or the CI
+log's `rule=` grep output. A `# nosemgrep: <short-id>` comment silently
+fails to match and does nothing — no error, no warning, the finding just
+stays live. Also: the comment must be a trailing comment on the *exact*
+reported line (or a comment on the line *immediately* above with nothing
+between), not floating a couple of lines above the statement. **Any other
+`# nosemgrep` comment written anywhere in this codebase from before this
+iteration should be treated as suspect and re-verified** the same way:
+`semgrep scan --config=p/default --severity=WARNING --severity=ERROR
+--exclude=.github/workflows --exclude='docs/research/**/standards' --error`
+locally, confirm 0 findings, not just "the comment is there."
+
+Corrected PR #746's branch directly (`7771d99`) once this was understood.
+
+### Next iteration checklist (supersedes prior ones where it conflicts)
+
+1. Did #750 (Semgrep root-cause fix) merge? This is the one to watch
+   closest — if it clears, expect a large drop in both checks-red and
+   `CHANGES_REQUESTED` counts across the backlog on the next re-scan/sweep,
+   more than either the throughput or strix-agent fixes alone.
+2. Re-pull the full PR snapshot (paginated GraphQL) and compare against
+   iteration 2's baseline (81 red, 119 CHANGES_REQUESTED, 213 open) — by
+   now three root-cause fixes (#747 JSON-bomb, #749 SSRF-redirect, #750
+   Semgrep-whole-tree, plus .github#1121 strix-agent) and two throughput
+   raises should be compounding. If the count still isn't moving, stop
+   assuming "it just needs another sweep cycle" and go find out why (check
+   scheduler run logs for actual errors, not just green/red).
+3. Grep the codebase for every existing `# nosemgrep` comment predating
+   this iteration and re-verify each one actually suppresses (see method
+   above) — iteration 2's PR #746 fix for the *other* Semgrep finding
+   pattern may have the same bug elsewhere, this file was just the one we
+   happened to check.
+4. Did #746, #747, #748, #749, #750 merge? Did `.github#1121` merge?
+5. Check the 5 Dependabot alerts on `.github`'s default branch (not yet
+   triaged — `gh api repos/ContextualWisdomLab/.github/dependabot/alerts`).
+6. Start the PII-masking-alternative research (governance-risk-compliance +
+   `gyeot`/`naruon`) if repo-queue work isn't the bottleneck anymore —
+   authorized since iteration 1, still not started.
+7. Once `contextual-orchestrator` and `.github` queues are meaningfully
+   down, move to `noema`/`keyverse`, then check other
+   `OPENCODE_REPOSITORY_DISPATCH_TARGETS` repos for the same issues.
