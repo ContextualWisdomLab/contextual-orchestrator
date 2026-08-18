@@ -8,7 +8,8 @@ import os
 import sys
 
 from .credentials import register_credential
-from .orchestrator import ModelClient, TaskOrchestrator, load_agents
+from .orchestrator import ModelClient, load_agents
+from .resilient_orchestrator import TaskOrchestrator
 from .server import SecurityConfig, serve
 
 
