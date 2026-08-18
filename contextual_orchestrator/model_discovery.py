@@ -105,11 +105,19 @@ class ProviderDiscoveryError(RuntimeError):
 
 
 def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
+    if not url.startswith("https://"):
+        # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
+        # constants below, never external input -- but urlopen also honors
+        # file:// and other unsafe schemes, so refuse anything not https as a
+        # cheap invariant check rather than trusting the constant list alone.
+        raise ValueError(f"refusing non-https model discovery URL: {url!r}")
     request = urllib.request.Request(
         url,
         headers={"authorization": f"{auth_scheme} {api_key}"},
         method="GET",
     )
+    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected -- scheme is
+    # enforced to https:// immediately above; url is never attacker-controlled.
     with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts
         return json.loads(response.read().decode("utf-8"))
 

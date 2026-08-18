@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import sys
 import urllib.error
+import urllib.parse
 from pathlib import Path
 from unittest.mock import patch
 
@@ -143,7 +144,7 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
 
     def urlopen(request, timeout=None):
-        if "openai.com" in request.full_url:
+        if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
             raise urllib.error.URLError("connection refused")
         return _Response({"data": [{"id": "meta/llama-3.3"}]})
 

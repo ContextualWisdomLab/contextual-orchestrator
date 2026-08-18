@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import sys
+import urllib.parse
 from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
@@ -59,7 +60,7 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
     stdout = StringIO()
 
     def urlopen(request, timeout=None):
-        if "api.openai.com" in request.full_url:
+        if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
             return _Response({"data": [{"id": "gpt-5.5"}]})
         return _Response({"data": []})
 
@@ -87,7 +88,7 @@ def test_discover_models_persists_to_agents_db(tmp_path) -> None:
     stdout = StringIO()
 
     def urlopen(request, timeout=None):
-        if "api.openai.com" in request.full_url:
+        if urllib.parse.urlsplit(request.full_url).hostname == "api.openai.com":
             return _Response({"data": [{"id": "gpt-5.5"}]})
         return _Response({"data": []})
 
@@ -135,9 +136,10 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
     stdout = StringIO()
 
     def urlopen(request, timeout=None):
-        if "api.openai.com" in request.full_url:
+        host = urllib.parse.urlsplit(request.full_url).hostname
+        if host == "api.openai.com":
             return _Response({"data": [{"id": "pricey-model", "pricing": {"prompt": "0.00005", "completion": "0.0001"}}]})
-        if "openrouter.ai" in request.full_url:
+        if host == "openrouter.ai":
             return _Response({"data": [{"id": "cheap-model", "pricing": {"prompt": "0.0000001", "completion": "0.0000002"}}]})
         return _Response({"data": []})
 
