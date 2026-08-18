@@ -17,8 +17,10 @@ document. Each `chunk_units[i]` is the source slice behind `embeddings[i]`.
 Search for an invoice id against those units — not against one averaged
 document vector.
 
-Omit `chunking_strategy` (or send JSON null) to keep the naruon contract: one
-vector per submitted input string.
+Omit `chunking_strategy` or send JSON null to keep the existing naruon
+one-vector-per-input contract. `"source_document"` is an explicit alias for
+the same behavior; it does not request chunk expansion or alter token-budget
+map/reduce boundaries.
 
 ## Why this exists
 
