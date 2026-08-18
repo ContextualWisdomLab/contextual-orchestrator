@@ -442,7 +442,7 @@ OPENAPI_SPEC = {
                                     "attribution": {"type": "object"},
                                     "chunking_strategy": {
                                         "type": "string",
-                                        "enum": ["meaning_units"],
+                                        "enum": ["source_document", "meaning_units"],
                                         "description": (
                                             "Omit to keep one vector per input (naruon contract). "
                                             "meaning_units embeds email parties, HTML blocks, "

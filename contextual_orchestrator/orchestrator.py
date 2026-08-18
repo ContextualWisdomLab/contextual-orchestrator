@@ -200,6 +200,27 @@ def is_transient_error(exc: BaseException) -> bool:
     return False
 
 
+class _RejectProviderRedirects(urllib.request.HTTPRedirectHandler):
+    """Refuse redirects so a validated provider host cannot redirect egress."""
+
+    def redirect_request(
+        self,
+        request: urllib.request.Request,
+        file_pointer: Any,
+        code: int,
+        message: str,
+        headers: Any,
+        new_url: str,
+    ) -> None:
+        raise urllib.error.HTTPError(
+            request.full_url,
+            code,
+            f"provider redirects are not allowed: {new_url}",
+            headers,
+            file_pointer,
+        )
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -222,15 +243,21 @@ class ModelClient:
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
-        # TLS trust for provider egress. Default verifies against the system trust store;
-        # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
-        # explicit dev-only opt-out (insecure) for self-signed endpoints.
+        # Provider egress always verifies TLS. Corporate gateways must supply
+        # an explicit CA bundle rather than disabling certificate verification.
         self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+        self._provider_opener = urllib.request.build_opener(
+            urllib.request.HTTPSHandler(context=self._ssl_context),
+            _RejectProviderRedirects(),
+        )
 
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+            raise ValueError(
+                "provider TLS verification cannot be disabled; configure ca_bundle "
+                "for a private or corporate certificate authority"
+            )
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -306,12 +333,28 @@ class ModelClient:
         return data["choices"][0]["message"]["content"]
 
     def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
-            request,
-            timeout=self.timeout,
-            context=self._ssl_context,
-        )
+        """Open HTTPS, or loopback HTTP for isolated transport tests, without redirects."""
+        parsed = urlparse(request.full_url)
+        if not parsed.hostname:
+            raise RuntimeError("provider transport requires an absolute URL")
+        if parsed.scheme == "https":
+            pass
+        elif parsed.scheme == "http":
+            try:
+                peer = ipaddress.ip_address(parsed.hostname)
+            except ValueError as exc:
+                raise RuntimeError(
+                    "provider transport requires https or numeric loopback http"
+                ) from exc
+            if not peer.is_loopback:
+                raise RuntimeError(
+                    "provider transport requires https or numeric loopback http"
+                )
+        else:
+            raise RuntimeError(
+                "provider transport requires https or numeric loopback http"
+            )
+        return self._provider_opener.open(request, timeout=self.timeout)
 
     def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.

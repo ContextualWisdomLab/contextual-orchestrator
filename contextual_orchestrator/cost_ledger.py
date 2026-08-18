@@ -564,13 +564,12 @@ class SqlLedgerStore:
     """
 
     def __init__(self, connection: Any, paramstyle: str = "qmark") -> None:
+        if paramstyle not in {"qmark", "pyformat"}:
+            raise ValueError(f"unsupported ledger paramstyle: {paramstyle!r}")
         self._conn = connection
         self._paramstyle = paramstyle
         self._create_schema()
         self._seed_dimension_catalog()
-
-    def _placeholder(self) -> str:
-        return "?" if self._paramstyle == "qmark" else "%s"
 
     def _create_schema(self) -> None:
         cur = self._conn.cursor()
@@ -580,49 +579,139 @@ class SqlLedgerStore:
         self._conn.commit()
 
     def _seed_dimension_catalog(self) -> None:
-        ph = self._placeholder()
+        """Insert the fixed attribution-dimension catalog rows once."""
         cur = self._conn.cursor()
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
-            cur.execute(
-                f"SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = {ph}",  # nosec B608 - ph is a DB-API placeholder.
-                (name,),
-            )
-            if cur.fetchone() is None:
+            if self._paramstyle == "qmark":
+                cur.execute(
+                    "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?",
+                    (name,),
+                )
+            else:
+                cur.execute(
+                    "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s",
+                    (name,),
+                )
+            if cur.fetchone() is not None:
+                continue
+            if self._paramstyle == "qmark":
                 cur.execute(
                     "INSERT INTO cost_attribution_dimensions "
-                    f"(dimension_name, dimension_label, dimension_order) VALUES ({ph}, {ph}, {ph})",  # nosec B608 - ph is a DB-API placeholder.
+                    "(dimension_name, dimension_label, dimension_order) "
+                    "VALUES (?, ?, ?)",
+                    (name, label, order),
+                )
+            else:
+                cur.execute(
+                    "INSERT INTO cost_attribution_dimensions "
+                    "(dimension_name, dimension_label, dimension_order) "
+                    "VALUES (%s, %s, %s)",
                     (name, label, order),
                 )
         self._conn.commit()
 
     def append(self, record: UsageRecord) -> None:
-        """Insert a usage record row."""
+        """Insert a usage record row with driver-appropriate bound values."""
         row = record.as_dict()
-        ph = self._placeholder()
-        placeholders = ", ".join(ph for _ in _USAGE_COLUMNS)
-        columns = ", ".join(_USAGE_COLUMNS)
+        values = tuple(row.get(column) for column in _USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(
-            f"INSERT INTO llm_usage_records ({columns}) VALUES ({placeholders})",  # nosec B608 - columns are fixed _USAGE_COLUMNS.
-            tuple(row.get(column) for column in _USAGE_COLUMNS),
-        )
+        if self._paramstyle == "qmark":
+            cur.execute(
+                "INSERT INTO llm_usage_records ("
+                "usage_record_id, created_at, workflow_run_id, request_channel, "
+                "route_mode, provider_name, model_name, account_name, service_name, "
+                "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                "completion_tokens, total_tokens, cost_amount, currency_code"
+                ") VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+                values,
+            )
+        else:
+            cur.execute(
+                "INSERT INTO llm_usage_records ("
+                "usage_record_id, created_at, workflow_run_id, request_channel, "
+                "route_mode, provider_name, model_name, account_name, service_name, "
+                "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                "completion_tokens, total_tokens, cost_amount, currency_code"
+                ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)",
+                values,
+            )
         self._conn.commit()
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return record rows in the optional half-open window."""
-        ph = self._placeholder()
-        clauses: List[str] = []
-        params: List[Any] = []
-        if start is not None:
-            clauses.append(f"created_at >= {ph}")
-            params.append(start)
-        if end is not None:
-            clauses.append(f"created_at < {ph}")
-            params.append(end)
-        where = f" WHERE {' AND '.join(clauses)}" if clauses else ""
-        columns = ", ".join(_USAGE_COLUMNS)
         cur = self._conn.cursor()
-        cur.execute(f"SELECT {columns} FROM llm_usage_records{where}", tuple(params))  # nosec B608 - columns and clauses are fixed.
+        if self._paramstyle == "qmark":
+            if start is not None and end is not None:
+                cur.execute(
+                    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+                    "route_mode, provider_name, model_name, account_name, service_name, "
+                    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                    "completion_tokens, total_tokens, cost_amount, currency_code "
+                    "FROM llm_usage_records WHERE created_at >= ? AND created_at < ?",
+                    (start, end),
+                )
+            elif start is not None:
+                cur.execute(
+                    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+                    "route_mode, provider_name, model_name, account_name, service_name, "
+                    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                    "completion_tokens, total_tokens, cost_amount, currency_code "
+                    "FROM llm_usage_records WHERE created_at >= ?",
+                    (start,),
+                )
+            elif end is not None:
+                cur.execute(
+                    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+                    "route_mode, provider_name, model_name, account_name, service_name, "
+                    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                    "completion_tokens, total_tokens, cost_amount, currency_code "
+                    "FROM llm_usage_records WHERE created_at < ?",
+                    (end,),
+                )
+            else:
+                cur.execute(
+                    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+                    "route_mode, provider_name, model_name, account_name, service_name, "
+                    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                    "completion_tokens, total_tokens, cost_amount, currency_code "
+                    "FROM llm_usage_records"
+                )
+        else:
+            if start is not None and end is not None:
+                cur.execute(
+                    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+                    "route_mode, provider_name, model_name, account_name, service_name, "
+                    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                    "completion_tokens, total_tokens, cost_amount, currency_code "
+                    "FROM llm_usage_records WHERE created_at >= %s AND created_at < %s",
+                    (start, end),
+                )
+            elif start is not None:
+                cur.execute(
+                    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+                    "route_mode, provider_name, model_name, account_name, service_name, "
+                    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                    "completion_tokens, total_tokens, cost_amount, currency_code "
+                    "FROM llm_usage_records WHERE created_at >= %s",
+                    (start,),
+                )
+            elif end is not None:
+                cur.execute(
+                    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+                    "route_mode, provider_name, model_name, account_name, service_name, "
+                    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                    "completion_tokens, total_tokens, cost_amount, currency_code "
+                    "FROM llm_usage_records WHERE created_at < %s",
+                    (end,),
+                )
+            else:
+                cur.execute(
+                    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
+                    "route_mode, provider_name, model_name, account_name, service_name, "
+                    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
+                    "completion_tokens, total_tokens, cost_amount, currency_code "
+                    "FROM llm_usage_records"
+                )
         return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
 
 

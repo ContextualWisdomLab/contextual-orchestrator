@@ -24,10 +24,34 @@ _EMAIL_HEADER = re.compile(
     r"^(From|To|Cc|Bcc|Subject|Reply-To|Date):\s*.+$",
     re.MULTILINE | re.IGNORECASE,
 )
-_IMAGE = re.compile(r"data:image/[A-Za-z0-9.+-]+;base64,[A-Za-z0-9+/=]+")
-_HTML_BLOCK = re.compile(
-    r"<(p|div|li|h[1-6]|tr|td|section|article|blockquote)\b[^>]*>.*?</\1>",
-    re.IGNORECASE | re.DOTALL,
+_IMAGE_HEAD = re.compile(
+    r"data:image/[A-Za-z0-9.+-]+(?:;[A-Za-z0-9!#$&^_.+-]+(?:=[^;,\s]+)?)*;base64,",
+    re.IGNORECASE,
+)
+_B64_CHAR = frozenset(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/-_"
+)
+_HTML_BLOCK_TAGS = frozenset(
+    {
+        "p",
+        "div",
+        "li",
+        "h1",
+        "h2",
+        "h3",
+        "h4",
+        "h5",
+        "h6",
+        "tr",
+        "td",
+        "section",
+        "article",
+        "blockquote",
+    }
+)
+_ASCII_CASE_FOLD = str.maketrans(
+    "ABCDEFGHIJKLMNOPQRSTUVWXYZ",
+    "abcdefghijklmnopqrstuvwxyz",
 )
 _PARAGRAPH_BREAK = re.compile(r"\n\s*\n+")
 _SENTENCE_CUT = re.compile(r"(?<=[.!?。！？])(?=\s+(?:[A-Z\"'(가-힣]))")
@@ -105,19 +129,20 @@ def meaning_unit_chunks(
         return [MeaningUnit("source_document", 0, len(text), text, input_index, 0)]
 
     reserved: list[tuple[int, int, str, str]] = []
-    for match in _IMAGE.finditer(text):
-        reserved.append((match.start(), match.end(), "embedded_image", match.group(0)))
+    for start, end, piece in _iter_embedded_images(text):
+        reserved.append((start, end, "embedded_image", piece))
     if _looks_like_email(text):
-        for match in _EMAIL_HEADER.finditer(text):
+        header_end = _leading_email_header_end(text)
+        for match in _EMAIL_HEADER.finditer(text, 0, header_end):
             if _overlaps(reserved, match.start(), match.end()):
                 continue
             kind = _EMAIL_KIND.get(match.group(1).lower(), "email_header")
             reserved.append((match.start(), match.end(), kind, match.group(0)))
     if "<" in text and ">" in text:
-        for match in _HTML_BLOCK.finditer(text):
-            if _overlaps(reserved, match.start(), match.end()):
+        for start, end, piece in _html_leaf_spans(text):
+            if _overlaps(reserved, start, end):
                 continue
-            reserved.append((match.start(), match.end(), "html_block", match.group(0)))
+            reserved.append((start, end, "html_block", piece))
 
     reserved.sort(key=lambda item: (item[0], item[1]))
     units: list[MeaningUnit] = []
@@ -129,7 +154,11 @@ def meaning_unit_chunks(
         cursor = max(cursor, end)
     if cursor < len(text):
         units.extend(_split_plain(text[cursor:], cursor, input_index, unit_grain))
-    units = [unit for unit in units if unit.chunk_text.strip()]
+    units = [
+        unit
+        for unit in units
+        if unit.chunk_text.strip() and not _is_tag_only(unit.chunk_text)
+    ]
     if not units:
         return [MeaningUnit("source_document", 0, len(text), text, input_index, 0)]
     return [unit.with_index(input_index, index) for index, unit in enumerate(units)]
@@ -153,7 +182,9 @@ def expand_embedding_inputs(
         ]
         return list(inputs), units
     if chunking_strategy != "meaning_units":
-        raise ValueError("chunking_strategy must be omitted or meaning_units")
+        raise ValueError(
+            "chunking_strategy must be omitted, source_document, or meaning_units"
+        )
     units: list[MeaningUnit] = []
     for input_index, text in enumerate(inputs):
         parts = meaning_unit_chunks(text, input_index=input_index)
@@ -202,6 +233,209 @@ def _looks_like_email(text: str) -> bool:
             break
     return bool({"from", "to", "subject"} & set(headers))
 
+
+
+def _leading_email_header_end(text: str) -> int:
+    """Return the exclusive end of the leading RFC 5322-style header block.
+
+    Header recognition and reservation share this bound so a body paragraph
+    beginning with ``Subject:`` is never promoted to ``email_subject``.
+    """
+    offset = 0
+    saw_header = False
+    header_count = 0
+    for line in text.splitlines(keepends=True):
+        stripped = line.strip()
+        if not stripped:
+            if saw_header:
+                return offset
+            offset += len(line)
+            continue
+        if _EMAIL_HEADER.match(stripped) is None:
+            return offset
+        saw_header = True
+        header_count += 1
+        offset += len(line)
+        if header_count >= 8:
+            return offset
+    return offset
+
+
+def _iter_embedded_images(text: str) -> list[tuple[int, int, str]]:
+    """Return exact RFC 2397 ``data:image`` spans including MIME folds."""
+    found: list[tuple[int, int, str]] = []
+    for head in _IMAGE_HEAD.finditer(text):
+        if found and head.start() < found[-1][1]:
+            continue
+        end = _consume_base64_payload(text, head.end())
+        if end <= head.end():
+            continue
+        found.append((head.start(), end, text[head.start() : end]))
+    return found
+
+
+def _is_b64_line(line: str) -> bool:
+    """Return True for a complete physical base64/base64url payload line."""
+    stripped = line.rstrip(" \t")
+    if not stripped:
+        return False
+    padding = 0
+    for char in stripped:
+        if char == "=":
+            padding += 1
+            if padding > 2:
+                return False
+            continue
+        if padding or char not in _B64_CHAR:
+            return False
+    return True
+
+
+def _is_mime_continuation(line: str, previous_payload_len: int) -> bool:
+    """Recognize MIME-folded payload without swallowing plain body prose."""
+    stripped = line.rstrip(" \t")
+    if not _is_b64_line(stripped):
+        return False
+    if "=" in stripped:
+        return True
+    if previous_payload_len == 76:
+        return True
+    has_b64_mark = any(char in stripped for char in "+/_-")
+    return has_b64_mark and previous_payload_len >= 16
+
+
+def _consume_base64_payload(text: str, start_index: int) -> int:
+    """Return the exclusive end of a data-URL payload."""
+    length = len(text)
+    cursor = start_index
+    end = start_index
+    padding = 0
+    line_payload_len = 0
+    while cursor < length:
+        char = text[cursor]
+        if char in " \t\"'<>":
+            break
+        if char in "\r\n":
+            if padding:
+                break
+            next_index = cursor + 1
+            if char == "\r" and next_index < length and text[next_index] == "\n":
+                next_index += 1
+            line_end = next_index
+            while line_end < length and text[line_end] not in "\r\n":
+                line_end += 1
+            peek = text[next_index:line_end]
+            if _is_mime_continuation(peek, line_payload_len):
+                cursor = next_index
+                line_payload_len = 0
+                continue
+            break
+        if char == "=":
+            padding += 1
+            if padding > 2:
+                break
+            end = cursor + 1
+            line_payload_len += 1
+            cursor += 1
+            continue
+        if char in _B64_CHAR:
+            if padding:
+                break
+            end = cursor + 1
+            line_payload_len += 1
+            cursor += 1
+            continue
+        break
+    return end
+
+
+def _is_tag_only(text: str) -> bool:
+    """Return True when ``text`` is only HTML tags and whitespace."""
+    index = 0
+    length = len(text)
+    saw_tag = False
+    while index < length:
+        while index < length and text[index].isspace():
+            index += 1
+        if index >= length:
+            return saw_tag
+        if text[index] != "<":
+            return False
+        name_at = index + 1
+        if name_at < length and text[name_at] == "/":
+            name_at += 1
+        if (
+            name_at >= length
+            or not text[name_at].isascii()
+            or not text[name_at].isalpha()
+        ):
+            return False
+        close_at = text.find(">", name_at + 1)
+        if close_at < 0:
+            return False
+        index = close_at + 1
+        saw_tag = True
+    return saw_tag
+
+
+def _fold_ascii_case(text: str) -> str:
+    """Lower ASCII tag names without changing source-string length."""
+    return text.translate(_ASCII_CASE_FOLD)
+
+
+def _is_ascii_tag_name_char(char: str) -> bool:
+    return "A" <= char <= "Z" or "a" <= char <= "z" or "0" <= char <= "9"
+
+
+def _is_ascii_word_char(char: str) -> bool:
+    return _is_ascii_tag_name_char(char) or char == "_"
+
+
+def _html_leaf_spans(text: str) -> list[tuple[int, int, str]]:
+    """Return innermost block elements with one left-to-right stack walk."""
+    leaves: list[tuple[int, int, str]] = []
+    stack: list[tuple[str, int, bool]] = []
+    index = 0
+    length = len(text)
+    while index < length:
+        lt = text.find("<", index)
+        if lt < 0 or lt + 1 >= length:
+            break
+        closing = text[lt + 1] == "/"
+        name_at = lt + 2 if closing else lt + 1
+        if name_at >= length:
+            break
+        name_end = name_at
+        while name_end < length and _is_ascii_tag_name_char(text[name_end]):
+            name_end += 1
+        if name_end == name_at:
+            index = lt + 1
+            continue
+        if name_end < length and _is_ascii_word_char(text[name_end]):
+            index = lt + 1
+            continue
+        tag = _fold_ascii_case(text[name_at:name_end])
+        gt = text.find(">", name_end)
+        if gt < 0:
+            break
+        if tag in _HTML_BLOCK_TAGS:
+            if closing:
+                for depth in range(len(stack) - 1, -1, -1):
+                    if stack[depth][0] != tag:
+                        continue
+                    _name, start, has_child = stack[depth]
+                    del stack[depth:]
+                    if not has_child:
+                        end = gt + 1
+                        leaves.append((start, end, text[start:end]))
+                    break
+            else:
+                if stack:
+                    parent_name, parent_start, _has_child = stack[-1]
+                    stack[-1] = (parent_name, parent_start, True)
+                stack.append((tag, lt, False))
+        index = gt + 1
+    return leaves
 
 def _overlaps(reserved: list[tuple[int, int, str, str]], start: int, end: int) -> bool:
     for existing_start, existing_end, _kind, _piece in reserved:

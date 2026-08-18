@@ -260,8 +260,8 @@ def _validate_chunking_strategy(body: dict[str, Any]) -> str | None:
     """Return ``meaning_units`` or omit-equivalent ``None``.
 
     Unknown values fail closed so a buyer cannot believe the gateway split a
-    document when it actually embedded the whole string. JSON null and
-    empty/whitespace strings are treat-as-omit.
+    document when it actually embedded the whole string. JSON null,
+    empty/whitespace strings, and ``source_document`` are treat-as-omit.
     """
     if "chunking_strategy" not in body:
         return None
@@ -274,12 +274,14 @@ def _validate_chunking_strategy(body: dict[str, Any]) -> str | None:
             "invalid_chunking_strategy",
             "chunking_strategy must be a string",
         )
+    if value == "source_document":
+        return None
     if value == "meaning_units":
         return value
     raise RequestError(
         400,
         "invalid_chunking_strategy",
-        "chunking_strategy must be omitted or meaning_units; send meaning_units to embed email, HTML, and paragraph units separately",
+        "chunking_strategy must be omitted, null, source_document, or meaning_units; send meaning_units to embed email, HTML, and paragraph units separately",
     )
 
 

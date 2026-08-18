@@ -35,8 +35,10 @@ that cost is not justified by consistent gains over simpler splits. This
 gateway cuts at linguistic units:
 
 - email parties (`email_sender`, `email_recipient`, `email_subject`, `email_copy`)
-- HTML blocks (`html_block`)
-- `data:image/...;base64,` spans (`embedded_image`) with the original
+- innermost HTML block leaves (`html_block`), so Gmail wrapper `div` elements
+  do not glue sibling paragraphs together
+- RFC 2397 `data:image` spans (`embedded_image`), including parameters,
+  base64url characters, and RFC 2045 line wrapping, with the original
   `source_offset` so a later OCR/object-tag job can attach to the same place
 - remaining prose as `body_paragraph` (default retrieval grain)
 

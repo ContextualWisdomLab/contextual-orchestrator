@@ -13,4 +13,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   parties, HTML blocks, embedded images, and paragraphs as separate vectors and
   returns `chunk_units` with source offsets. Omit the field to keep the naruon
   one-vector-per-input contract. Next action: send the raw invoice email and
-  search `chunk_units` for the invoice id.
+  search `chunk_units` for the invoice id. Gmail wrapper HTML now emits
+  innermost leaves; RFC 2397 image parameters, base64url payloads, and MIME
+  line wraps remain exact image units. `source_document` is an explicit omit
+  alias.

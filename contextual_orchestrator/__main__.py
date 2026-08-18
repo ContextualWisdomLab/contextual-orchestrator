@@ -94,7 +94,12 @@ def main() -> None:
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
-    client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
+    if args.insecure_skip_tls_verify:
+        parser.error(
+            "--insecure-skip-tls-verify is no longer supported; "
+            "configure --provider-ca-bundle for a private certificate authority"
+        )
+    client = ModelClient(ca_bundle=args.provider_ca_bundle)
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),
         client=client,

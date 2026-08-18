@@ -24,10 +24,14 @@ def test_default_verifies_against_system_store() -> None:
     assert context.check_hostname is True
 
 
-def test_insecure_skip_verify_disables_checks() -> None:
-    context = ModelClient(verify_tls=False)._ssl_context
-    assert context.verify_mode == ssl.CERT_NONE
-    assert context.check_hostname is False
+def test_insecure_skip_verify_is_rejected() -> None:
+    try:
+        ModelClient(verify_tls=False)
+    except ValueError as exc:
+        assert "cannot be disabled" in str(exc)
+        assert "ca_bundle" in str(exc)
+    else:
+        raise AssertionError("provider TLS verification must remain mandatory")
 
 
 def test_ca_bundle_is_loaded() -> None:
