@@ -30,58 +30,128 @@ looks stale — don't trust it blindly past a few weeks.
    `EmbedRelay`, `context-graph-contracts`, `semantic-data-portal`.
 8. Everything else (forks, research briefs, one-off tools) — sweep last.
 
-## Status as of 2026-08-18 (this session)
+## Status as of 2026-08-18, iteration 1 (session start)
 
 `contextual-orchestrator` open-PR queue (30 open before this session):
 
-- **#747 (new)** — fix: JSON request-body nesting-depth guard. Fixes the
-  real Strix finding (JSON-bomb DoS in `_coerce_json`) shared by PRs
-  #716/#728/#732 (all showed `strix: FAILURE` for the same root cause, since
-  Strix scans PR-head changed-file state and all four touch `server.py`).
-  Pushed, open, pipeline should pick it up automatically.
-- **#746** — multi-provider model auto-discovery. Had 2 real findings:
-  dynamic-urllib-use (now scheme-checked) and 3x incomplete-url-substring-
-  sanitization in test doubles (now exact-hostname compares). Fixed and
-  pushed directly to its branch, full suite reverified green (410 unit +
-  10 fuzz). This PR is the contextual-orchestrator half of wiring this repo
-  in as the reasoning engine behind the org's OpenCode review sidecar — high
-  leverage, should merge soon after checks clear.
-- **#716, #728, #732** — same strix root cause as #747. Do **not** hand-fix
-  each one; once #747 merges to `main`, the merge-scheduler's
-  `update_branches` behavior should rebase/update these automatically and
-  their strix re-scan should pass. If they're still stuck a full sweep cycle
-  (~30 min) after #747 merges, investigate `update_branches`/branch-update
-  budget settings instead of assuming it'll resolve on its own.
-- **#718-#745 (the rest of the "http-honesty" stack)** — all-green,
-  `REVIEW_REQUIRED` with 0 reviews at last check. This is expected: OpenCode
-  review is the approval source, not a human. Confirm OpenCode is actually
-  dispatching/approving these (check `gh pr view <n> --json reviews`) on the
-  next iteration; if a PR sits green with zero reviews for a full sweep
-  cycle, that's a scheduler/dispatch bug worth root-causing, not something
-  to merge around by hand.
-- **#742, #741** — drafts (citation/README docs). Leave as drafts unless
-  ready to flip to ready-for-review.
+- **#747** — fix: JSON request-body nesting-depth guard (real Strix finding:
+  JSON-bomb DoS in `_coerce_json`, shared root cause behind #716/#728/#732's
+  `strix: FAILURE`). Pushed, open.
+- **#746** — multi-provider model auto-discovery. Fixed 2 real findings
+  (dynamic-urllib-use, 3x incomplete-url-substring-sanitization in test
+  doubles). Full suite reverified green (410 unit + 10 fuzz). High leverage:
+  contextual-orchestrator half of wiring this repo in as the reasoning
+  engine behind the org's OpenCode review sidecar.
+- **#716, #728, #732** — same strix root cause as #747; expected to clear
+  once #747 merges and their branches get updated (see the throughput fix
+  below — this was slower than expected because of it, not because the fix
+  was wrong).
+
+## Status as of 2026-08-18, iteration 2 (~40 min later) — the real scale
+
+**Correction: iteration 1's "30 open PRs" was wrong.** `gh pr list` with no
+`--limit` silently caps at 30. Real count via GraphQL
+(`pullRequests(states: OPEN) { totalCount }`): **212 open PRs**, oldest from
+2026-08-05. Always pass `--limit 100` (or paginate GraphQL) when sizing the
+queue — see the one-liner in "Useful commands" below.
+
+Breakdown of all 212: 131 checks-green / 81 checks-red. Review decisions:
+119 `CHANGES_REQUESTED`, 64 `REVIEW_REQUIRED` (of which 38 are green-but-
+never-reviewed), 29 `None`.
+
+**Root cause found (this is the highest-leverage fix of the session):** a
+39/40 sample of the `CHANGES_REQUESTED` PRs were *all* rejected for the
+identical mechanical reason — `coverage-evidence result was 'failure'` —
+because their OpenCode review's `coverage-evidence` job got **cancelled**
+(stale run, superseded, never re-dispatched), not because of any real code
+problem. Digging into why re-dispatch never happens: `pr-review-merge-
+scheduler.yml` (central `.github`) defaults `REVIEW_DISPATCH_LIMIT` and
+`BRANCH_UPDATE_LIMIT` to **1 PR per run** — both for the per-repo path
+(`vars.REVIEW_DISPATCH_LIMIT`/`vars.BRANCH_UPDATE_LIMIT`, event-triggered)
+and the org-wide 15-minute cron sweep (`vars.ORG_SWEEP_REVIEW_DISPATCH_LIMIT`/
+`vars.ORG_SWEEP_BRANCH_UPDATE_LIMIT`, shared across ~40 repos in
+`OPENCODE_REPOSITORY_DISPATCH_TARGETS`). At 1 PR per 15-30 min sweep against
+a 212-PR backlog in this repo alone (plus whatever backlog the other ~40
+repos have), the queue was mathematically guaranteed to never drain — new
+PRs are created faster than 1-per-sweep can process them.
+
+**Fix applied:** raised both limits via repository/org Actions variables
+(numeric config only — did not touch any token/key/auth wiring, per the
+standing rule not to disturb the review agents' credentials):
+- Repo `ContextualWisdomLab/contextual-orchestrator`: `REVIEW_DISPATCH_LIMIT=10`,
+  `BRANCH_UPDATE_LIMIT=10`.
+- Org `ContextualWisdomLab`: `ORG_SWEEP_REVIEW_DISPATCH_LIMIT=15`,
+  `ORG_SWEEP_BRANCH_UPDATE_LIMIT=15`.
+
+10-15x throughput, not unlimited — NVIDIA NIM 429 rate-limit errors were
+already observed in Strix logs at the old limit of 1, so this is a
+deliberately moderate first raise, not a max. **Next iteration: check
+whether NIM rate-limiting got worse (more 429s in Strix/OpenCode job logs)
+before raising further; if the sweep is now erroring out more than it's
+clearing, dial back instead of pushing higher.**
+
+Also found and fixed (real, current, unrelated to the above) via `strix` on
+old stale PR #600: **SSRF via unvalidated redirect** in
+`ModelClient._open_provider` (plain `urlopen` follows 3xx without
+re-validating the target against `_validate_provider`'s private/loopback
+checks). Fixed on `main` directly via PR **#749** — `_RefuseRedirectHandler`,
+verified against a real local HTTP server issuing a 302, not a mock. Full
+suite green (293 unit + 8 fuzz).
+
+Also opened PR **#748** — this track's docs.
+
+Manually dispatched a targeted scheduler pass for #747 during this
+iteration; note the `repository_dispatch(target_repository=...)` path
+**requires a `pr_number`** (rejects bare repository-only targeting) — use it
+per-PR to unstick something specific, not as a whole-repo sweep trigger.
 
 ## Next iteration checklist
 
-1. Re-check `gh pr list --state open` in `contextual-orchestrator`: did
-   #747 and #746 merge? Did #716/#728/#732 clear once #747 landed? Did the
-   REVIEW_REQUIRED-but-green PRs pick up an OpenCode approval and merge?
-2. If the queue isn't draining on its own within a couple of sweep cycles,
-   read `pr-review-merge-scheduler.yml`'s recent runs
-   (`gh run list -R ContextualWisdomLab/.github --workflow=pr-review-merge-scheduler.yml`)
-   for errors before assuming it's fine.
-3. Once `contextual-orchestrator`'s queue is empty or everything left is
-   logged as externally blocked, move to `.github` itself: check its own
-   open PRs/issues.
-4. Start the PII-masking-alternative research (governance-risk-compliance +
-   the repos that actually mask PII, e.g. `gyeot`, `naruon`) — this was
-   explicitly authorized to start immediately, don't let repo-queue work
-   crowd it out indefinitely.
-5. Check whether `contextual-orchestrator` needs its own hourly
+1. Re-pull the full 212-PR snapshot (paginated GraphQL, not `gh pr list`
+   without `--limit`) and diff against this iteration's counts: is
+   `CHANGES_REQUESTED` actually dropping now that dispatch limits are
+   raised? Is `red` (checks-FAILURE) count dropping?
+2. Check Strix/OpenCode job logs from the last hour for NVIDIA NIM 429s —
+   if the raised limits made backend rate-limiting materially worse, lower
+   `REVIEW_DISPATCH_LIMIT`/`ORG_SWEEP_REVIEW_DISPATCH_LIMIT` back down
+   (try 5 before going back to 1).
+3. Did #747, #746, #749, #748 merge? Did #716/#728/#732 clear?
+4. Among the 81 checks-red PRs, sample beyond what this iteration covered
+   (#96, #111, #600 area) for more shared root causes the same way the
+   coverage-evidence and JSON-bomb ones were found — a handful of root
+   causes likely explain most of the 81, not 81 distinct bugs.
+5. For PRs from a stale/superseded lineage (many `cursor/bc-*` and
+   `feat/*-http-honesty-*` branches look like an agent iterating the same
+   surface many times) — close the superseded ones with a one-line reason
+   instead of trying to land all of them; a clean queue matters more than
+   preserving every intermediate attempt.
+6. Once `contextual-orchestrator`'s queue is meaningfully down (not
+   necessarily zero — 212 will take several iterations even at 10-15x
+   throughput), move to `.github` itself: check its own open PRs/issues,
+   and check whether OTHER repos in `OPENCODE_REPOSITORY_DISPATCH_TARGETS`
+   have the same backlog-vs-throughput problem this one did.
+7. Start the PII-masking-alternative research (governance-risk-compliance +
+   the repos that actually mask PII, e.g. `gyeot`, `naruon`) — authorized
+   to start immediately, don't let repo-queue work crowd it out
+   indefinitely.
+8. Check whether `contextual-orchestrator` needs its own hourly
    review-repair workflow (pattern exists for clearfolio/disksage/
-   fast-mlsirm) — add via NVIDIA_NIM_API_KEY-backed OpenCode agent if
-   missing, reusing the existing generic workflow rather than inventing a
-   new one.
-6. Keep this file current: strike completed items, add newly discovered
+   fast-mlsirm) — reuse the generic NVIDIA_NIM_API_KEY-backed one, never
+   COPILOT_GITHUB_TOKEN.
+9. Keep this file current: strike completed items, add newly discovered
    product gaps, re-rank leverage order if a dependency changes.
+
+## Useful commands
+
+```bash
+# True open-PR count + full snapshot (gh pr list without --limit silently caps at 30)
+gh api graphql -f query='{repository(owner:"ContextualWisdomLab",name:"contextual-orchestrator"){pullRequests(states:OPEN){totalCount}}}'
+
+# Recent scheduler runs (check for errors, and whether throughput improved)
+gh run list -R ContextualWisdomLab/.github --workflow=pr-review-merge-scheduler.yml --limit 10
+
+# Unstick one specific PR right now instead of waiting for the next sweep
+gh api repos/ContextualWisdomLab/.github/dispatches -f event_type=merge-scheduler \
+  -f 'client_payload[target_repository]=ContextualWisdomLab/contextual-orchestrator' \
+  -f 'client_payload[pr_number]=<N>'
+```
