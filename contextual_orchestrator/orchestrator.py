@@ -243,7 +243,7 @@ class ModelClient:
     @staticmethod
     def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
         if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323  # nosemgrep: python.lang.security.unverified-ssl-context -- explicit verify_tls=False dev opt-out.
+            return ssl._create_unverified_context()  # nosec B323  # nosemgrep
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -324,7 +324,7 @@ class ModelClient:
             RefuseRedirectHandler,
             urllib.request.HTTPSHandler(context=self._ssl_context),
         )
-        return opener.open(  # nosec B310  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected -- URL is from _provider_url after _validate_provider.
+        return opener.open(  # nosec B310  # nosemgrep
             request,
             timeout=self.timeout,
         )
