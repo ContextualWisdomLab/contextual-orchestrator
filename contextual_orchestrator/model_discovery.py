@@ -116,9 +116,8 @@ def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> 
         headers={"authorization": f"{auth_scheme} {api_key}"},
         method="GET",
     )
-    # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected -- scheme is
-    # enforced to https:// immediately above; url is never attacker-controlled.
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts
+    # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         return json.loads(response.read().decode("utf-8"))
 
 
