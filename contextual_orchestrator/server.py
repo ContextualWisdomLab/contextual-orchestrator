@@ -164,7 +164,43 @@ def _error_payload(error_code: str, error_message: str, error_detail: dict[str, 
     }
 
 
+MAX_JSON_NESTING_DEPTH = 32
+
+
+def _reject_excessive_json_nesting(payload: bytes, max_depth: int = MAX_JSON_NESTING_DEPTH) -> None:
+    """Reject JSON with object/array nesting deeper than max_depth before parsing.
+
+    json.loads() has no built-in depth cap, so a deeply nested payload well
+    under max_body_bytes can still burn disproportionate CPU/stack during
+    parsing (JSON-bomb DoS). Structural brackets are always single ASCII
+    bytes and UTF-8 continuation/lead bytes are always >= 0x80, so a raw
+    byte scan that only toggles on an unescaped '"' is safe without decoding.
+    """
+    depth = 0
+    in_string = False
+    escaped = False
+    for byte in payload:
+        char = chr(byte)
+        if in_string:
+            if escaped:
+                escaped = False
+            elif char == "\\":
+                escaped = True
+            elif char == '"':
+                in_string = False
+            continue
+        if char == '"':
+            in_string = True
+        elif char in "{[":
+            depth += 1
+            if depth > max_depth:
+                raise RequestError(400, "invalid_json", "request body JSON nesting exceeds the allowed depth")
+        elif char in "}]":
+            depth -= 1
+
+
 def _coerce_json(payload: bytes) -> dict[str, Any]:
+    _reject_excessive_json_nesting(payload)
     value = json.loads(payload.decode("utf-8"))
     if not isinstance(value, dict):
         raise RequestError(400, "invalid_json", "request body must be a JSON object")
