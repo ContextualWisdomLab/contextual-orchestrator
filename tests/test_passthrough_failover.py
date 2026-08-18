@@ -50,7 +50,7 @@ def _orchestrator(client: SequencedProxyClient) -> TaskOrchestrator:
 
 
 def test_proxy_completion_fails_over_after_primary_rate_limit_and_preserves_tools() -> None:
-    """A rate-limited tool-call provider must hand the unchanged request to fallback."""
+    """A rate-limited tool-call provider must preserve fields for fallback."""
     client = SequencedProxyClient(
         {
             "primary_agent": RuntimeError("429 rate limit"),
@@ -77,6 +77,46 @@ def test_proxy_completion_fails_over_after_primary_rate_limit_and_preserves_tool
     assert client.calls[0][2]["model"] == "primary-model"
     assert client.calls[1][2]["model"] == "fallback-model"
     assert client.calls[1][2]["tools"] == tools
+    assert client.calls[1][2]["stream"] is False
+    assert "mode" not in client.calls[1][2]
+    assert body == original
+
+
+def test_proxy_completion_fails_over_responses_input_and_forces_non_streaming() -> None:
+    """Responses API input must use the same fallback and non-streaming contract."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": RuntimeError("429 rate limit"),
+            "fallback_agent": {
+                "object": "response",
+                "model": "fallback-model",
+                "output": [],
+            },
+        }
+    )
+    orchestrator = _orchestrator(client)
+    body = {
+        "input": [
+            {
+                "role": "user",
+                "content": [{"type": "input_text", "text": "inspect this change"}],
+            }
+        ],
+        "tools": [{"type": "function", "name": "inspect", "parameters": {}}],
+        "stream": True,
+        "mode": "auto",
+    }
+    original = deepcopy(body)
+
+    result = orchestrator.proxy_completion(body, endpoint="responses")
+
+    assert result["model"] == "fallback-model"
+    assert [call[0] for call in client.calls] == ["primary_agent", "fallback_agent"]
+    assert [call[1] for call in client.calls] == ["responses", "responses"]
+    assert client.calls[1][2]["input"] == original["input"]
+    assert client.calls[1][2]["tools"] == original["tools"]
+    assert client.calls[1][2]["model"] == "fallback-model"
+    assert client.calls[1][2]["stream"] is False
     assert "mode" not in client.calls[1][2]
     assert body == original
 
