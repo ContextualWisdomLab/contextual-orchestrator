@@ -1266,3 +1266,19 @@ operator bearer is coarse-grained and that per-operation RBAC/ABAC is still a
 required production boundary. Do not relabel this as an infrastructure flake
 or bypass Strix; hold the feature PR as deployment-restricted until the
 operator identity/resource-authorization design is separately remediated.
+
+## Status as of 2026-08-19, iteration 18 — isolated fixes are now in hosted verification
+
+The lock-only remediation is live as keyverse #112 at exact head
+`f02acf93367a40dbfb23a73985017dca8d42ff39`, based on protected-main head
+`ce207dfd42975db61c82a5963e206fc1db14ac2b`. Its hosted checks are queued (14
+required jobs); seven scheduler/bootstrap cancellation jobs are already
+terminal and no review decision has been posted. Do not call it green or
+mergeable yet.
+
+The living track plan is now exact head #758
+`9f1a2946fd34adf76a661a0fb41aeb871e71bcc2`; its 15 required hosted checks are
+also queued. The central `.github` scheduler remains intentionally bounded at
+the previously recorded `0/0` dispatch/update limits while #1139 is not
+merged and live-verified. Current-head evidence is preserved; no admin bypass,
+self-approval, or policy write was used.
