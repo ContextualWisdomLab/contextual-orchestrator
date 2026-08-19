@@ -1,7 +1,7 @@
 ---
 id: "0002"
 title: "Explicit local mlx transport and evaluation adapter"
-status: accepted
+status: superseded
 proposed_date: "2026-08-10"
 accepted_date: "2026-08-11"
 deciders:
@@ -22,13 +22,13 @@ affected_components:
   - "contextual_orchestrator/cost_router.py"
   - "examples/agents.mlx.json"
   - "examples/agents.local.json"
-  - "tests/test_local_mlx.py"
+  - "tests/test_local_gateway.py"
   - "tests/test_batch_routing.py"
   - "tests/test_cost_router.py"
   - "tests/test_openai_passthrough.py"
 effort: M
 supersedes: null
-superseded-by: null
+superseded-by: "0010-gateway-only-provider-contract"
 related:
   - path: "docs/planning/adrs/0001-fail-closed-model-judgment.md"
     relation: informational
@@ -48,7 +48,7 @@ success_criteria:
   - metric: "local provider safety"
     target: "loopback-only mlx/local URL, no Authorization header, remote HTTP rejected"
     measurement_window: "every local transport test run"
-    source: "tests/test_local_mlx.py"
+    source: "tests/test_local_gateway.py"
   - metric: "judge integration"
     target: "fast-mlsirm judge reaches an injected contextual-orchestrator only"
     measurement_window: "every LLM-as-a-Judge run"
@@ -173,14 +173,14 @@ a Codex profile; its credential is never sent to the loopback mlx-lm endpoint.
 * `contextual_orchestrator/server.py`: authenticate `/v1/models` and `/v1/responses`, proxy Responses requests, and frame streamed responses with `response.completed` and `data: [DONE]`.
 * `examples/agents.mlx.json`: keep the minimal selected MLX worker example visible in data, not code.
 * `examples/agents.local.json`: keep the explicit candidate registry: public contextual-orchestrator and every discovered MLX, llama.cpp, and LM Studio candidate. Do not pre-disable entries as a discovery side effect.
-* `tests/test_local_mlx.py`: verify direct MLX template arguments, authenticated local gateway credential separation, and fail-closed missing credentials.
+* `tests/test_local_gateway.py`: verify direct MLX template arguments, authenticated local gateway credential separation, and fail-closed missing credentials.
 * `tests/test_model_judge.py`: verify structured fast-mlsirm completion requests remain on the contextual gateway adapter.
 * `tests/test_openai_passthrough.py`: verify the Responses SSE completion contract and model discovery endpoint.
 * Local machine configuration: keep the ChatGPT login in Codex's normal auth cache, select the built-in `openai` provider through a profile when needed, and keep the local gateway bearer token in the OS credential store.
 
 ## Verification
 
-* `PYTHONPATH=. .venv/bin/python -m pytest -q tests/test_local_mlx.py tests/test_openai_passthrough.py` passes in the repository test environment.
+* `PYTHONPATH=. .venv/bin/python -m pytest -q tests/test_local_gateway.py tests/test_openai_passthrough.py` passes in the repository test environment.
 * `GET /healthz` and authenticated `GET /v1/models` succeed on the loopback control plane; model discovery includes the public orchestrator and the complete configured candidate registry.
 * Authenticated streamed `POST /v1/responses` contains `response.completed` and `data: [DONE]` and reaches the configured mlx-lm model.
 * A Codex local-provider smoke returns the requested exact sentinel response through contextual-orchestrator.
@@ -342,7 +342,7 @@ Remove the explicit local adapter and use the mock path if the local server is u
 * contextual_orchestrator/__main__.py
 * examples/agents.mlx.json
 * examples/agents.local.json
-* tests/test_local_mlx.py
+* tests/test_local_gateway.py
 * tests/test_openai_passthrough.py
 * fast-mlsirm/python/fast_mlsirm/llm_judge.py
 * fast-mlsirm/tests/test_llm_judge.py

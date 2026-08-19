@@ -65,17 +65,6 @@ def _local_concurrency(value: str) -> int:
     return parsed
 
 
-def _json_object(value: str) -> dict[str, object]:
-    """Parse a JSON object for an argparse option, rejecting other JSON values."""
-    try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise argparse.ArgumentTypeError("valid JSON object required") from exc
-    if not isinstance(parsed, dict):
-        raise argparse.ArgumentTypeError("JSON object required")
-    return parsed
-
-
 def _resolve_auth_token(explicit: str, credential_name: str) -> str:
     """Resolve a server bearer token from an explicit local value or the KV."""
     if explicit:
@@ -301,15 +290,13 @@ def main() -> None:
     parser.add_argument("--max-output-tokens", type=int, default=2048,
                         help="Default provider output token cap (default: 2048).")
     parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
-                        help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
+                        help=f"Concurrent requests for local gateway batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
                         help=f"Maximum simultaneous HTTP orchestration runs (default: 8; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--route-text-length-threshold", type=_positive_int, default=None,
                         help="Auto-mode minimum prompt length that can trigger conduct instead of route.")
     parser.add_argument("--conduct-hint-threshold", type=_positive_int, default=None,
                         help="Auto-mode hint-count minimum that can trigger conduct instead of route.")
-    parser.add_argument("--chat-template-args", type=_json_object, default={},
-                        help="JSON kwargs forwarded to local mlx-lm chat templates, e.g. '{\"enable_thinking\":false}'.")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
     parser.add_argument("--budget-max-cost-usd", type=float, default=None,
@@ -325,7 +312,6 @@ def main() -> None:
         temperature=args.sampling_temperature,
         max_output_tokens=args.max_output_tokens,
         local_concurrency=args.local_concurrency,
-        chat_template_args=args.chat_template_args,
         allowed_provider_hosts=args.allowed_provider_hosts,
     )
     orchestrator = TaskOrchestrator(

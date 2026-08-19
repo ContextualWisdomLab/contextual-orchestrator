@@ -19,6 +19,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
 from .batch_routing import cheapest_upstream
 from .credentials import get_credential
@@ -105,12 +106,9 @@ class ProviderDiscoveryError(RuntimeError):
 
 
 def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
-    if not url.startswith("https://"):
-        # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
-        # constants below, never external input -- but urlopen also honors
-        # file:// and other unsafe schemes, so refuse anything not https as a
-        # cheap invariant check rather than trusting the constant list alone.
-        raise ValueError(f"refusing non-https model discovery URL: {url!r}")
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("model discovery requires an https provider URL")
     request = urllib.request.Request(
         url,
         headers={"authorization": f"{auth_scheme} {api_key}"},

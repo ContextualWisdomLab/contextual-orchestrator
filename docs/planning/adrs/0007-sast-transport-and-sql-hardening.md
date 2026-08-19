@@ -1,7 +1,7 @@
 ---
 id: "0007"
 title: "Harden provider transport and SQL ledger against scanner findings"
-status: accepted
+status: superseded
 proposed_date: "2026-08-11"
 accepted_date: "2026-08-11"
 deciders:
@@ -16,11 +16,11 @@ affected_components:
   - "contextual_orchestrator/cost_ledger.py"
   - "contextual_orchestrator/__main__.py"
   - "tests/test_provider_tls.py"
-  - "tests/test_local_mlx.py"
+  - "tests/test_local_gateway.py"
   - "tests/test_cost_ledger.py"
 effort: M
 supersedes: null
-superseded-by: null
+superseded-by: "0010-gateway-only-provider-contract"
 related:
   - path: "docs/planning/adrs/0002-explicit-local-mlx-evaluation.md"
     relation: influences
@@ -154,5 +154,5 @@ reintroducing general urllib URL handling.
 * contextual_orchestrator/cost_ledger.py
 * contextual_orchestrator/__main__.py
 * tests/test_provider_tls.py
-* tests/test_local_mlx.py
+* tests/test_local_gateway.py
 * tests/test_cost_ledger.py

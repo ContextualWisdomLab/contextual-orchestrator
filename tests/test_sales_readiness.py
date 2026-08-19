@@ -162,7 +162,7 @@ def test_sales_readiness_warns_for_single_token_local_deployment() -> None:
 def test_provider_egress_report_skips_local_and_checks_remote_agents() -> None:
     orchestrator = TaskOrchestrator(
         [
-            ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1"),
+            ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1"),
             ModelAgent(
                 "remote_agent",
                 "remote-model",

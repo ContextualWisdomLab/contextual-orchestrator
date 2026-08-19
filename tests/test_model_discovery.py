@@ -113,6 +113,18 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert discovered[1].prompt_price_per_1k is None
 
 
+def test_discover_local_gateway_is_not_a_model_discovery_source() -> None:
+    register_credential("LOCAL_GATEWAY_KEY", "local-secret")
+    source = ProviderModelSource(
+        provider_name="local_gateway",
+        credential_name="LOCAL_GATEWAY_KEY",
+        list_url="local://host.docker.internal:8080/v1/models",
+        chat_base_url="local://host.docker.internal:8080/v1",
+    )
+    with pytest.raises(RuntimeError, match="model discovery requires an https provider URL"):
+        discover_provider_models(source)
+
+
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     register_credential("BYTEZ_API_KEY", "bytez-secret")
     payload = {
