@@ -1358,6 +1358,26 @@ for the new head exists yet. The PR remains open and `mergeable_state=dirty`;
 do not call it green or mergeable until hosted checks and the normal review
 gate produce terminal evidence.
 
+## Status as of 2026-08-19, iteration 23 — no clean merge candidate while hosted jobs queue
+
+An individual-PR REST sweep of all open contextual-orchestrator PRs found only
+four with `mergeable=true`: #758, #762, #763, and Draft #410. The first three
+are `mergeable_state=blocked`; #758 (`a72f647...`) and #762
+(`3b685af...`) retain their 15 required jobs queued, while the newly identified
+#763 (`f06ba9199854c090a149059b36639260e9b622d8`) has 15 required jobs queued,
+seven scheduler jobs skipped, and no submitted review. Draft #410 is unstable
+and was not considered for merge. There is therefore no clean, independently
+reviewed PR to merge in this snapshot.
+
+The scheduler candidate `.github#1139` remains mergeable but blocked: its two
+required CodeQL compatibility jobs are still pending, and no independent
+approval exists. No admin merge, review dismissal, branch update, or sweep-limit
+change was attempted while required checks were non-terminal. The next safe
+action is to re-read these exact heads after hosted queue progress, then merge
+only a fully terminal, policy-allowed candidate through the normal protected
+path (using the documented admin fallback only when the independent-review
+requirement alone is demonstrably unsatisfiable).
+
 ## Status as of 2026-08-19, iteration 21 — stale Semgrep branch update is conflict-bound
 
 The next independent stale-Semgrep candidate was contextual-orchestrator #650,
