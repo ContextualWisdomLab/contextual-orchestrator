@@ -270,10 +270,10 @@ def test_chat_completion_response_requires_explicit_trace() -> None:
     assert trace[0]["output"] == "Bearer [REDACTED]"
 
 
-def test_redaction_masks_common_sensitive_values() -> None:
+def test_redaction_masks_credentials_but_not_email_pii() -> None:
     text = "api_key='abcdefghijklmnopqrstuvwxyz' sent by alice@example.com"
 
-    assert redact_text(text) == "api_key='[REDACTED]' sent by [REDACTED]"
+    assert redact_text(text) == "api_key='[REDACTED]' sent by alice@example.com"
 
 
 def test_external_provider_requires_resolvable_credential_and_public_https() -> None:
@@ -395,7 +395,7 @@ if __name__ == "__main__":
     test_public_bind_requires_explicit_opt_in()
     test_concurrency_limit_rejects_when_slots_are_full()
     test_chat_completion_response_requires_explicit_trace()
-    test_redaction_masks_common_sensitive_values()
+    test_redaction_masks_credentials_but_not_email_pii()
     test_external_provider_requires_resolvable_credential_and_public_https()
     test_external_provider_rejects_insecure_or_unlisted_hosts()
     test_provider_transport_rejects_local_url_schemes_before_urllib()

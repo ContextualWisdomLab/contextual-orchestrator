@@ -97,7 +97,6 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
-    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
 )
 
 DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
@@ -9185,15 +9184,19 @@ for _report_name, _report_method in list(TaskOrchestrator.__dict__.items()):
 
 
 def redact_text(text: str) -> str:
-    """Mask common secret and personal-data shapes from traces."""
+    """Mask credential shapes (API keys, tokens, passwords, bearer headers) from traces.
+
+    Does not mask PII (email addresses, names, etc.): per governance-risk-compliance policy,
+    PII is protected by purpose-limited authorization, encryption, and audit logging, not by
+    destroying it in every response -- blanket PII masking here broke every downstream
+    consumer that needs the real content (e.g. an email client rendering actual addresses).
+    """
     redacted = text
     for pattern in SECRET_PATTERNS:
         if pattern.pattern.lower().startswith("(?i)(api"):
             redacted = pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted)
-        elif pattern.pattern.lower().startswith("(?i)(bearer"):
-            redacted = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
         else:
-            redacted = pattern.sub("[REDACTED]", redacted)
+            redacted = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
     return redacted
 
 
