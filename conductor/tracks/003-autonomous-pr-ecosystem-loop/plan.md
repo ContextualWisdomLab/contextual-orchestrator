@@ -1796,3 +1796,30 @@ current-head run, review, merge, branch, or sweep-limit was changed.
 2. Read any terminal failure at the finding level and repair only its root
    cause; local green evidence does not waive hosted gates.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 39 — three candidates have local proof but hosted runner backlog persists
+
+At `2026-08-19T13:28:58Z`, exact-head rollups still showed no terminal
+failure:
+
+- #1128 `e33536ba...`: 28 successes; `opencode-review` and `strix` queued.
+- #1142 `660d4712...`: 20 successes; six CodeQL/coverage/pip-audit contexts
+  queued. Its exact worktree passed focused queue-health tests, actionlint,
+  diff check, and the full suite (`1256 passed, 16 subtests passed`).
+- #1138 `1f4f5e09...`: 19 successes; seven compatibility/coverage/audit
+  contexts queued. Its exact worktree passed 65 focused classifier/contract
+  tests, actionlint, and `git diff --check`.
+
+The oldest pending jobs remain runner-queued current-head jobs, not stale
+dispatches. Local proof is preserved as supporting evidence only; no merge,
+rerun, cancellation, review dismissal, branch update, or sweep-limit change
+was made while hosted required contexts remain non-terminal.
+
+### Next iteration checklist
+
+1. Monitor the three candidates and act on the first terminal failure or fully
+   terminal required set; use immediate exact-head and protection checks before
+   merge.
+2. Preserve current-head jobs and do not create more reruns to compete for the
+   same hosted runner backlog.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
