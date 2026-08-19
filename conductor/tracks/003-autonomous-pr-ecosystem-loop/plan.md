@@ -1238,3 +1238,31 @@ No protection or bypass configuration was modified. The queue remains hosted
 runner-bound: the latest observed queue was `591`, the three exact-head fix
 runs (#1138, #1139, and #762) remained queued, and both org sweep variables
 remained `0`.
+
+## Status as of 2026-08-19, iteration 17 — isolated a base lock failure and retained a real security blocker
+
+The next current-head audit covered `noema#67`, `keyverse#103`, and
+`keyverse#104`. Noema #67 is an intentionally frozen historical Draft: its
+body names #407 as the current-main successor and says not to merge the branch.
+Its old `verify` failure (`31365833579`, job `93383880229`) is the historical
+`nanoid` high-severity `npm audit` result, not a current successor failure.
+
+Keyverse #104 is documentation-only at exact head
+`7f1194d68b256d55f3b6cae6c1d181042091ea3c`; its `account-unification-tests`
+failure (`32100975368`, job `95601269902`) is a base-main lock mismatch:
+`pyproject.toml` requires coverage `7.15.4` and setuptools `84.0.0`, while
+protected `main` still contained `7.15.2` and `83.0.0`. A separate minimal
+lock-sync PR #112 was opened from protected-main head
+`ce207dfd42975db61c82a5963e206fc1db14ac2b`, exact head
+`f02acf93367a40dbfb23a73985017dca8d42ff39`. `uv lock` regenerated the hashes
+and `uv run --locked --extra dev pytest -q` passed locally; hosted checks are
+queued, so no hosted-green claim is made.
+
+Keyverse #103 remains blocked at exact head
+`44fb43428eab0075b9e5ee114a5ade56bb18eec2` by a real Strix MEDIUM IDOR report
+(`32092025335`, job `95576032571`) against the new authorization-plane grant
+mutation surface. ADR-0008 explicitly records that the current deployment
+operator bearer is coarse-grained and that per-operation RBAC/ABAC is still a
+required production boundary. Do not relabel this as an infrastructure flake
+or bypass Strix; hold the feature PR as deployment-restricted until the
+operator identity/resource-authorization design is separately remediated.
