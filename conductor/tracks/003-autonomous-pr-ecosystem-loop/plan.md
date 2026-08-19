@@ -2342,3 +2342,21 @@ still runner-queued; main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
 2. Monitor PR #758 and #1155 for runner assignment, then let normal
    auto-merge proceed and verify the resulting main commits.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 63 — regenerated no-op run removed
+
+After the 47-run cleanup, the unchanged scheduler generated one new pending
+`workflow_run` with no PR metadata and no jobs (`32267791101`). It was
+cancelled and verified `completed/cancelled`. The source PR #1155 remains
+unchanged at exact head `762a999bf66db0bae2e6fc7455e1dc0c83268e1e`; the plan
+PR #758 now has exact head `7c7b4d013aa3913e3c45ab85f68af80260c049dc`. Both
+retain normal auto-merge, while their required checks remain queued and main
+remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Continue cancelling only regenerated scheduler runs proven to have no PR
+   metadata and no jobs; preserve target and current-head runs.
+2. Recheck both auto-merge PRs for terminal required checks and verify main
+   after any protected merge.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
