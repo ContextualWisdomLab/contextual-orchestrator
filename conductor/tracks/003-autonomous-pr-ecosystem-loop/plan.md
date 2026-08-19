@@ -1,5 +1,71 @@
 # Plan (living — update every iteration, this is what the loop resumes from)
 
+## If you're a new agent picking this up (updated every iteration)
+
+**What this is**: a standing autonomous mission, operator-authorized, running as a
+self-paced `/loop` in the `contextual-orchestrator` repo (org: `ContextualWisdomLab`).
+The mandate: keep every PR queue across the org's repos empty via
+review → fix → recheck → merge, with no interim check-ins with the human operator;
+once a repo's queue is genuinely empty, find and close real, buyer-visible product
+gaps. This file (`conductor/tracks/003-autonomous-pr-ecosystem-loop/plan.md`) is the
+loop's memory across iterations — always read the latest `## Status as of ...`
+section and its "Next iteration checklist" first; they supersede everything above.
+
+**Standing authorizations already granted this session** (don't re-ask):
+full autonomous merge authority; org-wide repo scope (every repo where
+`viewerPermission` is `ADMIN`); an `OrganizationAdmin` bypass actor added to
+this repo's and `.github`'s branch-protection rulesets, plus `enforce_admins`
+disabled on both repos' classic branch protection (both were independently
+blocking *any* merge, even admin, before this) — `gh pr merge --admin --squash
+--delete-branch` is a real, working, authorized action now, not a bypass to
+ask permission for each time. PII-masking-removal (replace with purpose-
+limited authorization + encryption + audit, per `governance-risk-compliance`'s
+own stated policy) was also pre-authorized and partially delivered (ADR 0010).
+The one hard rule that is *not* relaxed: never weaken, skip, or bypass a real
+required CI check (tests/Semgrep/CodeQL/Strix/etc.) to force a merge through —
+only the redundant/unsatisfiable independent-human-review requirement is
+being bypassed, always with a stated reason in the merge body.
+
+**Mechanics discovered the hard way (don't rediscover these)**:
+- `gh pr list` with no `--limit` silently caps at 30 — always paginate GraphQL
+  or pass `--limit 100`+ when sizing a queue.
+- The org-central review/merge pipeline (`.github`'s `pr-review-merge-
+  scheduler.yml`, `opencode-review.yml`, `strix.yml`) is real infrastructure —
+  extend/fix it, never duplicate it. Its branch-auto-update mechanism only
+  touches *already-approved* PRs, so a `CHANGES_REQUESTED` PR's branch is
+  never auto-updated — a structural deadlock for anything rejected before a
+  root-cause fix landed on `main`. Don't assume "it'll self-correct with more
+  sweeps" — check `mergeable` state directly.
+- `opencode-agent[bot]` reviews are real (it does submit genuine
+  APPROVE/CHANGES_REQUESTED), but a `CHANGES_REQUESTED` citing "coverage-
+  evidence result was failure" is usually a known mechanical artifact from a
+  since-fixed infra bug (atheris/cp314 wheel gap, Semgrep whole-repo-tree
+  scan, pip-audit resolver conflict — all fixed this session). Read the
+  review before dismissing it; only dismiss the known mechanical pattern, never
+  a substantive objection.
+- Before fighting a branch-update conflict on an older/smaller PR, check
+  whether a larger, actively-evolving PR already solved the same problem in
+  its own scope — close as redundant instead of re-resolving (happened twice
+  with #746).
+- Verify everything locally before pushing: full `pytest tests -q
+  --ignore=tests/fuzz`, `pytest tests/fuzz -q`, and
+  `semgrep scan --config=p/default --severity=WARNING --severity=ERROR
+  --exclude=.github/workflows --exclude='docs/research/**/standards' --error`
+  (the *exact* CI command — `semgrep --config auto` locally gives a different,
+  misleading rule set).
+
+**Where things stand**: see the latest `## Status as of ...` entry below for
+the current numbers, the current highest-priority task, and exactly what to
+do next. As of iteration 10, the priority is resolving one large unmerged
+~47-PR feature chain (branches `feat/<slug>-http-honesty-<timestamp>`) that
+accounts for most of the open-PR backlog.
+
+**Convention going forward**: end every iteration by updating this section
+if the standing context has materially changed, and always add a dated
+`## Status as of <date>, iteration N` entry below with what happened and a
+"Next iteration checklist" for whoever (or whatever fresh agent) picks this
+up next.
+
 ## Ecosystem leverage order
 
 Central/infra repos first (they unblock everyone downstream), then the
