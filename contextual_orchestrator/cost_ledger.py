@@ -222,6 +222,8 @@ class UsageRecord:
 
     def as_dict(self) -> Dict[str, Any]:
         """Flatten the record (attribution inlined) for JSON + SQL storage."""
+        # Execution identity is evidence of what ran — never a client-chosen tag.
+        # Account/service/team/group/company remain descriptive attribution.
         row = {
             "usage_record_id": self.usage_record_id,
             "created_at": self.created_at,
@@ -725,14 +727,31 @@ class CostLedger:
     ) -> UsageRecord:
         """Compute cost, build a :class:`UsageRecord`, persist it, and return it."""
         if isinstance(attribution, dict) or attribution is None:
-            dims = AttributionDimensions.from_mapping(attribution)
+            # Strip caller-controlled execution identity before mapping so a
+            # client cannot spoof model/provider rollups (buyer-bill honesty).
+            if isinstance(attribution, dict):
+                cleaned = {
+                    key: value
+                    for key, value in attribution.items()
+                    if key not in {"model_name", "provider", "upstream_api"}
+                }
+            else:
+                cleaned = None
+            dims = AttributionDimensions.from_mapping(cleaned)
         else:
-            dims = attribution
-        # Keep the model_name dimension aligned with the served model unless the
-        # caller pinned it explicitly, and default the provider dimension too.
-        if dims.model_name == UNATTRIBUTED and model:
+            dims = AttributionDimensions(
+                account=attribution.account,
+                service=attribution.service,
+                upstream_api=UNATTRIBUTED,
+                model_name=UNATTRIBUTED,
+                team=attribution.team,
+                group=attribution.group,
+                company=attribution.company,
+            )
+        # Execution identity always wins — descriptive dimensions stay as-is.
+        if model:
             dims.model_name = model
-        if dims.upstream_api == UNATTRIBUTED and provider:
+        if provider:
             dims.upstream_api = provider
 
         cost_amount, currency = self.price_book.compute_cost(

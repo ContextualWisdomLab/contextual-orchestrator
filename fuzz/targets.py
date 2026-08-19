@@ -117,6 +117,80 @@ def exercise_request_body(raw: bytes) -> None:
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
 
+    # Omit-equivalent instructions/metadata must leave the body persist-clean.
+    if "instructions" in body:
+        try:
+            instructions = server._validate_responses_instructions(body)
+        except RequestError:
+            pass
+        else:
+            if instructions is None:
+                assert "instructions" not in body
+    if "metadata" in body:
+        try:
+            metadata = server._validate_openai_metadata(body)
+        except RequestError:
+            pass
+        else:
+            if metadata is None:
+                leftover = body.get("metadata")
+                assert leftover is None or (
+                    isinstance(leftover, dict)
+                    and not any(value is None for value in leftover.values())
+                )
+            else:
+                assert body.get("metadata") == metadata
+                assert all(isinstance(value, str) for value in metadata.values())
+
+    # response_format.json_schema.name must match [a-zA-Z0-9_-]{1,64} ASCII.
+    if "response_format" in body:
+        try:
+            fmt = server._validate_chat_response_format(body)
+        except RequestError:
+            pass
+        else:
+            if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
+                schema = fmt.get("json_schema")
+                if isinstance(schema, dict) and "name" in schema:
+                    schema_name = schema["name"]
+                    assert isinstance(schema_name, str) and 1 <= len(schema_name) <= 64
+                    assert schema_name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in schema_name
+                    )
+
+    # Tools honesty: successful function names match [a-zA-Z0-9_-]{1,64} ASCII.
+    if "tools" in body:
+        try:
+            tools = server._validate_chat_tools(body)
+        except RequestError:
+            pass
+        else:
+            if tools:
+                for item in tools:
+                    function = item.get("function")
+                    assert isinstance(function, dict)
+                    tool_name = function.get("name")
+                    assert isinstance(tool_name, str) and 1 <= len(tool_name) <= 64
+                    assert tool_name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in tool_name
+                    )
+
+    # Official Responses text.format: successful names are ASCII [a-zA-Z0-9_-]{1,64}.
+    if "text" in body:
+        try:
+            text_value = server._validate_responses_text(body)
+        except RequestError:
+            pass
+        else:
+            if isinstance(text_value, dict):
+                fmt = text_value.get("format")
+                if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
+                    name = fmt.get("name")
+                    assert isinstance(name, str) and 1 <= len(name) <= 64
+                    assert name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in name
+                    )
+
 
 def exercise_agent_config(value: Any) -> None:
     """Drive ``ModelAgent.from_dict`` over an arbitrary decoded JSON value."""

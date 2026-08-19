@@ -1,0 +1,19 @@
+Cycle: whole-float optional bool coerce (0.0 / 1.0 / "0.0" / "1.0")
+
+Substrate: tip #713 (reasoning.effort none omit; empty text.format.type;
+completions logprobs 0.0; embeddings dimensions 0 omit).
+
+Gap: form/JS SDKs serialize booleans as whole floats (0.0/1.0) or whole-float
+strings ("0.0"/"1.0"). _coerce_optional_bool accepted int 0/1 and "0"/"1" but
+rejected float/string whole floats on stream, store, parallel_tool_calls,
+logprobs, echo, include_orchestration_trace, routing.latency_tolerant,
+background.
+
+Fix: extend _coerce_optional_bool to accept type(float) in {0.0, 1.0} and
+whole-float digit strings that float() to exactly 0.0 or 1.0. Non-whole floats
+(0.5, 1.5, "2.0") remain fail-closed. store=true / logprobs=true paths still
+reject after coerce.
+
+Tests: tests/test_bool_whole_float_zero_one_coerce_http_honesty.py
+
+Local: 1178 passed (full unit suite).

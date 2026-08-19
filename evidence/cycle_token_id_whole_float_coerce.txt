@@ -1,0 +1,10 @@
+cycle: whole-float token-id coerce HTTP honesty (Completions + embeddings)
+tip_base: #736 feat/service-tier-flex-priority-noop-http-honesty-20260817203754
+change:
+  - _coerce_token_id / _coerce_embedding_token_sequence accept whole floats (1.0)
+  - Completions prompt + embeddings input/batch token arrays coerce then surrogate
+  - bools, negatives, non-integral floats fail closed (named invalid_prompt/input)
+  - digit strings stay string-array items (not token ids) — OpenAI shape honesty
+tests: tests/test_token_id_whole_float_coerce_http_honesty.py
+product_gates: Full unit + Semgrep only (Strix ignored)
+Local: 1297 passed.
