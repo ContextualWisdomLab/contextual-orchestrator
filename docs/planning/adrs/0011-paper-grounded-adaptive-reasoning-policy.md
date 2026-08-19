@@ -72,6 +72,13 @@ Every change to routing or reasoning policy must cite the relevant sources in
 boundary, and report requested versus effective effort in the trace or
 metadata. A provider health result alone is not evidence of reasoning quality.
 
+Transport compatibility is checked against the current provider API contract,
+not treated as model-policy evidence. In particular, Responses API capability
+checks may cover supported reasoning-effort values and `json_schema` structured
+outputs; Chat Completions compatibility must negotiate its system-message and
+structured-output equivalent separately. These checks must never turn a vendor
+default into this repository's reasoning policy.
+
 ## Consequences
 
 - Callers can request `auto` without coupling themselves to provider-specific
