@@ -1906,3 +1906,27 @@ rerun.
    source or workflow finding at the same HEAD.
 3. Preserve #1128, #1142, and #1139 current-head jobs and the `0/0` sweep
    limits until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 43 — closed-PR queue hygiene completed
+
+At `2026-08-19T13:46:59Z`, the queued-run scan found 29 runs targeting exact
+HEADs belonging to closed PRs #1016 (`ffbb4865...`), #1013
+(`751ffc4c...`), and #1063 (`20629ff7...`). The PR states and HEADs were
+re-read immediately before cancellation; all 29 explicit run IDs were then
+cancelled and independently verified as `completed/cancelled`.
+
+Current-head work was preserved. In particular, #1128 run `32258530207`,
+#1142 run `32258529724`, #1138 job `96085913624`, and the queued #1128
+`strix`/`opencode-review` jobs remain untouched. Their status was still
+`queued` immediately after cleanup, so the cleanup removed stale work without
+altering protected candidate evidence. No sweep limit or merge policy was
+changed.
+
+### Next iteration checklist
+
+1. Re-scan queued runs for newly stale closed-PR or superseded-HEAD work, using
+   the same exact-head guard before any further cancellation.
+2. Monitor the preserved current-head jobs; on terminal success or failure,
+   continue with the exact-head merge or root-cause repair procedure.
+3. Keep `ORG_SWEEP_REVIEW_DISPATCH_LIMIT=0` and
+   `ORG_SWEEP_BRANCH_UPDATE_LIMIT=0` until #1139 is merged and live-verified.
