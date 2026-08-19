@@ -2461,3 +2461,21 @@ sweep skipped. PR #1155 and plan PR #758 current-head evidence was untouched.
 2. Monitor updated PR #1155 and plan PR #758 checks; merge normally after
    terminal success and verify main.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 69 — regenerated no-op pair cleaned
+
+The old main workflow generated two more metadata-free pending scheduler runs
+(`32269041835` and `32268813254`) before PR #1155 could merge. Both matched
+the established no-PR/no-jobs evidence; both were cancelled and verified
+`completed/cancelled`. PR #1155 remains exact-head
+`3626e5eaee95fdfda36c4d079b8e191521fdec74`; plan PR #758 remains exact-head
+`f32faf165828c2bd3c446d64de2a124f6de24524`; both normal auto-merges remain
+enabled and main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve current-head checks and target dispatches; cancel only regenerated
+   no-PR/no-jobs scheduler runs before the source fix reaches main.
+2. Merge PR #1155 through normal auto-merge after required success, then
+   verify no-op and no-target concurrency behavior on main.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
