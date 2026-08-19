@@ -1198,3 +1198,17 @@ The current fix runs remain exact-head queued: `.github#1138` run
 run `32242960444` at `3dd3b634ca54f26d7719e972630d8a10e9eae3e7`, and the PII
 design PR #762 at `3b685af971036fe61153b43eab674f4bc534390f`. The `0/0` org
 sweep limits remain correct until #1139 is merged and verified live.
+
+## Status as of 2026-08-19, iteration 15 — hosted queue is draining, target fixes await their turn
+
+The queued Actions count fell from `678` to `596` during this observation
+window. Recent scheduler runs are still queued/pending behind the hosted
+runner backlog, so this is natural queue drainage rather than evidence that
+#1139 is already live. The exact-head runs for `.github#1138`, `.github#1139`,
+and contextual-orchestrator#762 remain queued and none is mergeable yet.
+
+The stale closed `disksage#196` run `32229577567` remains `in_progress` after
+the cancellation request. It is the same provider-held state recorded in
+iteration 14; do not repeat the cancellation request while GitHub has not
+changed the run state. All current-head runs remain preserved, and both org
+sweep variables remain `0`.
