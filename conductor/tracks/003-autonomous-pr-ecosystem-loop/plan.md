@@ -2196,3 +2196,20 @@ other inspected active PR runs matched their live PR heads and were preserved.
 2. Continue preserving the newest no-target scheduler dispatch until PR #1155
    merges, then verify the fix on live `main`.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 55 — newest-only dispatch cleanup
+
+Before the fix reached `main`, three additional unscoped dispatch runs for
+the same main SHA were queued within seconds. The newest run
+`32265347345` was preserved; older duplicates `32265324539` and
+`32265314214` were cancelled and both verified `completed/cancelled`. The
+source PR #1155 still has exact head `762a999bf66db0bae2e6fc7455e1dc0c83268e1e`
+and remains normal-auto-merge enabled but runner-queued.
+
+### Next iteration checklist
+
+1. Continue preserving only the newest no-target dispatch and canceling only
+   verified older duplicates until the workflow fix merges.
+2. Recheck PR #1155 after any hosted-runner state transition; merge normally
+   only after all required contexts succeed.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
