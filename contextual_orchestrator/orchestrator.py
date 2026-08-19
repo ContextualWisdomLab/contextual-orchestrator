@@ -267,7 +267,7 @@ class ModelAgent:
     provider_name: str = ""
     provider_exclusions: tuple[str, ...] = ()
     # Explicit KV credential for an authenticated loopback gateway. Keep this
-    # separate from ``credential_key`` so mlx:// workers remain keyless.
+    # separate from ``credential_key`` so local gateway credentials stay scoped.
     local_credential_key: str = ""
     # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
     # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
@@ -279,6 +279,8 @@ class ModelAgent:
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+        if urlparse(self.base_url).scheme == "mlx":
+            raise ValueError("direct mlx:// provider URLs are unsupported; use the gateway")
         if type(self.local_credential_key) is not str:
             raise TypeError("local_credential_key must be a string")
         if self.local_credential_key and urlparse(self.base_url).scheme != "local":
@@ -437,7 +439,7 @@ class OrchestrationPolicy:
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
-LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
+LOCAL_PROVIDER_SCHEMES = frozenset({"local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "host.docker.internal"})
 
 
@@ -451,19 +453,10 @@ def _is_local_provider_url(base_url: str) -> bool:
     return parsed.scheme in LOCAL_PROVIDER_SCHEMES and parsed.hostname in LOCAL_PROVIDER_HOSTS
 
 
-def _is_direct_mlx_provider_url(base_url: str) -> bool:
-    """Return whether a loopback provider is the direct mlx-lm transport."""
-    return _is_local_provider_url(base_url) and urlparse(base_url).scheme == "mlx"
-
-
 def _provider_credential_name(agent: ModelAgent) -> str | None:
     """Return the credential name allowed for this provider transport."""
     if not _is_local_provider_url(agent.base_url):
         return agent.credential_name
-    # mlx-lm is intentionally keyless; only the explicit local:// gateway
-    # transport may opt into a separately named loopback bearer credential.
-    if urlparse(agent.base_url).scheme != "local":
-        return None
     return agent.local_credential_key or None
 
 
@@ -551,8 +544,8 @@ def _responses_text(value: Any) -> str:
 
 
 def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
-    # ADR 0002: keep Codex Responses compatibility at the public control-plane
-    # boundary; mlx-lm remains a local Chat Completions worker provider.
+    # Keep Responses compatibility at the public control-plane boundary; a
+    # provider-neutral local gateway may expose Chat Completions downstream.
     messages: list[dict[str, Any]] = []
     instructions = _responses_text(request.get("instructions"))
     if instructions:
@@ -564,7 +557,7 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     elif isinstance(raw_input, str):
         items = [{"type": "message", "role": "user", "content": raw_input}]
     else:
-        raise ValueError("local Responses input must be a string or item list")
+        raise ValueError("gateway Responses input must be a string or item list")
     for item in items:
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
@@ -722,7 +715,6 @@ class ModelClient:
         retry_backoff_cap: float = 8.0,
         temperature: float | None = None,
         local_concurrency: int = 1,
-        chat_template_args: dict[str, Any] | None = None,
         ca_bundle: str | None = None,
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
@@ -743,7 +735,6 @@ class ModelClient:
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
             )
         self.local_concurrency = local_concurrency
-        self.chat_template_args = dict(chat_template_args or {})
         self.allowed_provider_hosts = self._normalize_allowed_provider_hosts(allowed_provider_hosts)
         # Seam so tests can observe/skip real sleeping during backoff.
         self._sleep = time.sleep
@@ -823,8 +814,6 @@ class ModelClient:
         sampling_temperature = self.temperature if temperature is None else temperature
         if sampling_temperature is not None:
             payload["temperature"] = sampling_temperature
-        if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-            payload["chat_template_kwargs"] = self.chat_template_args
         if metadata:
             payload["metadata"] = dict(metadata)
         if reasoning_effort and reasoning_effort != "auto":
@@ -877,8 +866,6 @@ class ModelClient:
                     "stream": False,
                     "max_tokens": 1,
                 })
-                if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-                    payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
                     content = self._send(agent, payload, destination, timeout=probe_timeout)
                 usage = self.take_usage()
@@ -1031,7 +1018,7 @@ class ModelClient:
         if isinstance(message, dict) and message.get("reasoning"):
             raise RuntimeError(
                 f"provider {agent.id} returned reasoning without content; "
-                "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
+                "configure the provider to return assistant content or increase max_output_tokens"
             )
         raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
 
@@ -1160,8 +1147,6 @@ class ModelClient:
         sampling_temperature = self.temperature if temperature is None else temperature
         if sampling_temperature is not None:
             payload["temperature"] = sampling_temperature
-        if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-            payload["chat_template_kwargs"] = self.chat_template_args
         if metadata:
             payload["metadata"] = dict(metadata)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
@@ -1263,8 +1248,6 @@ class ModelClient:
         ):
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault("max_tokens", self.max_output_tokens)
-            if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-                chat_payload["chat_template_kwargs"] = self.chat_template_args
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                 chat_response = self._send_raw_with_retry(
                     agent, "chat/completions", chat_payload, destination
@@ -1493,7 +1476,7 @@ class ModelClient:
         requests: dict[str, list[ChatMessage]],
         temperature: float | None,
     ) -> dict[str, dict[str, Any]]:
-        """Run local OpenAI-compatible requests concurrently through mlx-lm."""
+        """Run local OpenAI-compatible requests concurrently through a gateway."""
         def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
             content = self.chat(agent, messages, temperature=temperature)
             return custom_id, {"content": content, "usage": self.take_usage()}
@@ -2809,7 +2792,7 @@ class TaskOrchestrator:
         if not agent.base_url.startswith("mock://"):
             parsed = urlparse(agent.base_url)
             if not _is_local_provider_url(agent.base_url) and (parsed.scheme != "https" or not parsed.hostname):
-                raise ValueError("non-mock remote agents must use an https base_url; local agents use mlx://loopback")
+                raise ValueError("non-mock remote agents must use an https base_url; local agents use local://loopback")
             if not _is_local_provider_url(agent.base_url) and not agent.credential_name:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
         self.candidates = [*self.candidates, agent]

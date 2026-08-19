@@ -19,7 +19,7 @@ import urllib.error
 import urllib.request
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
-from urllib.parse import urlparse, urlunparse
+from urllib.parse import urlparse
 
 from .batch_routing import cheapest_upstream
 from .credentials import get_credential
@@ -29,7 +29,6 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
-_LOCAL_DISCOVERY_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "host.docker.internal"})
 
 
 @dataclass(frozen=True)
@@ -108,10 +107,8 @@ class ProviderDiscoveryError(RuntimeError):
 
 def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
     parsed = urlparse(url)
-    if parsed.scheme in {"local", "mlx"}:
-        if parsed.hostname not in _LOCAL_DISCOVERY_HOSTS:
-            raise ValueError("local model discovery requires a loopback provider host")
-        url = urlunparse(("http", parsed.netloc, parsed.path, "", "", ""))
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("model discovery requires an https provider URL")
     request = urllib.request.Request(
         url,
         headers={"authorization": f"{auth_scheme} {api_key}"},

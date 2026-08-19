@@ -88,9 +88,6 @@ def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
         (["--local-concurrency", "65"], "1..64"),
         (["--max-concurrent-runs", "0"], "positive integer"),
         (["--max-concurrent-runs", "65"], "1..64"),
-        (["--chat-template-args", "[]"], "JSON object"),
-        (["--chat-template-args", "null"], "JSON object"),
-        (["--chat-template-args", "{"], "valid JSON object"),
     )
 
     for options, expected_message in invalid_options:

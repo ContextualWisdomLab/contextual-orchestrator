@@ -306,7 +306,6 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
         {
             "model": "model-x",
             "messages": [{"role": "user", "content": "judge"}],
-            "temperature": orchestrator.client.temperature,
             "max_tokens": orchestrator.client.max_output_tokens,
             "response_format": response_format,
         }
