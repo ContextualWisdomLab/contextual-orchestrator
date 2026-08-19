@@ -1648,3 +1648,28 @@ terminal-gate loop.
    refreshed and its current-head evidence is re-established; do not dismiss
    it solely because the old check is now green.
 3. Keep the sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 33 — #1128 advanced but remains non-terminal
+
+At `2026-08-19T13:11:43Z`, three GraphQL rollups over 30 seconds showed no
+failure transition. `.github#1128` stayed at exact head
+`e33536ba95a6fd6ff185b857ac2955835b80471e` with `opencode-review` and `strix`
+queued, no review decision, and `MERGE_STATE=BLOCKED`. Its earlier
+`coverage-evidence` blocker is no longer in the pending set, but it was not
+treated as a green claim without a terminal conclusion.
+
+`.github#1139` stayed at exact head
+`7476d4a152d561ce5942befc91aee21b09e86afc`, with the security/scheduler
+required set queued, no failures, and no independent approval. No current-head
+run was cancelled and no review, merge, branch update, or sweep-limit change
+was attempted.
+
+### Next iteration checklist
+
+1. Keep monitoring #1128's two remaining checks and #1139's required set;
+   record conclusions, not merely disappearance from pending.
+2. On the first terminal failure, read the complete log and repair its root
+   cause at the exact head; on a fully terminal green set, re-read reviews and
+   protection before any merge.
+3. Keep `ORG_SWEEP_REVIEW_DISPATCH_LIMIT` and
+   `ORG_SWEEP_BRANCH_UPDATE_LIMIT` at `0` until the central fix is live.
