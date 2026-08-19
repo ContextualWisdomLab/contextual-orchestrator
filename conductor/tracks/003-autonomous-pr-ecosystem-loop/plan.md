@@ -2068,3 +2068,27 @@ change was made.
 2. Treat auxiliary green workflows as supporting evidence only; require every
    protected context to be terminal-successful before merge verification.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 49 — runner occupancy audit finds no safe cancellation
+
+At `2026-08-19T14:19:58Z`, the four refreshed bootstrap jobs were still queued
+without runners: #1139 `96097189605`, #1128 `96097385014`, #1142
+`96097498627`, and #1138 `96097606347`. A separate `in_progress` scan found
+no stale `pull_request` or `pull_request_target` run; the active PR runs
+belong to open current heads. The long-running OpenCode dispatches for the
+open #920/#928/#930/#931/#932/#933/#934/#935/#939 PRs likewise have matching
+current HEADs and were preserved.
+
+There is consequently no safe queue cancellation or source finding to act on
+in this snapshot. The four required sets remain failure-free but non-terminal;
+no rerun, policy bypass, sweep-limit change, or current-head cancellation was
+made.
+
+### Next iteration checklist
+
+1. Continue monitoring the four exact-head bootstrap jobs and dependent gates;
+   act immediately on the first terminal success or failure.
+2. Re-run the stale in-progress audit only after a state transition or newly
+   queued workload appears; do not cancel current-head evidence to force
+   scheduling.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
