@@ -1981,3 +1981,26 @@ review, branch update, or merge policy was changed.
 2. Keep current-head jobs intact and re-scan only for newly created stale
    closed/superseded PR runs.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 46 — one stale run remains an API orphan
+
+At `2026-08-19T13:59:48Z`, live #919 was still open at
+`04909c83eadb6833b5d792327e4075e0ba8523fb`, while stale run `32216087004`
+remained queued at old HEAD `2852ed9dadb9a37103fbd485c38bf8644c0a25ff`. After
+re-reading both states, the normal run cancel and the documented force-cancel
+endpoint both returned HTTP 500; direct cancellation of its only job had
+already returned HTTP 404. No further retries or current-head cancellations
+were made.
+
+Queue hygiene otherwise remains effective: #1128's Strix job
+`96069651307` is in progress, #1142 has only its current `scan-pr-queue`
+pending, and #1138 has only current `coverage-evidence` pending. The
+current-head jobs remain untouched and sweep limits remain `0/0`.
+
+### Next iteration checklist
+
+1. Wait for #1128 Strix to terminate; inspect its completed logs and same-head
+   status before any merge conclusion.
+2. Preserve #1142 and #1138's single pending jobs and the #1139 queued set.
+3. Do not retry orphan run `32216087004` unless its API state changes; keep
+   both sweep limits at `0/0` until #1139 is merged and live-verified.
