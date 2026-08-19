@@ -1823,3 +1823,38 @@ was made while hosted required contexts remain non-terminal.
 2. Preserve current-head jobs and do not create more reruns to compete for the
    same hosted runner backlog.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 40 — protected auto-merge is armed; hosted gates remain
+
+At `2026-08-19T13:33:45Z`, exact-head checks confirmed that the three active
+candidates remain open and blocked only by hosted required work:
+
+- #1128 remains at `e33536ba95a6fd6ff185b857ac2955835b80471e`. Its 28
+  successful contexts are preserved; `opencode-review`, `strix`, and the
+  current `scan-pr-queue` dispatch remain pending. Normal squash auto-merge was
+  enabled at `2026-08-19T13:30:52Z`.
+- #1142 remains at `660d4712805f87700223220e96975eb72051093d`. The current
+  `scan-pr-queue` check is still queued at run `32258529724`, job
+  `96085903212`; the same-HEAD earlier `scan-pr-queue` cancellation is an old
+  execution, while another same-HEAD execution already passed. The GraphQL
+  aggregate is therefore not merge evidence until the latest required contexts
+  settle. Normal squash auto-merge was enabled at `2026-08-19T13:30:51Z`.
+- #1139 remains at `7476d4a152d561ce5942befc91aee21b09e86afc`; its new-head
+  required workflow set is queued and normal squash auto-merge was already
+  enabled at `2026-08-19T12:20:25Z`.
+
+The live `main` branch protection rule reports required status checks, an
+approval requirement count of `0`, and `isAdminEnforced=false`. These are
+normal protected auto-merge requests, not CI bypasses or administrator merges;
+GitHub must still observe the required terminal-success contexts. No current-
+head job was cancelled or rerun, and the organization sweep limits remain
+`ORG_SWEEP_REVIEW_DISPATCH_LIMIT=0` and `ORG_SWEEP_BRANCH_UPDATE_LIMIT=0`.
+
+### Next iteration checklist
+
+1. Monitor the auto-merge candidates and immediately re-read exact head,
+   required checks, review state, and protection before any merge conclusion.
+2. If a required context fails, inspect its terminal job evidence and repair
+   only the root cause; if all required contexts pass, verify the resulting
+   merge commit and live main branch before recording success.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
