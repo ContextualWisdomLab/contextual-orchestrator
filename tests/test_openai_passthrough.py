@@ -39,6 +39,16 @@ def _build() -> TaskOrchestrator:
     )
 
 
+def _provider_capability_error() -> urllib.error.HTTPError:
+    return urllib.error.HTTPError(
+        "https://provider.invalid/v1/chat/completions",
+        400,
+        "unsupported response format",
+        {},
+        None,
+    )
+
+
 # -- orchestrator-level ------------------------------------------------------
 
 def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> None:
@@ -219,7 +229,7 @@ def test_provider_feature_json_schema_falls_back_to_json_object_on_provider_reje
         calls.append(payload)
         response_format = payload.get("response_format")
         if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
-            raise RuntimeError("provider does not support json_schema")
+            raise _provider_capability_error()
         content = '{"status":"ok"}' if len(calls) == 4 else '{"status":"candidate"}'
         return {
             "object": "chat.completion",
@@ -239,6 +249,69 @@ def test_provider_feature_json_schema_falls_back_to_json_object_on_provider_reje
     assert len(calls) == 4
     assert calls[2]["response_format"]["type"] == "json_schema"
     assert calls[3]["response_format"] == {"type": "json_object"}
+    assert json.loads(result["choices"][0]["message"]["content"]) == {"status": "ok"}
+
+
+def test_provider_feature_json_schema_negotiates_prompt_only_after_both_json_modes_fail() -> None:
+    orch = _build()
+    schema = {
+        "type": "object",
+        "properties": {"status": {"type": "string", "enum": ["ok"]}},
+        "required": ["status"],
+        "additionalProperties": False,
+    }
+    calls = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append(payload)
+        if "response_format" in payload:
+            raise _provider_capability_error()
+        content = '{"status":"ok"}' if len(calls) == 5 else '{"status":"candidate"}'
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": content}}],
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion({
+        "messages": [{"role": "user", "content": "return the status"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "status_result", "strict": True, "schema": schema},
+        },
+    })
+
+    assert len(calls) == 5
+    assert calls[2]["response_format"]["type"] == "json_schema"
+    assert calls[3]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in calls[4]
+    assert json.loads(result["choices"][0]["message"]["content"]) == {"status": "ok"}
+
+
+def test_provider_feature_json_object_negotiates_prompt_only_on_provider_rejection() -> None:
+    orch = _build()
+    calls = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append(payload)
+        if "response_format" in payload:
+            raise _provider_capability_error()
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": '{"status":"ok"}'}}],
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion({
+        "messages": [{"role": "user", "content": "return JSON"}],
+        "response_format": {"type": "json_object"},
+    })
+
+    assert len(calls) == 4
+    assert calls[2]["response_format"] == {"type": "json_object"}
+    assert "response_format" not in calls[3]
     assert json.loads(result["choices"][0]["message"]["content"]) == {"status": "ok"}
 
 

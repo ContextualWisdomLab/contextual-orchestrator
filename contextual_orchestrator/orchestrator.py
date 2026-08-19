@@ -439,6 +439,7 @@ class OrchestrationPolicy:
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+PROVIDER_CAPABILITY_ERROR_STATUS = frozenset({400, 422})
 LOCAL_PROVIDER_SCHEMES = frozenset({"local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "host.docker.internal"})
 
@@ -699,6 +700,21 @@ def is_transient_error(exc: BaseException) -> bool:
     # is never retried as if it were a network fault.
     if isinstance(exc, ssl.SSLError):
         return not isinstance(exc, ssl.SSLCertVerificationError)
+    return False
+
+
+def is_provider_capability_error(exc: BaseException) -> bool:
+    """Return True when a provider rejected a request feature, not the request path."""
+    pending: list[BaseException | None] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, urllib.error.HTTPError) and current.code in PROVIDER_CAPABILITY_ERROR_STATUS:
+            return True
+        pending.extend((current.__cause__, current.__context__))
     return False
 
 
@@ -1975,35 +1991,28 @@ class TaskOrchestrator:
         synthesized: dict[str, Any] | None = None
         successful_synthesis_index: int | None = None
         for synthesis_index, synthesis_agent in enumerate(synthesis_agents):
-            synthesis_body = self._provider_feature_synthesis_body(
+            for synthesis_body in self._provider_feature_synthesis_variants(
                 body, endpoint, candidate_responses, synthesis_agent
-            )
-            try:
-                synthesized = self.client.proxy_send(
-                    synthesis_agent,
-                    endpoint,
-                    synthesis_body,
-                )
-            except provider_feature_errors as exc:
-                synthesis_failures.append(exc)
-                response_format = body.get("response_format")
-                if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
-                    fallback_body = dict(synthesis_body)
-                    fallback_body["response_format"] = {"type": "json_object"}
-                    try:
-                        synthesized = self.client.proxy_send(
-                            synthesis_agent, endpoint, fallback_body
-                        )
-                    except provider_feature_errors as fallback_exc:
-                        synthesis_failures.append(fallback_exc)
+            ):
+                try:
+                    synthesized = self.client.proxy_send(
+                        synthesis_agent,
+                        endpoint,
+                        synthesis_body,
+                    )
+                except provider_feature_errors as exc:
+                    # A provider may support chat but reject structured-output
+                    # extensions. Negotiate this same agent before rotating the
+                    # multi-agent synthesis pool.
+                    synthesis_failures.append(exc)
+                    if is_provider_capability_error(exc):
                         continue
-                    synthesizer = synthesis_agent
-                    successful_synthesis_index = synthesis_index
                     break
-                continue
-            synthesizer = synthesis_agent
-            successful_synthesis_index = synthesis_index
-            break
+                synthesizer = synthesis_agent
+                successful_synthesis_index = synthesis_index
+                break
+            if synthesized is not None:
+                break
         if synthesized is None or synthesizer is None or successful_synthesis_index is None:
             error = synthesis_failures[-1] if synthesis_failures else None
             raise RuntimeError("provider feature workflow could not synthesize candidates") from error
@@ -2052,6 +2061,40 @@ class TaskOrchestrator:
         if not ranked:
             raise RuntimeError("no enabled worker agents are configured")
         return [ranked[index % len(ranked)] for index in range(count)]
+
+    @classmethod
+    def _provider_feature_synthesis_variants(
+        cls,
+        body: dict[str, Any],
+        endpoint: str,
+        candidates: list[dict[str, Any]],
+        agent: ModelAgent,
+    ) -> tuple[dict[str, Any], ...]:
+        """Negotiate structured-output capability without leaving orchestration.
+
+        The caller's response contract is validated locally after synthesis, so
+        a provider that rejects both JSON modes can still participate in the
+        same multi-agent workflow. The schema remains in the synthesis prompt.
+        """
+        primary = cls._provider_feature_synthesis_body(
+            body, endpoint, candidates, agent
+        )
+        response_format = body.get("response_format")
+        if not isinstance(response_format, dict) or response_format.get("type") not in {
+            "json_object",
+            "json_schema",
+        }:
+            return (primary,)
+
+        plain = dict(primary)
+        plain.pop("response_format", None)
+        variants = [primary]
+        if response_format.get("type") == "json_schema":
+            json_object = dict(primary)
+            json_object["response_format"] = {"type": "json_object"}
+            variants.append(json_object)
+        variants.append(plain)
+        return tuple(variants)
 
     def _provider_feature_body(self, body: dict[str, Any], agent: ModelAgent) -> dict[str, Any]:
         """Build one provider request while keeping orchestration policy private."""
