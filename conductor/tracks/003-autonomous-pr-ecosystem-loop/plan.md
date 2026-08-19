@@ -2128,11 +2128,11 @@ the existing target-PR groups. The new static contract test and the full
 `tests/test_required_workflow_queue_contract.py` file pass (`51 passed`),
 along with `git diff --check` and `actionlint`.
 
-PR #1155 has normal squash auto-merge enabled. Its first scheduler run was
-cancelled by the subsequent same-group run, providing live confirmation that
-the new concurrency key is effective; the newest run and all other required
-checks are still queued without a terminal failure. No sweep-limit variable
-was changed.
+PR #1155 has normal squash auto-merge enabled. Its first scheduler run was a
+`pull_request_target` run cancelled by the subsequent PR-scoped run; that is
+expected existing behavior and is not evidence for the new no-target
+concurrency key. The newest run and all other required checks are still queued
+without a terminal failure. No sweep-limit variable was changed.
 
 ### Next iteration checklist
 
