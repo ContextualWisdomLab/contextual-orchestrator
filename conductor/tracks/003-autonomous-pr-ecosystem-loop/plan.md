@@ -1884,3 +1884,25 @@ cancellation was issued, and sweep limits remain `0/0`.
    root cause; do not treat runner queue behavior as a source failure.
 3. Continue monitoring #1128, #1142, and #1139 without creating competing
    reruns; keep both sweep limits at `0/0` until #1139 is merged and verified.
+
+## Status as of 2026-08-19, iteration 42 — the remaining #1138 gate is infrastructure-only
+
+At `2026-08-19T13:43:16Z`, run `32244899441` still targeted exact HEAD
+`1f4f5e0968852e453918a1c11af8e0870434739d`; job `96085913624` remained
+queued with no runner, and the required-check view still showed every other
+context passing. The exact-head `.github/workflows/opencode-review.yml` shows
+that `coverage-evidence` only depends on `coverage-source-tree`, uses
+`ubuntu-latest`, and emits a stable branch-protection evidence message without
+executing pull-request content. The queue is therefore not a source finding:
+do not remove the context, weaken its requirement, or manufacture a competing
+rerun.
+
+### Next iteration checklist
+
+1. Keep monitoring job `96085913624`; on success, re-read #1138's exact HEAD,
+   review decision, protection rule, and mergeability before relying on the
+   already-enabled normal auto-merge.
+2. On a terminal failure, inspect the job result and only repair a genuine
+   source or workflow finding at the same HEAD.
+3. Preserve #1128, #1142, and #1139 current-head jobs and the `0/0` sweep
+   limits until #1139 is merged and live-verified.
