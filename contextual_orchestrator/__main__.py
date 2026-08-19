@@ -310,6 +310,8 @@ def main() -> None:
                         help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
                         help=f"Maximum simultaneous HTTP orchestration runs (default: 8; maximum: {MAX_LOCAL_CONCURRENCY}).")
+    parser.add_argument("--max-body-bytes", type=_positive_int, default=64 * 1024,
+                        help="Maximum JSON request body size in bytes (default: 65536; maximum: 67108864).")
     parser.add_argument("--route-text-length-threshold", type=_positive_int, default=None,
                         help="Auto-mode minimum prompt length that can trigger conduct instead of route.")
     parser.add_argument("--conduct-hint-threshold", type=_positive_int, default=None,
@@ -410,6 +412,7 @@ def main() -> None:
                 auth_token=auth_token,
                 admin_token=admin_token,
                 inference_token=inference_token,
+                max_body_bytes=args.max_body_bytes,
                 max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,

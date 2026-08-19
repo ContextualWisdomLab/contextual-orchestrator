@@ -137,6 +137,22 @@ def test_server_concurrency_is_explicit_and_bounded() -> None:
     assert serve.call_args.kwargs["security"].max_concurrent_runs == 16
 
 
+def test_server_body_limit_is_explicit() -> None:
+    with (
+        patch.object(
+            sys,
+            "argv",
+            ["contextual-orchestrator", "--serve", "--auth-token", "token", "--max-body-bytes", "8388608"],
+        ),
+        patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
+        patch("contextual_orchestrator.__main__.ModelClient"),
+        patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        main()
+    assert serve.call_args.kwargs["security"].max_body_bytes == 8 * 1024 * 1024
+
+
 def test_sampling_temperature_uses_descriptive_name_and_legacy_alias() -> None:
     for option in ("--sampling-temperature", "--temperature"):
         with (

@@ -176,6 +176,26 @@ def test_http_api_validates_mode_and_request_shape() -> None:
     assert body["error"]["code"] in {"invalid_message", "invalid_mode"}
 
 
+def test_http_api_rejects_body_over_configured_limit() -> None:
+    server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token", max_body_bytes=128))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+
+    try:
+        status, body = post_json(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {"messages": [{"role": "user", "content": "x" * 256}]},
+            token="secret_token",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 413
+    assert body["error"]["code"] == "request_too_large"
+
+
 def test_http_api_rejects_unknown_request_fields() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)

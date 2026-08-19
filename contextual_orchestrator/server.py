@@ -109,6 +109,8 @@ class SecurityConfig:
             raise ValueError("single auth_token cannot be combined with split tokens")
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if type(self.max_body_bytes) is not int or not 1 <= self.max_body_bytes <= 64 * 1024 * 1024:
+            raise ValueError("max_body_bytes must be an integer in 1..67108864")
         if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
