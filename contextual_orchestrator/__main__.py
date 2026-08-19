@@ -8,8 +8,10 @@ import os
 import sys
 from dataclasses import replace
 
+from .batch_routing import ProviderEmbeddingBatchBackend, UnavailableEmbeddingBatchBackend
 from .cost_ledger import PriceBook
 from .credentials import get_credential, register_credential
+from .cost_router import CostRoutingCoordinator
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     agent_from_discovered,
@@ -300,6 +302,10 @@ def main() -> None:
     )
     parser.add_argument("--max-output-tokens", type=int, default=2048,
                         help="Default provider output token cap (default: 2048).")
+    parser.add_argument("--embedding-provider-url", default="",
+                        help="OpenAI-compatible embeddings provider URL; enables the native provider backend.")
+    parser.add_argument("--embedding-model", default="",
+                        help="Explicit embeddings model; blank fails semantic embedding closed.")
     parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
                         help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
@@ -385,6 +391,17 @@ def main() -> None:
             parser.error(str(exc))
         if not (auth_token or admin_token or inference_token):
             parser.error("--serve requires a KV auth credential or explicit local token")
+        coordinator = None
+        if args.embedding_provider_url:
+            embedding_backend = (
+                ProviderEmbeddingBatchBackend(args.embedding_provider_url, {args.embedding_model})
+                if args.embedding_model
+                else UnavailableEmbeddingBatchBackend()
+            )
+            coordinator = CostRoutingCoordinator(
+                orchestrator,
+                embedding_batch_backend=embedding_backend,
+            )
         serve(
             orchestrator,
             host=args.host,
@@ -398,6 +415,7 @@ def main() -> None:
                 expose_trace_by_default=args.expose_trace_by_default,
             ),
             clearfolio_url=args.clearfolio_url,
+            coordinator=coordinator,
         )
         return
 

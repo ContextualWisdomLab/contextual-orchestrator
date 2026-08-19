@@ -416,7 +416,7 @@ class OrchestrationPolicy:
 # is a caller or configuration error and must not be retried.
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
-LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "host.docker.internal"})
 
 
 def _is_local_provider_url(base_url: str) -> bool:
@@ -1329,7 +1329,10 @@ class ModelClient:
             if parsed.username or parsed.password or parsed.query or parsed.fragment:
                 raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
             addresses = self._resolve_addresses(parsed.hostname or "", parsed.port or 80)
-            if any(not ipaddress.ip_address(sockaddr[0]).is_loopback for _family, sockaddr in addresses):
+            if any(
+                not ipaddress.ip_address(sockaddr[0]).is_loopback
+                for _family, sockaddr in addresses
+            ) and urlparse(agent.base_url).hostname != "host.docker.internal":
                 raise RuntimeError(f"{agent.id} local provider resolves to a non-loopback address")
             return addresses[0]
         credential_name = _provider_credential_name(agent)

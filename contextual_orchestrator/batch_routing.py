@@ -23,11 +23,15 @@ from __future__ import annotations
 import asyncio
 import hashlib
 import json
+import math
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
+from urllib.error import HTTPError, URLError
+from urllib.parse import urlparse
+from urllib.request import Request, urlopen
 
 _ROUTING_CATEGORY = "routing"
 
@@ -532,6 +536,130 @@ class LocalEmbeddingBatchBackend:
     def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
         """Return the embeddings computed at submit time."""
         return self._results.get(job.job_id, [])
+
+
+def _ordered_provider_embedding_items(
+    payload: Dict[str, Any], expected_count: int, model: str
+) -> List[Dict[str, Any]]:
+    data = payload.get("data")
+    if not isinstance(data, list) or len(data) != expected_count:
+        raise RuntimeError("embedding provider returned an incomplete data array")
+
+    ordered: List[Optional[Dict[str, Any]]] = [None] * expected_count
+    for item in data:
+        if not isinstance(item, dict) or not isinstance(item.get("index"), int):
+            raise RuntimeError("embedding provider returned an invalid index")
+        index = item["index"]
+        vector = item.get("embedding")
+        if not 0 <= index < expected_count or not isinstance(vector, list) or not vector:
+            raise RuntimeError("embedding provider returned an invalid vector")
+        if not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in vector):
+            raise RuntimeError("embedding provider returned a non-finite vector")
+        if ordered[index] is not None:
+            raise RuntimeError("embedding provider returned a duplicate index")
+        ordered[index] = {
+            "index": index,
+            "embedding": [float(value) for value in vector],
+            "prompt_tokens": 0,
+            "model": model,
+        }
+    if any(item is None for item in ordered):
+        raise RuntimeError("embedding provider omitted a vector")
+    return [item for item in ordered if item is not None]
+
+
+class ProviderEmbeddingBatchBackend:
+    """Submit embeddings to an injected OpenAI-compatible provider endpoint."""
+
+    name = "provider"
+
+    def __init__(
+        self,
+        base_url: str,
+        allowed_models: set[str],
+        *,
+        credential_key: str = "LLM_GATEWAY_API_KEY",
+        timeout: float = 120.0,
+    ) -> None:
+        parsed = urlparse(base_url)
+        if parsed.scheme not in {"http", "https"} or not parsed.netloc:
+            raise ValueError("embedding provider URL must be an http(s) URL")
+        self._base_url = base_url.rstrip("/")
+        self._allowed_models = frozenset(allowed_models)
+        self._credential_key = credential_key
+        self._timeout = timeout
+        self._provider = parsed.hostname or "provider"
+        self._results: Dict[str, List[EmbeddingBatchResultItem]] = {}
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        if not requests:
+            raise ValueError("embedding batch must not be empty")
+        models = {request.model for request in requests}
+        if len(models) != 1 or not models.issubset(self._allowed_models):
+            raise ValueError("embedding model is not allowlisted")
+        model = next(iter(models))
+        for request in requests:
+            request.attribution.setdefault("provider", self._provider)
+        payload = self._post(model, [request.input_text for request in requests])
+        rows = _ordered_provider_embedding_items(payload, len(requests), model)
+        batch_id = f"providerembed_{uuid.uuid4().hex}"
+        self._results[batch_id] = [
+            EmbeddingBatchResultItem(
+                custom_id=request.custom_id,
+                index=row["index"],
+                embedding=row["embedding"],
+                prompt_tokens=row["prompt_tokens"],
+                model=row["model"],
+            )
+            for request, row in zip(requests, rows)
+        ]
+        return BatchJob(job_id=batch_id, backend=self.name, status="completed", request_count=len(requests))
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        return {"job_id": job.job_id, "status": "completed", "is_complete": True}
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        return self._results.get(job.job_id, [])
+
+    def _post(self, model: str, inputs: List[str]) -> Dict[str, Any]:
+        from .credentials import get_credential
+
+        request = Request(
+            f"{self._base_url}/embeddings",
+            data=json.dumps({"model": model, "input": inputs}).encode("utf-8"),
+            headers={
+                "authorization": f"Bearer {get_credential(self._credential_key) or ''}",
+                "content-type": "application/json",
+            },
+            method="POST",
+        )
+        try:
+            with urlopen(request, timeout=self._timeout) as response:  # nosec B310 - injected provider URL.
+                payload = json.loads(response.read().decode("utf-8"))
+        except (HTTPError, URLError, TimeoutError, json.JSONDecodeError) as exc:
+            raise RuntimeError("embedding provider request failed") from exc
+        if not isinstance(payload, dict):
+            raise RuntimeError("embedding provider returned an invalid response")
+        return payload
+
+
+class UnavailableEmbeddingBatchBackend:
+    """Fail closed when no semantic embedding provider model is configured."""
+
+    name = "unavailable"
+
+    def submit(
+        self, requests: List[EmbeddingBatchRequest], metadata: Optional[Dict[str, Any]] = None
+    ) -> BatchJob:
+        raise RuntimeError("semantic embedding provider is not configured")
+
+    def poll(self, job: BatchJob) -> Dict[str, Any]:
+        raise RuntimeError("semantic embedding provider is not configured")
+
+    def retrieve(self, job: BatchJob) -> List[EmbeddingBatchResultItem]:
+        raise RuntimeError("semantic embedding provider is not configured")
 
 
 class PgLlmBatchEmbeddingBackend:

@@ -1242,8 +1242,16 @@ def serve(
     port: int = 8000,
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
+    coordinator: CostRoutingCoordinator | None = None,
 ) -> None:
     """Serve the admin console and resource-oriented orchestration API."""
-    server = build_server(orchestrator, host=host, port=port, security=security, clearfolio_url=clearfolio_url)
+    server = build_server(
+        orchestrator,
+        host=host,
+        port=port,
+        security=security,
+        clearfolio_url=clearfolio_url,
+        coordinator=coordinator,
+    )
     print(f"listening on http://{host}:{port}")
     server.serve_forever()
