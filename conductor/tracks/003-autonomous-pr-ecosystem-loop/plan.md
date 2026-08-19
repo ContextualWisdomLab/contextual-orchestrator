@@ -105,8 +105,15 @@ consult.
 3. **Exit condition, not indefinite operation**: measure the exit gate instead
    of treating "near zero" as a judgment call. Take two snapshots at least
    one complete scheduler interval apart, using paginated REST PR data and the
-   current review/check state at each PR head. The gate is met only when both
-   repositories satisfy all three thresholds in both snapshots:
+   current review/check state at each PR head. For every open PR in each
+   snapshot, record `number`, `headRefOid`, `baseRefOid`, `mergeable`,
+   `mergeable_state`, and the UTC observation time from the same fresh API
+   response; refetch until the response is definitive, and fail the snapshot
+   if `mergeable` is null, `mergeable_state` is missing or `UNKNOWN`, the
+   response is stale, or the recorded head SHA differs from a fresh current
+   PR-head read. Count `CONFLICTING == 0` only after every PR passes those
+   checks. The gate is met only when both repositories satisfy all three
+   thresholds in both snapshots:
    - `contextual-orchestrator`: `open_prs <= 5`, `CHANGES_REQUESTED <= 2`,
      `CONFLICTING == 0`;
    - `.github`: `open_prs <= 5`, `CHANGES_REQUESTED <= 2`, `CONFLICTING == 0`.
@@ -125,11 +132,18 @@ consult.
    here.
 
    Only after both threshold snapshots and both fresh-PR proofs pass, **revert
-   the bypass**: re-enable `enforce_admins` on `contextual-orchestrator/main`
-   and `.github/main`, remove every `OrganizationAdmin` bypass actor from the
-   active rulesets `18156473`, `18259551`, and `17921150`, then re-read the
-   protection/ruleset APIs. Record the before/after JSON evidence, UTC
-   timestamps, and the restoration commits/actor here. Don't leave this open
+   the bypass**. First fetch the full JSON for rulesets `18156473`, `18259551`,
+   and `17921150`, including each ruleset's repository assignments,
+   include/exclude conditions, and bypass actors. Treat `18156473` as a shared
+   organization ruleset: do not remove its `OrganizationAdmin` actor or alter
+   its assignment based only on evidence from these two repositories. Either
+   obtain separate completion evidence for every other affected repository, or
+   use a repository-scoped ruleset change that leaves unrelated assignments
+   unchanged. For the repository-scoped rulesets, re-enable `enforce_admins`
+   on `contextual-orchestrator/main` and `.github/main`, remove only the
+   target-repository bypass actor, and re-read the protection/ruleset APIs.
+   Record the before/after JSON evidence, affected repository set, UTC
+   timestamps, and restoration commits/actor here. Don't leave this open
    "just in case" once its job is done.
 4. **Codex is now a standing collaborator on this track**, not a one-off
    second opinion, and not gated to only sensitive/delicate moments —
