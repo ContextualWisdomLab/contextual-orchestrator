@@ -43,7 +43,7 @@ from .provider_protocol import (
 )
 
 
-ChatMessage = dict[str, str]
+ChatMessage = dict[str, Any]
 ProviderDestination = tuple[int, tuple[Any, ...]]
 MAX_LOCAL_CONCURRENCY = 64
 DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
@@ -2643,7 +2643,19 @@ class TaskOrchestrator:
         return hits >= self.policy.conduct_hint_threshold or len(text) > self.policy.route_text_length_threshold
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
-        return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
+        for message in reversed(messages):
+            if message.get("role") != "user":
+                continue
+            content = message.get("content", "")
+            if isinstance(content, str):
+                return content
+            if isinstance(content, list):
+                return "\n".join(
+                    block.get("text", "") if block.get("type") == "text" else "[image]"
+                    for block in content
+                    if isinstance(block, dict)
+                )
+        return ""  # pragma: no cover
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""

@@ -212,18 +212,44 @@ def _validate_mode(mode: Any) -> str:
     return mode
 
 
-def _validate_messages(messages: Any) -> list[dict[str, str]]:
+def _validate_messages(messages: Any) -> list[dict[str, Any]]:
     if not isinstance(messages, list) or not messages:
         raise RequestError(400, "invalid_message", "messages must be a non-empty array")
-    validated: list[dict[str, str]] = []
+    validated: list[dict[str, Any]] = []
     for message in messages:
         if not isinstance(message, dict):
             raise RequestError(400, "invalid_message", "each message must be an object")
         role = message.get("role")
         content = message.get("content")
-        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES or not isinstance(content, str):
+        if not isinstance(role, str) or role not in ALLOWED_MESSAGE_ROLES:
             raise RequestError(400, "invalid_message", "message role or content is invalid")
-        validated.append({"role": role, "content": content})
+        if isinstance(content, str):
+            validated.append({"role": role, "content": content})
+            continue
+        if not isinstance(content, list) or not content:
+            raise RequestError(400, "invalid_message", "message role or content is invalid")
+        blocks: list[dict[str, Any]] = []
+        for block in content:
+            if not isinstance(block, dict):
+                raise RequestError(400, "invalid_message", "message content blocks must be objects")
+            block_type = block.get("type")
+            if block_type == "text" and isinstance(block.get("text"), str):
+                blocks.append({"type": "text", "text": block["text"]})
+                continue
+            if block_type == "image_url":
+                image_url = block.get("image_url")
+                url = image_url.get("url") if isinstance(image_url, dict) else None
+                if not isinstance(url, str) or not (
+                    url.startswith("data:image/") or url.startswith("https://")
+                ):
+                    raise RequestError(400, "invalid_message", "image_url must be a data image or HTTPS URL")
+                normalized = {"url": url}
+                if isinstance(image_url, dict) and isinstance(image_url.get("detail"), str):
+                    normalized["detail"] = image_url["detail"]
+                blocks.append({"type": "image_url", "image_url": normalized})
+                continue
+            raise RequestError(400, "invalid_message", "unsupported message content block")
+        validated.append({"role": role, "content": blocks})
     return validated
 
 
