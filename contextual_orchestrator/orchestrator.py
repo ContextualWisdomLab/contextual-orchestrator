@@ -2045,6 +2045,11 @@ class TaskOrchestrator:
         ):
             final_body.pop("reasoning_effort")
         final_body["stream"] = False
+        if previous_response is not None and isinstance(response_format, dict):
+            if response_format.get("type") == "json_schema":
+                # The original contract is validated below; a provider that ignored
+                # JSON Schema on the first pass is more reliable with plain JSON on repair.
+                final_body["response_format"] = {"type": "json_object"}
         if endpoint.strip("/") == "responses":
             original_input = body.get("input")
             final_body["input"] = (
