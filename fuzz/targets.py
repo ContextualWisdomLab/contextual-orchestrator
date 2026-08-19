@@ -8,7 +8,7 @@ and asserts the invariants that must hold *for arbitrary input*:
   ``AttributeError``, ``RecursionError``, ``SystemError`` or a hang; and
 * structural invariants on any successful result (shape, types, idempotence).
 
-CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
+CodeGraph (``codegraph explore``) surfaced these five surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
@@ -18,6 +18,11 @@ consume untrusted bytes/JSON:
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
+5. ``orchestrator._parse_model_judge_reply`` -- strict parsing of untrusted
+   model-generated verdicts.
+6. ``model_discovery._parse_openai_compatible`` / ``_parse_bytez`` -- parsing
+   of a remote provider's model-list HTTP response (attacker/compromised
+   -provider-controlled JSON).
 
 No network, no secrets, no filesystem: every target runs fully offline.
 """
@@ -28,9 +33,15 @@ import json
 from typing import Any
 
 from contextual_orchestrator import server
+from contextual_orchestrator.model_discovery import (
+    ProviderModelSource,
+    _parse_bytez,
+    _parse_openai_compatible,
+)
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
+    _parse_model_judge_reply,
     chat_completion_chunks,
     redact_text,
     redact_value,
@@ -125,6 +136,41 @@ def exercise_agent_config(value: Any) -> None:
     assert isinstance(agent.disabled, bool)
 
 
+_FUZZ_OPENAI_SOURCE = ProviderModelSource(
+    provider_name="fuzz_openai",
+    credential_name="FUZZ_OPENAI_API_KEY",
+    list_url="https://example.invalid/v1/models",
+    chat_base_url="https://example.invalid/v1",
+)
+_FUZZ_BYTEZ_SOURCE = ProviderModelSource(
+    provider_name="fuzz_bytez",
+    credential_name="FUZZ_BYTEZ_API_KEY",
+    list_url="https://example.invalid/models/v2/list/models",
+    chat_base_url="https://example.invalid/models/v2/openai/v1",
+    auth_scheme="Key",
+    style="bytez",
+    task_filter="chat",
+)
+
+
+def exercise_provider_model_payload(value: Any) -> None:
+    """Drive the provider model-list JSON parsers over an arbitrary decoded value.
+
+    Both parsers only index dicts/lists defensively (``isinstance`` guards,
+    ``.get`` with defaults); a malformed or hostile provider response must
+    never raise, only yield fewer (or zero) ``DiscoveredModel`` rows.
+    """
+    for source, parser in (
+        (_FUZZ_OPENAI_SOURCE, _parse_openai_compatible),
+        (_FUZZ_BYTEZ_SOURCE, _parse_bytez),
+    ):
+        discovered = parser(value, source)
+        assert isinstance(discovered, list)
+        for model in discovered:
+            assert isinstance(model.model_id, str) and model.model_id
+            assert model.provider_name == source.provider_name
+
+
 def exercise_redaction(text: str) -> None:
     """Drive secret/PII redaction over arbitrary text and structures.
 
@@ -188,3 +234,13 @@ def exercise_orchestration(prompt: str, mode: str) -> None:
             continue
         assert frame.startswith("data: ")
         json.loads(frame[len("data: "):])
+
+
+def exercise_model_judge_reply(reply: str) -> None:
+    """Drive strict model-judge parsing over arbitrary untrusted text."""
+    try:
+        decision, reason = _parse_model_judge_reply(reply)
+    except ValueError:
+        return
+    assert decision in {"ACCEPT", "REJECT"}
+    assert isinstance(reason, str) and reason.strip()

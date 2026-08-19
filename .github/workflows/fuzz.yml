@@ -53,10 +53,11 @@ jobs:
           persist-credentials: false
 
       - name: Set up Python
-        # Atheris ships wheels/builds cleanly for 3.11 (Clang + libFuzzer).
+        # Atheris 3.1.0 dropped the cp311 wheel; use the same cp312-compatible
+        # pin that the central CPython 3.14 coverage-evidence image preflights.
         uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
         with:
-          python-version: "3.11"
+          python-version: "3.12"
 
       - name: Install Atheris
         # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Sources:
@@ -72,16 +73,19 @@ jobs:
           fi
 
       - name: Fuzz request-body parser
-        run: python fuzz/fuzz_request_body.py -max_total_time=${FUZZ_SECONDS} -artifact_prefix=crash- fuzz/corpus/request_body
+        run: python fuzz/fuzz_request_body.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/request_body
 
       - name: Fuzz agent-config parser
-        run: python fuzz/fuzz_agent_config.py -max_total_time=${FUZZ_SECONDS} -artifact_prefix=crash- fuzz/corpus/agent_config
+        run: python fuzz/fuzz_agent_config.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/agent_config
 
       - name: Fuzz secret redaction
-        run: python fuzz/fuzz_redaction.py -max_total_time=${FUZZ_SECONDS} -artifact_prefix=crash- fuzz/corpus/redaction
+        run: python fuzz/fuzz_redaction.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/redaction
 
       - name: Fuzz orchestration engine
-        run: python fuzz/fuzz_orchestration.py -max_total_time=${FUZZ_SECONDS} -artifact_prefix=crash- fuzz/corpus/orchestration
+        run: python fuzz/fuzz_orchestration.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/orchestration
+
+      - name: Fuzz model-judge response parser
+        run: python fuzz/fuzz_model_judge.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/judge
 
       - name: Upload crash artifacts
         if: failure()

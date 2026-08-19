@@ -109,3 +109,49 @@ def test_unknown_backend_selector_raises(monkeypatch) -> None:
     with pytest.raises(NotConfigured):
         credentials.get_backend()
     set_backend(None)
+
+
+def test_auth_scheme_defaults_to_bearer() -> None:
+    agent = ModelAgent("remote_agent", "gpt-example", "https://api.openai.com/v1")
+    assert agent.auth_scheme == "Bearer"
+
+
+def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
+    # Bytez (and similar providers) use "Key <token>" instead of "Bearer <token>".
+    from unittest.mock import patch
+
+    agent = ModelAgent(
+        "bytez_agent",
+        "some/model",
+        base_url="https://api.bytez.com/models/v2/openai/v1",
+        credential_key="BYTEZ_API_KEY",
+        auth_scheme="Key",
+    )
+    register_credential("BYTEZ_API_KEY", "bytez-secret")
+    client = ModelClient(max_retries=0)
+    seen = []
+
+    class _Response:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            return False
+
+        def read(self) -> bytes:
+            import json
+
+            return json.dumps({"choices": [{"message": {"content": "ok"}}]}).encode("utf-8")
+
+    def open_provider(request, _destination=None):
+        seen.append(request)
+        return _Response()
+
+    with patch.object(client, "_open_provider", side_effect=open_provider):
+        assert client.chat(agent, [{"role": "user", "content": "ping"}]) == "ok"
+    assert seen[0].get_header("Authorization") == "Key bytez-secret"
+
+
+def test_auth_scheme_rejects_empty_value() -> None:
+    with pytest.raises(ValueError):
+        ModelAgent("bad_agent", "gpt-example", "https://api.openai.com/v1", auth_scheme="")

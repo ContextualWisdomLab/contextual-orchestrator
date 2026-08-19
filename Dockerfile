@@ -2,10 +2,11 @@
 # tree on a slim Python base. Runs the OpenAI-compatible server.
 #
 # Build:  docker build -t contextual-orchestrator .
-# Run  :  docker run --rm -p 8000:8000 \
-#           -e CONTEXTUAL_ORCHESTRATOR_TOKEN=change-me \
-#           -e OPENAI_API_KEY=sk-... \
-#           contextual-orchestrator
+# Run  :  seed CONTEXTUAL_ORCHESTRATOR_TOKEN and provider credentials into the KV
+#        registry first, then use:
+#        docker run --rm -p 8000:8000 contextual-orchestrator
+# Runtime secrets are never passed through the container environment or argv;
+# see docs/kv-credentials.md for the bootstrap flow.
 # Agents: defaults to the bundled mock pool; mount your own and set AGENTS_FILE:
 #           -v ./agents.json:/app/agents.json -e AGENTS_FILE=/app/agents.json
 # python:3.12-slim
@@ -26,4 +27,4 @@ HEALTHCHECK --interval=30s --timeout=3s --start-period=5s \
   CMD ["python", "-c", "import urllib.request,os;urllib.request.urlopen(f'http://127.0.0.1:{os.environ.get(\"PORT\",\"8000\")}/healthz', timeout=2)"]
 
 # --allow-public-bind: 컨테이너 내부 0.0.0.0 바인딩 필요(외부 노출은 호스트 포트 매핑이 결정)
-CMD ["sh", "-c", "python -m contextual_orchestrator --serve --agents \"$AGENTS_FILE\" --host 0.0.0.0 --port \"$PORT\" --allow-public-bind"]
+CMD ["sh", "-c", "python -m contextual_orchestrator --serve --agents \"$AGENTS_FILE\" --host 0.0.0.0 --port \"$PORT\" --allow-public-bind --auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN"]

@@ -5,6 +5,7 @@ import json
 import sys
 import threading
 import urllib.request
+from urllib.error import HTTPError
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -16,7 +17,10 @@ from contextual_orchestrator.server import SecurityConfig, build_server  # noqa:
 
 
 def test_healthz_is_unauthenticated_liveness() -> None:
-    orchestrator = TaskOrchestrator([ModelAgent("probe_agent", "mock-agent", tags=("reasoning",))])
+    orchestrator = TaskOrchestrator([
+        ModelAgent("probe_agent", "mock-agent", tags=("reasoning",)),
+        ModelAgent("disabled_probe_agent", "disabled-mock-agent", disabled=True),
+    ])
     server = build_server(
         orchestrator,
         port=0,
@@ -38,11 +42,58 @@ def test_healthz_is_unauthenticated_liveness() -> None:
     assert body["status"] == "ok"
     assert body["service"] == "contextual-orchestrator"
     assert body["agent_count"] == 1
+    assert body["enabled_agent_count"] == 1
+    assert body["candidate_count"] == 2
+    assert body["provider_readiness"] == "unprobed"
     assert body["batch_backend"]
     assert body["embedding_batch_backend"]
     assert body["usage_record_count"] == 0
 
 
+def test_provider_readiness_refresh_is_authenticated_and_explicit() -> None:
+    orchestrator = TaskOrchestrator([
+        ModelAgent("probe_agent", "mock-agent", tags=("reasoning",)),
+        ModelAgent("disabled_probe_agent", "disabled-mock-agent", disabled=True),
+    ])
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(admin_token="admin_secret", inference_token="inference_secret"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    url = f"http://127.0.0.1:{port}/api/v1/provider_readiness/latest"
+
+    def request(path: str, token: str | None = "admin_secret") -> tuple[int, dict]:
+        headers = {} if token is None else {"Authorization": f"Bearer {token}"}
+        req = urllib.request.Request(path, headers=headers)
+        with urllib.request.urlopen(req, timeout=5) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+    try:
+        status, unprobed = request(url)
+        assert status == 200
+        assert unprobed["status"] == "unprobed"
+
+        status, refreshed = request(f"{url}?refresh=true")
+        assert status == 200
+        assert refreshed["status"] == "ready"
+        assert refreshed["ready_agent_count"] == 1
+        assert refreshed["items"][1]["status"] == "disabled"
+
+        try:
+            request(f"{url}?refresh=true", token=None)
+        except HTTPError as exc:
+            assert exc.code == 401
+        else:  # pragma: no cover
+            raise AssertionError("provider readiness must require admin authentication")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_healthz_is_unauthenticated_liveness()
+    test_provider_readiness_refresh_is_authenticated_and_explicit()
     print("ok")

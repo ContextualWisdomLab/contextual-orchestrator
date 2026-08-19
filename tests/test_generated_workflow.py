@@ -12,10 +12,12 @@ from dataclasses import replace
 import json
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
@@ -56,12 +58,13 @@ def _orch(plan_text: str) -> tuple[TaskOrchestrator, _PlannerClient]:
 
 def test_generated_plan_executes_with_natural_language_subtasks() -> None:
     orchestrator, client = _orch(json.dumps(PLAN))
-    result = orchestrator.conduct([{"role": "user", "content": "solve the hard problem"}])
+    with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None):
+        result = orchestrator.conduct([{"role": "user", "content": "solve the hard problem"}])
 
     assert result["plan_source"] == "generated"
     assert [row["subtask"] for row in result["trace"]] == [s["subtask"] for s in PLAN["steps"]]
-    assert result["answer"] == "step-output(4)"  # the synthesizer (last step) answers
-    assert len(client.calls) == 5  # 1 planner call + 4 steps
+    assert result["answer"] == "step-output(2)"  # fail-closed judge leaves the worker answer
+    assert len(client.calls) == 5  # 1 planner call + 4 steps; missing fast-mlsirm fails closed
 
 
 def test_access_lists_actually_isolate_context() -> None:

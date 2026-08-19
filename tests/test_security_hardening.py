@@ -2,11 +2,13 @@ from __future__ import annotations
 
 import json
 import os
+import socket
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -18,6 +20,25 @@ from contextual_orchestrator.server import SecurityConfig, build_server  # noqa:
 
 def build() -> TaskOrchestrator:
     return TaskOrchestrator([ModelAgent("general_agent", "mock-generalist", tags=("reasoning", "writing"))])
+
+
+def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
+    seen: list[tuple[str, str]] = []
+
+    def verify(token: str, scope: str) -> bool:
+        seen.append((token, scope))
+        return token == "keyverse-token" and scope == "inference"
+
+    security = SecurityConfig(bearer_verifier=verify)
+    security.authorize({"authorization": "Bearer keyverse-token"}, "inference", "127.0.0.1")
+    try:
+        security.authorize({"authorization": "Bearer keyverse-token"}, "admin", "127.0.0.1")
+    except Exception as exc:
+        assert "invalid" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("external verifier accepted the wrong scope")
+    assert seen == [("keyverse-token", "inference"), ("keyverse-token", "admin")]
+    assert security.readiness_profile()["auth_mode"] == "external_bearer_verifier"
 
 
 def post_json(url: str, payload: dict[str, object], token: str | None = None) -> tuple[int, dict[str, object]]:
@@ -93,6 +114,29 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert inference_status == 200
     assert inference_body["orchestration"]["mode"] == "route"
     assert "trace" not in inference_body["orchestration"]
+
+
+def test_single_and_split_token_modes_cannot_be_combined() -> None:
+    try:
+        SecurityConfig(auth_token="shared_secret", admin_token="admin_secret", inference_token="inference_secret")
+    except ValueError as exc:
+        assert str(exc) == "single auth_token cannot be combined with split tokens"
+    else:  # pragma: no cover
+        raise AssertionError("mixed single and split token modes must be rejected")
+
+
+def test_scope_token_precedes_mutated_shared_token() -> None:
+    security = SecurityConfig(admin_token="admin_secret", inference_token="inference_secret")
+    security.auth_token = "mutated_shared_secret"
+
+    try:
+        security.authorize({"authorization": "Bearer mutated_shared_secret"}, "admin", "127.0.0.1")
+    except Exception as exc:
+        assert "invalid" in str(exc)
+    else:  # pragma: no cover
+        raise AssertionError("scope token must remain authoritative after field mutation")
+
+    security.authorize({"authorization": "Bearer admin_secret"}, "admin", "127.0.0.1")
 
 
 def test_loopback_without_configured_token_is_rejected() -> None:
@@ -204,6 +248,16 @@ def test_concurrency_limit_rejects_when_slots_are_full() -> None:
         security.release_run_slot()
 
 
+def test_concurrency_limit_rejects_unbounded_or_non_integer_configuration() -> None:
+    for value in (0, 65, False, 1.5):
+        try:
+            SecurityConfig(auth_token="secret_token", max_concurrent_runs=value)  # type: ignore[arg-type]
+        except ValueError as exc:
+            assert "max_concurrent_runs" in str(exc)
+        else:  # pragma: no cover
+            raise AssertionError("invalid max_concurrent_runs configuration was accepted")
+
+
 def test_chat_completion_response_requires_explicit_trace() -> None:
     result = {
         "mode": "route",
@@ -216,10 +270,10 @@ def test_chat_completion_response_requires_explicit_trace() -> None:
     assert trace[0]["output"] == "Bearer [REDACTED]"
 
 
-def test_redaction_masks_common_sensitive_values() -> None:
+def test_redaction_masks_credentials_but_not_email_pii() -> None:
     text = "api_key='abcdefghijklmnopqrstuvwxyz' sent by alice@example.com"
 
-    assert redact_text(text) == "api_key='[REDACTED]' sent by [REDACTED]"
+    assert redact_text(text) == "api_key='[REDACTED]' sent by alice@example.com"
 
 
 def test_external_provider_requires_resolvable_credential_and_public_https() -> None:
@@ -255,11 +309,9 @@ def test_external_provider_requires_resolvable_credential_and_public_https() -> 
 
 
 def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
-    client = ModelClient()
+    client = ModelClient(allowed_provider_hosts={"example.com"})
     insecure_agent = ModelAgent("insecure_agent", "gpt-example", "http://api.openai.com/v1", "MODEL_KEY")
     unlisted_agent = ModelAgent("unlisted_agent", "gpt-example", "https://api.openai.com/v1", "MODEL_KEY")
-    previous = os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS")
-    os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = "example.com"
     # Register the credential so validation proceeds to the host-safety checks.
     backend = InMemoryCredentialBackend()
     backend.set("MODEL_KEY", "sk-host-check")
@@ -281,10 +333,28 @@ def test_external_provider_rejects_insecure_or_unlisted_hosts() -> None:
             raise AssertionError("unlisted provider should fail")
     finally:
         set_backend(None)
-        if previous is None:
-            os.environ.pop("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", None)
-        else:
-            os.environ["CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS"] = previous
+
+
+def test_provider_allowlist_ignores_request_time_environment_changes() -> None:
+    client = ModelClient(allowed_provider_hosts={"provider.example"})
+    agent = ModelAgent(
+        "remote_agent",
+        "remote-model",
+        base_url="https://provider.example/v1",
+        credential_key="remote-key",
+    )
+    with patch.dict(
+        "contextual_orchestrator.orchestrator.os.environ",
+        {"CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS": "other.example"},
+    ), patch(
+        "contextual_orchestrator.orchestrator.get_credential",
+        return_value="secret",
+    ), patch.object(
+        client,
+        "_resolve_addresses",
+        return_value=[(socket.AF_INET, ("93.184.216.34", 443))],
+    ):
+        assert client._validate_provider(agent) == (socket.AF_INET, ("93.184.216.34", 443))
 
 
 def test_provider_transport_rejects_local_url_schemes_before_urllib() -> None:
@@ -325,7 +395,7 @@ if __name__ == "__main__":
     test_public_bind_requires_explicit_opt_in()
     test_concurrency_limit_rejects_when_slots_are_full()
     test_chat_completion_response_requires_explicit_trace()
-    test_redaction_masks_common_sensitive_values()
+    test_redaction_masks_credentials_but_not_email_pii()
     test_external_provider_requires_resolvable_credential_and_public_https()
     test_external_provider_rejects_insecure_or_unlisted_hosts()
     test_provider_transport_rejects_local_url_schemes_before_urllib()

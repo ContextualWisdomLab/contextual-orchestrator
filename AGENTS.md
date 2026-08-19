@@ -71,8 +71,19 @@ push or open a PR.
 - Its `ModelClient` currently reads `os.environ.get(agent.api_key_env)` — this
   is the KV-principle deviation above. Resolve the API key (including the org
   `OPENAI_API_KEY`) from the **KV / credential registry**, not env.
-- The **OpenCode review pipeline is separate** and stays on **GitHub Models** —
-  do not change it.
+- **Policy change (2026-08-18, explicit org decision, supersedes the prior
+  "stays on GitHub Models" rule):** OpenCode, Noema, and Strix — the org's
+  three-stage CI review pipeline defined in `ContextualWisdomLab/.github`
+  (`opencode.jsonc`, `noema-review.yml`, `strix.yml`) — are being migrated to
+  use `contextual-orchestrator` as their shared backend, with
+  `BYTEZ_API_KEY`, `NVIDIA_NIM_API_KEY`, `NVIDIA_NIM_API_KEY_SUB`,
+  `OPENROUTER_API_KEY`, and `OPENAI_API_KEY` registered in this repo's KV so
+  it auto-discovers models across all five and auto-optimizes routing by
+  cost (see `contextual_orchestrator/model_discovery.py`, the
+  `discover-models` CLI subcommand, and `ModelAgent.auth_scheme` for
+  non-Bearer providers like Bytez). The provider-config change to the org
+  repo itself lands as a separate, human-reviewed PR — this repo does not
+  push or merge it automatically.
 
 ### This repo's role in the ecosystem
 

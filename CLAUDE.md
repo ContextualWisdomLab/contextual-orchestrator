@@ -8,7 +8,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 - **Security gate**: every PR to `main` runs the required Security workflow. A failing Trivy or pip-audit job is a real finding — remediate by bumping the dependency and regenerating `requirements.lock`; never weaken, `continue-on-error`, or disable the gate.
 - **KV, not env**: runtime config and provider secrets are resolved from the KV credential registry (`get_credential`), never `os.getenv` at request time. Env is only bootstrap transport into the KV (see `docs/kv-credentials.md`).
-- **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot` and `scopeweave`. The OpenCode review pipeline is separate, stays on GitHub Models, and must not be changed.
+- **Org role**: this repo is the org's LLM gateway (cost optimizer + sync/batch routing + upstream load balancing, LiteLLM-plus scope), consumed by `gyeot` and `scopeweave`. As of 2026-08-18, OpenCode/Noema/Strix (the org's CI review pipeline in `ContextualWisdomLab/.github`) are being migrated onto this gateway as their shared backend — see AGENTS.md's "This repo: the org LLM gateway" section for the full policy and scope.
 - **Research grounding**: substantive feature/process PRs should attach the relevant papers (PDF when redistribution is permissible, otherwise cite + link + summary) under `docs/papers/` with full citations.
 
 This file complements AGENTS.md with commands and architecture; where they differ, AGENTS.md wins.
@@ -44,8 +44,9 @@ python fuzz/fuzz_request_body.py -max_total_time=60 fuzz/corpus/request_body
 python -m contextual_orchestrator "your prompt" --agents examples/agents.mock.json
 
 # Serve the OpenAI-compatible API + /admin console
-export CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000
+local_token="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000 \
+  --auth-token "$local_token"
 
 # Loopback-only local dev server (auth disabled; loopback only)
 ./.superset/run.sh

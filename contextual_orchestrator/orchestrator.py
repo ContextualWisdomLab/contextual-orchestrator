@@ -3,13 +3,19 @@
 from __future__ import annotations
 
 from collections import Counter, deque, OrderedDict
+from collections.abc import Iterable, Mapping
+from contextlib import contextmanager
 from contextvars import ContextVar
+from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
 import hashlib
+import http.client
+import io
 import ipaddress
 import json
+import math
 import os
 from pathlib import Path
 import random
@@ -21,7 +27,7 @@ import threading
 import time
 import uuid
 from typing import Any
-from urllib.parse import urlparse
+from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
@@ -30,6 +36,41 @@ from .credentials import NotConfigured, get_credential
 
 
 ChatMessage = dict[str, str]
+ProviderDestination = tuple[int, tuple[Any, ...]]
+MAX_LOCAL_CONCURRENCY = 64
+DEFAULT_PROVIDER_PROBE_TIMEOUT = 5.0
+MAX_PROVIDER_PROBE_TIMEOUT = 30.0
+_SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
+    "ConnectionError",
+    "HTTPError",
+    "OSError",
+    "RuntimeError",
+    "SSLError",
+    "TimeoutError",
+    "TypeError",
+    "UnknownError",
+    "URLError",
+    "ValueError",
+})
+
+
+def _safe_provider_probe_error_type(exc: Exception) -> str:
+    """Keep provider diagnostics package-owned instead of echoing exception classes."""
+    name = type(exc).__name__
+    return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
+
+
+def _validate_provider_probe_timeout(timeout: float) -> float:
+    """Validate the finite, bounded timeout used by explicit readiness probes."""
+    if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
+        raise ValueError("provider probe timeout must be a finite number")
+    value = float(timeout)
+    if not math.isfinite(value) or not 0.1 <= value <= MAX_PROVIDER_PROBE_TIMEOUT:
+        raise ValueError(
+            f"provider probe timeout must be between 0.1 and {MAX_PROVIDER_PROBE_TIMEOUT:g} seconds"
+        )
+    return value
+
 
 class BudgetExceededError(RuntimeError):
     """Raised when an operator-configured spend budget is already exhausted."""
@@ -56,10 +97,139 @@ _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] 
 SECRET_PATTERNS = (
     re.compile(r"(?i)(api[_-]?key|token|secret|password)(['\"]?\s*[:=]\s*['\"]?)[A-Za-z0-9._~+/=-]{12,}"),
     re.compile(r"(?i)(bearer\s+)[A-Za-z0-9._~+/=-]{12,}"),
-    re.compile(r"[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}"),
 )
 
 DEFAULT_COMMERCIAL_TARGET_VALUE_KRW = 2_000_000_000
+MAX_MODEL_JUDGE_REPLY_CHARACTERS = 32_000
+CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1 = "contextual-orchestrator-contract-v1"
+
+
+@dataclass(frozen=True)
+class FastMLSIRMJudgeComponents:
+    """Resolved fast-mlsirm symbols used by model verification."""
+
+    judge_cls: type[Any]
+    criterion_cls: type[Any]
+    format_error: type[Exception]
+
+
+def _resolve_fast_mlsirm_components() -> FastMLSIRMJudgeComponents | None:
+    """Resolve the fast-mlsirm adapter symbols without importing unconditionally."""
+    try:
+        from fast_mlsirm import ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError
+    except ModuleNotFoundError as exc:
+        if exc.name == "fast_mlsirm":
+            return None
+        raise
+    return FastMLSIRMJudgeComponents(ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError)
+
+
+@dataclass
+class _FastMLSIJudgeAdapter:
+    """Adapter that exposes `complete()` for `ContextualOrchestratorJudge`."""
+
+    orchestrator: "TaskOrchestrator"
+    text: str
+    judge: str
+    served_agent_id: str | None = None
+    mode: str = "auto"
+
+    @property
+    def contextual_orchestrator_contract(self) -> str:
+        """Declare the versioned gateway boundary required by fast-mlsirm."""
+        return CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1
+
+    @property
+    def client(self) -> ModelClient:
+        """Expose the existing gateway client capability to fast-mlsirm."""
+        return self.orchestrator.client
+
+    def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
+        if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
+            raise ValueError("mode must be auto, route, or conduct")
+        output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="verifier")
+        return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
+
+    def complete_structured(
+        self,
+        messages: list[ChatMessage],
+        mode: str | None = None,
+        *,
+        response_format: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Route a Judge JSON-schema request through the existing gateway proxy."""
+        if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
+            raise ValueError("mode must be auto, route, or conduct")
+        if not isinstance(response_format, dict):
+            raise TypeError("response_format must be a mapping")
+        agent = self._agent()
+        response = self.orchestrator.proxy_completion({
+            "model": agent.model,
+            "messages": messages,
+            "temperature": self.orchestrator.client.temperature,
+            "max_tokens": self.orchestrator.client.max_output_tokens,
+            "response_format": response_format,
+        })
+        output = ModelClient._response_content(agent, response)
+        usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
+        return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
+
+    def _completion_payload(
+        self,
+        output: str,
+        served_id: str,
+        usage: dict[str, Any] | None,
+        mode: str,
+    ) -> dict[str, Any]:
+        """Build the bounded adapter response shared by normal and structured calls."""
+        self.served_agent_id = served_id
+        trace = [
+            {
+                "id": 0,
+                "role": "verifier",
+                "agent_id": served_id,
+                "subtask": "LLM-as-a-Judge evaluation",
+                "output": output,
+            }
+        ]
+        if usage is not None:
+            trace[0]["usage"] = usage
+        return {
+            "answer": output,
+            "mode": mode,
+            "trace": trace,
+        }
+
+    def _agent(self) -> ModelAgent:
+        return self.orchestrator._agent(self.judge)
+
+
+def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
+    """Parse one exact, duplicate-free model-judge verdict."""
+    if not isinstance(reply, str) or len(reply) > MAX_MODEL_JUDGE_REPLY_CHARACTERS:
+        raise ValueError("judge response is missing or exceeds the maximum size")
+
+    def reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+        result: dict[str, Any] = {}
+        for key, value in pairs:
+            if key in result:
+                raise ValueError("judge response contains duplicate object keys")
+            result[key] = value
+        return result
+
+    try:
+        decision = json.loads(reply.strip(), object_pairs_hook=reject_duplicate_keys)
+    except (json.JSONDecodeError, RecursionError, TypeError) as exc:
+        raise ValueError("judge response is not valid JSON") from exc
+    if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
+        raise ValueError("judge response must match the exact verdict schema")
+    decision_value = decision["decision"]
+    if not isinstance(decision_value, str) or decision_value not in {"ACCEPT", "REJECT"}:
+        raise ValueError("judge decision is not an allowed enum value")
+    reason = decision["reason"]
+    if not isinstance(reason, str) or not reason.strip():
+        raise ValueError("judge reason is missing")
+    return decision_value, reason.strip()
 
 
 @dataclass(frozen=True)
@@ -79,9 +249,21 @@ class ModelAgent:
     disabled: bool = False
     provider_name: str = ""
     provider_exclusions: tuple[str, ...] = ()
+    # Explicit KV credential for an authenticated loopback gateway. Keep this
+    # separate from ``credential_key`` so mlx:// workers remain keyless.
+    local_credential_key: str = ""
+    # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
+    # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
+    auth_scheme: str = "Bearer"
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+        if type(self.local_credential_key) is not str:
+            raise TypeError("local_credential_key must be a string")
+        if self.local_credential_key and urlparse(self.base_url).scheme != "local":
+            raise ValueError("local_credential_key requires a local:// gateway URL")
+        if not self.auth_scheme or type(self.auth_scheme) is not str:
+            raise ValueError("auth_scheme must be a non-empty string")
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -96,6 +278,8 @@ class ModelAgent:
             "disabled": self.disabled,
             "provider_name": self.provider_name,
             "provider_exclusions": list(self.provider_exclusions),
+            "local_credential_key": self.local_credential_key,
+            "auth_scheme": self.auth_scheme,
         }
 
     @property
@@ -123,7 +307,32 @@ class ModelAgent:
             disabled=bool(value.get("disabled", False)),
             provider_name=value.get("provider_name", ""),
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
+            local_credential_key=value.get("local_credential_key", ""),
+            auth_scheme=value.get("auth_scheme", "Bearer"),
         )
+
+
+def _validate_batch_results(
+    requests: Mapping[str, list[ChatMessage]],
+    results: Mapping[str, Mapping[str, Any]],
+) -> dict[str, dict[str, Any]]:
+    """Reject incomplete batch output before it can become an accepted run."""
+    if not isinstance(results, Mapping):
+        raise TypeError("batch provider returned an invalid result map")
+    if set(requests) != set(results):
+        raise RuntimeError(
+            "batch provider returned an incomplete or unexpected result set "
+            f"(requested={len(requests)}, received={len(results)})"
+        )
+    invalid_count = sum(
+        not isinstance(result, Mapping) or not isinstance(result.get("content"), str)
+        for result in results.values()
+    )
+    if invalid_count:
+        raise RuntimeError(
+            f"batch provider returned {invalid_count} result(s) without assistant content"
+        )
+    return {custom_id: dict(result) for custom_id, result in results.items()}
 
 
 @dataclass(frozen=True)
@@ -157,24 +366,29 @@ class OrchestrationPolicy:
 
     route_p95_seconds: float = 2.5
     conduct_hint_threshold: int = 2
+    route_text_length_threshold: int = 700
     verifier_required: bool = True
-    verifier_positive_terms: tuple[str, ...] = ("verified", "accepted", "confirmed", "pass", "good", "ok")
-    verifier_negative_terms: tuple[str, ...] = ("reject", "disagree", "conflict", "unsafe", "fails", "error", "risky")
     # Conductor-style planning (arXiv:2512.04388): "generated" asks the planner model to
     # emit the workflow (subtasks, worker assignment, access lists); "template" keeps the
     # fixed 4-step plan. Generated plans that fail validation fall back to the template.
     workflow_planning: str = "template"
     max_workflow_steps: int = 6
-    # Verifier verdict: "terms" (default) matches accept/reject vocabulary in the verifier
-    # report; "model" asks a verifier-selected model to reply ACCEPT/REJECT (fixes the
-    # known term-matching false negative on risk-vocabulary verifier outputs).
-    verifier_judge: str = "terms"
+    # Verifier verdicts are structured model judgments. Keyword matching is intentionally
+    # unsupported: it cannot handle negation, language, or a report that quotes a risk.
+    verifier_judge: str = "model"
+
+    def __post_init__(self) -> None:
+        if self.verifier_judge != "model":
+            raise ValueError("keyword-based verifier_judge modes are unsupported; use 'model'")
+        if type(self.route_text_length_threshold) is not int or self.route_text_length_threshold < 1:
+            raise ValueError("route_text_length_threshold must be a positive integer")
 
     def as_dict(self) -> dict[str, Any]:
         """Return the API-safe policy snapshot for workflow records."""
         return {
             "route_p95_seconds": self.route_p95_seconds,
             "conduct_hint_threshold": self.conduct_hint_threshold,
+            "route_text_length_threshold": self.route_text_length_threshold,
             "verifier_required": self.verifier_required,
             "workflow_planning": self.workflow_planning,
             "verifier_judge": self.verifier_judge,
@@ -188,6 +402,261 @@ class OrchestrationPolicy:
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
+LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
+LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
+
+
+def _is_local_provider_url(base_url: str) -> bool:
+    """Return whether a provider uses the explicit loopback-only local scheme."""
+    parsed = urlparse(base_url)
+    try:
+        parsed.port
+    except ValueError:
+        return False
+    return parsed.scheme in LOCAL_PROVIDER_SCHEMES and parsed.hostname in LOCAL_PROVIDER_HOSTS
+
+
+def _is_direct_mlx_provider_url(base_url: str) -> bool:
+    """Return whether a loopback provider is the direct mlx-lm transport."""
+    return _is_local_provider_url(base_url) and urlparse(base_url).scheme == "mlx"
+
+
+def _provider_credential_name(agent: ModelAgent) -> str | None:
+    """Return the credential name allowed for this provider transport."""
+    if not _is_local_provider_url(agent.base_url):
+        return agent.credential_name
+    # mlx-lm is intentionally keyless; only the explicit local:// gateway
+    # transport may opt into a separately named loopback bearer credential.
+    if urlparse(agent.base_url).scheme != "local":
+        return None
+    return agent.local_credential_key or None
+
+
+def _provider_credential(agent: ModelAgent) -> str | None:
+    """Resolve the transport-specific credential from the KV registry."""
+    name = _provider_credential_name(agent)
+    return get_credential(name) if name else None
+
+
+class _LocalProviderState:
+    """Coordinate model switching and bounded concurrency for one local endpoint."""
+
+    def __init__(self) -> None:
+        self.condition = threading.Condition()
+        self.active_model: str | None = None
+        self.active = 0
+        self.capacity = 1
+
+
+_LOCAL_PROVIDER_STATES: dict[str, _LocalProviderState] = {}
+_LOCAL_PROVIDER_STATES_GUARD = threading.Lock()
+
+
+def _local_provider_state(base_url: str) -> _LocalProviderState:
+    """Return the shared in-process coordinator for one loopback provider endpoint."""
+    parsed = urlparse(base_url)
+    key = urlunsplit(("http", (parsed.netloc or base_url).lower(), parsed.path.rstrip("/"), "", ""))
+    with _LOCAL_PROVIDER_STATES_GUARD:
+        return _LOCAL_PROVIDER_STATES.setdefault(key, _LocalProviderState())
+
+
+@contextmanager
+def _local_provider_slot(
+    agent: ModelAgent,
+    capacity: int,
+    timeout: float,
+):
+    """Bound local requests and serialize model switches on a shared endpoint."""
+    if not _is_local_provider_url(agent.base_url):
+        yield
+        return
+
+    state = _local_provider_state(agent.base_url)
+    deadline = time.monotonic() + max(float(timeout), 0.0)
+    with state.condition:
+        while True:
+            if state.active == 0:
+                state.active_model = agent.model
+                state.capacity = capacity
+            elif state.active_model == agent.model:
+                state.capacity = min(state.capacity, capacity)
+
+            if state.active_model == agent.model and state.active < state.capacity:
+                state.active += 1
+                break
+
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise TimeoutError("local provider endpoint is busy past its request deadline")
+            state.condition.wait(remaining)
+
+    try:
+        yield
+    finally:
+        with state.condition:
+            state.active -= 1
+            if state.active == 0:
+                state.active_model = None
+                state.capacity = 1
+            state.condition.notify_all()
+
+
+def _responses_text(value: Any) -> str:
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        return ""
+    parts: list[str] = []
+    for item in value:
+        if isinstance(item, str):
+            parts.append(item)
+        elif isinstance(item, dict) and isinstance(item.get("text"), str):
+            parts.append(item["text"])
+    return "".join(parts)
+
+
+def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
+    # ADR 0002: keep Codex Responses compatibility at the public control-plane
+    # boundary; mlx-lm remains a local Chat Completions worker provider.
+    messages: list[dict[str, Any]] = []
+    instructions = _responses_text(request.get("instructions"))
+    if instructions:
+        messages.append({"role": "system", "content": instructions})
+
+    raw_input = request.get("input", "")
+    if isinstance(raw_input, list):
+        items = raw_input
+    elif isinstance(raw_input, str):
+        items = [{"type": "message", "role": "user", "content": raw_input}]
+    else:
+        raise ValueError("local Responses input must be a string or item list")
+    for item in items:
+        if isinstance(item, str):
+            messages.append({"role": "user", "content": item})
+            continue
+        if not isinstance(item, dict):
+            raise ValueError("local Responses input items must be objects")
+        item_type = item.get("type", "message")
+        if item_type == "message":
+            role = item.get("role", "user")
+            if role == "developer":
+                role = "system"
+            if role not in {"system", "user", "assistant"}:
+                raise ValueError(f"unsupported local Responses message role: {role}")
+            content = _responses_text(item.get("content"))
+            if content:
+                messages.append({"role": role, "content": content})
+        elif item_type == "function_call_output":
+            messages.append({
+                "role": "tool",
+                "tool_call_id": str(item.get("call_id", "")),
+                "content": _responses_text(item.get("output", item.get("content", ""))),
+            })
+        elif item_type == "function_call":
+            messages.append({
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [{
+                    "id": str(item.get("call_id", "")),
+                    "type": "function",
+                    "function": {
+                        "name": str(item.get("name", "")),
+                        "arguments": str(item.get("arguments", "{}")),
+                    },
+                }],
+            })
+        elif item_type in {"reasoning", "item_reference"}:
+            continue
+        else:
+            raise ValueError(f"unsupported local Responses input item: {item_type}")
+
+    payload: dict[str, Any] = {
+        "model": request.get("model", "local-model"),
+        "messages": messages,
+        "stream": False,
+    }
+    for key in (
+        "temperature", "top_p", "max_tokens", "stop", "seed", "presence_penalty",
+        "frequency_penalty", "logit_bias", "logprobs", "top_logprobs", "user",
+        "parallel_tool_calls", "tool_choice",
+    ):
+        if key in request:
+            payload[key] = request[key]
+    if "max_output_tokens" in request and "max_tokens" not in payload:
+        payload["max_tokens"] = request["max_output_tokens"]
+
+    tools: list[dict[str, Any]] = []
+    for tool in request.get("tools", []):
+        if not isinstance(tool, dict) or tool.get("type") != "function":
+            continue
+        function = {
+            key: tool[key]
+            for key in ("name", "description", "parameters", "strict")
+            if key in tool
+        }
+        tools.append({"type": "function", "function": function})
+    if tools:
+        payload["tools"] = tools
+
+    tool_choice = payload.get("tool_choice")
+    if isinstance(tool_choice, dict) and tool_choice.get("type") == "function":
+        payload["tool_choice"] = {
+            "type": "function",
+            "function": {"name": tool_choice.get("name", "")},
+        }
+    return payload
+
+
+def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
+    choice = (data.get("choices") or [{}])[0]
+    message = choice.get("message") if isinstance(choice, dict) else {}
+    message = message if isinstance(message, dict) else {}
+    content = message.get("content")
+    if not isinstance(content, str):
+        content = message.get("reasoning") if isinstance(message.get("reasoning"), str) else ""
+
+    output: list[dict[str, Any]] = []
+    if content or not message.get("tool_calls"):
+        output.append({
+            "id": f"msg_{uuid.uuid4().hex}",
+            "type": "message",
+            "status": "completed",
+            "role": "assistant",
+            "content": [{"type": "output_text", "text": content, "annotations": []}],
+        })
+    for tool_call in message.get("tool_calls", []):
+        if not isinstance(tool_call, dict):
+            continue
+        function = tool_call.get("function") or {}
+        output.append({
+            "id": f"fc_{tool_call.get('id', uuid.uuid4().hex)}",
+            "type": "function_call",
+            "status": "completed",
+            "call_id": str(tool_call.get("id", uuid.uuid4().hex)),
+            "name": str(function.get("name", "")),
+            "arguments": str(function.get("arguments", "{}")),
+        })
+
+    usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
+    input_tokens = int(usage.get("prompt_tokens", 0) or 0)
+    output_tokens = int(usage.get("completion_tokens", 0) or 0)
+    response: dict[str, Any] = {
+        "id": f"resp_{data.get('id', uuid.uuid4().hex)}",
+        "object": "response",
+        "created_at": int(data.get("created", time.time())),
+        "model": data.get("model", request.get("model", "local-model")),
+        "output": output,
+        "output_text": content,
+        "status": "completed" if choice.get("finish_reason") != "length" else "incomplete",
+        "usage": {
+            "input_tokens": input_tokens,
+            "output_tokens": output_tokens,
+            "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
+        },
+    }
+    if isinstance(request.get("metadata"), dict):
+        response["metadata"] = request["metadata"]
+    return response
 
 
 def is_transient_error(exc: BaseException) -> bool:
@@ -197,6 +666,11 @@ def is_transient_error(exc: BaseException) -> bool:
     # Network-level failures (DNS, connection reset, read timeout) are transient.
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):
         return True
+    # A VPN/socket path can surface as an SSL EOF or SSL_ERROR_SYSCALL. Keep
+    # certificate verification failures non-transient so a bad trust boundary
+    # is never retried as if it were a network fault.
+    if isinstance(exc, ssl.SSLError):
+        return not isinstance(exc, ssl.SSLCertVerificationError)
     return False
 
 
@@ -208,29 +682,46 @@ class ModelClient:
         timeout: int = 90,
         max_output_tokens: int = 2048,
         max_retries: int = 2,
+        local_max_retries: int = 0,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
+        temperature: float = 0.2,
+        local_concurrency: int = 1,
+        chat_template_args: dict[str, Any] | None = None,
         ca_bundle: str | None = None,
         verify_tls: bool = True,
+        allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
         self.timeout = timeout
         self.max_output_tokens = max_output_tokens
+        if isinstance(max_retries, bool) or max_retries < 0:
+            raise ValueError("max_retries must be >= 0")
         self.max_retries = max_retries
+        if isinstance(local_max_retries, bool) or local_max_retries < 0:
+            raise ValueError("local_max_retries must be >= 0")
+        self.local_max_retries = int(local_max_retries)
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
+        self.temperature = temperature
+        if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
+            raise ValueError(
+                f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
+            )
+        self.local_concurrency = local_concurrency
+        self.chat_template_args = dict(chat_template_args or {})
+        self.allowed_provider_hosts = self._normalize_allowed_provider_hosts(allowed_provider_hosts)
         # Seam so tests can observe/skip real sleeping during backoff.
         self._sleep = time.sleep
         # Per-thread usage from the most recent chat() (the server is threaded).
         self._local = threading.local()
-        # TLS trust for provider egress. Default verifies against the system trust store;
-        # ca_bundle points at a custom CA (corporate gateways); verify_tls=False is an
-        # explicit dev-only opt-out (insecure) for self-signed endpoints.
-        self._ssl_context = self._build_ssl_context(ca_bundle, verify_tls)
+        if not verify_tls:
+            raise ValueError("provider TLS verification cannot be disabled; configure a trusted ca_bundle")
+        # TLS trust for provider egress. The system trust store is the default;
+        # ca_bundle points at a custom CA for a reviewed corporate gateway.
+        self._ssl_context = self._build_ssl_context(ca_bundle)
 
     @staticmethod
-    def _build_ssl_context(ca_bundle: str | None, verify_tls: bool) -> ssl.SSLContext:
-        if not verify_tls:
-            return ssl._create_unverified_context()  # nosec B323 - explicit dev-only provider TLS opt-out.
+    def _build_ssl_context(ca_bundle: str | None) -> ssl.SSLContext:
         if ca_bundle:
             if not os.path.isfile(ca_bundle):
                 raise ValueError(f"provider CA bundle does not exist: {ca_bundle}")
@@ -240,80 +731,308 @@ class ModelClient:
                 raise ValueError(f"provider CA bundle could not be loaded: {ca_bundle}") from exc
         return ssl.create_default_context()
 
+    @staticmethod
+    def _normalize_allowed_provider_hosts(hosts: Iterable[str] | None) -> frozenset[str]:
+        """Normalize an explicit provider-host policy once at client construction."""
+        if hosts is None:
+            return frozenset()
+        if isinstance(hosts, (str, bytes)):
+            raise ValueError("allowed_provider_hosts must be an iterable of host strings")
+        normalized: set[str] = set()
+        try:
+            values = iter(hosts)
+        except TypeError as exc:
+            raise ValueError("allowed_provider_hosts must be an iterable of host strings") from exc
+        for host in values:
+            if type(host) is not str:
+                raise ValueError("allowed_provider_hosts must contain only strings")
+            value = host.strip().lower()
+            if not value or any(character in value for character in "/?#"):
+                raise ValueError("allowed_provider_hosts entries must be bare host names")
+            normalized.add(value)
+        return frozenset(normalized)
+
     def take_usage(self) -> dict[str, Any] | None:
         """Return and clear provider-reported usage from the most recent chat() on this thread."""
         usage = getattr(self._local, "usage", None)
         self._local.usage = None
         return usage
 
-    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2) -> str:
+    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
         self._local.usage = None
         if agent.base_url.startswith("mock://"):
             return self._mock(agent, messages)
 
-        self._validate_provider(agent)  # pragma: no cover
-        api_key = get_credential(agent.credential_name)  # pragma: no cover
-        if not api_key:  # pragma: no cover
+        destination = self._validate_provider(agent)  # pragma: no cover
+        api_key = _provider_credential(agent)  # pragma: no cover
+        credential_name = _provider_credential_name(agent)  # pragma: no cover
+        if credential_name and not api_key:  # pragma: no cover
             raise NotConfigured(
-                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV"
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
             )
 
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": self.temperature if temperature is None else temperature,
             "stream": False,
             "max_tokens": self.max_output_tokens,
         }
-        return self._send_with_retry(agent, payload)
+        if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
+            payload["chat_template_kwargs"] = self.chat_template_args
+        with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+            return self._send_with_retry(agent, payload, destination)
 
-    def _send_with_retry(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
+    def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
+        """Verify a local model registry, then run one bounded completion probe.
+
+        ``/health`` and ``/v1/models`` only prove process/model-registry liveness;
+        this verifies the configured local model and deliberately exercises the
+        chat path with one output token. It never retries, so a stuck local queue
+        cannot be multiplied by the readiness check.
+        """
+        probe_timeout = _validate_provider_probe_timeout(timeout)
+        started = time.monotonic()
+        self._local.usage = None
+        failure_code = "provider_probe_failed"
+        try:
+            if agent.base_url.startswith("mock://"):
+                content = self._mock(agent, [{"role": "user", "content": "Reply with exactly OK."}])
+                usage = None
+            else:
+                destination = self._validate_provider(agent)
+                if _is_local_provider_url(agent.base_url):
+                    registry_request = urllib.request.Request(
+                        self._provider_url(agent, "/models"),
+                        method="GET",
+                    )
+                    with self._open_provider(
+                        registry_request, destination, timeout=probe_timeout
+                    ) as registry_response:
+                        registry = json.loads(
+                            registry_response.read().decode("utf-8")
+                        )
+                    model_ids = {
+                        item.get("id")
+                        for item in registry.get("data", [])
+                        if isinstance(item, dict) and type(item.get("id")) is str
+                    }
+                    if agent.model not in model_ids:
+                        failure_code = "provider_model_not_registered"
+                        raise RuntimeError(
+                            f"provider {agent.id} model registry does not contain {agent.model!r}"
+                        )
+                payload: dict[str, Any] = {
+                    "model": agent.model,
+                    "messages": [{"role": "user", "content": "Reply with exactly OK."}],
+                    "temperature": 0.0,
+                    "stream": False,
+                    "max_tokens": 1,
+                }
+                if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
+                    payload["chat_template_kwargs"] = self.chat_template_args
+                with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
+                    content = self._send(agent, payload, destination, timeout=probe_timeout)
+                usage = self.take_usage()
+            if not content.strip():
+                failure_code = "provider_empty_probe_response"
+                raise RuntimeError(f"provider {agent.id} returned empty probe content")
+            return {
+                "agent_id": agent.id,
+                "model": agent.model,
+                "status": "ready",
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "usage": usage,
+            }
+        except Exception as exc:  # noqa: BLE001 - readiness reports failures, it does not serve them
+            return {
+                "agent_id": agent.id,
+                "model": agent.model,
+                "status": "not_ready",
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "error_type": _safe_provider_probe_error_type(exc),
+                "failure_code": failure_code,
+            }
+
+    def _send_with_retry(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        retry_limit = self._retry_limit(agent)
+        for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
-                return self._send(agent, payload)
+                return (
+                    self._send(agent, payload, destination)
+                    if timeout is None
+                    else self._send(agent, payload, destination, timeout=timeout)
+                )
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
-                if attempt >= self.max_retries or not is_transient_error(exc):
+                if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        raise RuntimeError(f"provider {agent.id} request failed") from last_error
+        detail = f": {last_error}" if last_error else ""
+        raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
+
+    def _retry_limit(self, agent: ModelAgent) -> int:
+        """Return a retry budget without multiplying an expensive local queue by default."""
+        return self.local_max_retries if _is_local_provider_url(agent.base_url) else self.max_retries
 
     def _backoff_delay(self, attempt: int) -> float:
         """Full-jitter exponential backoff, capped, so retries do not thundering-herd a provider."""
         ceiling = min(self.retry_backoff_cap, self.retry_backoff * (2 ** attempt))
         return random.uniform(0.0, ceiling)
 
-    def _send(self, agent: ModelAgent, payload: dict[str, Any]) -> str:
+    def _send(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
-        api_key = get_credential(agent.credential_name) or ""
+        api_key = _provider_credential(agent)
+        headers = {"content-type": "application/json"}
+        if api_key:
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-            },
+            headers=headers,
             method="POST",
         )
-        with self._open_provider(request) as response:
+        opened = (
+            self._open_provider(request, destination)
+            if timeout is None
+            else self._open_provider(request, destination, timeout=timeout)
+        )
+        with opened as response:
             data = json.loads(response.read().decode("utf-8"))
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
-        return data["choices"][0]["message"]["content"]
+        return self._response_content(agent, data)
 
-    def _open_provider(self, request: urllib.request.Request) -> Any:
-        """Open a provider request built from a validated provider URL."""
-        return urllib.request.urlopen(  # nosec B310 - request URL comes from _provider_url after provider validation.
-            request,
-            timeout=self.timeout,
-            context=self._ssl_context,
+    @staticmethod
+    def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
+        """Extract text and explain provider responses that contain reasoning only."""
+        choices = data.get("choices")
+        message = choices[0].get("message") if isinstance(choices, list) and choices else None
+        content = message.get("content") if isinstance(message, dict) else None
+        if isinstance(content, str):
+            return content
+        if isinstance(message, dict) and message.get("reasoning"):
+            raise RuntimeError(
+                f"provider {agent.id} returned reasoning without content; "
+                "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
+            )
+        raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
+
+    @staticmethod
+    def _connect_validated(
+        destination: ProviderDestination, timeout: float | None, source_address: tuple[str, int] | None
+    ) -> socket.socket:
+        """Connect to one already-resolved address without performing another DNS lookup."""
+        family, sockaddr = destination
+        connection = socket.socket(family, socket.SOCK_STREAM)
+        try:
+            connection.settimeout(timeout)
+            if source_address is not None:
+                connection.bind(source_address)
+            connection.connect(sockaddr)
+            return connection
+        except Exception:
+            connection.close()
+            raise
+
+    @staticmethod
+    def _resolve_addresses(hostname: str, port: int) -> list[ProviderDestination]:
+        try:
+            addresses = socket.getaddrinfo(hostname, port, type=socket.SOCK_STREAM)
+        except socket.gaierror as exc:
+            raise RuntimeError(f"provider host {hostname!r} could not be resolved") from exc
+        resolved = [(family, sockaddr) for family, _type, _proto, _canonname, sockaddr in addresses]
+        if not resolved:
+            raise RuntimeError(f"provider host {hostname!r} has no stream address")
+        return resolved
+
+    def _open_provider(
+        self,
+        request: urllib.request.Request,
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> Any:
+        """Open a validated HTTP(S) request without generic URL-handler dispatch."""
+        parsed = urlparse(request.full_url)
+        if (
+            parsed.scheme not in {"http", "https"}
+            or not parsed.hostname
+            or parsed.username
+            or parsed.password
+            or parsed.fragment
+        ):
+            raise RuntimeError("provider request URL must be an HTTP(S) URL without userinfo or fragments")
+        try:
+            port = parsed.port or (443 if parsed.scheme == "https" else 80)
+        except ValueError as exc:
+            raise RuntimeError("provider request URL has an invalid port") from exc
+        if destination is None:
+            destination = self._resolve_addresses(parsed.hostname, port)[0]
+        connection_timeout = self.timeout if timeout is None else timeout
+        connection: http.client.HTTPConnection
+        if parsed.scheme == "https":
+            # The explicit verifying context is the security control for this reviewed API.
+            connection = http.client.HTTPSConnection(  # nosemgrep: python.lang.security.audit.httpsconnection-detected.httpsconnection-detected
+                parsed.hostname,
+                port,
+                timeout=connection_timeout,
+                context=self._ssl_context,
+            )
+        else:
+            connection = http.client.HTTPConnection(parsed.hostname, port, timeout=connection_timeout)
+        connection._create_connection = (  # type: ignore[attr-defined]
+            lambda _address, timeout, source_address: self._connect_validated(
+                destination, timeout, source_address
+            )
         )
+        target = urlunsplit(("", "", parsed.path or "/", parsed.query, ""))
+        try:
+            connection.request(
+                request.get_method(),
+                target,
+                body=request.data,
+                headers=dict(request.header_items()),
+            )
+            response = connection.getresponse()
+            if response.status >= 400:
+                body = response.read()
+                status = response.status
+                reason = response.reason
+                headers = response.headers
+                response.close()
+                connection.close()
+                raise urllib.error.HTTPError(
+                    request.full_url,
+                    status,
+                    reason,
+                    headers,
+                    io.BytesIO(body),
+                )
+            return response
+        except Exception:
+            connection.close()
+            raise
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float = 0.2):
+    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
@@ -326,30 +1045,34 @@ class ModelClient:
                 yield answer[start : start + 24]
             return
 
-        self._validate_provider(agent)  # pragma: no cover
+        destination = self._validate_provider(agent)  # pragma: no cover
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": temperature,
+            "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
-        yield from self._stream_send(agent, payload)  # pragma: no cover
+        if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
+            payload["chat_template_kwargs"] = self.chat_template_args
+        with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+            yield from self._stream_send(agent, payload, destination)  # pragma: no cover
 
-    def _stream_send(self, agent: ModelAgent, payload: dict[str, Any]):
+    def _stream_send(
+        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+    ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
-        api_key = get_credential(agent.credential_name) or ""
+        api_key = _provider_credential(agent)
+        headers = {"content-type": "application/json", "accept": "text/event-stream"}
+        if api_key:
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-                "accept": "text/event-stream",
-            },
+            headers=headers,
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             for raw in response:
                 line = raw.decode("utf-8").strip()
                 if not line.startswith("data:"):
@@ -377,39 +1100,59 @@ class ModelClient:
         """Passthrough a full request to one agent, returning the raw provider JSON."""
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, endpoint, payload)
-        self._validate_provider(agent)  # pragma: no cover
-        return self._send_raw_with_retry(agent, endpoint, payload)  # pragma: no cover
+        destination = self._validate_provider(agent)  # pragma: no cover
+        if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
+            chat_payload = _responses_to_chat_payload(payload)
+            chat_payload.setdefault("max_tokens", self.max_output_tokens)
+            if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
+                chat_payload["chat_template_kwargs"] = self.chat_template_args
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                chat_response = self._send_raw_with_retry(
+                    agent, "chat/completions", chat_payload, destination
+                )
+            return _chat_to_responses_payload(chat_response, payload)
+        with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+            return self._send_raw_with_retry(agent, endpoint, payload, destination)
 
     def _send_raw_with_retry(
-        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
-        for attempt in range(self.max_retries + 1):
+        retry_limit = self._retry_limit(agent)
+        for attempt in range(retry_limit + 1):
             try:
-                return self._send_raw(agent, endpoint, payload)
+                return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
-                if attempt >= self.max_retries or not is_transient_error(exc):
+                if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
 
     def _send_raw(
-        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """One provider HTTP request returning the FULL provider JSON (for passthrough)."""
-        api_key = get_credential(agent.credential_name) or ""
+        api_key = _provider_credential(agent)
+        headers = {"content-type": "application/json"}
+        if api_key:
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
-            headers={
-                "authorization": f"Bearer {api_key}",
-                "content-type": "application/json",
-            },
+            headers=headers,
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             return json.loads(response.read().decode("utf-8"))
 
     def _mock_raw(
@@ -450,29 +1193,36 @@ class ModelClient:
             "echo": echoed,
         }
 
-    def _validate_provider(self, agent: ModelAgent) -> None:
-        """Reject unsafe remote model endpoints before any egress happens."""
+    def _validate_provider(self, agent: ModelAgent) -> ProviderDestination:
+        """Reject unsafe model endpoints and return the exact address to connect to."""
         # Runtime secret must be resolvable from the KV — never an env var name,
         # never a silent os.getenv fallback. (Legacy api_key_env, if set, is used
         # only as the credential NAME; see ModelAgent.credential_name.)
-        if get_credential(agent.credential_name) is None:
+        if _is_local_provider_url(agent.base_url):
+            parsed = urlparse(agent.base_url)
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
+            addresses = self._resolve_addresses(parsed.hostname or "", parsed.port or 80)
+            if any(not ipaddress.ip_address(sockaddr[0]).is_loopback for _family, sockaddr in addresses):
+                raise RuntimeError(f"{agent.id} local provider resolves to a non-loopback address")
+            return addresses[0]
+        credential_name = _provider_credential_name(agent)
+        if credential_name and get_credential(credential_name) is None:
             raise NotConfigured(
-                f"{agent.id} requires a resolvable credential '{agent.credential_name}' in the KV "
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV "
                 "(this replaces the legacy api_key_env environment pattern)"
             )
         parsed = urlparse(agent.base_url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise RuntimeError(f"{agent.id} base_url must use https")
-        allowed_hosts = {
-            host.strip().lower()
-            for host in os.environ.get("CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS", "").split(",")
-            if host.strip()
-        }
+        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
         hostname = parsed.hostname.lower()
-        if allowed_hosts and hostname not in allowed_hosts:
+        if self.allowed_provider_hosts and hostname not in self.allowed_provider_hosts:
             raise RuntimeError(f"{agent.id} provider host is not allowlisted")
-        for address in socket.getaddrinfo(hostname, parsed.port or 443, type=socket.SOCK_STREAM):
-            ip_address = ipaddress.ip_address(address[4][0])
+        addresses = self._resolve_addresses(hostname, parsed.port or 443)
+        for _family, sockaddr in addresses:
+            ip_address = ipaddress.ip_address(sockaddr[0])
             if (
                 ip_address.is_private
                 or ip_address.is_loopback
@@ -481,15 +1231,22 @@ class ModelClient:
                 or ip_address.is_reserved
             ):
                 raise RuntimeError(f"{agent.id} provider resolves to non-public address")
+        return addresses[0]
 
     def _provider_url(self, agent: ModelAgent, path: str) -> str:
         """Build a provider URL while rejecting urllib-supported local schemes."""
         parsed = urlparse(agent.base_url)
-        if parsed.scheme not in {"http", "https"} or not parsed.hostname:
+        if _is_local_provider_url(agent.base_url):
+            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+                raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
+            base_url = urlunsplit(("http", parsed.netloc, parsed.path.rstrip("/"), "", ""))
+        elif parsed.scheme in {"http", "https"} and parsed.hostname:
+            base_url = agent.base_url.rstrip("/")
+        else:
             raise RuntimeError(f"{agent.id} base_url must be an http(s) provider URL")
         if not path.startswith("/") or path.startswith("//") or "\r" in path or "\n" in path:
             raise RuntimeError("provider path must be a single absolute URL path")
-        return f"{agent.base_url.rstrip('/')}{path}"
+        return f"{base_url}{path}"
 
     def _mock(self, agent: ModelAgent, messages: list[ChatMessage]) -> str:
         last = next((m["content"] for m in reversed(messages) if m.get("role") == "user"), "")
@@ -506,7 +1263,7 @@ class ModelClient:
         self,
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
-        temperature: float = 0.2,
+        temperature: float | None = None,
         poll_interval: float = 5.0,
         poll_timeout: float = 3600.0,
     ) -> dict[str, dict[str, Any]]:
@@ -517,12 +1274,35 @@ class ModelClient:
         using ``chat``. The mock path answers synchronously so tests and local runs work.
         """
         if agent.base_url.startswith("mock://"):
-            return {
+            results = {
                 custom_id: {"content": self._mock(agent, messages), "usage": None}
                 for custom_id, messages in requests.items()
             }
-        self._validate_provider(agent)  # pragma: no cover
-        return self._batch_run(agent, requests, temperature, poll_interval, poll_timeout)  # pragma: no cover
+        elif _is_local_provider_url(agent.base_url):
+            results = self._local_batch_chat(agent, requests, temperature)
+        else:
+            destination = self._validate_provider(agent)  # pragma: no cover
+            results = self._batch_run(  # pragma: no cover
+                agent, requests, temperature, poll_interval, poll_timeout, destination
+            )
+        return _validate_batch_results(requests, results)
+
+    def _local_batch_chat(
+        self,
+        agent: ModelAgent,
+        requests: dict[str, list[ChatMessage]],
+        temperature: float | None,
+    ) -> dict[str, dict[str, Any]]:
+        """Run local OpenAI-compatible requests concurrently through mlx-lm."""
+        def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
+            content = self.chat(agent, messages, temperature=temperature)
+            return custom_id, {"content": content, "usage": self.take_usage()}
+
+        if self.local_concurrency == 1 or len(requests) <= 1:
+            return dict(complete(custom_id, messages) for custom_id, messages in requests.items())
+        with ThreadPoolExecutor(max_workers=min(self.local_concurrency, len(requests))) as pool:
+            futures = [pool.submit(complete, custom_id, messages) for custom_id, messages in requests.items()]
+            return dict(future.result() for future in futures)
 
     def _batch_run(
         self,
@@ -531,6 +1311,7 @@ class ModelClient:
         temperature: float,
         poll_interval: float,
         poll_timeout: float,
+        destination: ProviderDestination | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
         lines = [
@@ -541,21 +1322,21 @@ class ModelClient:
                 "body": {
                     "model": agent.model,
                     "messages": messages,
-                    "temperature": temperature,
+                    "temperature": self.temperature if temperature is None else temperature,
                     "max_tokens": self.max_output_tokens,
                 },
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]
-        input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"))
+        input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"), destination)
         batch_id = self._batch_json(agent, "POST", "/batches", {
             "input_file_id": input_file_id,
             "endpoint": "/v1/chat/completions",
             "completion_window": "24h",
-        })["id"]
+        }, destination)["id"]
         deadline = time.monotonic() + poll_timeout
         while True:
-            batch = self._batch_json(agent, "GET", f"/batches/{batch_id}")
+            batch = self._batch_json(agent, "GET", f"/batches/{batch_id}", destination=destination)
             status = batch.get("status")
             if status == "completed":
                 break
@@ -564,7 +1345,7 @@ class ModelClient:
             if time.monotonic() >= deadline:
                 raise TimeoutError(f"batch {batch_id} still {status} after {poll_timeout}s")
             self._sleep(poll_interval)
-        raw = self._batch_raw(agent, f"/files/{batch['output_file_id']}/content")
+        raw = self._batch_raw(agent, f"/files/{batch['output_file_id']}/content", destination)
         results: dict[str, dict[str, Any]] = {}
         for line in raw.decode("utf-8").splitlines():
             if not line.strip():
@@ -578,7 +1359,9 @@ class ModelClient:
             }
         return results
 
-    def _batch_upload(self, agent: ModelAgent, payload: bytes) -> str:
+    def _batch_upload(
+        self, agent: ModelAgent, payload: bytes, destination: ProviderDestination | None = None
+    ) -> str:
         """Upload a JSONL batch input via multipart/form-data; returns the file id."""
         boundary = f"co-batch-{uuid.uuid4().hex}"
         api_key = get_credential(agent.credential_name) or ""
@@ -591,36 +1374,43 @@ class ModelClient:
             self._provider_url(agent, "/files"),
             data=body,
             headers={
-                "authorization": f"Bearer {api_key}",
+                "authorization": f"{agent.auth_scheme} {api_key}",
                 "content-type": f"multipart/form-data; boundary={boundary}",
             },
             method="POST",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             return json.loads(response.read().decode("utf-8"))["id"]
 
-    def _batch_json(self, agent: ModelAgent, method: str, path: str, payload: dict[str, Any] | None = None) -> dict[str, Any]:
+    def _batch_json(
+        self,
+        agent: ModelAgent,
+        method: str,
+        path: str,
+        payload: dict[str, Any] | None = None,
+        destination: ProviderDestination | None = None,
+    ) -> dict[str, Any]:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
             data=json.dumps(payload).encode("utf-8") if payload is not None else None,
             headers={
-                "authorization": f"Bearer {api_key}",
+                "authorization": f"{agent.auth_scheme} {api_key}",
                 "content-type": "application/json",
             },
             method=method,
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             return json.loads(response.read().decode("utf-8"))
 
-    def _batch_raw(self, agent: ModelAgent, path: str) -> bytes:
+    def _batch_raw(self, agent: ModelAgent, path: str, destination: ProviderDestination | None = None) -> bytes:
         api_key = get_credential(agent.credential_name) or ""
         request = urllib.request.Request(
             self._provider_url(agent, path),
-            headers={"authorization": f"Bearer {api_key}"},
+            headers={"authorization": f"{agent.auth_scheme} {api_key}"},
             method="GET",
         )
-        with self._open_provider(request) as response:
+        with self._open_provider(request, destination) as response:
             return response.read()
 
 
@@ -811,7 +1601,6 @@ class TaskOrchestrator:
         "검증",
         "논문",
     )
-
     def __init__(
         self,
         agents: list[ModelAgent],
@@ -830,7 +1619,8 @@ class TaskOrchestrator:
         if self._pool_store is not None:
             stored = {agent.id: agent for agent in self._pool_store.load_all()}
             agents = [stored.pop(agent.id, agent) for agent in agents] + list(stored.values())
-        self.agents = [agent for agent in agents if not agent.disabled]
+        self.candidates = list(agents)
+        self.agents = [agent for agent in self.candidates if not agent.disabled]
         if not self.agents:  # pragma: no cover
             raise ValueError("at least one enabled agent is required")
         self.client = client or ModelClient()
@@ -848,6 +1638,8 @@ class TaskOrchestrator:
         # Per-agent circuit breaker: consecutive failures trip an agent "open"
         # so a persistently failing provider is skipped until it cools down.
         self._circuit: dict[str, dict[str, float]] = {}
+        self._circuit_lock = threading.Lock()
+        self._provider_readiness_lock = threading.Lock()
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
@@ -865,6 +1657,53 @@ class TaskOrchestrator:
             self._pool_store.close()
         if self._store is not None:
             self._store.close()
+
+    def provider_readiness_report(
+        self,
+        *,
+        refresh: bool = False,
+        timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT,
+    ) -> dict[str, Any]:
+        """Report provider liveness separately from an explicit chat readiness probe."""
+        if type(refresh) is not bool:
+            raise ValueError("refresh must be a boolean")
+        probe_timeout = _validate_provider_probe_timeout(timeout)
+        items: list[dict[str, Any]] = []
+        with self._provider_readiness_lock:
+            for agent in self.candidates:
+                provider = agent.provider_name or self._infer_provider_name(agent.base_url)
+                if agent.disabled:
+                    items.append({
+                        "agent_id": agent.id,
+                        "model": agent.model,
+                        "provider": provider,
+                        "status": "disabled",
+                    })
+                    continue
+                if refresh:
+                    item = dict(self.client.probe(agent, timeout=probe_timeout))
+                    item["provider"] = provider
+                    items.append(redact_value(item))
+                else:
+                    items.append({
+                        "agent_id": agent.id,
+                        "model": agent.model,
+                        "provider": provider,
+                        "status": "unprobed",
+                    })
+        active = [item for item in items if item["status"] != "disabled"]
+        status = "unprobed" if not refresh else (
+            "ready" if active and all(item["status"] == "ready" for item in active) else "not_ready"
+        )
+        return {
+            "status": status,
+            "probe": "refresh" if refresh else "none",
+            "timeout_seconds": probe_timeout,
+            "checked_at": int(time.time()) if refresh else None,
+            "agent_count": len(active),
+            "ready_agent_count": sum(item["status"] == "ready" for item in active),
+            "items": items,
+        }
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
@@ -897,7 +1736,12 @@ class TaskOrchestrator:
             text = self._latest_user_text(messages)
         else:
             text = _coerce_input_text(body.get("input"))
-        agent = self._select_agent(text, "worker")
+        requested_model = body.get("model")
+        agent = self._requested_agent(requested_model)
+        if agent is not None and agent.disabled:
+            raise RuntimeError(f"requested model {requested_model!r} is disabled")
+        if agent is None:
+            agent = self._select_agent(text, "worker")
         upstream = {
             key: value
             for key, value in body.items()
@@ -908,6 +1752,17 @@ class TaskOrchestrator:
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
         return self.client.proxy_send(agent, endpoint, upstream)
+
+    def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
+        """Resolve an explicit model without silently serving a different model."""
+        if requested_model is None or requested_model == "contextual-orchestrator":
+            return None
+        if type(requested_model) is not str or not requested_model:
+            raise ValueError("requested model must be a configured non-empty string")
+        matches = [candidate for candidate in self.candidates if candidate.model == requested_model]
+        if not matches:
+            raise ValueError(f"requested model {requested_model!r} is not configured")
+        return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
     def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
@@ -1050,12 +1905,25 @@ class TaskOrchestrator:
 
         answers: dict[int, dict[str, Any]] = {}
         for agent_id, requests in requests_by_agent.items():
-            for custom_id, result in self.client.batch_chat(agents_by_id[agent_id], requests).items():
-                answers[int(custom_id.rsplit("_", 1)[1])] = result
+            results = _validate_batch_results(
+                requests,
+                self.client.batch_chat(agents_by_id[agent_id], requests),
+            )
+            for custom_id, result in results.items():
+                try:
+                    prefix, suffix = custom_id.rsplit("_", 1)
+                    index = int(suffix)
+                except (AttributeError, ValueError) as exc:
+                    raise RuntimeError("batch provider returned an invalid request identifier") from exc
+                if prefix != "task" or custom_id != f"task_{index}" or not 0 <= index < len(selected):
+                    raise RuntimeError("batch provider returned an invalid request identifier")
+                if index in answers:
+                    raise RuntimeError("batch provider returned a duplicate request identifier")
+                answers[index] = result
 
         records: list[dict[str, Any]] = []
         for index, (prompt, agent) in enumerate(selected):
-            result = answers.get(index, {"content": None, "usage": None})
+            result = answers[index]
             row: dict[str, Any] = {
                 "id": 0, "role": "worker", "agent_id": agent.id,
                 "subtask": "Direct route (batched)", "access": [], "output": result["content"],
@@ -1151,7 +2019,9 @@ class TaskOrchestrator:
             messages = [{"role": "user", "content": prompt}]
 
             start = time.perf_counter()
-            orchestrated = self.complete(messages, mode=mode)
+            # Evaluation must measure provider work, not a cache hit from a prior request.
+            # The normal completion path still honors the configured response cache.
+            orchestrated = self._dispatch(messages, mode)
             orchestrated_latency = round((time.perf_counter() - start) * 1000, 2)
 
             start = time.perf_counter()
@@ -1254,7 +2124,12 @@ class TaskOrchestrator:
         if "provider_exclusions" in patch:
             patched = replace(patched, provider_exclusions=tuple(patch["provider_exclusions"]))
 
-        self.agents = [patched if agent.id == worker_agent_id else agent for agent in self.agents]
+        updated_candidates = [patched if agent.id == worker_agent_id else agent for agent in self.candidates]
+        updated_agents = [agent for agent in updated_candidates if not agent.disabled]
+        if not updated_agents:
+            raise ValueError("cannot disable the last enabled agent")
+        self.candidates = updated_candidates
+        self.agents = updated_agents
         if self._pool_store is not None:
             self._pool_store.save(patched)
         self._append_audit_event(
@@ -1292,15 +2167,16 @@ class TaskOrchestrator:
         if "id" not in value or "model" not in value:
             raise ValueError("agent requires id and model")
         agent = ModelAgent.from_dict(value)
-        if any(existing.id == agent.id for existing in self.agents):
+        if any(existing.id == agent.id for existing in self.candidates):
             raise ValueError(f"agent {agent.id} already exists")
         if not agent.base_url.startswith("mock://"):
             parsed = urlparse(agent.base_url)
-            if parsed.scheme != "https" or not parsed.hostname:
-                raise ValueError("non-mock agents must use an https base_url")
-            if not agent.credential_name:
+            if not _is_local_provider_url(agent.base_url) and (parsed.scheme != "https" or not parsed.hostname):
+                raise ValueError("non-mock remote agents must use an https base_url; local agents use mlx://loopback")
+            if not _is_local_provider_url(agent.base_url) and not agent.credential_name:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
-        self.agents = [*self.agents, agent]
+        self.candidates = [*self.candidates, agent]
+        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
         if self._pool_store is not None:
             self._pool_store.save(agent)
         self._append_audit_event(
@@ -1313,15 +2189,53 @@ class TaskOrchestrator:
         )
         return self._agent_to_admin_payload(agent)
 
+    def sync_discovered_agents(self, discovered_agents: list[ModelAgent]) -> dict[str, list[str]]:
+        """Upsert auto-discovered agents into the pool; persists when agents_db is set.
+
+        Unlike :meth:`add_agent`, an id that already exists is replaced in place
+        (re-running discovery is idempotent) instead of raising. New agents are
+        appended disabled (see ``model_discovery.agent_from_discovered``) so a
+        freshly discovered model never starts serving traffic before an operator
+        (or the cost router) opts it in via ``patch_agent``.
+        """
+        existing_by_id = {agent.id: index for index, agent in enumerate(self.candidates)}
+        updated_candidates = list(self.candidates)
+        added: list[str] = []
+        updated: list[str] = []
+        for agent in discovered_agents:
+            index = existing_by_id.get(agent.id)
+            if index is None:
+                existing_by_id[agent.id] = len(updated_candidates)
+                updated_candidates.append(agent)
+                added.append(agent.id)
+            else:
+                updated_candidates[index] = agent
+                updated.append(agent.id)
+            if self._pool_store is not None:
+                self._pool_store.save(agent)
+        self.candidates = updated_candidates
+        self.agents = [candidate for candidate in self.candidates if not candidate.disabled]
+        if added or updated:
+            self._append_audit_event(
+                "agents_discovered",
+                {"added": added, "updated": updated},
+            )
+            self.record_analytics_event(
+                "agents_discovered",
+                {"added_count": len(added), "updated_count": len(updated)},
+            )
+        return {"added": added, "updated": updated}
+
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
         """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
         if agent_pool_id != "default":  # pragma: no cover
             raise KeyError(agent_pool_id)
         target = self._agent(worker_agent_id)
-        remaining_enabled = [agent for agent in self.agents if agent.id != worker_agent_id and not agent.disabled]
+        remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
             raise ValueError("cannot remove the last enabled agent")
-        self.agents = [agent for agent in self.agents if agent.id != worker_agent_id]
+        self.candidates = [agent for agent in self.candidates if agent.id != worker_agent_id]
+        self.agents = [agent for agent in self.candidates if not agent.disabled]
         if self._pool_store is not None:
             # Disabled tombstone (not a row delete): it overlays the seed file on restart
             # and startup drops disabled agents, so removal survives even for seed agents.
@@ -1570,26 +2484,29 @@ class TaskOrchestrator:
         return healthy or eligible or [primary]
 
     def _circuit_open(self, agent_id: str) -> bool:
-        state = self._circuit.get(agent_id)
-        if not state or state["failures"] < self.circuit_failure_threshold:
-            return False
-        if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
-            state["failures"] = 0.0
-            state["opened_at"] = 0.0
-            return False
-        return True
+        with self._circuit_lock:
+            state = self._circuit.get(agent_id)
+            if not state or state["failures"] < self.circuit_failure_threshold:
+                return False
+            if time.monotonic() - state["opened_at"] >= self.circuit_reset_seconds:
+                state["failures"] = 0.0
+                state["opened_at"] = 0.0
+                return False
+            return True
 
     def _record_failure(self, agent_id: str) -> None:
-        state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
-        state["failures"] += 1.0
-        if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
-            state["opened_at"] = time.monotonic()
+        with self._circuit_lock:
+            state = self._circuit.setdefault(agent_id, {"failures": 0.0, "opened_at": 0.0})
+            state["failures"] += 1.0
+            if state["failures"] >= self.circuit_failure_threshold and not state["opened_at"]:
+                state["opened_at"] = time.monotonic()
 
     def _record_success(self, agent_id: str) -> None:
-        self._circuit.pop(agent_id, None)
+        with self._circuit_lock:
+            self._circuit.pop(agent_id, None)
 
     def _agent(self, agent_id: str) -> ModelAgent:
-        for agent in self.agents:
+        for agent in self.candidates:
             if agent.id == agent_id:
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
@@ -1597,64 +2514,123 @@ class TaskOrchestrator:
     def _needs_workflow(self, text: str) -> bool:
         lowered = text.lower()
         hits = sum(1 for hint in self.COMPLEX_HINTS if hint in lowered)
-        return hits >= self.policy.conduct_hint_threshold or len(text) > 700
+        return hits >= self.policy.conduct_hint_threshold or len(text) > self.policy.route_text_length_threshold
 
     def _latest_user_text(self, messages: list[ChatMessage]) -> str:
         return next((m.get("content", "") for m in reversed(messages) if m.get("role") == "user"), "")  # pragma: no cover
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
-        """Ask a model to judge the verifier report (fixes term-matching false negatives).
-
-        The judge must answer ACCEPT or REJECT; an ambiguous reply or a judge failure
-        keeps the term-based fallback verdict — the judge can only refine, never break.
-        """
+        """Ask a model for a strict structured verdict and fail closed on uncertainty."""
         verifier_output = fallback.get("verifier_output", "")
         if not verifier_output:
-            return fallback
-        judge = self._select_agent(task, "verifier")
-        try:
-            reply = self.client.chat(judge, [
-                {"role": "system", "content": (
-                    "You are the verification judge. Read the verifier report about the task. "
-                    "Reply with exactly one word: ACCEPT if the verified work is sound, "
-                    "REJECT if it has disqualifying problems."
-                )},
-                {"role": "user", "content": f"Task:\n{task}\n\nVerifier report:\n{verifier_output}"},
-            ])
-        except Exception:  # noqa: BLE001 - judge failure must not break the request
-            return fallback
-        upper = (reply or "").strip().upper()
-        if "ACCEPT" in upper and "REJECT" not in upper:
-            return {"accepted": True, "reason": "model judge accepted the verifier report",
-                    "verifier_output": verifier_output, "judge": "model"}
-        if "REJECT" in upper and "ACCEPT" not in upper:
-            return {"accepted": False, "reason": "model judge rejected the verifier report",
-                    "verifier_output": verifier_output, "judge": "model"}
-        return fallback
-
-    def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
-        lowered = verifier_output.lower()
-        if any(term in lowered for term in self.policy.verifier_negative_terms):  # pragma: no cover
             return {
                 "accepted": False,
-                "reason": "verifier output flagged disagreement or risk",
+                "reason": "model judge requires a non-empty verifier report",
                 "verifier_output": verifier_output,
+                "judge": "model",
             }
-        if any(term in lowered for term in self.policy.verifier_positive_terms):  # pragma: no cover
+        try:
+            components = _resolve_fast_mlsirm_components()
+        except Exception:  # noqa: BLE001 - a broken installed judge must not bypass the required path
             return {
-                "accepted": True,
-                "reason": "verifier output accepted the synthesized result",
+                "accepted": False,
+                "reason": "fast-mlsirm judge could not be loaded; verification failed closed",
                 "verifier_output": verifier_output,
+                "judge": "model",
             }
-        if thinker_output and worker_output:
+        if components is None:
             return {
-                "accepted": True,
-                "reason": "fallback acceptance from available planner and worker output",
+                "accepted": False,
+                "reason": "fast-mlsirm judge is unavailable; verification failed closed",
                 "verifier_output": verifier_output,
+                "judge": "model",
             }
-        return {  # pragma: no cover
+        try:
+            judge = self._select_agent(task, "verifier")
+            # The judge is one bounded provider call.  Do not pass the
+            # planning strategy ("template"/"generated") as an
+            # orchestration mode or recursively conduct another workflow.
+            judge_adapter = _FastMLSIJudgeAdapter(self, task, judge.id, mode="route")
+            fast_judge = components.judge_cls(
+                judge_adapter,
+                mode="route",
+                accept_threshold=0.7,
+            )
+            result = fast_judge.judge(
+                task=task,
+                answer=verifier_output,
+                criteria=(
+                    components.criterion_cls(
+                        criterion_id="evidence_quality",
+                        description="Does the verifier output identify concrete evidence and caveats with actionable impact?",
+                        weight=1.0,
+                    ),
+                    components.criterion_cls(
+                        criterion_id="risk_signal",
+                        description="Does the verifier output mention substantive risks and constraints with support?",
+                        weight=1.0,
+                    ),
+                ),
+            )
+            verification = {
+                "accepted": result.accepted,
+                "reason": result.rationale,
+                "verifier_output": verifier_output,
+                "judge": "model",
+            }
+            if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
+                verification["judge_agent_id"] = judge_adapter.served_agent_id
+            if result.usage:
+                verification["judge_usage"] = result.usage
+            verification["judge_orchestration_mode"] = result.orchestration_mode
+            criterion_scores = getattr(result, "criterion_scores", None)
+            to_irt_row = getattr(result, "to_irt_row", None)
+            if isinstance(criterion_scores, Mapping) and callable(to_irt_row):
+                try:
+                    irt_row = to_irt_row(item_type="dichotomous")
+                except Exception:  # noqa: BLE001 - invalid IRT projection must not be published
+                    return {
+                        "accepted": False,
+                        "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
+                        "verifier_output": verifier_output,
+                        "judge": "model",
+                    }
+                if (
+                    len(criterion_scores) < 2
+                    or type(irt_row) not in (tuple, list)
+                    or len(irt_row) != len(criterion_scores)
+                ):
+                    return {
+                        "accepted": False,
+                        "reason": "model judge returned an invalid multi-item IRT projection; verification failed closed",
+                        "verifier_output": verifier_output,
+                        "judge": "model",
+                    }
+                verification["judge_criterion_scores"] = dict(criterion_scores)
+                verification["judge_irt_item_type"] = "dichotomous"
+                verification["judge_irt_row"] = list(irt_row)
+            return verification
+        except components.format_error:
+            return {
+                "accepted": False,
+                "reason": "model judge returned an invalid structured verdict; verification failed closed",
+                "verifier_output": verifier_output,
+                "judge": "model",
+            }
+        except Exception:  # noqa: BLE001 - judge failure must not break the request
+            return {
+                "accepted": False,
+                "reason": "model judge unavailable; verification failed closed",
+                "verifier_output": verifier_output,
+                "judge": "model",
+            }
+
+    def _judge_verifier_output(self, verifier_output: str, thinker_output: str, worker_output: str) -> dict[str, Any]:
+        """Prepare evidence for the model judge without making a heuristic decision."""
+        del thinker_output, worker_output
+        return {
             "accepted": False,
-            "reason": "fallback verifier disagreement with missing upstream outputs",
+            "reason": "model judgment required; keyword matching is disabled",
             "verifier_output": verifier_output,
         }
 
@@ -1693,7 +2669,7 @@ class TaskOrchestrator:
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        return [self._agent_to_admin_payload(agent) for agent in self.agents[start:end]]
+        return [self._agent_to_admin_payload(agent) for agent in self.candidates[start:end]]
 
     def list_recent_runs(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
         """Return a paginated list of recent workflow run records."""
@@ -7907,7 +8883,7 @@ class TaskOrchestrator:
 
     def admin_state(self) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
-        agent_page_size = max(1, len(self.agents))
+        agent_page_size = max(1, len(self.candidates))
         return {
             "agents": self.list_agents(page_size=agent_page_size),
             "policy": {
@@ -8057,7 +9033,7 @@ class TaskOrchestrator:
         warnings: list[str] = []
         if auth_mode == "single_token":
             warnings.append("single bearer token shared by admin and inference scopes")
-        elif auth_mode != "split_token":
+        elif auth_mode not in {"split_token", "external_bearer_verifier"}:
             issues.append("no bearer token configured outside loopback-only development")
         if security_profile.get("allow_public_bind"):
             issues.append("public bind is enabled")
@@ -8078,7 +9054,12 @@ class TaskOrchestrator:
             remediation = "For enterprise pilots, split admin and inference tokens before customer evaluation."
         else:
             status = "pass"
-            evidence = "split tokens, private bind default, hidden traces, rate limits, and run limits are configured"
+            auth_evidence = (
+                "external bearer verifier"
+                if auth_mode == "external_bearer_verifier"
+                else "split tokens"
+            )
+            evidence = f"{auth_evidence}, private bind default, hidden traces, rate limits, and run limits are configured"
             remediation = "Keep these controls enabled for customer-facing pilots."
 
         return self._criterion("security_posture", "Security posture", status, evidence, remediation)
@@ -8104,6 +9085,8 @@ class TaskOrchestrator:
         remote = []
         for agent in self.agents:
             if agent.base_url.startswith("mock://"):
+                continue
+            if _is_local_provider_url(agent.base_url):
                 continue
             remote.append(agent.id)
             parsed = urlparse(agent.base_url)
@@ -8201,15 +9184,19 @@ for _report_name, _report_method in list(TaskOrchestrator.__dict__.items()):
 
 
 def redact_text(text: str) -> str:
-    """Mask common secret and personal-data shapes from traces."""
+    """Mask credential shapes (API keys, tokens, passwords, bearer headers) from traces.
+
+    Does not mask PII (email addresses, names, etc.): per governance-risk-compliance policy,
+    PII is protected by purpose-limited authorization, encryption, and audit logging, not by
+    destroying it in every response -- blanket PII masking here broke every downstream
+    consumer that needs the real content (e.g. an email client rendering actual addresses).
+    """
     redacted = text
     for pattern in SECRET_PATTERNS:
         if pattern.pattern.lower().startswith("(?i)(api"):
             redacted = pattern.sub(lambda match: f"{match.group(1)}{match.group(2)}[REDACTED]", redacted)
-        elif pattern.pattern.lower().startswith("(?i)(bearer"):
-            redacted = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
         else:
-            redacted = pattern.sub("[REDACTED]", redacted)
+            redacted = pattern.sub(lambda match: f"{match.group(1)}[REDACTED]", redacted)
     return redacted
 
 
@@ -8501,7 +9488,7 @@ def chat_completion_response(
     if include_trace:
         orchestration["trace"] = redact_value(result["trace"])
     return {
-        "id": f"chatcmpl-{int(time.time() * 1000)}",
+        "id": _new_chat_completion_id(),
         "object": "chat.completion",
         "created": int(time.time()),
         "model": model,
@@ -8532,7 +9519,7 @@ def chat_completion_chunks(
     token-by-token streaming — real token streaming requires a streaming ModelClient.
     """
     answer = result.get("answer", "")
-    completion_id = f"chatcmpl-{int(time.time() * 1000)}"
+    completion_id = _new_chat_completion_id()
     created = int(time.time())
     base = {"id": completion_id, "object": "chat.completion.chunk", "created": created, "model": model}
 
@@ -8554,6 +9541,11 @@ def chat_completion_chunks(
     final["orchestration"] = {key: value for key, value in orchestration.items() if value is not None}
     chunks.append(final)
     return chunks
+
+
+def _new_chat_completion_id() -> str:
+    """Create a collision-resistant OpenAI-compatible completion identifier."""
+    return f"chatcmpl-{uuid.uuid4().hex}"
 
 
 def sse_stream_body(chunks: list[dict[str, Any]]) -> str:

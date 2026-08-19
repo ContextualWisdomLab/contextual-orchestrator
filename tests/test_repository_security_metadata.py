@@ -1,6 +1,5 @@
-from pathlib import Path
 import re
-
+from pathlib import Path
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
 
@@ -71,9 +70,44 @@ def test_security_workflow_covers_core_repository_security_process():
 def test_dependabot_tracks_actions_and_python_dependencies():
     dependabot_text = read_text(".github/dependabot.yml")
 
-    assert "package-ecosystem: github-actions" in dependabot_text
-    assert "package-ecosystem: pip" in dependabot_text
-    assert "timezone: Asia/Seoul" in dependabot_text
+    entries = {
+        match.group(1): match.group(2)
+        for match in re.finditer(
+            r"(?ms)^  - package-ecosystem:\s+([^\n]+)\n(.*?)(?=^  - package-ecosystem:|\Z)",
+            dependabot_text,
+        )
+    }
+
+    assert set(entries) == {"github-actions", "pip"}
+    for entry in entries.values():
+        assert "timezone: Asia/Seoul" in entry
+        assert re.search(r"(?m)^    cooldown:\n      default-days: 7$", entry)
+
+
+def test_review_adr_requires_enforced_exact_head_merge_controls():
+    adr_text = read_text("docs/planning/adrs/0004-pr-review-merge-loop.md")
+    normalized_adr_text = " ".join(adr_text.split())
+
+    required_controls = [
+        "`requiredApprovals >= 1`",
+        "`enforce_admins=true`",
+        "`reviewDecision=APPROVED`",
+        "independent current-head approval",
+        "zero active unresolved threads",
+        "terminal successful required checks",
+        "structured same-head Strix evidence",
+        "final re-fetch immediately before",
+        "one recorded `verified_head_sha`",
+        "the PR head, any check SHA, or the reviewed diff changes",
+        "the merge stops and the complete gate is re-evaluated on the new head",
+    ]
+    for required_control in required_controls:
+        assert required_control in normalized_adr_text
+
+    assert (
+        "Branch protection and the central scheduler must each reject direct and "
+        "auto merge when any control is absent or non-passing."
+    ) in normalized_adr_text
 
 
 def test_codeowners_requires_repository_owner_review():
