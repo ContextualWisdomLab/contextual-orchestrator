@@ -1771,3 +1771,28 @@ state transition, and do not merge while either required context is pending.
 2. If both pass, perform the immediate live-head/review/protection check and
    normal protected merge for #1128 if the rules permit it.
 3. Otherwise repair the first terminal failure and keep sweep limits at `0/0`.
+
+## Status as of 2026-08-19, iteration 38 — #1142 is a second near-green candidate
+
+The small candidate rollup found `.github#1142` at exact head
+`660d4712805f87700223220e96975eb72051093d` with 20 successful checks, six
+queued required contexts (CodeQL compatibility/merge previews,
+`coverage-source-tree`, and pip-audit), no failure, and no review decision.
+Its exact worktree independently passed the focused queue-health tests (40
+tests), actionlint parsing with local shellcheck/pyflakes integrations
+disabled, `git diff --check`, and the full suite (`1256 passed, 16 subtests
+passed`). It is not mergeable evidence until all six hosted contexts are
+terminal-successful.
+
+#1128 remains at `e33536ba95a6fd6ff185b857ac2955835b80471e` with 28 successful
+contexts and only `opencode-review`/`strix` queued. #1139 remains at
+`7476d4a152d561ce5942befc91aee21b09e86afc` with its required set queued. No
+current-head run, review, merge, branch, or sweep-limit was changed.
+
+### Next iteration checklist
+
+1. Monitor #1128 and #1142 for terminal conclusions; choose the first fully
+   green candidate only after immediate exact-head and protection re-reads.
+2. Read any terminal failure at the finding level and repair only its root
+   cause; local green evidence does not waive hosted gates.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
