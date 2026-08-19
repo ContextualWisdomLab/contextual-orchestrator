@@ -102,17 +102,35 @@ consult.
    If a `CHANGES_REQUESTED` review's content doesn't clearly match a known,
    already-fixed mechanical cause, treat it as a real finding — don't
    dismiss it to unblock a merge.
-3. **Exit condition, not indefinite operation**: once `contextual-
-   orchestrator`'s and `.github`'s open-PR counts are near zero (not
-   necessarily zero, but no longer dominated by the http-honesty stack or
-   similar mass-conflict backlogs) and the merge-scheduler's normal
-   approve→auto-update→merge path is verified working end-to-end for a
-   fresh PR (i.e. the deadlock this session found and worked around is
-   actually fixed upstream, not just bypassed around), **revert the bypass**:
-   re-enable `enforce_admins` on both repos and remove the
-   `OrganizationAdmin` bypass_actor from both rulesets. Log that reversion
-   here when it happens. Don't leave this open "just in case" once its job
-   is done.
+3. **Exit condition, not indefinite operation**: measure the exit gate instead
+   of treating "near zero" as a judgment call. Take two snapshots at least
+   one complete scheduler interval apart, using paginated REST PR data and the
+   current review/check state at each PR head. The gate is met only when both
+   repositories satisfy all three thresholds in both snapshots:
+   - `contextual-orchestrator`: `open_prs <= 5`, `CHANGES_REQUESTED <= 2`,
+     `CONFLICTING == 0`;
+   - `.github`: `open_prs <= 5`, `CHANGES_REQUESTED <= 2`, `CONFLICTING == 0`.
+   Record the UTC timestamp, repository default-branch SHA, counts, and the
+   paginated API evidence in this plan; do not count stale review decisions or
+   non-current heads as proof of closure.
+
+   Before reverting the bypass, prove the merge-scheduler's normal
+   approve→auto-update→merge path with one fresh, non-draft PR in each
+   repository. The evidence must show: an independent APPROVE and all
+   required checks at the original head; a base-branch advance while the PR
+   is open; the scheduler's logged branch update to the new exact head; fresh
+   checks/review at that head; and the resulting protected merge commit with
+   no admin merge, self-approval, unresolved thread, or required-check bypass.
+   Link each PR, scheduler run, old/new head, review commit, and merge commit
+   here.
+
+   Only after both threshold snapshots and both fresh-PR proofs pass, **revert
+   the bypass**: re-enable `enforce_admins` on `contextual-orchestrator/main`
+   and `.github/main`, remove every `OrganizationAdmin` bypass actor from the
+   active rulesets `18156473`, `18259551`, and `17921150`, then re-read the
+   protection/ruleset APIs. Record the before/after JSON evidence, UTC
+   timestamps, and the restoration commits/actor here. Don't leave this open
+   "just in case" once its job is done.
 4. **Codex is now a standing collaborator on this track**, not a one-off
    second opinion, and not gated to only sensitive/delicate moments —
    operator confirmed it's fine to bring Codex in for regular work too
@@ -327,7 +345,7 @@ required check every repo inherits, so this crash-after-report bug has
 likely been causing false-closed `strix` failures across many of
 `contextual-orchestrator`'s 81 checks-red PRs too (separate from the two
 genuine findings already fixed — JSON-bomb in #747, SSRF-redirect in
-#749). **Next iteration: once #1121 merges, re-check whether the
+`#749`). **Next iteration: once #1121 merges, re-check whether the
 checks-red count on `contextual-orchestrator`'s backlog drops on
 re-scan** — if a PR's `strix` failure disappears on its own after a
 branch update/re-dispatch post-#1121, that confirms it was this bug, not
@@ -965,7 +983,9 @@ from `main` far enough that no automated mechanism can rescue it.
    authorization scoping who sees PII in responses, and field-level
    encryption for PII at rest — deferred three times now.
 6. Check whether `noema`/`IRT-bibliography-set`/other repos have the same
-   `enforce_admins: true` classic-protection layer (2-for-2 so far).## Live correction and continuation update — 2026-08-19
+   `enforce_admins: true` classic-protection layer (2-for-2 so far).
+
+## Live correction and continuation update — 2026-08-19
 
 The earlier iteration-10 note correctly identified the scheduler deadlock, but its broad statement that every `CHANGES_REQUESTED` PR was `CONFLICTING` is not carried forward as a current fact. The live GitHub snapshot at this update is **210 open PRs, 202 `CHANGES_REQUESTED`, 6 `REVIEW_REQUIRED`, and 72 PRs with a failing status search result**; treat these as point-in-time queue metrics, not proof that every review has the same cause.
 
@@ -982,7 +1002,9 @@ Before #759, the integration-head ancestry audit proved **42** open PR heads fro
 3. Finish `.github#1139` through its own fresh checks/review and normal merge.
 4. Use the repaired scheduler for the `CHANGES_REQUESTED` sweep; inspect review bodies before treating any rejection as mechanical.
 5. Revisit ADR 0010's purpose-limited PII authorization and field-level encryption follow-ups.
-6. Continue the live classic-protection audit, then revert temporary bypass changes only after the documented exit condition is actually met.## Completion update — 2026-08-19
+6. Continue the live classic-protection audit, then revert temporary bypass changes only after the documented exit condition is actually met.
+
+## Completion update — 2026-08-19
 
 **PR #759 merged** at main commit `7eb459ee72c37dead5d25f284dfa4546f149fbe1` from exact head `f5dbf582df15ecd9cf444b6d92874b3b7153a016`. The published tree is exactly the tested integration tree (`fdf2fbec`); fresh required checks were terminal green, including Strix and coverage-evidence. OpenCode's required wrapper completed successfully but submitted no review; the documented admin fallback was used only for that unsatisfiable independent approval requirement, with no CI check bypass and zero unresolved threads.
 
@@ -990,7 +1012,7 @@ The live, guarded superseded sweep then closed **42** PRs whose current heads we
 
 PR #760 was closed as a duplicate of this canonical plan PR. The next queue task is the remaining non-ancestor review sweep; `.github#1139` is the scheduler repair that will remove the structural `CHANGES_REQUESTED` deadlock once its own normal checks/review complete.
 
-### Next continuation checklist
+### Post-merge continuation checklist
 
 1. Let this canonical docs PR (#758) complete its normal checks and review, then merge it without replacing the live evidence above.
 2. Finish `.github#1139` through its normal checks and review; verify its current head before any merge.
@@ -1043,6 +1065,7 @@ considered complete.
 
 Implementation remains a separate change requiring route-level policy tests,
 persistence migration tests, key-rotation tests, and a threat-model review.
+
 ## Live CHANGES_REQUESTED and protection audit — 2026-08-19
 
 The remaining queue was re-snapshotted after the guarded ancestor closure:
@@ -1145,7 +1168,7 @@ urllib use. Those PR heads predate the merged fixes and need a branch update;
 do not weaken Semgrep or close these feature PRs as if they were redundant.
 
 The representative Strix overflow remains evidenced by contextual-orchestrator
-#576 run `31943964967`, job `95157106075`: provider context length was exceeded
+`#576` run `31943964967`, job `95157106075`: provider context length was exceeded
 (`1438805` requested versus `1000000`) with `Vulnerabilities 0`. The classifier
 fix is on `.github#1138` at `1f4f5e0968852e453918a1c11af8e0870434739d`; its
 exact-head Strix run `32244899442` is still queued. The global scheduler fix
@@ -1153,7 +1176,7 @@ remains `.github#1139` at `3dd3b634ca54f26d7719e972630d8a10e9eae3e7`, with
 run `32242960444` also queued. The Actions queue was `712` at this snapshot;
 `ORG_SWEEP_REVIEW_DISPATCH_LIMIT=0` and
 `ORG_SWEEP_BRANCH_UPDATE_LIMIT=0` remain in force, so restore neither until
-#1139 is merged and its global-budget behavior is live-verified.
+`.github#1139` is merged and its global-budget behavior is live-verified.
 
 The overdue PII follow-up now has a concrete proposed design ADR on
 contextual-orchestrator#762, commit
@@ -1204,7 +1227,7 @@ sweep limits remain correct until #1139 is merged and verified live.
 The queued Actions count fell from `678` to `596` during this observation
 window. Recent scheduler runs are still queued/pending behind the hosted
 runner backlog, so this is natural queue drainage rather than evidence that
-#1139 is already live. The exact-head runs for `.github#1138`, `.github#1139`,
+`.github#1139` is already live. The exact-head runs for `.github#1138`, `.github#1139`,
 and contextual-orchestrator#762 remain queued and none is mergeable yet.
 
 The stale closed `disksage#196` run `32229577567` remains `in_progress` after
