@@ -965,4 +965,21 @@ from `main` far enough that no automated mechanism can rescue it.
    authorization scoping who sees PII in responses, and field-level
    encryption for PII at rest — deferred three times now.
 6. Check whether `noema`/`IRT-bibliography-set`/other repos have the same
-   `enforce_admins: true` classic-protection layer (2-for-2 so far).
+   `enforce_admins: true` classic-protection layer (2-for-2 so far).## Live correction and continuation update — 2026-08-19
+
+The earlier iteration-10 note correctly identified the scheduler deadlock, but its broad statement that every `CHANGES_REQUESTED` PR was `CONFLICTING` is not carried forward as a current fact. The live GitHub snapshot at this update is **210 open PRs, 202 `CHANGES_REQUESTED`, 6 `REVIEW_REQUIRED`, and 72 PRs with a failing status search result**; treat these as point-in-time queue metrics, not proof that every review has the same cause.
+
+The http-honesty integration remains pending at **#759 head `f5dbf582df15ecd9cf444b6d92874b3b7153a016`**, based on `main` `c919c04cf0f4a5ce3676d61aa8a67287eb23b411`. A scheduler base refresh invalidated the earlier Strix result on `c1aa96a`; the fresh head's completed checks are green, while the full unit suite and Strix are still running. Do not merge or close its ancestor PRs until this exact head completes the normal review/check gate.
+
+The root-cause scheduler repair is published as **ContextualWisdomLab/.github#1139**. It permits branch refresh only when the exact current-head automated OpenCode review requested changes, the PR is behind, the head is writable, and a fresh review can be dispatched; current-head findings remain blocked otherwise. Focused scheduler and fix suites pass (**135 tests**). This is a normal PR with no CI or review bypass.
+
+Before #759, the integration-head ancestry audit proved **42** open PR heads from the #587–#740 range are ancestors of `c1aa96a`, plus #740 itself as the integration parent. Those 43 are candidates for superseded closure only after #759 merges; the non-ancestor PRs remain preserved for individual review.
+
+### Next continuation checklist
+
+1. Let #759's fresh exact-head checks, OpenCode review, and Strix finish; merge only through the normal protected path with the exact head guard.
+2. After #759 merges, revalidate and close only the 43 proven ancestor PRs with a per-PR superseded comment; do not close non-ancestors.
+3. Finish `.github#1139` through its own fresh checks/review and normal merge.
+4. Use the repaired scheduler for the `CHANGES_REQUESTED` sweep; inspect review bodies before treating any rejection as mechanical.
+5. Revisit ADR 0010's purpose-limited PII authorization and field-level encryption follow-ups.
+6. Continue the live classic-protection audit, then revert temporary bypass changes only after the documented exit condition is actually met.
