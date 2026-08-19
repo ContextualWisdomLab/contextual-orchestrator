@@ -66,6 +66,53 @@ if the standing context has materially changed, and always add a dated
 "Next iteration checklist" for whoever (or whatever fresh agent) picks this
 up next.
 
+### Security-bypass audit trail and exit conditions (operator-confirmed after a Codex second opinion)
+
+Consulted Codex (`/codex` consult mode) about this mission's biggest risk.
+Its verdict, unedited: the `OrganizationAdmin` bypass actor + disabled
+`enforce_admins` don't just unblock the current backlog — left as-is with
+no expiry or audit, they're a **standing privilege-escalation path**: if
+the automation misjudges a dismissal, or the credential driving it is ever
+compromised, there is now a way to merge past required review with no
+independent check. It also flagged that this track's "just needs a few
+more sweep cycles" framing has no real exit condition — open-PR count,
+checks-red, and `CHANGES_REQUESTED` all lag differently, and nothing stops
+this from becoming a permanent operating mode instead of a bounded
+cleanup. Operator's call: keep the bypass, but hold it to these rules going
+forward, and bring Codex in as an ongoing collaborator, not a one-time
+consult.
+
+1. **Every bypass merge already states its reason in the merge body** (the
+   established procedure) — keep doing this without exception; it's the
+   audit trail. If a future merge can't state a specific, verifiable reason
+   the independent-review requirement doesn't apply, don't bypass it —
+   stop and ask.
+2. **Never dismiss a review on pattern-match alone.** The "stale mechanical
+   coverage-evidence rejection" dismissal pattern is safe only because the
+   review body is read and confirmed to be the known artifact every time.
+   If a `CHANGES_REQUESTED` review's content doesn't clearly match a known,
+   already-fixed mechanical cause, treat it as a real finding — don't
+   dismiss it to unblock a merge.
+3. **Exit condition, not indefinite operation**: once `contextual-
+   orchestrator`'s and `.github`'s open-PR counts are near zero (not
+   necessarily zero, but no longer dominated by the http-honesty stack or
+   similar mass-conflict backlogs) and the merge-scheduler's normal
+   approve→auto-update→merge path is verified working end-to-end for a
+   fresh PR (i.e. the deadlock this session found and worked around is
+   actually fixed upstream, not just bypassed around), **revert the bypass**:
+   re-enable `enforce_admins` on both repos and remove the
+   `OrganizationAdmin` bypass_actor from both rulesets. Log that reversion
+   here when it happens. Don't leave this open "just in case" once its job
+   is done.
+4. **Codex is now a standing collaborator on this track**, not a one-off
+   second opinion. Consult it (`/codex` consult mode, or review/challenge
+   mode against a diff) before any large or delicate action — the
+   http-honesty stack merge being the immediate case — and record what it
+   said and how it changed the plan, the way this section does. Disagreement
+   between Claude and Codex on a security-relevant call is a signal to slow
+   down and get the operator's read, not to pick whichever answer is more
+   convenient.
+
 ## Ecosystem leverage order
 
 Central/infra repos first (they unblock everyone downstream), then the
