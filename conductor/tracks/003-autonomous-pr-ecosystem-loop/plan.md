@@ -2534,3 +2534,22 @@ auto-merge enabled, but their protected checks are still queued. Main remains
 2. Let PR #1155 and plan PR #758 merge through normal auto-merge after all
    required contexts succeed, then verify main and the source fixes live.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 73 — updated PR checks still have no runner
+
+PR #1155's updated exact head remains
+`3626e5eaee95fdfda36c4d079b8e191521fdec74`. Its fresh protected runs, including
+bootstrap `32268264855`, scheduler `32268265106`, and Noema `32268265021`,
+are all `queued` with `runnerName=null`; their skipped auxiliary jobs are
+terminal but provide no required evidence. The 25-second recheck produced no
+terminal result. PR #758 has the same runner-queued condition at exact head
+`68d819e7e75014373fea69f6adf3b6e975c7190d`; main remains
+`bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve these exact-head queued checks and inspect the first runner
+   assignment or terminal result; do not rerun to manufacture evidence.
+2. Merge normally after all required contexts succeed, then verify both source
+   concurrency fixes on main and confirm no backlog buildup.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
