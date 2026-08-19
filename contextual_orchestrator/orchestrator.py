@@ -1916,16 +1916,43 @@ class TaskOrchestrator:
         requested_effort = body.get("reasoning_effort", "auto")
         attempt_count = 3 if requested_effort in {"high", "xhigh"} else 2
         workers = self._provider_feature_agents(text, requested_model, attempt_count)
-        candidate_responses = [
-            {
-                "attempt": index + 1,
-                "agent_id": agent.id,
-                "response": self.client.proxy_send(
+        provider_feature_errors = (RuntimeError, OSError, TimeoutError, urllib.error.URLError, ValueError)
+        worker_pool = list(workers)
+        if requested_model in (None, "contextual-orchestrator"):
+            known_worker_ids = {agent.id for agent in worker_pool}
+            worker_pool.extend(
+                agent
+                for agent in self._ranked_agents(text, "worker")
+                if agent.id not in known_worker_ids
+            )
+        candidate_responses: list[dict[str, Any]] = []
+        worker_failures: list[Exception] = []
+        for agent in worker_pool:
+            if len(candidate_responses) >= attempt_count:
+                break
+            try:
+                response = self.client.proxy_send(
                     agent, endpoint, self._provider_feature_body(body, agent)
-                ),
-            }
-            for index, agent in enumerate(workers)
-        ]
+                )
+            except provider_feature_errors as exc:
+                worker_failures.append(exc)
+                continue
+            candidate_responses.append(
+                {
+                    "attempt": len(candidate_responses) + 1,
+                    "agent_id": agent.id,
+                    "response": response,
+                }
+            )
+        if requested_model not in (None, "contextual-orchestrator"):
+            minimum_candidates = min(2, attempt_count)
+        elif len({agent.id for agent in worker_pool}) <= 1:
+            minimum_candidates = 1
+        else:
+            minimum_candidates = 2
+        if len(candidate_responses) < minimum_candidates:
+            error = worker_failures[-1] if worker_failures else None
+            raise RuntimeError("provider feature workflow did not obtain enough candidates") from error
         synthesis_agents = (
             [workers[0]]
             if requested_model is not None and requested_model != "contextual-orchestrator"
@@ -1933,14 +1960,28 @@ class TaskOrchestrator:
         )
         if not synthesis_agents:
             raise RuntimeError("no enabled synthesis agent is configured")
-        synthesizer = synthesis_agents[0]
-        synthesized = self.client.proxy_send(
-            synthesizer,
-            endpoint,
-            self._provider_feature_synthesis_body(
-                body, endpoint, candidate_responses, synthesizer
-            ),
-        )
+        synthesis_failures: list[Exception] = []
+        synthesizer: ModelAgent | None = None
+        synthesized: dict[str, Any] | None = None
+        successful_synthesis_index: int | None = None
+        for synthesis_index, synthesis_agent in enumerate(synthesis_agents):
+            try:
+                synthesized = self.client.proxy_send(
+                    synthesis_agent,
+                    endpoint,
+                    self._provider_feature_synthesis_body(
+                        body, endpoint, candidate_responses, synthesis_agent
+                    ),
+                )
+            except provider_feature_errors as exc:
+                synthesis_failures.append(exc)
+                continue
+            synthesizer = synthesis_agent
+            successful_synthesis_index = synthesis_index
+            break
+        if synthesized is None or synthesizer is None or successful_synthesis_index is None:
+            error = synthesis_failures[-1] if synthesis_failures else None
+            raise RuntimeError("provider feature workflow could not synthesize candidates") from error
         normalized = self._normalize_provider_feature_response(synthesized, body, endpoint)
         response_format = body.get("response_format")
         if (
@@ -1949,18 +1990,23 @@ class TaskOrchestrator:
             and not self._provider_feature_response_matches_schema(normalized, response_format, endpoint)
         ):
             for retry_index in range(2):
-                synthesizer = synthesis_agents[(retry_index + 1) % len(synthesis_agents)]
-                synthesized = self.client.proxy_send(
-                    synthesizer,
-                    endpoint,
-                    self._provider_feature_synthesis_body(
-                        body,
-                        endpoint,
-                        candidate_responses,
+                synthesizer = synthesis_agents[
+                    (successful_synthesis_index + retry_index + 1) % len(synthesis_agents)
+                ]
+                try:
+                    synthesized = self.client.proxy_send(
                         synthesizer,
-                        previous_response=normalized,
-                    ),
-                )
+                        endpoint,
+                        self._provider_feature_synthesis_body(
+                            body,
+                            endpoint,
+                            candidate_responses,
+                            synthesizer,
+                            previous_response=normalized,
+                        ),
+                    )
+                except provider_feature_errors:
+                    continue
                 normalized = self._normalize_provider_feature_response(synthesized, body, endpoint)
                 if self._provider_feature_response_matches_schema(normalized, response_format, endpoint):
                     break

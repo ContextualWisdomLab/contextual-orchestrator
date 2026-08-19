@@ -91,6 +91,56 @@ def test_provider_feature_request_always_collects_multiple_attempts() -> None:
     assert "reasoning_effort" not in calls[-1][1]
 
 
+def test_provider_feature_workflow_rotates_after_worker_failure() -> None:
+    orch = _build()
+    calls = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append((agent.id, payload))
+        if len(calls) == 1:
+            raise RuntimeError("provider timeout")
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": agent.id}}],
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion({
+        "messages": [{"role": "user", "content": "extract JSON"}],
+        "response_format": {"type": "json_object"},
+    })
+
+    assert len(calls) >= 4
+    assert result["object"] == "chat.completion"
+    assert len(calls[-1][1]["messages"]) == 2
+
+
+def test_provider_feature_workflow_rotates_after_synthesis_failure() -> None:
+    orch = _build()
+    calls = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append((agent.id, payload))
+        if len(calls) == 3:
+            raise RuntimeError("synthesis timeout")
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": agent.id}}],
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion({
+        "messages": [{"role": "user", "content": "extract JSON"}],
+        "response_format": {"type": "json_object"},
+    })
+
+    assert len(calls) == 4
+    assert calls[2][0] != calls[3][0]
+    assert result["object"] == "chat.completion"
+
+
 def test_provider_feature_synthesis_normalizes_verbose_json() -> None:
     orch = _build()
     calls = 0
