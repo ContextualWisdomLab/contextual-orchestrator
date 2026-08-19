@@ -997,3 +997,49 @@ PR #760 was closed as a duplicate of this canonical plan PR. The next queue task
 3. Re-snapshot the remaining 160 `CHANGES_REQUESTED` PRs, inspect bodies, and use the repaired scheduler only for stale-base cases; preserve genuine findings.
 4. Revisit ADR 0010's purpose-limited PII authorization and field-level encryption follow-ups.
 5. Continue the classic-protection audit and revert temporary bypass changes only when the documented exit condition is actually met.
+## ADR 0010 follow-up design checkpoint — 2026-08-19
+
+This is a design checkpoint only; neither follow-up is implemented or
+considered complete.
+
+### Purpose-limited authorization for PII-bearing responses
+
+- Derive the principal only from the configured bearer verifier or the
+  authenticated token-to-principal registry. Never accept identity, role, or
+  purpose from request JSON or caller-controlled headers.
+- Derive purpose from the server route/operation, then authorize the smallest
+  explicit scope: inference response, audit read, analytics read, or
+  administrative operation. Default-deny raw PII when the route has no
+  purpose policy.
+- Apply the decision before response serialization and before any trace or
+  analytics projection. A public/demo route may select a masked projection,
+  but a global redaction regex must not be reinstated.
+- Record principal identifier, purpose, resource identifier, policy version,
+  and allow/deny result in the audit event without copying raw PII.
+- Acceptance evidence: an unauthorized principal cannot receive raw PII; an
+  authorized purpose can; request-supplied purpose/role is ignored; every
+  deny and allow is auditable; credential redaction remains independent.
+
+### Field-level encryption for PII at rest
+
+- Classify PII fields at the audit/analytics persistence boundary and encrypt
+  each classified value before SQLite or Postgres persistence. Store only
+  ciphertext plus key identifier/version and the AEAD nonce/tag alongside
+  the record; do not encrypt an entire record if that prevents retention,
+  indexing, or deletion controls.
+- Resolve encryption keys through the existing credential/KV boundary or an
+  approved KMS-backed adapter; plaintext keys and decrypted PII must never
+  enter logs, analytics dimensions, or error messages.
+- Decrypt only after the purpose authorization decision. Fail closed on
+  missing keys, invalid tags, unknown key versions, or an authorization
+  failure.
+- Define rotation and revocation before implementation: versioned keys,
+  bounded re-encryption migration, rollback-safe failure handling, and
+  deletion of retired ciphertext after the retention policy permits it.
+- Acceptance evidence: a database export contains no plaintext classified
+  field; authorized reads decrypt with the recorded key version; tampering
+  fails authentication; rotation preserves authorized reads; unauthorized
+  reads and failures are audited without raw PII.
+
+Implementation remains a separate change requiring route-level policy tests,
+persistence migration tests, key-rotation tests, and a threat-model review.
