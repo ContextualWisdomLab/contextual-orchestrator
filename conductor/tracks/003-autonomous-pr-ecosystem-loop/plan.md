@@ -2286,3 +2286,20 @@ or CI bypass was used.
 2. Merge only through their enabled normal auto-merge paths, then verify the
    exact resulting main commit and scheduler behavior.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 60 — queue draining without runner assignment
+
+The next live snapshot showed the Actions queue moving from `846 queued / 16
+in-progress` to `840 queued / 13 in-progress`, but neither PR #758 nor PR
+#1155 received a runner; all inspected required contexts remain queued. The
+no-target scheduler inventory still contains only `merge-scheduler`
+`32266217283`. Six other queued `repository_dispatch` runs are explicitly
+cross-repository Noema target reviews and were preserved.
+
+### Next iteration checklist
+
+1. Recheck both exact-head PRs after the next queue transition; do not rerun
+   or cancel their current evidence merely to change scheduling order.
+2. Preserve target dispatches and the single newest no-target scheduler run;
+   merge normally when required contexts become terminal-successful.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
