@@ -122,6 +122,7 @@ class CostRoutingCoordinator:
         hints: Optional[Dict[str, Any]] = None,
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
+        metadata: Optional[Dict[str, Any]] = None,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -141,7 +142,9 @@ class CostRoutingCoordinator:
                 attribution=dict(attribution or {}),
                 mode=mode,
             )
-            job = self.submit_batch([request], metadata={"routing_reason": decision.reason})
+            job_metadata = dict(metadata or {})
+            job_metadata["routing_reason"] = decision.reason
+            job = self.submit_batch([request], metadata=job_metadata)
             return {
                 "channel": "batch",
                 "routing_reason": decision.reason,
@@ -151,7 +154,10 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        result = self.orchestrator.run(messages, mode=mode, workflow_run_id=workflow_run_id)
+        run_kwargs: dict[str, Any] = {"mode": mode, "workflow_run_id": workflow_run_id}
+        if metadata:
+            run_kwargs["metadata"] = dict(metadata)
+        result = self.orchestrator.run(messages, **run_kwargs)
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),

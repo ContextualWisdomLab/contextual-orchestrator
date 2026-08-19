@@ -142,6 +142,7 @@ class _FastMLSIJudgeAdapter:
     judge: str
     served_agent_id: str | None = None
     mode: str = "auto"
+    metadata: dict[str, Any] | None = None
 
     @property
     def contextual_orchestrator_contract(self) -> str:
@@ -156,7 +157,9 @@ class _FastMLSIJudgeAdapter:
     def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
-        output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="verifier")
+        output, served_id, usage = self.orchestrator._invoke(
+            self._agent(), messages, text=self.text, role="verifier", metadata=self.metadata
+        )
         return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
 
     def complete_structured(
@@ -172,13 +175,16 @@ class _FastMLSIJudgeAdapter:
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
-        response = self.orchestrator.proxy_completion({
+        request = {
             "model": agent.model,
             "messages": messages,
             "temperature": self.orchestrator.client.temperature,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        })
+        }
+        if self.metadata:
+            request["metadata"] = dict(self.metadata)
+        response = self.orchestrator.proxy_completion(request)
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
@@ -771,7 +777,13 @@ class ModelClient:
         self._local.usage = None
         return usage
 
-    def chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None) -> str:
+    def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
         self._local.usage = None
         if agent.base_url.startswith("mock://"):
@@ -794,6 +806,8 @@ class ModelClient:
         })
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
+        if metadata:
+            payload["metadata"] = dict(metadata)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_with_retry(agent, payload, destination)
 
@@ -1092,7 +1106,13 @@ class ModelClient:
             connection.close()
             raise
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None):
+    def stream_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
@@ -1115,6 +1135,8 @@ class ModelClient:
         })
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
+        if metadata:
+            payload["metadata"] = dict(metadata)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             yield from self._stream_send(agent, payload, destination)  # pragma: no cover
 
@@ -1893,30 +1915,45 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
+    def complete(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
         if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
+            return self._dispatch(messages, mode, metadata)
+        key = self._cache_key(messages, mode, metadata)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._dispatch(messages, mode)
+        result = self._dispatch(messages, mode, metadata)
         self._cache.put(key, result)
         return result
 
-    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
+    def _dispatch(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
-            return self.route_once(messages)
-        return self.conduct(messages)
+            return self.route_once(messages, metadata=metadata)
+        return self.conduct(messages, metadata=metadata)
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
         text = self._latest_user_text(messages)
         return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
 
-    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+    def stream_route(
+        self,
+        messages: list[ChatMessage],
+        workflow_run_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
         True streaming for the route path. ponytail: no cross-agent failover here — bytes
@@ -1925,7 +1962,8 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
+        stream_kwargs = {"metadata": metadata} if metadata else {}
+        for delta in self.client.stream_chat(agent, messages, **stream_kwargs):
             parts.append(delta)
             yield delta
         answer = "".join(parts)
@@ -1943,6 +1981,8 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
         }
+        if metadata:
+            record["metadata"] = dict(metadata)
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         self._append_audit_event(
@@ -1955,17 +1995,32 @@ class TaskOrchestrator:
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+    def _cache_key(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> str:
+        payload = json.dumps(
+            {"mode": mode, "messages": messages, "metadata": metadata or {}},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        result = self.complete(messages, mode=mode, metadata=metadata)
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -1978,6 +2033,8 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
         }
+        if metadata:
+            record["metadata"] = dict(metadata)
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         if self._store is not None:
@@ -2379,12 +2436,18 @@ class TaskOrchestrator:
         )
         return {"removed": worker_agent_id}
 
-    def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def route_once(
+        self,
+        messages: list[ChatMessage],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         start = time.perf_counter()
-        answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
+        answer, served_id, usage = self._invoke(
+            agent, messages, text=text, role="worker", metadata=metadata
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
             "id": 0,
@@ -2407,13 +2470,17 @@ class TaskOrchestrator:
             "trace": [row],
         }
 
-    def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def conduct(
+        self,
+        messages: list[ChatMessage],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
         plan_source = "template"
         if self.policy.workflow_planning == "generated":
             try:
-                steps = self._plan_generated(task)
+                steps = self._plan_generated(task, metadata=metadata)
                 plan_source = "generated"
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
                 steps = self._plan(task)
@@ -2441,7 +2508,9 @@ class TaskOrchestrator:
                 },
             ]
             start = time.perf_counter()
-            output, served_id, usage = self._invoke(agent, step_messages, text=task, role=step.role)
+            output, served_id, usage = self._invoke(
+                agent, step_messages, text=task, role=step.role, metadata=metadata
+            )
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
@@ -2464,14 +2533,14 @@ class TaskOrchestrator:
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
             if self.policy.verifier_judge == "model":
-                verification = self._model_judge_verification(task, verification)
+                verification = self._model_judge_verification(task, verification, metadata=metadata)
             answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
                 answer = last_output("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
             if self.policy.verifier_judge == "model":
-                verification = self._model_judge_verification(task, verification)
+                verification = self._model_judge_verification(task, verification, metadata=metadata)
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
@@ -2484,7 +2553,11 @@ class TaskOrchestrator:
             "plan_source": plan_source,
         }
 
-    def _plan_generated(self, task: str) -> list[WorkflowStep]:
+    def _plan_generated(
+        self,
+        task: str,
+        metadata: dict[str, Any] | None = None,
+    ) -> list[WorkflowStep]:
         """Ask the planner model to generate the workflow (Conductor, arXiv:2512.04388).
 
         The plan is JSON: natural-language subtasks, a worker assignment, and an access
@@ -2505,10 +2578,15 @@ class TaskOrchestrator:
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
-        raw = self.client.chat(planner, [
+        plan_messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": task},
-        ])
+        ]
+        raw = self.client.chat(
+            planner,
+            plan_messages,
+            **({"metadata": metadata} if metadata else {}),
+        )
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -2581,7 +2659,13 @@ class TaskOrchestrator:
         return selected
 
     def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        metadata: dict[str, Any] | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -2594,7 +2678,11 @@ class TaskOrchestrator:
         last_error: Exception | None = None
         for agent in candidates:
             try:
-                output = self.client.chat(agent, messages)
+                output = self.client.chat(
+                    agent,
+                    messages,
+                    **({"metadata": metadata} if metadata else {}),
+                )
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
                 self._record_failure(agent.id)
@@ -2660,7 +2748,12 @@ class TaskOrchestrator:
                 )
         return ""  # pragma: no cover
 
-    def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
+    def _model_judge_verification(
+        self,
+        task: str,
+        fallback: dict[str, Any],
+        metadata: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""
         verifier_output = fallback.get("verifier_output", "")
         if not verifier_output:
@@ -2691,7 +2784,9 @@ class TaskOrchestrator:
             # The judge is one bounded provider call.  Do not pass the
             # planning strategy ("template"/"generated") as an
             # orchestration mode or recursively conduct another workflow.
-            judge_adapter = _FastMLSIJudgeAdapter(self, task, judge.id, mode="route")
+            judge_adapter = _FastMLSIJudgeAdapter(
+                self, task, judge.id, mode="route", metadata=metadata
+            )
             fast_judge = components.judge_cls(
                 judge_adapter,
                 mode="route",

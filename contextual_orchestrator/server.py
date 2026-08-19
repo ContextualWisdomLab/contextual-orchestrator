@@ -279,6 +279,15 @@ def _validate_routing(routing: Any) -> dict[str, Any] | None:
     return routing
 
 
+def _validate_request_metadata(metadata: Any) -> dict[str, Any] | None:
+    """Accept OpenAI-compatible metadata without putting it into prompt text."""
+    if metadata is None:
+        return None
+    if not isinstance(metadata, dict):
+        raise RequestError(400, "invalid_request", "metadata must be an object")
+    return dict(metadata)
+
+
 def _validate_batch_requests(body: dict[str, Any], expose_trace: bool) -> list[BatchRequest]:
     raw_requests = body.get("requests")
     if not isinstance(raw_requests, list) or not raw_requests:
@@ -914,10 +923,13 @@ def build_server(
                         raise RequestError(400, "invalid_request", "stream must be a boolean")
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
+                    request_metadata = _validate_request_metadata(body.get("metadata"))
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     started_at = time.perf_counter()
                     if stream and orchestrator.would_route(messages, mode):
-                        self._stream_route_completion(orchestrator, security, messages, model_name)
+                        self._stream_route_completion(
+                            orchestrator, security, messages, model_name, request_metadata
+                        )
                         orchestrator.record_analytics_event(
                             "chat_completion_requested",
                             {
@@ -937,6 +949,7 @@ def build_server(
                         hints=routing,
                         model_name=model_name,
                         workflow_run_id=f"run_{uuid.uuid4().hex}",
+                        metadata=request_metadata,
                     ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
@@ -977,7 +990,10 @@ def build_server(
                     inputs = _validate_embeddings_inputs(body)
                     model_name = str(body.get("model", "contextual-orchestrator"))
                     attribution = _embeddings_attribution(body)
-                    submit_metadata: dict[str, Any] = {"actor_scope": "inference"}
+                    submit_metadata: dict[str, Any] = dict(
+                        _validate_request_metadata(body.get("metadata")) or {}
+                    )
+                    submit_metadata["actor_scope"] = "inference"
                     endpoint_alias = body.get("endpoint")
                     if endpoint_alias:
                         submit_metadata["endpoint_alias"] = str(endpoint_alias)
@@ -1197,7 +1213,14 @@ def build_server(
             self.wfile.write(frame.encode("utf-8"))
             self.wfile.flush()
 
-        def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
+        def _stream_route_completion(
+            self,
+            orchestrator: Any,
+            security: Any,
+            messages: Any,
+            model_name: str,
+            metadata: dict[str, Any] | None = None,
+        ) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
             completion_id = _new_chat_completion_id()
@@ -1218,7 +1241,10 @@ def build_server(
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                    stream_kwargs = {"metadata": metadata} if metadata else {}
+                    for delta in orchestrator.stream_route(
+                        messages, workflow_run_id=run_id, **stream_kwargs
+                    ):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
