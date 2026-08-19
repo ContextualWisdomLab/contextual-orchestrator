@@ -1305,3 +1305,31 @@ also queued. The central `.github` scheduler remains intentionally bounded at
 the previously recorded `0/0` dispatch/update limits while #1139 is not
 merged and live-verified. Current-head evidence is preserved; no admin bypass,
 self-approval, or policy write was used.
+
+## Status as of 2026-08-19, iteration 19 — review gate made measurable and checks restarted
+
+The living plan PR #758 advanced from `262ce8b2d61d566e8f5c467dcb6a887164dbf12c`
+to exact head `3f1175e17a32252a31dbd86ecaa50e4e94770582` after addressing the
+current-head review findings. The bypass exit is now measurable per repository:
+two snapshots one scheduler interval apart, `open_prs <= 5`,
+`CHANGES_REQUESTED <= 2`, and `CONFLICTING == 0` for both
+`contextual-orchestrator` and `.github`, followed by fresh-PR
+approve→base-advance→scheduler-update→fresh-check/review→protected-merge
+evidence in each repository. The restoration checklist names the exact
+classic protection and ruleset API changes and requires before/after evidence.
+
+The duplicate continuation heading and the three Markdown PR-reference
+hazards were also corrected. Targeted structural checks passed
+(`git diff --check`, unique continuation headings, and no unintended numeric
+PR lines parsed as headings). The standalone markdownlint run still reports
+51 historical findings elsewhere in this long-lived plan; that is not claimed
+as a full-file lint pass.
+
+The new exact-head #758 hosted set is 15 required jobs queued, with only the
+seven scheduler/cancellation jobs terminal-skipped. The last exact-head audit
+also left keyverse #112 (14 required jobs), `.github` #1138/#1139, and
+contextual-orchestrator #762 queued; no terminal failure or formal independent
+approval was available for those heads. Keep both org sweep variables at `0`
+until #1139 is merged and its global-budget behavior is live-verified. The
+next action is to re-read these exact heads after queue progress, then use only
+the normal protected merge path for any fully green, independently reviewed PR.
