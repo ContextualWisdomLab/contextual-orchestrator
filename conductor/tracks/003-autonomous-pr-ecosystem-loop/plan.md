@@ -1181,3 +1181,20 @@ base ref. The run-name target head is the relevant PR evidence.
 The PII design PR remains #762 at exact head
 `3b685af971036fe61153b43eab674f4bc534390f`, open and blocked only by queued
 required checks; it is still design-only and not an implementation claim.
+
+## Status as of 2026-08-19, iteration 14 — one running stale job is provider-held
+
+The hosted Actions queue is `680` with `28` runs in progress. The exact-head
+audit covered running `OpenCode Review Dispatch`, `Required OpenCode Review`,
+and `Strix Security Scan` runs across their target repositories. It found no
+stale current-head run except `disksage#196`, whose PR is closed. Its run
+`32229577567` was re-read as `in_progress` before a cancellation request; the
+request has not reached a terminal state and remains `in_progress`. Do not
+blindly retry it or cancel any current-head run. The earlier closed
+`.github#1136` run `32237453799` did reach `completed/cancelled`.
+
+The current fix runs remain exact-head queued: `.github#1138` run
+`32244899442` at `1f4f5e0968852e453918a1c11af8e0870434739d`, `.github#1139`
+run `32242960444` at `3dd3b634ca54f26d7719e972630d8a10e9eae3e7`, and the PII
+design PR #762 at `3b685af971036fe61153b43eab674f4bc534390f`. The `0/0` org
+sweep limits remain correct until #1139 is merged and verified live.
