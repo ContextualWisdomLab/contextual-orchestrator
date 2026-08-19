@@ -2248,3 +2248,23 @@ active, while the source fix remains isolated in PR #1155.
 2. Recheck hosted runner assignment and merge PR #1155 normally when all
    required contexts succeed.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 58 — queue volume measured, no further safe cancellation
+
+The current Actions inventory reports `846` queued runs and `16` in-progress
+runs. A queued PR-event audit compared the known open/closed PR inventory with
+each run's exact head and found no additional stale-head or closed-PR set safe
+to cancel. The queued `repository_dispatch` inventory contains one
+no-target `merge-scheduler` run (`32266217283`) plus cross-repository Noema
+target dispatches; only the former is eligible for newest-only duplicate
+cleanup. PR #1155 remains exact-head `762a999bf66db0bae2e6fc7455e1dc0c83268e1e`,
+with every required context still queued and normal auto-merge enabled. Main
+remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve cross-repository target dispatches and current-head PR evidence;
+   cancel only a verified older no-target scheduler duplicate.
+2. Monitor the exact PR #1155 checks for a runner assignment or terminal
+   result, then merge normally and verify the new scheduler on main.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
