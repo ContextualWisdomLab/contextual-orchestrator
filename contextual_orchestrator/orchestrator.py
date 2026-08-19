@@ -2004,7 +2004,7 @@ class TaskOrchestrator:
             and response_format.get("type") == "json_schema"
             and not self._provider_feature_response_matches_schema(normalized, response_format, endpoint)
         ):
-            for retry_index in range(2):
+            for retry_index in range(max(2, len(synthesis_agents))):
                 synthesizer = synthesis_agents[
                     (successful_synthesis_index + retry_index + 1) % len(synthesis_agents)
                 ]
@@ -2099,7 +2099,9 @@ class TaskOrchestrator:
             if isinstance(schema, dict):
                 synthesis_instruction += (
                     " The required JSON Schema is exactly: "
-                    f"{json.dumps(schema, ensure_ascii=False, separators=(',', ':'))}"
+                    f"{json.dumps(schema, ensure_ascii=False, separators=(',', ':'))}. "
+                    "The root value must be the complete object described by this schema; "
+                    "never return one array item as the root value."
                 )
         if previous_response is not None:
             synthesis_instruction += (
