@@ -179,10 +179,11 @@ class _FastMLSIJudgeAdapter:
         request = {
             "model": agent.model,
             "messages": messages,
-            "temperature": self.orchestrator.client.temperature,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
         }
+        if self.orchestrator.client.temperature is not None:
+            request["temperature"] = self.orchestrator.client.temperature
         if self.metadata:
             request["metadata"] = dict(self.metadata)
         response = self.orchestrator.proxy_completion(request)
@@ -719,7 +720,7 @@ class ModelClient:
         local_max_retries: int = 0,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
-        temperature: float = 0.2,
+        temperature: float | None = None,
         local_concurrency: int = 1,
         chat_template_args: dict[str, Any] | None = None,
         ca_bundle: str | None = None,
@@ -816,10 +817,12 @@ class ModelClient:
         payload = omit_empty_model({  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
             "stream": False,
             "max_tokens": self.max_output_tokens,
         })
+        sampling_temperature = self.temperature if temperature is None else temperature
+        if sampling_temperature is not None:
+            payload["temperature"] = sampling_temperature
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         if metadata:
@@ -871,7 +874,6 @@ class ModelClient:
                 payload: dict[str, Any] = omit_empty_model({
                     "model": agent.model,
                     "messages": [{"role": "user", "content": "Reply with exactly OK."}],
-                    "temperature": 0.0,
                     "stream": False,
                     "max_tokens": 1,
                 })
@@ -1147,10 +1149,12 @@ class ModelClient:
         payload = omit_empty_model({  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
             "max_tokens": self.max_output_tokens,
         })
+        sampling_temperature = self.temperature if temperature is None else temperature
+        if sampling_temperature is not None:
+            payload["temperature"] = sampling_temperature
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         if metadata:
@@ -1489,20 +1493,22 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
-        lines = [
-            json.dumps({
+        lines = []
+        sampling_temperature = self.temperature if temperature is None else temperature
+        for custom_id, messages in requests.items():
+            request_body = omit_empty_model({
+                "model": agent.model,
+                "messages": messages,
+                "max_tokens": self.max_output_tokens,
+            })
+            if sampling_temperature is not None:
+                request_body["temperature"] = sampling_temperature
+            lines.append(json.dumps({
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": omit_empty_model({
-                    "model": agent.model,
-                    "messages": messages,
-                    "temperature": self.temperature if temperature is None else temperature,
-                    "max_tokens": self.max_output_tokens,
-                }),
-            }, ensure_ascii=False)
-            for custom_id, messages in requests.items()
-        ]
+                "body": request_body,
+            }, ensure_ascii=False))
         input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"), destination)
         batch_id = self._batch_json(agent, "POST", "/batches", {
             "input_file_id": input_file_id,

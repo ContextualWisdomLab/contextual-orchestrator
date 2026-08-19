@@ -14,6 +14,7 @@ from pathlib import Path
 import socket
 import sys
 import threading
+from unittest.mock import patch
 import urllib.request
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -80,6 +81,25 @@ def test_send_real_http_round_trip_and_usage_capture() -> None:
         result = client._send(_agent(provider.base_url), {"model": "gpt-x"})
     assert result == "live answer"  # real POST + JSON parse over the wire
     assert client._local.usage == usage  # provider-reported usage captured from a real response
+
+
+def test_default_sampling_temperature_is_omitted_but_explicit_value_is_forwarded() -> None:
+    client = ModelClient()
+    agent = _agent("https://provider.example/v1")
+    payloads: list[dict] = []
+
+    def send(_agent: ModelAgent, payload: dict, *_args: object) -> str:
+        payloads.append(payload)
+        return "ok"
+
+    with patch("contextual_orchestrator.orchestrator._provider_credential", return_value="gateway-key"), patch.object(
+        client, "_validate_provider", return_value=None
+    ), patch.object(client, "_send_with_retry", side_effect=send):
+        assert client.chat(agent, [{"role": "user", "content": "ping"}]) == "ok"
+        assert client.chat(agent, [{"role": "user", "content": "ping"}], temperature=0.2) == "ok"
+
+    assert "temperature" not in payloads[0]
+    assert payloads[1]["temperature"] == 0.2
 
 
 def test_open_provider_uses_validated_destination_without_dns_relookup() -> None:

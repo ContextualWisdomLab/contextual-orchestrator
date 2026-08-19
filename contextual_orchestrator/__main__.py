@@ -303,8 +303,8 @@ def main() -> None:
         "--temperature",
         dest="sampling_temperature",
         type=float,
-        default=0.2,
-        help="Default provider sampling temperature (default: 0.2; --temperature is a compatibility alias).",
+        default=None,
+        help="Optional provider sampling temperature; omitted by default so each model applies its own contract.",
     )
     parser.add_argument("--max-output-tokens", type=int, default=2048,
                         help="Default provider output token cap (default: 2048).")
