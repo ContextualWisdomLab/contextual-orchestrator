@@ -2303,3 +2303,22 @@ cross-repository Noema target reviews and were preserved.
 2. Preserve target dispatches and the single newest no-target scheduler run;
    merge normally when required contexts become terminal-successful.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 61 — duplicate audit removed one older dispatch
+
+The queued-run duplicate audit found an older no-target `merge-scheduler`
+`32265347345` for the same main SHA as the newest preserved no-target run
+`32266217283`. The older run was cancelled and verified
+`completed/cancelled`. Other same-SHA scheduler entries were schedule,
+workflow-run, or push events rather than no-target dispatches and were
+preserved; target dispatches were also preserved. The queue snapshot was
+`996 queued / 16 in-progress`; PR #758 and PR #1155 remained exact-head,
+normal-auto-merge, runner-queued, and main remained unchanged.
+
+### Next iteration checklist
+
+1. Continue grouping duplicate scheduler runs by event and title before any
+   cancellation; preserve target and current-head evidence.
+2. Recheck PR #758 and #1155 for runner assignment or terminal results, then
+   rely on normal auto-merge and verify resulting main.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
