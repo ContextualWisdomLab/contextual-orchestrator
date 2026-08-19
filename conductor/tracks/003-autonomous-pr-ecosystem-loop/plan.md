@@ -1074,3 +1074,29 @@ These are audit observations, not permission to weaken or bypass the
 required exact-head review/check gates. Re-enable any temporary classic
 protection bypass only after the documented dependent PRs have completed
 and the post-change protection responses are re-read.
+
+## Status as of 2026-08-19, iteration 10 — the dispatch flood was per-repository
+
+The central Actions queue was not merely slow. `ORG_SWEEP_REVIEW_DISPATCH_LIMIT=15`
+and `ORG_SWEEP_BRANCH_UPDATE_LIMIT=15` were passed unchanged inside the
+organization sweep's repository loop, so the nominal limits reset for every
+repository. With roughly 40 repositories, one 15-minute sweep could enqueue
+hundreds of long-running OpenCode/CI cascades.
+
+Queue hygiene was run against the queued OpenCode dispatches before changing
+the source. Six stale-head runs were re-read against their live PRs and
+cancelled with `completed/cancelled` verification; one additional stale run's
+cancel request remains queued for GitHub to finalize. No closed PR dispatch
+was cancelled, and current-head runs were retained.
+
+The fix is on `.github#1139` as commit
+`3dd3b634ca54f26d7719e972630d8a10e9eae3e7`: consume review-dispatch and
+branch-update budgets across the whole sweep, pass only the remaining budget
+to each repository scheduler invocation, and fail closed on malformed budget
+variables. The central workflow contract suite (50 tests) and `actionlint`
+pass.
+
+Until #1139 merges, both org sweep variables are temporarily `0` to prevent
+another flood. Restore them to a deliberately chosen global budget only after
+the merged workflow is live and the queued-run trend is rechecked; do not
+restore the old per-repository interpretation.
