@@ -1592,3 +1592,29 @@ any merge decision; no merge, review bypass, or sweep-limit change was made.
 3. If #1139 is fully terminal-successful but still lacks independent review,
    use the documented admin fallback only with the explicit unsatisfiable-gate
    reason, then live-verify the merge and the global sweep-budget behavior.
+
+## Status as of 2026-08-19, iteration 31 — repaired head is hosted-queued without failures
+
+At `2026-08-19T13:07:03Z`, the GraphQL status rollup confirmed
+`.github#1139` at exact head
+`7476d4a152d561ce5942befc91aee21b09e86afc`, `MERGEABLE/BLOCKED`, with no
+review decision, zero failed checks, and the current security/scheduler set
+still queued. The 30-second rollup observation showed no transition.
+
+The same rollup showed `.github#1128` still at
+`e33536ba95a6fd6ff185b857ac2955835b80471e`, blocked only by queued
+`coverage-evidence` and `strix`, with no failure. `.github#1120` remains at
+`c6bb739db213161b39f137640bd835354a4ba529`, with no failure and sixteen
+queued checks. No current-head check was cancelled, no review was dismissed,
+and no merge or sweep-limit change was attempted.
+
+### Next iteration checklist
+
+1. Continue low-rate GraphQL rollups until #1139's required contexts are
+   terminal; distinguish no-failure/queued from green and never merge the
+   former.
+2. Re-read #1128's exact-head Strix result when it terminates and compare any
+   finding to source before dismissal.
+3. After #1139 is terminal-successful, re-read current reviews and branch
+   protection, then use the documented review-only admin fallback if and only
+   if the independent approval remains unsatisfiable.
