@@ -2425,3 +2425,21 @@ are enabled and all selected required checks are still queued. Main remains
 2. After PR #1155 merges, verify the stable repository dispatch and
    metadata-free workflow-run concurrency behavior on main.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 67 — one pre-merge no-op run cleaned
+
+The old main workflow generated one more metadata-free scheduler pending run
+(`32268607834`) while PR #1155 was still waiting for hosted checks. It matched
+the established no-PR/no-jobs contract, was cancelled, and verified
+`completed/cancelled`. PR #1155 remains exact-head
+`3626e5eaee95fdfda36c4d079b8e191521fdec74`; plan PR #758 remains exact-head
+`b9f2d4bc644b7c2e1813ad47a1064148251a687a`; both normal auto-merges remain
+enabled, and main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve current-head checks and cancel only another proven no-PR/no-jobs
+   scheduler run while the fix is pre-merge.
+2. Merge PR #1155 through normal auto-merge after terminal required success,
+   then verify the two concurrency fixes on main.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
