@@ -1954,3 +1954,30 @@ policy change was made.
 2. Preserve the remaining current-head queued jobs and perform the same stale
    closed-PR scan if the queue fills again.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 45 — broad stale-head scan completed
+
+At `2026-08-19T13:54:49Z`, a full queued `pull_request`/
+`pull_request_target` scan was compared against the live open-PR HEAD set. It
+found 15 additional runs targeting closed PR HEADs (#1067, #1066, #1021,
+#1073, #1091, #1072, #1081, #835, #1099, #1133, and #1131); all 15 were
+cancelled and verified `completed/cancelled`.
+
+One superseded run for still-open #919 was separately guarded: run
+`32216087004` targets old HEAD `2852ed9...`, while live #919 is at
+`04909c83...`. The run-level cancellation returned HTTP 500 and its only
+queued job `95957823154` returned HTTP 404 to direct cancellation. This is a
+GitHub Actions API state anomaly, not a reason to touch current-head jobs; it
+was left unchanged after the two explicit failure responses.
+
+#1128 Strix job `96069651307` remains the active current-head execution. The
+other protected candidate jobs remain preserved, and no sweep limit, rerun,
+review, branch update, or merge policy was changed.
+
+### Next iteration checklist
+
+1. Monitor #1128 Strix to terminal success or failure and act only on its
+   exact-head result; do not repeatedly retry the #919 API anomaly.
+2. Keep current-head jobs intact and re-scan only for newly created stale
+   closed/superseded PR runs.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
