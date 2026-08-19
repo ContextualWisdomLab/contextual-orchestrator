@@ -1100,3 +1100,28 @@ Until #1139 merges, both org sweep variables are temporarily `0` to prevent
 another flood. Restore them to a deliberately chosen global budget only after
 the merged workflow is live and the queued-run trend is rechecked; do not
 restore the old per-repository interpretation.
+
+## Status as of 2026-08-19, iteration 11 — classify the Strix context-window failure
+
+The current-head queue audit found that the representative red `strix` check
+on contextual-orchestrator#576 was not a vulnerability finding. Its exact job
+log (run `31943964967`, job `95157106075`) reported
+`openai.BadRequestError` / `ContextWindowExceededError` because the request
+contained `1438805` tokens against a `1000000` token context limit, followed by
+`Vulnerabilities 0`. REST current-head check inspection found the same Strix
+failure family on 17 open contextual-orchestrator PRs; the GraphQL required-
+context rollup reported 9, so these counts must not be conflated.
+
+The minimal remediation is on `.github#1138`, commit
+`1f4f5e0968852e453918a1c11af8e0870434739d`: extend the existing Strix
+backend-unavailable classifier for context-window overflow markers while
+retaining the existing fail-closed vulnerability regex. The focused workflow
+contract and fallback tests pass (`65 passed`), `actionlint` passes, and the
+full Strix shell self-test is still running separately. The PR is open and
+`mergeable=true`, but its required checks are queued; do not merge until the
+current head has green required checks and the normal review/protection gate.
+
+The central queue fix remains in `.github#1139` at
+`3dd3b634ca54f26d7719e972630d8a10e9eae3e7`, and the temporary org sweep
+variables remain `0/0` until that workflow is merged and its global-budget
+behavior is live-verified.
