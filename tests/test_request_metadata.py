@@ -17,7 +17,14 @@ class RecordingClient:
 def test_post_metadata_reaches_provider_and_workflow_record() -> None:
     client = RecordingClient()
     orchestrator = TaskOrchestrator(
-        [ModelAgent("worker_agent", "mock-worker", tags=("coding", "reasoning"))],
+        [
+            ModelAgent(
+                "worker_agent",
+                "mock-worker",
+                tags=("coding", "reasoning"),
+                reasoning_efforts=("high",),
+            )
+        ],
         client=client,
     )
     metadata = {
@@ -40,7 +47,14 @@ def test_post_metadata_reaches_provider_and_workflow_record() -> None:
 def test_reasoning_effort_auto_stays_with_orchestrator_and_explicit_value_propagates() -> None:
     client = RecordingClient()
     orchestrator = TaskOrchestrator(
-        [ModelAgent("worker_agent", "mock-worker", tags=("coding", "reasoning"))],
+        [
+            ModelAgent(
+                "worker_agent",
+                "mock-worker",
+                tags=("coding", "reasoning"),
+                reasoning_efforts=("high",),
+            )
+        ],
         client=client,
     )
 
@@ -55,4 +69,21 @@ def test_reasoning_effort_auto_stays_with_orchestrator_and_explicit_value_propag
         reasoning_effort="high",
     )
 
-    assert client.reasoning_efforts == [None, "high"]
+    assert client.reasoning_efforts == [None, "high", "high", "high", "high"]
+
+
+def test_high_uses_a_non_reasoning_agent_without_provider_effort() -> None:
+    client = RecordingClient()
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("worker_agent", "mock-worker", tags=("coding",))],
+        client=client,
+    )
+
+    result = orchestrator.run(
+        [{"role": "user", "content": "Summarize this post."}],
+        mode="route",
+        reasoning_effort="high",
+    )
+
+    assert result["mode"] == "conduct"
+    assert client.reasoning_efforts == [None, None, None, None]
