@@ -2271,8 +2271,10 @@ remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
 
 ## Status as of 2026-08-19, iteration 59 — plan PR auto-merge armed
 
-The plan worktree's latest commit `22741222f9ac9757f167c7999ed577e2821bb73f`
-is pushed to PR #758. Its live base is `7eb459ee72c37dead5d25f284dfa4546f149fbe1`,
+The iteration-58 evidence commit
+`22741222f9ac9757f167c7999ed577e2821bb73f` was pushed to PR #758; the current
+plan branch head is `778c866352185a3f2d26f05ad82e5043953e506a`. Its live base is
+`7eb459ee72c37dead5d25f284dfa4546f149fbe1`,
 the PR is mergeable but blocked only on its queued required checks, and normal
 squash auto-merge is now enabled and verified. No admin merge, self-approval,
 or CI bypass was used.
