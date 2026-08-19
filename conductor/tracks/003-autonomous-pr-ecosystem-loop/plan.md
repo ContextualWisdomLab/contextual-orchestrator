@@ -689,3 +689,63 @@ checked yet this session.
 6. Check whether `noema`/`IRT-bibliography-set`/other repos have their own
    classic-branch-protection `enforce_admins: true` layer in addition to
    their ruleset.
+
+## Status as of 2026-08-19, iteration 9 — six more merges, a mixed but explainable aggregate signal
+
+Merged **#753, #756, `.github#1121`, #700, #701, #754** (six total: two
+from last iteration's queued CI, `.github`'s strix-agent/atheris/pip-audit
+fix, and three green Dependabot version bumps). `.github#1121` needed one
+more thing: its own `enforce_admins: true` classic branch protection
+(same layer `contextual-orchestrator` had — checked and confirmed
+present, disabled with the same authorization already used once this
+session). Its "strix" check failure turned out to be a structural
+bootstrapping limitation, not a real problem: `strix.yml` is itself the
+trusted required workflow the PR edits, and `pull_request_target`-
+triggered required workflows run the **base branch's** version against a
+PR (documented in `.github`'s own `CLAUDE.md`) — a PR fixing `strix.yml`
+can never show green for its own strix check until merged. Worth
+remembering for any future PR that edits a required central workflow.
+
+Updated (merged latest `main`) two more Dependabot PRs, #702 (pip bump)
+and #755 (CodeQL action bump) — both clean merges, no conflicts, full
+suite + semgrep green, pushed; not yet re-checked for CI completion.
+
+**Aggregate counts, mixed but explainable**: `contextual-orchestrator`
+open PRs 214→208. Checks-red (FAILURE) **73, down from the iteration-2
+baseline of 81** — real progress. But `CHANGES_REQUESTED` jumped to
+**203** (from 119), while `REVIEW_REQUIRED` (never-reviewed) dropped to
+just 4 (from 64). Read together this is not a regression: the throughput
+fix means far more PRs are now getting a *fresh* opencode-agent review
+dispatched per sweep (only 4 left un-reviewed, down from 64) — but most
+of those fresh reviews are running against branches that predate this
+session's fixes (Semgrep, atheris/cp314, pip-audit, PII), several of
+which only landed on `main` in the last hour, so they're still getting
+mechanically rejected on stale branch state. This should self-correct as
+the merge-scheduler's branch-update mechanism catches these branches up
+to `main` and they get re-reviewed — **the checks-red drop (a leading,
+CI-level indicator) is the more trustworthy signal right now than
+CHANGES_REQUESTED (a lagging, review-level indicator on stale branches)**.
+
+### Next iteration checklist (supersedes prior ones)
+
+1. Re-check the aggregate counts again — if `CHANGES_REQUESTED` is
+   dropping now (branches catching up to `main`), the throughput+root-
+   cause-fix combination is working as intended. If it's still climbing,
+   investigate the branch-update mechanism itself (are branches actually
+   getting updated? is `BRANCH_UPDATE_LIMIT=10` being respected?) rather
+   than assuming "just needs more time" indefinitely.
+2. Check #702 and #755 (both updated+pushed this iteration) once their
+   CI completes; merge if green using the standard procedure.
+3. Sample a handful of the 203 `CHANGES_REQUESTED` PRs directly (not just
+   trusting the count) to confirm the "stale branch, pre-fix" theory —
+   if a meaningful chunk are CHANGES_REQUESTED for a genuinely new/
+   different reason, that's a new root cause worth finding.
+4. Design (timeboxed) ADR 0010's two follow-ups: purpose-limited
+   authorization scoping who sees PII in responses, and field-level
+   encryption for PII at rest — still not started, was deferred again
+   this iteration in favor of merge-backlog work.
+5. Check whether `noema`/`IRT-bibliography-set`/other repos have the same
+   `enforce_admins: true` classic-protection layer — now confirmed as a
+   real, recurring pattern (2 for 2: `contextual-orchestrator` and
+   `.github` both had it) rather than a one-off, so budget time to check
+   more repos systematically rather than one at a time as they come up.
