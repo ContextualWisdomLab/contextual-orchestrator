@@ -718,6 +718,22 @@ def is_provider_capability_error(exc: BaseException) -> bool:
     return False
 
 
+def is_provider_protocol_fallback_error(exc: BaseException) -> bool:
+    """Return True when an auto-protocol provider rejected the endpoint shape."""
+    pending: list[BaseException | None] = [exc]
+    seen: set[int] = set()
+    fallback_statuses = PROVIDER_CAPABILITY_ERROR_STATUS | UNSUPPORTED_ENDPOINT_STATUSES
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, urllib.error.HTTPError) and current.code in fallback_statuses:
+            return True
+        pending.extend((current.__cause__, current.__context__))
+    return False
+
+
 class ModelClient:
     """Small chat-completions client with retry, backoff, and mock support."""
 
@@ -1259,6 +1275,19 @@ class ModelClient:
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                 response = self._send_raw_with_retry(agent, "responses", response_payload, destination)
             return responses_to_chat_response(response, payload)
+        if endpoint_name == "chat/completions" and agent.provider_protocol == "auto":
+            try:
+                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                    return self._send_raw_with_retry(
+                        agent, endpoint_name, omit_empty_model(payload), destination
+                    )
+            except RuntimeError as exc:
+                if not is_provider_protocol_fallback_error(exc):
+                    raise
+            response_payload = chat_to_responses_payload(payload, self.max_output_tokens)
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                response = self._send_raw_with_retry(agent, "responses", response_payload, destination)
+            return responses_to_chat_response(response, payload)
         if endpoint_name == "responses" and (
             agent.provider_protocol == "chat_completions" or _is_local_provider_url(agent.base_url)
         ):
@@ -1273,8 +1302,8 @@ class ModelClient:
             try:
                 with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                     return self._send_raw_with_retry(agent, endpoint, omit_empty_model(payload), destination)
-            except urllib.error.HTTPError as exc:
-                if exc.code not in UNSUPPORTED_ENDPOINT_STATUSES:
+            except RuntimeError as exc:
+                if not is_provider_protocol_fallback_error(exc):
                     raise
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault("max_tokens", self.max_output_tokens)

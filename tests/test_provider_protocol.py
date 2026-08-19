@@ -12,6 +12,7 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent  # noqa: E402
+from contextual_orchestrator.credentials import register_credential  # noqa: E402
 from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 from contextual_orchestrator.provider_protocol import (  # noqa: E402
     chat_to_responses_payload,
@@ -118,6 +119,52 @@ def test_auto_protocol_retries_without_temperature_after_provider_capability_rej
     assert client._send(agent, {"messages": [{"role": "user", "content": "question"}], "temperature": 0.2}) == "ok"
     assert calls[0]["temperature"] == 0.2
     assert "temperature" not in calls[1]
+
+
+def test_proxy_send_auto_falls_back_from_chat_to_responses_for_multimodal_capability() -> None:
+    client = ModelClient()
+    register_credential("OPENAI_API_KEY", "test-provider-key")
+    agent = ModelAgent("auto_agent", "vision-model", "https://provider.example/v1")
+    calls: list[tuple[str, dict]] = []
+    provider_error = urllib.error.HTTPError(
+        "https://provider.example/v1/chat/completions", 400, "bad request", {}, io.BytesIO(b"{}")
+    )
+
+    def send(_agent, endpoint, payload, _destination=None, _timeout=None):
+        calls.append((endpoint, payload))
+        if endpoint == "chat/completions":
+            raise RuntimeError("provider request failed") from provider_error
+        return {
+            "id": "resp_test",
+            "model": "vision-model",
+            "output_text": "region result",
+            "usage": {"input_tokens": 2, "output_tokens": 2, "total_tokens": 4},
+        }
+
+    client._validate_provider = lambda _agent: (2, ("127.0.0.1", 443))  # type: ignore[method-assign]
+    client._send_raw_with_retry = send  # type: ignore[method-assign]
+    result = client.proxy_send(
+        agent,
+        "chat/completions",
+        {
+            "model": "vision-model",
+            "messages": [
+                {"role": "system", "content": "extract visible evidence"},
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe this"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,x"}},
+                    ],
+                },
+            ],
+        },
+    )
+
+    assert [endpoint for endpoint, _payload in calls] == ["chat/completions", "responses"]
+    assert calls[1][1]["input"][0]["role"] == "developer"
+    assert calls[1][1]["input"][1]["content"][1]["type"] == "input_image"
+    assert result["choices"][0]["message"]["content"] == "region result"
 
 
 def test_provider_protocol_rejects_unknown_values() -> None:
