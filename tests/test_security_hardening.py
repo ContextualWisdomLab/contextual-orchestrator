@@ -63,7 +63,7 @@ def test_http_api_requires_bearer_token_and_hides_trace_by_default() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    payload = {"messages": [{"role": "user", "content": "hello"}]}
+    payload = {"model": "mock-generalist", "messages": [{"role": "user", "content": "hello"}]}
 
     try:
         unauthorized_status, unauthorized_body = post_json(f"http://127.0.0.1:{port}/v1/chat/completions", payload)
@@ -93,7 +93,7 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    payload = {"messages": [{"role": "user", "content": "hello"}]}
+    payload = {"model": "mock-generalist", "messages": [{"role": "user", "content": "hello"}]}
 
     try:
         admin_for_chat_status, _ = post_json(
@@ -144,7 +144,7 @@ def test_loopback_without_configured_token_is_rejected() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    payload = {"messages": [{"role": "user", "content": "hello"}]}
+    payload = {"model": "mock-generalist", "messages": [{"role": "user", "content": "hello"}]}
 
     try:
         status, body = post_json(f"http://127.0.0.1:{port}/v1/chat/completions", payload)
@@ -165,7 +165,7 @@ def test_http_api_validates_mode_and_request_shape() -> None:
     try:
         status, body = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
-            {"messages": [{"role": "owner", "content": "hello"}], "orchestration": "unsafe"},
+            {"model": "mock-generalist", "messages": [{"role": "owner", "content": "hello"}], "orchestration": "unsafe"},
             token="secret_token",
         )
     finally:
@@ -185,7 +185,7 @@ def test_http_api_rejects_unknown_request_fields() -> None:
     try:
         status, body = post_json(
             f"http://127.0.0.1:{port}/v1/chat/completions",
-            {"messages": [{"role": "user", "content": "hello"}], "unexpected": True},
+            {"model": "mock-generalist", "messages": [{"role": "user", "content": "hello"}], "unexpected": True},
             token="secret_token",
         )
     finally:
@@ -205,7 +205,7 @@ def test_rate_limit_returns_429_after_configured_budget() -> None:
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    payload = {"messages": [{"role": "user", "content": "hello"}]}
+    payload = {"model": "mock-generalist", "messages": [{"role": "user", "content": "hello"}]}
 
     try:
         first_status, _ = post_json(f"http://127.0.0.1:{port}/v1/chat/completions", payload, token="secret_token")

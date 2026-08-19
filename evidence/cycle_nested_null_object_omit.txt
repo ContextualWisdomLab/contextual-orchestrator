@@ -1,0 +1,10 @@
+cycle: nested null/blank object omit HTTP honesty
+tip_base: #722 feat/content-part-aliases-web-search-omit-http-honesty-20260817134219
+change:
+  - Shared _non_omit_object_entries / _is_omit_equivalent_list helpers
+  - prediction, audio, tool_resources, reasoning: nested null/blank/empty-object omit
+  - include: list of only null/blank items omit
+  - completions chat-era prediction nested omit parity
+  - web_search_options refactored onto shared helper (behavior preserved)
+tests: tests/test_nested_null_object_omit_http_honesty.py
+local: 1230 passed

@@ -1,0 +1,2 @@
+tool_calls.function.arguments dict/list → compact JSON text; numbers/bools fail-closed.
+Local: 1195 passed.

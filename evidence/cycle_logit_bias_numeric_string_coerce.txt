@@ -1,0 +1,3 @@
+logit_bias values: numeric strings coerce via _coerce_optional_float;
+Responses pass-through writes cleaned map; Completions type-check then reject non-empty.
+Local: 1266 passed.

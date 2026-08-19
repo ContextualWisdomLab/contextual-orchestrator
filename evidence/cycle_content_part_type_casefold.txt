@@ -1,0 +1,3 @@
+Strip+casefold multimodal content part types (text, image_url) for form/SDK padding.
+Fail closed on unknown types.
+Local: 1215 passed.

@@ -1,0 +1,3 @@
+Accept official Responses flat tools {type,name,parameters,description,strict}
+alongside chat nested function tools; preserve wire shape; tool_choice name match flat.
+Local: 1206 passed.

@@ -1,0 +1,8 @@
+cycle: mode casefold + embeddings dimensions digit/float coerce then fail-closed
+tip: #709 (0c08028) routing.latency_tolerant + stream_options bool coerce
+changes:
+- _validate_mode: strip().lower() so ROUTE/Conduct/AuTo match auto|route|conduct
+- _validate_embeddings_dimensions: coerce digit strings / whole floats via
+  _coerce_optional_int before fail-closed unsupported (type-honest reject path)
+tests: tests/test_mode_casefold_http_honesty.py
+product gates: Full unit + Semgrep (Strix ignored)
