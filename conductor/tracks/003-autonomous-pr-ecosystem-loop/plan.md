@@ -2213,3 +2213,20 @@ and remains normal-auto-merge enabled but runner-queued.
 2. Recheck PR #1155 after any hosted-runner state transition; merge normally
    only after all required contexts succeed.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 56 — candidate auto-merge restored
+
+The current-head audit showed PR #1138 at
+`99bcee074d384d54bf368f199d9567947496fd86`, based on live main, with normal
+mergeability but auto-merge disabled while its required checks remained
+queued. Normal squash auto-merge was re-enabled and verified live; no admin
+merge, self-approval, or CI bypass was used. PR #1128, #1139, #1142, and
+#1155 retain their exact heads and normal auto-merge state.
+
+### Next iteration checklist
+
+1. Monitor the five exact-head auto-merge candidates for runner assignment or
+   terminal checks; inspect and repair any first real failure.
+2. Verify each protected merge on live main before advancing the candidate
+   queue or changing sweep limits.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
