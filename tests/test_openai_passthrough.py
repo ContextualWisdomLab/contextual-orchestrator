@@ -118,6 +118,41 @@ def test_provider_feature_synthesis_normalizes_verbose_json() -> None:
     assert result["choices"][0]["message"]["content"] == '{"status": "ok"}'
 
 
+def test_provider_feature_json_schema_preserves_schema_and_synthesizes_valid_value() -> None:
+    orch = _build()
+    schema = {
+        "type": "object",
+        "properties": {"status": {"type": "string", "enum": ["ok"]}},
+        "required": ["status"],
+        "additionalProperties": False,
+    }
+    calls = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append(payload)
+        content = '{"status":"candidate"}' if len(calls) < 3 else 'Result: {"status":"ok"}'
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": content}}],
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion({
+        "messages": [{"role": "user", "content": "return the status"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "status_result", "strict": True, "schema": schema},
+        },
+    })
+
+    assert len(calls) == 3
+    assert calls[-1]["response_format"]["type"] == "json_schema"
+    assert calls[-1]["response_format"]["json_schema"]["schema"] == schema
+    value = json.loads(result["choices"][0]["message"]["content"])
+    assert value == {"status": "ok"}
+
+
 def test_proxy_completion_forwards_explicit_reasoning_effort() -> None:
     result = _build().proxy_completion(
         {
