@@ -2322,3 +2322,23 @@ normal-auto-merge, runner-queued, and main remained unchanged.
 2. Recheck PR #758 and #1155 for runner assignment or terminal results, then
    rely on normal auto-merge and verify resulting main.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 62 — no-op scheduler pending runs removed
+
+The first live snapshot after the date rollover contained 47 pending
+`Required PR Review Merge Scheduler` runs from `workflow_run` events with no
+PR metadata. A representative run had `jobs=[]`, so these runs could not
+scan or mutate any PR and were not current-head evidence. All 47 were
+cancelled and individually verified `completed/cancelled`; schedule runs,
+target dispatches, and PR evidence were not touched. The queue moved from
+`1061 queued / 25 in-progress` to `1031 queued / 26 in-progress`. PR #758 and
+#1155 remain exact-head and normal-auto-merge enabled, with required checks
+still runner-queued; main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Re-scan no-op scheduler runs after the next transition and cancel only
+   runs with the same no-PR/no-jobs evidence.
+2. Monitor PR #758 and #1155 for runner assignment, then let normal
+   auto-merge proceed and verify the resulting main commits.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
