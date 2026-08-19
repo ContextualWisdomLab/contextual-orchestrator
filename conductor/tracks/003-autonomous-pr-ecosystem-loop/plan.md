@@ -2268,3 +2268,19 @@ remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
 2. Monitor the exact PR #1155 checks for a runner assignment or terminal
    result, then merge normally and verify the new scheduler on main.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 59 — plan PR auto-merge armed
+
+The plan worktree's latest commit `22741222f9ac9757f167c7999ed577e2821bb73f`
+is pushed to PR #758. Its live base is `7eb459ee72c37dead5d25f284dfa4546f149fbe1`,
+the PR is mergeable but blocked only on its queued required checks, and normal
+squash auto-merge is now enabled and verified. No admin merge, self-approval,
+or CI bypass was used.
+
+### Next iteration checklist
+
+1. Monitor both PR #758 and PR #1155 for hosted runner assignment and
+   terminal required checks.
+2. Merge only through their enabled normal auto-merge paths, then verify the
+   exact resulting main commit and scheduler behavior.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
