@@ -1377,3 +1377,17 @@ refresh: the branch conflicts in `contextual_orchestrator/__main__.py`,
 fuzz/docs conflict set. Do not auto-resolve or force-push a 1,000-line feature
 branch; retain #650 as conflict-bound and continue with current-head fixes or
 independently reviewable PRs.
+
+## Status as of 2026-08-19, iteration 22 — scheduler fix passed Strix, approval still gates merge
+
+The exact-head re-read of `.github#1139` at
+`3dd3b634ca54f26d7719e972630d8a10e9eae3e7` found the targeted scheduler fix's
+`strix` check terminal-success, with `Semgrep (multi-language SAST)`, gitleaks,
+dependency review, trivy-fs, scan-pr-queue, noema-review, and close-empty also
+successful. Three advisory checks are neutral and fifteen scheduler/cancellation
+checks are skipped. Six required checks remain queued: coverage-source-tree,
+four CodeQL compatibility/merge-preview jobs, and pip-audit. The PR is
+`mergeable=true` but `mergeable_state=blocked`; the only submitted review is a
+CodeRabbit COMMENTED review, so no independent approval exists. Do not merge or
+restore the `0/0` org sweep limits yet; re-read after the queued checks and
+approval gate change.
