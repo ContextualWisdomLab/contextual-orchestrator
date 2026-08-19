@@ -2479,3 +2479,21 @@ enabled and main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
 2. Merge PR #1155 through normal auto-merge after required success, then
    verify no-op and no-target concurrency behavior on main.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 70 — duplicate no-target scans reduced again
+
+The live no-target scheduler inventory found three active
+`merge-scheduler` runs for the same main SHA, each with only a queued
+`scan-pr-queue` job and skipped org sweep. The newest
+`32268908405` was preserved; older duplicates `32268856939` and
+`32268031090` were cancelled and verified `completed/cancelled`. PR #1155 and
+plan PR #758 current-head evidence remains untouched; main is still
+`bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve the newest active no-target scheduler and all target/current-head
+   evidence while PR #1155 is pre-merge.
+2. Monitor both auto-merge PRs for runner assignment and terminal success;
+   after merge, verify both concurrency fixes on main.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
