@@ -2038,3 +2038,33 @@ advance. No required CI was bypassed and sweep limits remain `0/0`.
    live `main`.
 3. Re-scan and cancel only newly stale closed/superseded runs; keep both sweep
    limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 48 — refreshed required gates are runner-queued
+
+At `2026-08-19T14:16:07Z`, the refreshed current-head checks remained
+failure-free but runner-queued:
+
+- #1128 HEAD `2e7f20dab0dd3963936c645c65869218c7af9091`, bootstrap job
+  `96097385014`;
+- #1142 HEAD `217e0ef900f7aaeee5158c364c632a6efefd8bc5`, bootstrap job
+  `96097498627`;
+- #1138 HEAD `99bcee074d384d54bf368f199d9567947496fd86`, bootstrap job
+  `96097606347`;
+- #1139 HEAD `82b66ace61f7b1b81aed0203bbc85bf688119eef`, bootstrap job
+  `96097189605`.
+
+All four jobs have no runner and remain queued; the corresponding required
+sets have no terminal failure. #1138's auxiliary `Strix Changed Path Quality
+CI` completed successfully, but its required Strix workflow is still pending,
+so that auxiliary result is not merge evidence. The current-head stale scan
+found no in-progress stale PR run and only the previously documented #919 API
+orphan. No rerun, current-head cancellation, policy bypass, or sweep-limit
+change was made.
+
+### Next iteration checklist
+
+1. Monitor the four bootstrap jobs and their dependent required contexts; act
+   on the first terminal result at the exact refreshed HEAD.
+2. Treat auxiliary green workflows as supporting evidence only; require every
+   protected context to be terminal-successful before merge verification.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
