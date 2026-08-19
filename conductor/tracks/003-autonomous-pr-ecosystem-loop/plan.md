@@ -1469,3 +1469,38 @@ The fresh exact-head Strix retry for `.github#1128` is run attempt 2,
 job `96069651307`, on head `e33536ba95a6fd6ff185b857ac2955835b80471e`, and
 remains queued. Preserve the original finding and wait for this terminal
 result before recording a dismissal or taking any PR action.
+
+## Status as of 2026-08-19, iteration 27 — paginated queue snapshot confirms hosted-runner backlog
+
+At `2026-08-19T12:45:52Z`, a fresh REST snapshot covered all paginated open
+PRs. `contextual-orchestrator` has 166 open PRs, 158 current-head
+`CHANGES_REQUESTED` reviews, and 162 REST `mergeable_state=dirty` conflicts.
+`.github` has 140 open PRs, 21 current-head `CHANGES_REQUESTED` reviews, and
+74 REST `mergeable_state=dirty` conflicts. The review count uses the latest
+non-dismissed review per reviewer and requires its `commit_id` to equal the
+live PR head; `dirty` is recorded as the REST equivalent of `CONFLICTING`.
+Neither repository is near the documented two-snapshot exit gate.
+
+The hosted queue is the active external bottleneck: `.github` reports 667
+queued and 3 in-progress workflow runs, while contextual-orchestrator reports
+27 queued runs. The central candidate `.github#1139` remains at
+`3dd3b634ca54f26d7719e972630d8a10e9eae3e7` with seven required checks queued
+and no independent approval. `.github#1120` remains at
+`c6bb739db213161b39f137640bd835354a4ba529` with sixteen checks queued, and
+the exact-head Strix retry for `.github#1128` remains queued at job
+`96069651307`. No review dispatch, branch update, merge, or sweep-limit change
+was attempted.
+
+### Next iteration checklist
+
+1. Re-read #1139, #1120, and #1128 by exact head and act on the first terminal
+   failure or fully terminal required set; never merge with a real required
+   check pending.
+2. If #1139 becomes fully terminal-successful and still has no independent
+   approval, use only the documented admin fallback with an explicit,
+   verifiable review-unsatisfiable reason, then live-verify the merge before
+   restoring the two org sweep budgets.
+3. If #1128's retry terminates, compare the finding to the exact path-line
+   source before recording any dismissal; do not rename tests or weaken Strix.
+4. Keep both sweep limits at `0`, preserve conflicting PRs, and take a new
+   paginated snapshot after the next scheduler interval.
