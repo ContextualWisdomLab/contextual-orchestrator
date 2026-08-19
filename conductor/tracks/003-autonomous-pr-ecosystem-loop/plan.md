@@ -1163,3 +1163,21 @@ tenant-bound associated data, and fail-closed acceptance evidence. It is a
 design-only PR; ADR 0010 remains honest that runtime authorization and
 encryption are not implemented. Its required checks are pending, so do not
 accept the ADR as implemented yet.
+
+## Status as of 2026-08-19, iteration 13 — queue hygiene preserved current heads
+
+The queued-run count fell from `712` to `683` during this loop while the
+global sweep limits remained `0/0`. A fresh audit of queued `Required OpenCode
+Review` and `Strix Security Scan` runs compared the PR number and the custom
+`@target-head` in each run name against the live PR head. One queued run for
+closed `.github#1136` (`32237453799`) was cancelled and verified
+`completed/cancelled`; no other queued OpenCode/Strix run was stale or closed.
+All current-head runs, including #1138 and #1139, were retained.
+
+Do not compare the workflow run object's `head_sha` to the target PR head for
+`pull_request_target`/repository-dispatch runs: it is the central workflow
+base ref. The run-name target head is the relevant PR evidence.
+
+The PII design PR remains #762 at exact head
+`3b685af971036fe61153b43eab674f4bc534390f`, open and blocked only by queued
+required checks; it is still design-only and not an implementation claim.
