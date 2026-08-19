@@ -91,6 +91,33 @@ def test_provider_feature_request_always_collects_multiple_attempts() -> None:
     assert "reasoning_effort" not in calls[-1][1]
 
 
+def test_provider_feature_synthesis_normalizes_verbose_json() -> None:
+    orch = _build()
+    calls = 0
+
+    def proxy_send(agent, endpoint, payload):
+        nonlocal calls
+        calls += 1
+        if calls < 3:
+            content = '{"status":"candidate"}'
+        else:
+            content = 'Explanation\n```json\n{"status":"ok"}\n```'
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": content}}],
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion({
+        "messages": [{"role": "user", "content": "return JSON"}],
+        "response_format": {"type": "json_object"},
+    })
+
+    assert calls == 3
+    assert result["choices"][0]["message"]["content"] == '{"status": "ok"}'
+
+
 def test_proxy_completion_forwards_explicit_reasoning_effort() -> None:
     result = _build().proxy_completion(
         {
