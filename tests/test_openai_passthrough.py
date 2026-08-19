@@ -154,6 +154,84 @@ def test_provider_feature_json_schema_preserves_schema_and_synthesizes_valid_val
     assert value == {"status": "ok"}
 
 
+def test_provider_feature_json_schema_repairs_invalid_final_synthesis() -> None:
+    orch = _build()
+    schema = {
+        "type": "object",
+        "properties": {"status": {"type": "string", "enum": ["ok"]}},
+        "required": ["status"],
+        "additionalProperties": False,
+    }
+    calls = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append(payload)
+        if len(calls) < 3:
+            content = '{"status":"candidate"}'
+        elif len(calls) == 3:
+            content = '{"unit_index":2,"indent_level":2}'
+        else:
+            content = '{"status":"ok"}'
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": content}}],
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion({
+        "messages": [{"role": "user", "content": "return the status"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "status_result", "strict": True, "schema": schema},
+        },
+    })
+
+    assert len(calls) == 4
+    assert json.loads(result["choices"][0]["message"]["content"]) == {"status": "ok"}
+    assert "Previous invalid synthesis" in calls[-1]["messages"][1]["content"]
+
+
+def test_provider_feature_json_schema_repairs_responses_output() -> None:
+    orch = _build()
+    schema = {
+        "type": "object",
+        "properties": {"status": {"type": "string", "enum": ["ok"]}},
+        "required": ["status"],
+        "additionalProperties": False,
+    }
+    calls = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append(payload)
+        content = '{"status":"candidate"}' if len(calls) < 3 else (
+            '{"wrong":"shape"}' if len(calls) == 3 else '{"status":"ok"}'
+        )
+        return {
+            "object": "response",
+            "model": agent.model,
+            "output": [{
+                "role": "assistant",
+                "content": [{"type": "output_text", "text": content}],
+            }],
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion(
+        {
+            "input": "return the status",
+            "response_format": {
+                "type": "json_schema",
+                "json_schema": {"name": "status_result", "strict": True, "schema": schema},
+            },
+        },
+        endpoint="responses",
+    )
+
+    assert len(calls) == 4
+    assert json.loads(result["output"][0]["content"][0]["text"]) == {"status": "ok"}
+
+
 def test_proxy_completion_forwards_explicit_reasoning_effort() -> None:
     result = _build().proxy_completion(
         {

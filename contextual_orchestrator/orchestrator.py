@@ -1938,7 +1938,31 @@ class TaskOrchestrator:
                 body, endpoint, candidate_responses, synthesizer
             ),
         )
-        return self._normalize_provider_feature_response(synthesized, body, endpoint)
+        normalized = self._normalize_provider_feature_response(synthesized, body, endpoint)
+        response_format = body.get("response_format")
+        if (
+            isinstance(response_format, dict)
+            and response_format.get("type") == "json_schema"
+            and not self._provider_feature_response_matches_schema(normalized, response_format, endpoint)
+        ):
+            for _ in range(2):
+                synthesized = self.client.proxy_send(
+                    synthesizer,
+                    endpoint,
+                    self._provider_feature_synthesis_body(
+                        body,
+                        endpoint,
+                        candidate_responses,
+                        synthesizer,
+                        previous_response=normalized,
+                    ),
+                )
+                normalized = self._normalize_provider_feature_response(synthesized, body, endpoint)
+                if self._provider_feature_response_matches_schema(normalized, response_format, endpoint):
+                    break
+            else:
+                raise RuntimeError("structured synthesis did not satisfy the requested JSON Schema")
+        return normalized
 
     def _provider_feature_agents(
         self, text: str, requested_model: Any, count: int
@@ -1977,6 +2001,7 @@ class TaskOrchestrator:
         endpoint: str,
         candidates: list[dict[str, Any]],
         agent: ModelAgent,
+        previous_response: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Ask the final agent to synthesize candidates under the original API contract."""
         synthesis_instruction = (
@@ -2002,6 +2027,11 @@ class TaskOrchestrator:
                     " The required JSON Schema is exactly: "
                     f"{json.dumps(schema, ensure_ascii=False, separators=(',', ':'))}"
                 )
+        if previous_response is not None:
+            synthesis_instruction += (
+                " The previous synthesis was invalid. Recompute the complete value; never "
+                "return a partial property or a single array item."
+            )
         final_body = {
             key: value
             for key, value in body.items()
@@ -2043,6 +2073,12 @@ class TaskOrchestrator:
                     ),
                 },
             ]
+        if previous_response is not None:
+            previous = f"\n\nPrevious invalid synthesis:\n{json.dumps(previous_response, ensure_ascii=False)}"
+            if endpoint.strip("/") == "responses":
+                final_body["input"] += previous
+            else:
+                final_body["messages"][1]["content"] += previous
         return final_body
 
     @staticmethod
@@ -2057,38 +2093,129 @@ class TaskOrchestrator:
         }:
             return response
 
+        value = TaskOrchestrator._provider_feature_json_value(response, endpoint)
+        if value is None:
+            return response
+        normalized = copy.deepcopy(response)
+        if endpoint.strip("/") == "responses":
+            for item in normalized.get("output", []):
+                for content in item.get("content", []):
+                    if isinstance(content, dict) and isinstance(content.get("text"), str):
+                        content["text"] = json.dumps(value, ensure_ascii=False)
+                        return normalized
+            return response
+        normalized["choices"][0]["message"]["content"] = json.dumps(value, ensure_ascii=False)
+        return normalized
+
+    @staticmethod
+    def _provider_feature_json_value(response: dict[str, Any], endpoint: str) -> Any | None:
+        """Extract the final JSON value from either provider response shape."""
         if endpoint.strip("/") == "responses":
             texts = [
-                content
+                content["text"]
                 for item in response.get("output", [])
                 if isinstance(item, dict)
                 for content in item.get("content", [])
                 if isinstance(content, dict) and isinstance(content.get("text"), str)
             ]
-            if texts:
-                value = TaskOrchestrator._last_json_value(texts[-1])
-                if value is not None:
-                    normalized = copy.deepcopy(response)
-                    for item in normalized.get("output", []):
-                        for content in item.get("content", []):
-                            if isinstance(content, dict) and isinstance(content.get("text"), str):
-                                content["text"] = json.dumps(value, ensure_ascii=False)
-                                return normalized
-            return response
-
+            return TaskOrchestrator._last_json_value(texts[-1]) if texts else None
         choices = response.get("choices")
         if not isinstance(choices, list) or not choices:
-            return response
+            return None
         message = choices[0].get("message") if isinstance(choices[0], dict) else None
         content = message.get("content") if isinstance(message, dict) else None
-        if not isinstance(content, str):
-            return response
-        value = TaskOrchestrator._last_json_value(content)
-        if value is None:
-            return response
-        normalized = copy.deepcopy(response)
-        normalized["choices"][0]["message"]["content"] = json.dumps(value, ensure_ascii=False)
-        return normalized
+        return TaskOrchestrator._last_json_value(content) if isinstance(content, str) else None
+
+    @staticmethod
+    def _provider_feature_response_matches_schema(
+        response: dict[str, Any], response_format: dict[str, Any], endpoint: str
+    ) -> bool:
+        """Validate a synthesized value against the caller's JSON Schema subset."""
+        wrapper = response_format.get("json_schema")
+        schema = wrapper.get("schema") if isinstance(wrapper, dict) else None
+        if not isinstance(schema, dict):
+            return False
+        value = TaskOrchestrator._provider_feature_json_value(response, endpoint)
+        return TaskOrchestrator._json_schema_matches(value, schema)
+
+    @staticmethod
+    def _json_schema_matches(value: Any, schema: dict[str, Any], depth: int = 0) -> bool:
+        """Check the bounded JSON Schema vocabulary used by provider contracts."""
+        if depth > 100:
+            return False
+        if "const" in schema and value != schema["const"]:
+            return False
+        if "enum" in schema and value not in schema["enum"]:
+            return False
+        for key in ("allOf", "anyOf", "oneOf"):
+            variants = schema.get(key)
+            if isinstance(variants, list):
+                matches = [
+                    TaskOrchestrator._json_schema_matches(value, item, depth + 1)
+                    for item in variants
+                    if isinstance(item, dict)
+                ]
+                if key == "allOf" and not all(matches):
+                    return False
+                if key == "anyOf" and not any(matches):
+                    return False
+                if key == "oneOf" and sum(matches) != 1:
+                    return False
+        expected = schema.get("type")
+        if isinstance(expected, list):
+            return any(
+                TaskOrchestrator._json_schema_matches(value, {**schema, "type": item}, depth + 1)
+                for item in expected
+            )
+        if expected == "object":
+            if not isinstance(value, dict):
+                return False
+            required = schema.get("required", [])
+            if any(not isinstance(name, str) or name not in value for name in required):
+                return False
+            properties = schema.get("properties", {})
+            if not isinstance(properties, dict):
+                return False
+            additional = schema.get("additionalProperties", True)
+            for name, item in value.items():
+                property_schema = properties.get(name)
+                if property_schema is None:
+                    if additional is False:
+                        return False
+                    if isinstance(additional, dict) and not TaskOrchestrator._json_schema_matches(
+                        item, additional, depth + 1
+                    ):
+                        return False
+                elif not isinstance(property_schema, dict) or not TaskOrchestrator._json_schema_matches(
+                    item, property_schema, depth + 1
+                ):
+                    return False
+        elif expected == "array":
+            if not isinstance(value, list):
+                return False
+            if "minItems" in schema and len(value) < schema["minItems"]:
+                return False
+            if "maxItems" in schema and len(value) > schema["maxItems"]:
+                return False
+            item_schema = schema.get("items")
+            if isinstance(item_schema, dict) and not all(
+                TaskOrchestrator._json_schema_matches(item, item_schema, depth + 1) for item in value
+            ):
+                return False
+        elif expected == "string":
+            if not isinstance(value, str):
+                return False
+            if "minLength" in schema and len(value) < schema["minLength"]:
+                return False
+        elif expected == "integer" and (not isinstance(value, int) or isinstance(value, bool)):
+            return False
+        elif expected == "number" and (not isinstance(value, (int, float)) or isinstance(value, bool)):
+            return False
+        elif expected == "boolean" and not isinstance(value, bool):
+            return False
+        elif expected == "null" and value is not None:
+            return False
+        return True
 
     @staticmethod
     def _last_json_value(text: str) -> Any | None:
