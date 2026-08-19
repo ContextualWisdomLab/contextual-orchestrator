@@ -2553,3 +2553,39 @@ terminal result. PR #758 has the same runner-queued condition at exact head
 2. Merge normally after all required contexts succeed, then verify both source
    concurrency fixes on main and confirm no backlog buildup.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 74 — protected checks remain runner-queued
+
+The next live audit found no terminal transition: PR #1155 remains mergeable
+at exact head `3626e5eaee95fdfda36c4d079b8e191521fdec74`, and plan PR #758 is
+mergeable at exact head `3bfb92d4ab010589dc843bc77ab787633209178d`; both
+normal auto-merges remain enabled and all selected required contexts are
+queued with no runner. The general Actions inventory is `999 queued / 29
+in-progress`; metadata-free pending scheduler count is zero. Main remains
+`bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve current-head evidence and active valid runner jobs; act on the
+   first terminal result or newly proven stale execution.
+2. Merge both PRs through normal auto-merge once required contexts succeed,
+   then verify main and live scheduler behavior.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 75 — one new no-op run removed safely
+
+The live audit found one newly pending metadata-free `workflow_run` scheduler
+run, `32269924641`, with no pull requests and zero jobs. It was canceled and
+verified `completed/cancelled`; the metadata-free pending count is now zero.
+The five protected contexts sampled across PR #1155 and plan PR #758 remained
+`QUEUED` throughout a 25-second poll, with no runner assignment. Both PRs are
+still exact-head, mergeable, and normal auto-merge enabled; main remains
+`bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve exact-head queued checks and current valid runner jobs; inspect the
+   first terminal result or newly proven no-op execution.
+2. Merge both PRs normally after required contexts succeed, then verify main
+   and live scheduler behavior.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
