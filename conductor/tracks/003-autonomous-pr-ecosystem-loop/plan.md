@@ -1043,3 +1043,34 @@ considered complete.
 
 Implementation remains a separate change requiring route-level policy tests,
 persistence migration tests, key-rotation tests, and a threat-model review.
+## Live CHANGES_REQUESTED and protection audit — 2026-08-19
+
+The remaining queue was re-snapshotted after the guarded ancestor closure:
+160 open PRs are CHANGES_REQUESTED. GraphQL review inspection found an
+OpenCode coverage-evidence rejection on all 160; 159 review commits match
+the current PR head and one (#744) is stale. This is evidence of a shared
+mechanical rejection reason, not evidence that the PRs are redundant.
+
+All 160 currently report CONFLICTING against main; six have active
+auto-merge requests and must not be branch-refreshed by the repaired
+scheduler. Preserve all 160 until a current-head review/check pass or
+separate integration proof establishes their fate.
+
+Classic/ruleset protection was also re-read:
+
+- contextual-orchestrator: classic enforce_admins=false, one required
+  approval, last-push approval, stale dismissal, strict checks, and
+  conversation resolution; active rulesets 18156473 and 18259551 both have
+  an organization-admin bypass.
+- .github: classic enforce_admins=false, zero required approvals, and no
+  last-push approval; active ruleset 17921150 also has an organization-admin
+  bypass. PR #1139 is the repair in flight; do not treat its wrapper check
+  as an approval.
+- noema: no classic protection response; ruleset 18794436 provides the
+  central security workflow with no bypass actors.
+- IRT-bibliography-set: no classic protection and no active ruleset.
+
+These are audit observations, not permission to weaken or bypass the
+required exact-head review/check gates. Re-enable any temporary classic
+protection bypass only after the documented dependent PRs have completed
+and the post-change protection responses are re-read.
