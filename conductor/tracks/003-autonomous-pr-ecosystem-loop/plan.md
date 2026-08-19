@@ -1562,3 +1562,33 @@ normal scheduler interval and a successful low-rate re-read.
    the unsatisfiable independent-review gate.
 3. If #1139 merges, verify the live workflow and queue trend before changing
    either org sweep variable; otherwise keep them at `0/0`.
+
+## Status as of 2026-08-19, iteration 30 — scheduler PR's real local contract failure repaired
+
+The exact `.github#1139` worktree at
+`3dd3b634ca54f26d7719e972630d8a10e9eae3e7` exposed one real full-suite
+failure: `tests/test_opencode_agent_contract.py` still required the old
+literal `--branch-update-limit "$ORG_SWEEP_BRANCH_UPDATE_LIMIT"`, while the
+scheduler fix correctly derives and passes the remaining organization-wide
+budget through `branch_update_limit`. The new queue contract test already
+asserted the derived-budget behavior, so the minimal repair removed only the
+stale credential-contract assertion; the workflow was not weakened or
+reverted.
+
+The repaired branch is now exact head
+`7476d4a152d561ce5942befc91aee21b09e86afc`, pushed after a remote-head guard.
+Local verification passed the focused 51 tests, workflow parsing with
+shellcheck/pyflakes integrations disabled, and the full suite (`1216 passed,
+16 subtests passed`). Hosted checks for this new head must be re-read before
+any merge decision; no merge, review bypass, or sweep-limit change was made.
+
+### Next iteration checklist
+
+1. Re-read `.github#1139` at `7476d4a...` after the API cooldown and wait for
+   every required context, including coverage evidence and OpenCode review, to
+   become terminal.
+2. Continue preserving #1120 current-head checks and #1128's exact-head Strix
+   retry; investigate only a new terminal failure, not the superseded head.
+3. If #1139 is fully terminal-successful but still lacks independent review,
+   use the documented admin fallback only with the explicit unsatisfiable-gate
+   reason, then live-verify the merge and the global sweep-budget behavior.
