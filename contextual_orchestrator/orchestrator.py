@@ -1965,16 +1965,31 @@ class TaskOrchestrator:
         synthesized: dict[str, Any] | None = None
         successful_synthesis_index: int | None = None
         for synthesis_index, synthesis_agent in enumerate(synthesis_agents):
+            synthesis_body = self._provider_feature_synthesis_body(
+                body, endpoint, candidate_responses, synthesis_agent
+            )
             try:
                 synthesized = self.client.proxy_send(
                     synthesis_agent,
                     endpoint,
-                    self._provider_feature_synthesis_body(
-                        body, endpoint, candidate_responses, synthesis_agent
-                    ),
+                    synthesis_body,
                 )
             except provider_feature_errors as exc:
                 synthesis_failures.append(exc)
+                response_format = body.get("response_format")
+                if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
+                    fallback_body = dict(synthesis_body)
+                    fallback_body["response_format"] = {"type": "json_object"}
+                    try:
+                        synthesized = self.client.proxy_send(
+                            synthesis_agent, endpoint, fallback_body
+                        )
+                    except provider_feature_errors as fallback_exc:
+                        synthesis_failures.append(fallback_exc)
+                        continue
+                    synthesizer = synthesis_agent
+                    successful_synthesis_index = synthesis_index
+                    break
                 continue
             synthesizer = synthesis_agent
             successful_synthesis_index = synthesis_index

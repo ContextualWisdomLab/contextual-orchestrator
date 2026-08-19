@@ -205,6 +205,43 @@ def test_provider_feature_json_schema_preserves_schema_and_synthesizes_valid_val
     assert value == {"status": "ok"}
 
 
+def test_provider_feature_json_schema_falls_back_to_json_object_on_provider_rejection() -> None:
+    orch = _build()
+    schema = {
+        "type": "object",
+        "properties": {"status": {"type": "string", "enum": ["ok"]}},
+        "required": ["status"],
+        "additionalProperties": False,
+    }
+    calls = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append(payload)
+        response_format = payload.get("response_format")
+        if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
+            raise RuntimeError("provider does not support json_schema")
+        content = '{"status":"ok"}' if len(calls) == 4 else '{"status":"candidate"}'
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": content}}],
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion({
+        "messages": [{"role": "user", "content": "return the status"}],
+        "response_format": {
+            "type": "json_schema",
+            "json_schema": {"name": "status_result", "strict": True, "schema": schema},
+        },
+    })
+
+    assert len(calls) == 4
+    assert calls[2]["response_format"]["type"] == "json_schema"
+    assert calls[3]["response_format"] == {"type": "json_object"}
+    assert json.loads(result["choices"][0]["message"]["content"]) == {"status": "ok"}
+
+
 def test_provider_feature_json_schema_repairs_invalid_final_synthesis() -> None:
     orch = _build()
     schema = {
