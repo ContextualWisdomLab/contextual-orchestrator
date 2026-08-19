@@ -10,6 +10,14 @@ updates:
     cooldown:
       default-days: 7
     open-pull-requests-limit: 5
+    groups:
+      # init and analyze must move together: CodeQL fails fast when they're on
+      # different versions ("Loaded a configuration file for version X, but
+      # running version Y"). Ungrouped, Dependabot proposes them as independent
+      # PRs and merging just one breaks CodeQL until the other lands too.
+      codeql-action:
+        patterns:
+          - "github/codeql-action/*"
 
   - package-ecosystem: pip
     directory: /
