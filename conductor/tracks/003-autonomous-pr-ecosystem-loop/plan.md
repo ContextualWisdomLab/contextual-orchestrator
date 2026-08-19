@@ -749,3 +749,91 @@ CHANGES_REQUESTED (a lagging, review-level indicator on stale branches)**.
    real, recurring pattern (2 for 2: `contextual-orchestrator` and
    `.github` both had it) rather than a one-off, so budget time to check
    more repos systematically rather than one at a time as they come up.
+
+## Status as of 2026-08-19, iteration 10 — the CHANGES_REQUESTED mystery solved, and the real shape of the backlog
+
+Merged **#757** (docs), **#702** (pip bump — also fixed a real CodeQL
+break: this PR only bumped `codeql-action/init` to v4.37.6, leaving
+`codeql-action/analyze` at v4.37.0; CodeQL hard-requires both on the same
+version and failed with `Loaded a configuration file for version
+'4.37.6', but running version '4.37.0'`; bumped analyze to match, and
+**grouped `github/codeql-action/*` in `.github/dependabot.yml`** so this
+can't recur — it had already happened 3 times before in this repo's
+Dependabot history, #61/#62, #67/#70, #80/#81, plus an unmerged #106
+manual-alignment attempt).
+
+### The real reason CHANGES_REQUESTED didn't drop: it's not a lagging indicator, it's a scheduler deadlock
+
+Sampled #96, #582, #740 from the 202 `CHANGES_REQUESTED` PRs: each
+review's `commit_id` matched the PR's *current* head SHA — not because
+they were freshly re-reviewed, but because **the branch itself hasn't
+been pushed to since the review was posted** (#96's head is from
+2026-08-16, three days before this session). `.github`'s own `CLAUDE.md`
+already documents why: *"The scheduler updates a PR branch only when the
+latest review is approved... and GitHub reports the PR as behind."* A
+`CHANGES_REQUESTED` PR is, by definition, never approved — so the
+scheduler will **never** update its branch, which means it can never pick
+up a root-cause fix landed on `main` after the review, which means it
+stays `CHANGES_REQUESTED` forever. This is a structural deadlock, not
+something that self-corrects with more sweep cycles.
+
+Confirmed by data, not just theory: pulled `mergeable` state for
+all 207 open PRs. **202 of 202 `CHANGES_REQUESTED` PRs are also
+`CONFLICTING`** (merge-conflicted against `main`) — literally every one.
+Only 2 PRs in the entire repo are currently `MERGEABLE`. Manually tried
+`PUT .../pulls/{n}/update-branch` on 3 samples (#96, #582, #740): all 3
+returned `422 merge conflict between base and head`. **Raising
+`BRANCH_UPDATE_LIMIT` in iteration 2 never had anything to act on for
+this cohort** — the scheduler's own approval gate excludes them before
+the limit is ever consulted.
+
+### The backlog isn't 202 small reviews — it's one ~30-commit stack, unmerged
+
+Checked whether PR #716 ("casefold message roles") was safe to close as
+superseded: `main` does **not** have this behavior yet, so it's still
+real, wanted work, not a duplicate. But `git diff main...716`'s branch is
+**30,595 insertions across 183 files** — because branch naming
+(`feat/<slug>-http-honesty-<timestamp>`) reveals #716 is one link in a
+~47-PR sequential chain (`#587` through at least `#740`, each built on
+the previous one's branch, spanning 2026-08-16 15:07 through 2026-08-17
+13:26), and **none of them ever merged**. `main` has moved independently
+in the meantime (including this session's own merges), so the whole
+chain has drifted into massive, unresolvable-by-simple-rebase conflict.
+
+**This is almost certainly most of the 202-PR "backlog"**: not 202
+independent pieces of review work, but one continuous feature-development
+effort (hardening this gateway's OpenAI-API-compatibility surface —
+casefold/coerce/reject-cleanly across chat/completions/embeddings/
+responses) that got built serially without ever landing, now diverged
+from `main` far enough that no automated mechanism can rescue it.
+
+### Next iteration checklist (supersedes prior ones) — this is the priority
+
+1. **Resolve the http-honesty stack, don't triage it PR-by-PR.** #740
+   (`feat/reasoning-effort-low-medium-high-noop-http-honesty-20260817220310`,
+   created 2026-08-17T13:26:51Z) is the newest/tip commit in the chain and
+   should carry the full cumulative diff of the whole ~47-PR lineage.
+   Plan: `git checkout` #740's branch, `git merge origin/main`, resolve
+   conflicts by *understanding intent on both sides* the way #746's
+   conflicts were resolved in iteration 6 (not blindly taking one side —
+   `main` has its own independent changes from this session that must be
+   preserved alongside #740's http-honesty hardening). This is a large,
+   delicate merge (~30K lines, 180+ new test files) — budget real time
+   for it, verify the full suite + fuzz + local semgrep before pushing,
+   and don't rush it to fit one iteration if it doesn't fit.
+2. Once #740 merges, **close #587 through #739 (excluding whichever, if
+   any, turn out to carry unique work #740 doesn't) as superseded** with
+   one clear comment each pointing at the merged #740 — don't try to
+   merge each individually, their content is a subset.
+3. Verify: does #740's branch actually contain every fix from every PR in
+   the chain, or did some earlier PRs get abandoned/redirected mid-stream
+   (check a few of the older ones' diffs against #740's for content that
+   ISN'T in #740 before assuming full coverage).
+4. After the http-honesty stack is resolved, re-check the aggregate
+   counts — this single action should resolve the vast majority of the
+   202 `CHANGES_REQUESTED`/`CONFLICTING` cohort.
+5. Design (timeboxed) ADR 0010's two follow-ups: purpose-limited
+   authorization scoping who sees PII in responses, and field-level
+   encryption for PII at rest — deferred three times now.
+6. Check whether `noema`/`IRT-bibliography-set`/other repos have the same
+   `enforce_admins: true` classic-protection layer (2-for-2 so far).
