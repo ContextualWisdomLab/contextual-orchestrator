@@ -1858,3 +1858,29 @@ head job was cancelled or rerun, and the organization sweep limits remain
    only the root cause; if all required contexts pass, verify the resulting
    merge commit and live main branch before recording success.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 41 — #1138 is one hosted job from green
+
+The current-head required-check scan found #1138 at
+`1f4f5e0968852e453918a1c11af8e0870434739d` with every other required context
+successful and only `coverage-evidence` pending. Its exact job
+`96085913624` has label `ubuntu-latest`, no runner assigned, and has been
+queued since `2026-08-19T13:30:58Z`; no terminal failure was observed. Normal
+squash auto-merge was already enabled at `2026-08-19T12:18:28Z`.
+
+This makes #1138 the first candidate to recheck for a normal protected merge
+once that one current-head context terminates successfully. #1128, #1142, and
+#1139 remain unchanged from iteration 40: their current-head required jobs are
+still runner-queued, and #1142 still has the historical same-HEAD cancelled
+`scan-pr-queue` entry alongside its newer queued execution. No rerun or
+cancellation was issued, and sweep limits remain `0/0`.
+
+### Next iteration checklist
+
+1. Re-read #1138's exact HEAD and job `96085913624`; if it passes, perform the
+   immediate review/protection/mergeability check and let normal auto-merge
+   complete, then verify the merge commit on live `main`.
+2. If it fails, inspect the job log at the exact HEAD and repair the finding's
+   root cause; do not treat runner queue behavior as a source failure.
+3. Continue monitoring #1128, #1142, and #1139 without creating competing
+   reruns; keep both sweep limits at `0/0` until #1139 is merged and verified.
