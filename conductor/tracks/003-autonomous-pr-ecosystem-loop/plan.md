@@ -2443,3 +2443,21 @@ enabled, and main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
 2. Merge PR #1155 through normal auto-merge after terminal required success,
    then verify the two concurrency fixes on main.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 68 — queued PR audit clean, duplicate dispatches reduced
+
+The current queued PR-event audit found no closed-PR or head-mismatch runs.
+The no-target scheduler audit found four same-main `merge-scheduler` runs;
+the newest (`32268642762`) was already auto-cancelled, so the next newest
+active run (`32268031090`) was preserved. Older active duplicates
+`32267427666` and `32266217283` were cancelled and verified
+`completed/cancelled`. All had only the queued `scan-pr-queue` job with org
+sweep skipped. PR #1155 and plan PR #758 current-head evidence was untouched.
+
+### Next iteration checklist
+
+1. Preserve the newest active no-target scheduler and all target/current-head
+   evidence while the source PR remains pre-merge.
+2. Monitor updated PR #1155 and plan PR #758 checks; merge normally after
+   terminal success and verify main.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
