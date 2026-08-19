@@ -2516,3 +2516,21 @@ Main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
 2. Merge through normal auto-merge as soon as all required contexts are
    terminal-successful, then verify both concurrency fixes on main.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 72 — active runner occupancy is current evidence
+
+The live in-progress inventory contained 18 jobs. The active Strix runs for
+#1128, #1138, #1139, #1142, #1144, #1146, #1150, #1151, and #1152 matched
+their current PR heads; the active main push and cross-repository coverage
+workflows also had valid current targets. None was safe to cancel as stale
+evidence. PR #1155 and plan PR #758 remain exact-head, mergeable, and normal
+auto-merge enabled, but their protected checks are still queued. Main remains
+`bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve active current-head runner jobs and inspect their terminal results
+   as they complete; cancel only newly proven stale/no-op executions.
+2. Let PR #1155 and plan PR #758 merge through normal auto-merge after all
+   required contexts succeed, then verify main and the source fixes live.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
