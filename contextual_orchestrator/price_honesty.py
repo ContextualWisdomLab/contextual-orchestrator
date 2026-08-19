@@ -34,11 +34,12 @@ def optional_finite_price(value: Any) -> float | None:
 def complete_pair_mean(prompt: float | None, completion: float | None) -> float | None:
     """Mean of a two-sided price, or ``None`` unless both sides are present.
 
-    A prompt-only or completion-only row is unknown, not free.
+    A prompt-only or completion-only row is unknown, not free. Dividing each
+    finite input before addition avoids overflowing an otherwise valid pair.
     """
     if prompt is None or completion is None:
         return None
-    return (prompt + completion) / 2.0
+    return (prompt / 2.0) + (completion / 2.0)
 
 
 def known_comparison_cost(

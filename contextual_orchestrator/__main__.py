@@ -9,7 +9,8 @@ import sys
 
 from .credentials import register_credential
 from .model_discovery import apply_discovered_pool
-from .orchestrator import ModelClient, TaskOrchestrator, load_agents
+from .orchestrator import ModelClient, load_agents
+from .passthrough_failover import ResilientTaskOrchestrator
 from .server import SecurityConfig, serve
 
 
@@ -96,7 +97,7 @@ def main() -> None:
     args = parser.parse_args()
 
     client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
-    orchestrator = TaskOrchestrator(
+    orchestrator = ResilientTaskOrchestrator(
         load_agents(args.agents),
         client=client,
         state_db=args.state_db,

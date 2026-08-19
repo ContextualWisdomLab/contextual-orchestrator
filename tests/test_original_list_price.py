@@ -16,6 +16,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     finite_unit_price,
     normalize_catalog_payload,
 )
+from contextual_orchestrator.price_honesty import complete_pair_mean  # noqa: E402
 
 
 def test_non_finite_and_boolean_prices_are_unknown() -> None:
@@ -29,6 +30,12 @@ def test_non_finite_and_boolean_prices_are_unknown() -> None:
     assert finite_unit_price("0") == 0.0
     assert finite_unit_price(1.5) == 1.5
     assert finite_unit_price(10**10000) is None
+
+
+def test_complete_pair_mean_avoids_intermediate_overflow() -> None:
+    result = complete_pair_mean(sys.float_info.max, sys.float_info.max)
+    assert result == sys.float_info.max
+    assert result < float("inf")
 
 
 def test_partial_two_sided_price_is_unknown_not_free() -> None:
@@ -140,6 +147,7 @@ def test_price_book_uses_original_list_when_billed_is_zero() -> None:
 
 if __name__ == "__main__":  # pragma: no cover
     test_non_finite_and_boolean_prices_are_unknown()
+    test_complete_pair_mean_avoids_intermediate_overflow()
     test_partial_two_sided_price_is_unknown_not_free()
     test_openrouter_free_variant_keeps_sibling_list_price()
     test_explicit_zero_without_list_is_known_free()

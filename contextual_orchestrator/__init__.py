@@ -45,7 +45,8 @@ from .model_discovery import (
     discover_model_catalog,
     list_served_models,
 )
-from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents, known_agent_comparison_cost
+from .orchestrator import ModelAgent, WorkflowStep, load_agents, known_agent_comparison_cost
+from .passthrough_failover import ResilientTaskOrchestrator as TaskOrchestrator
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 __all__ = [
