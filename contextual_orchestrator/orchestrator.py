@@ -33,6 +33,14 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .provider_protocol import (
+    UNSUPPORTED_ENDPOINT_STATUSES,
+    chat_to_responses_payload,
+    omit_empty_model,
+    responses_text,
+    responses_to_chat_response,
+    validate_provider_protocol,
+)
 
 
 ChatMessage = dict[str, str]
@@ -238,7 +246,7 @@ class ModelAgent:
     """Configuration for one model-backed worker in the agent pool."""
 
     id: str
-    model: str
+    model: str = ""
     base_url: str = "mock://local"
     # Legacy field: kept for back-compat. When set, its STRING is treated as the
     # KV credential NAME (never read as an environment variable). Prefer
@@ -256,6 +264,7 @@ class ModelAgent:
     # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
     # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
     auth_scheme: str = "Bearer"
+    provider_protocol: str = "auto"
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -265,6 +274,7 @@ class ModelAgent:
             raise ValueError("local_credential_key requires a local:// gateway URL")
         if not self.auth_scheme or type(self.auth_scheme) is not str:
             raise ValueError("auth_scheme must be a non-empty string")
+        validate_provider_protocol(self.provider_protocol)
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -281,6 +291,7 @@ class ModelAgent:
             "provider_exclusions": list(self.provider_exclusions),
             "local_credential_key": self.local_credential_key,
             "auth_scheme": self.auth_scheme,
+            "provider_protocol": self.provider_protocol,
         }
 
     @property
@@ -299,7 +310,7 @@ class ModelAgent:
         require_object_name(value["id"], "agent.id")
         return cls(
             id=value["id"],
-            model=value["model"],
+            model=value.get("model", ""),
             base_url=value.get("base_url", "mock://local"),
             api_key_env=value.get("api_key_env", ""),
             credential_key=value.get("credential_key", "OPENAI_API_KEY"),
@@ -310,6 +321,7 @@ class ModelAgent:
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
             local_credential_key=value.get("local_credential_key", ""),
             auth_scheme=value.get("auth_scheme", "Bearer"),
+            provider_protocol=value.get("provider_protocol", "auto"),
         )
 
 
@@ -773,13 +785,13 @@ class ModelClient:
                 f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
             )
 
-        payload = {  # pragma: no cover
+        payload = omit_empty_model({  # pragma: no cover
             "model": agent.model,
             "messages": messages,
             "temperature": self.temperature if temperature is None else temperature,
             "stream": False,
             "max_tokens": self.max_output_tokens,
-        }
+        })
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
@@ -824,13 +836,13 @@ class ModelClient:
                         raise RuntimeError(
                             f"provider {agent.id} model registry does not contain {agent.model!r}"
                         )
-                payload: dict[str, Any] = {
+                payload: dict[str, Any] = omit_empty_model({
                     "model": agent.model,
                     "messages": [{"role": "user", "content": "Reply with exactly OK."}],
                     "temperature": 0.0,
                     "stream": False,
                     "max_tokens": 1,
-                }
+                })
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
@@ -900,12 +912,63 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
+        if agent.provider_protocol == "responses":
+            return self._send_responses(agent, payload, destination, timeout=timeout)
+        normalized = omit_empty_model(payload)
+        try:
+            data = self._send_provider_json(agent, "chat/completions", normalized, destination, timeout)
+        except urllib.error.HTTPError as exc:
+            if agent.provider_protocol != "auto" or exc.code not in UNSUPPORTED_ENDPOINT_STATUSES:
+                raise
+            return self._send_responses(agent, normalized, destination, timeout=timeout)
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            self._local.usage = usage
+        return self._response_content(agent, data)
+
+    def _send_responses(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        *,
+        timeout: float | None = None,
+    ) -> str:
+        """Send Chat-shaped internal messages to a Responses-only provider."""
+        data = self._send_provider_json(
+            agent,
+            "responses",
+            chat_to_responses_payload(payload, self.max_output_tokens),
+            destination,
+            timeout,
+        )
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            self._local.usage = {
+                "prompt_tokens": usage.get("input_tokens", 0),
+                "completion_tokens": usage.get("output_tokens", 0),
+                "total_tokens": usage.get("total_tokens", 0),
+            }
+        content = responses_text(data)
+        if not content:
+            raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
+        return content
+
+    def _send_provider_json(
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+        timeout: float | None = None,
+    ) -> dict[str, Any]:
+        """POST one provider JSON request through the validated transport."""
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
         request = urllib.request.Request(
-            self._provider_url(agent, "/chat/completions"),
+            self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
             headers=headers,
             method="POST",
@@ -916,11 +979,7 @@ class ModelClient:
             else self._open_provider(request, destination, timeout=timeout)
         )
         with opened as response:
-            data = json.loads(response.read().decode("utf-8"))
-        usage = data.get("usage")
-        if isinstance(usage, dict):
-            self._local.usage = usage
-        return self._response_content(agent, data)
+            return json.loads(response.read().decode("utf-8"))
 
     @staticmethod
     def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
@@ -1047,13 +1106,13 @@ class ModelClient:
             return
 
         destination = self._validate_provider(agent)  # pragma: no cover
-        payload = {  # pragma: no cover
+        payload = omit_empty_model({  # pragma: no cover
             "model": agent.model,
             "messages": messages,
             "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
             "max_tokens": self.max_output_tokens,
-        }
+        })
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
@@ -1063,6 +1122,20 @@ class ModelClient:
         self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
     ):
         """Stream content deltas from a provider SSE response (real transport, testable)."""
+        if agent.provider_protocol == "responses":
+            yield from self._stream_responses_send(agent, payload, destination)
+            return
+        try:
+            yield from self._stream_chat_send(agent, payload, destination)
+        except urllib.error.HTTPError as exc:
+            if agent.provider_protocol != "auto" or exc.code not in UNSUPPORTED_ENDPOINT_STATUSES:
+                raise
+            yield from self._stream_responses_send(agent, payload, destination)
+
+    def _stream_chat_send(
+        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+    ):
+        """Stream Chat Completions deltas."""
         api_key = _provider_credential(agent)
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
@@ -1089,6 +1162,36 @@ class ModelClient:
                 if delta:
                     yield delta
 
+    def _stream_responses_send(
+        self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
+    ):
+        """Stream Responses API output_text deltas."""
+        api_key = _provider_credential(agent)
+        headers = {"content-type": "application/json", "accept": "text/event-stream"}
+        if api_key:
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        request = urllib.request.Request(
+            self._provider_url(agent, "/responses"),
+            data=json.dumps(chat_to_responses_payload(payload, self.max_output_tokens)).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with self._open_provider(request, destination) as response:
+            for raw in response:
+                line = raw.decode("utf-8").strip()
+                if not line.startswith("data:"):
+                    continue
+                data = line[len("data:") :].strip()
+                if data == "[DONE]":
+                    break
+                try:
+                    event = json.loads(data)
+                except json.JSONDecodeError:
+                    continue
+                delta = event.get("delta") if isinstance(event, dict) else None
+                if isinstance(delta, str):
+                    yield delta
+
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
     # (response_format / tools / the Responses API) are proxied to a single agent
@@ -1102,7 +1205,15 @@ class ModelClient:
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
-        if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
+        endpoint_name = endpoint.strip("/")
+        if endpoint_name == "chat/completions" and agent.provider_protocol == "responses":
+            response_payload = chat_to_responses_payload(payload, self.max_output_tokens)
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                response = self._send_raw_with_retry(agent, "responses", response_payload, destination)
+            return responses_to_chat_response(response, payload)
+        if endpoint_name == "responses" and (
+            agent.provider_protocol == "chat_completions" or _is_local_provider_url(agent.base_url)
+        ):
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault("max_tokens", self.max_output_tokens)
             if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
@@ -1112,8 +1223,22 @@ class ModelClient:
                     agent, "chat/completions", chat_payload, destination
                 )
             return _chat_to_responses_payload(chat_response, payload)
+        if endpoint_name == "responses" and agent.provider_protocol == "auto":
+            try:
+                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                    return self._send_raw_with_retry(agent, endpoint, omit_empty_model(payload), destination)
+            except urllib.error.HTTPError as exc:
+                if exc.code not in UNSUPPORTED_ENDPOINT_STATUSES:
+                    raise
+            chat_payload = _responses_to_chat_payload(payload)
+            chat_payload.setdefault("max_tokens", self.max_output_tokens)
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                chat_response = self._send_raw_with_retry(
+                    agent, "chat/completions", omit_empty_model(chat_payload), destination
+                )
+            return _chat_to_responses_payload(chat_response, payload)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            return self._send_raw_with_retry(agent, endpoint, payload, destination)
+            return self._send_raw_with_retry(agent, endpoint, omit_empty_model(payload), destination)
 
     def _send_raw_with_retry(
         self,
@@ -1320,12 +1445,12 @@ class ModelClient:
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
+                "body": omit_empty_model({
                     "model": agent.model,
                     "messages": messages,
                     "temperature": self.temperature if temperature is None else temperature,
                     "max_tokens": self.max_output_tokens,
-                },
+                }),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]
@@ -2165,8 +2290,8 @@ class TaskOrchestrator:
         """Register a new worker agent (model group member) at runtime; persists when agents_db is set."""
         if agent_pool_id != "default":  # pragma: no cover
             raise KeyError(agent_pool_id)
-        if "id" not in value or "model" not in value:
-            raise ValueError("agent requires id and model")
+        if "id" not in value:
+            raise ValueError("agent requires id")
         agent = ModelAgent.from_dict(value)
         if any(existing.id == agent.id for existing in self.candidates):
             raise ValueError(f"agent {agent.id} already exists")
@@ -2658,6 +2783,7 @@ class TaskOrchestrator:
             "model": agent.model,
             "base_url": agent.base_url,
             "provider_name": agent.provider_name or self._infer_provider_name(agent.base_url),
+            "provider_protocol": agent.provider_protocol,
             "priority": agent.priority,
             "tags": list(agent.tags),
             "status": "disabled" if agent.disabled else "active",
