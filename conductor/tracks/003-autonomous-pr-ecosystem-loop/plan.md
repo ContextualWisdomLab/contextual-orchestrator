@@ -1504,3 +1504,34 @@ was attempted.
    source before recording any dismissal; do not rename tests or weaken Strix.
 4. Keep both sweep limits at `0`, preserve conflicting PRs, and take a new
    paginated snapshot after the next scheduler interval.
+
+## Status as of 2026-08-19, iteration 28 — stale queued runs removed with exact-head guards
+
+Queue hygiene removed only runs proven not to represent a live PR head. The
+following runs were re-read after their target PRs were re-read and each
+finished `completed/cancelled`:
+
+- `.github#1145`: run `32252906006`, stale `d7375b1481e8016ccaca04872e6250774bae5d3f`; live head was
+  `6294747d2f05921fa93aa82b60aba95915b0c3ea`.
+- `.github#1144`: run `32250263504`, stale `9e5d7834735854022dd99cf438857673d9960976`; live head was
+  `d53fdfd4381d93e40a71984ff1f058605c0cb13c`.
+- `.github#1024`: run `32244495506`, stale `309c83fb37ea5f5eab4c744d34dd56c45f896c68`; live head was
+  `e7969870f22923834134e6dfded5eea240c95c88`.
+
+The queued repository-dispatch inventory contained 204 target runs across 20
+repositories. A broader all-repository comparison was intentionally stopped
+after the bounded command window and then hit GitHub's secondary API rate
+limit; the remaining candidates were not cancelled without a fresh live-head
+read. Current-head runs, including #1139, #1120, and #1128's fresh Strix job,
+were preserved. No branch update, review dispatch, merge, or sweep-limit
+change was attempted; both sweep limits remain `0`.
+
+### Next iteration checklist
+
+1. After the Actions endpoint cools down, re-read the partial stale candidates
+   and cancel only entries whose encoded `repo#PR@SHA` still differs from the
+   live head or whose PR is closed; verify every cancellation terminally.
+2. Re-read #1139's seven required checks, #1120's current checks, and #1128's
+   fresh Strix retry by exact head before any merge or dismissal decision.
+3. Record a second paginated queue snapshot only after one scheduler interval;
+   do not treat the current partial stale scan as the exit-gate snapshot.
