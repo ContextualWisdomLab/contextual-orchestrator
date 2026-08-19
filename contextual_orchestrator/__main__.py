@@ -344,7 +344,11 @@ def main() -> None:
     )
     agents = load_agents(args.agents)
     if args.auto_discover_model_agents:
-        agents, discovery_errors = expand_blank_agents(agents)
+        embedding_model = args.embedding_model.strip()
+        agents, discovery_errors = expand_blank_agents(
+            agents,
+            exclude_model_ids=(embedding_model,) if embedding_model else (),
+        )
         if discovery_errors:
             parser.error("; ".join(str(error) for error in discovery_errors))
     orchestrator = TaskOrchestrator(

@@ -198,7 +198,10 @@ def discover_provider_models(
 
 
 def expand_blank_agents(
-    agents: list[ModelAgent], *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
+    agents: list[ModelAgent],
+    *,
+    timeout: float = DISCOVERY_TIMEOUT_SECONDS,
+    exclude_model_ids: tuple[str, ...] = (),
 ) -> tuple[list[ModelAgent], list[ProviderDiscoveryError]]:
     """Expand blank seed agents into the provider's discovered model pool.
 
@@ -232,7 +235,16 @@ def expand_blank_agents(
         if not discovered:
             errors.append(ProviderDiscoveryError(source.provider_name, "no models discovered"))
             continue
-        for model in discovered:
+        usable = [model for model in discovered if model.model_id not in exclude_model_ids]
+        if not usable:
+            errors.append(
+                ProviderDiscoveryError(
+                    source.provider_name,
+                    "no chat models remain after the explicit embedding-model exclusion",
+                )
+            )
+            continue
+        for model in usable:
             expanded.append(
                 replace(
                     seed,

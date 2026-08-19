@@ -199,6 +199,26 @@ def test_expand_blank_agents_registers_every_discovered_model_without_ranking() 
     assert all(agent.disabled is False for agent in agents)
 
 
+def test_expand_blank_agents_excludes_explicit_embedding_model() -> None:
+    register_credential("GATEWAY_KEY", "gateway-secret")
+    seed = ModelAgent(
+        "gateway_agent",
+        "",
+        base_url="https://gateway.example/v1",
+        credential_key="GATEWAY_KEY",
+        tags=("vision", "reasoning"),
+    )
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response({"data": [{"id": "embedding-model"}, {"id": "chat-model"}]}),
+    ):
+        agents, errors = expand_blank_agents([seed], exclude_model_ids=("embedding-model",))
+
+    assert errors == []
+    assert [agent.model for agent in agents] == ["chat-model"]
+
+
 def test_expand_blank_agents_fails_closed_when_provider_catalog_is_empty() -> None:
     seed = ModelAgent(
         "gateway_agent",
