@@ -6,6 +6,10 @@
 - Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
 - TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
 - Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+- Route to Reason: Adaptive Routing for LLM and Reasoning Strategy Selection: https://arxiv.org/abs/2505.19435
+- Route-and-Reason: Scaling Large Language Model Reasoning with Reinforced Model Router: https://arxiv.org/abs/2506.05901
+- Reasoning on a Budget: A Survey of Adaptive and Controllable Test-Time Compute in LLMs: https://arxiv.org/abs/2507.02076
+- Ares: Adaptive Reasoning Effort Selection for Efficient LLM Agents: https://arxiv.org/abs/2603.07915
 
 ## What The Architecture Is
 
@@ -51,7 +55,17 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
-The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses a deterministic capability-hint heuristic only for worker/role routing so the repo runs without training data, GPUs, or vendor credentials. It is never an answer-quality, verification, or accept/reject judgment: verifier decisions must use the structured model judge and fail closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
+The deliberate simplification is the policy. The paper systems learn routing
+and topology from rewards; this lab uses capability evidence and a bounded
+orchestrator policy, with `auto` kept internal rather than sent as a provider
+value. This is never an answer-quality, verification, or accept/reject
+judgment: verifier decisions must use the structured model judge and fail
+closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
+
+Model and reasoning changes are governed by [ADR
+0011](planning/adrs/0011-paper-grounded-adaptive-reasoning-policy.md). The
+provider-neutral gateway boundary and direct-MLX prohibition are governed by
+[ADR 0010](planning/adrs/0010-gateway-only-provider-contract.md).
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 

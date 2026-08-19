@@ -46,3 +46,28 @@ but not vendored here so this repository remains one deployable control plane.
 > Citations are provided for scholarly attribution. Redistribution here relies
 > on the arXiv non-exclusive distribution license each author granted; no
 > GPL/AGPL-licensed material is vendored anywhere in this repository.
+
+## Adaptive reasoning and orchestration
+
+These sources govern model and reasoning-policy decisions. They are cited and
+linked rather than vendored because this repository does not assume that every
+paper permits redistribution of its PDF.
+
+- **Route to Reason: Adaptive Routing for LLM and Reasoning Strategy Selection**
+  — Zhihong Pan, Kai Zhang, Yuze Zhao, Yupeng Han. arXiv:2505.19435, 2025.
+  https://arxiv.org/abs/2505.19435
+  Grounds joint routing of models and reasoning strategies under a budget.
+- **Route-and-Reason: Scaling Large Language Model Reasoning with Reinforced
+  Model Router** — Chenyang Shao, Xinyang Liu, Yutang Lin, Fengli Xu, Yong Li.
+  arXiv:2506.05901, 2025. https://arxiv.org/abs/2506.05901
+  Grounds decomposition and allocation across heterogeneous workers.
+- **Reasoning on a Budget: A Survey of Adaptive and Controllable Test-Time
+  Compute in LLMs** — Mohammad Ali Alomrani et al. arXiv:2507.02076, 2025.
+  https://arxiv.org/abs/2507.02076
+  Grounds the distinction between fixed effort control and adaptive effort
+  allocation.
+- **Ares: Adaptive Reasoning Effort Selection for Efficient LLM Agents** —
+  Jingbo Yang, Bairu Hou, Wei Wei, Yujia Bao, Shiyu Chang. arXiv:2603.07915,
+  2026. https://arxiv.org/abs/2603.07915
+  Grounds per-step selection of the minimum sufficient effort with repeated
+  verification rather than a fixed effort for every step.
