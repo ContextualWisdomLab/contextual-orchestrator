@@ -71,3 +71,14 @@ paper permits redistribution of its PDF.
   2026. https://arxiv.org/abs/2603.07915
   Grounds per-step selection of the minimum sufficient effort with repeated
   verification rather than a fixed effort for every step.
+
+## Transport references (not policy sources)
+
+The provider API documentation is used only to verify request-shape and
+capability compatibility. It does not select models, assign reasoning effort,
+or establish quality claims; those decisions remain grounded in the papers
+above and runtime measurement.
+
+- **OpenAI Responses API reference** — reasoning effort, output limits, and
+  structured output format compatibility:
+  https://platform.openai.com/docs/api-reference/responses
