@@ -24,7 +24,16 @@ own stated policy) was also pre-authorized and partially delivered (ADR 0010).
 The one hard rule that is *not* relaxed: never weaken, skip, or bypass a real
 required CI check (tests/Semgrep/CodeQL/Strix/etc.) to force a merge through —
 only the redundant/unsatisfiable independent-human-review requirement is
-being bypassed, always with a stated reason in the merge body.
+being bypassed, always with a stated reason in the merge body. See "Security-
+bypass audit trail and exit conditions" below for the full rules and the
+condition under which this bypass gets reverted, not left on indefinitely.
+
+**Codex is a standing collaborator on this track**, not just a one-time
+consult and not gated to sensitive moments only — bring it in for regular
+work too (`/codex review` on a diff before pushing, `/codex challenge` when
+a fix feels too easy, `/codex` consult mode for planning questions), and
+always before anything large or delicate. See the same section below for
+the full convention.
 
 **Mechanics discovered the hard way (don't rediscover these)**:
 - `gh pr list` with no `--limit` silently caps at 30 — always paginate GraphQL
@@ -105,13 +114,20 @@ consult.
    here when it happens. Don't leave this open "just in case" once its job
    is done.
 4. **Codex is now a standing collaborator on this track**, not a one-off
-   second opinion. Consult it (`/codex` consult mode, or review/challenge
-   mode against a diff) before any large or delicate action — the
-   http-honesty stack merge being the immediate case — and record what it
-   said and how it changed the plan, the way this section does. Disagreement
-   between Claude and Codex on a security-relevant call is a signal to slow
-   down and get the operator's read, not to pick whichever answer is more
-   convenient.
+   second opinion, and not gated to only sensitive/delicate moments —
+   operator confirmed it's fine to bring Codex in for regular work too
+   (routine reviews, sanity-checking a fix, a second look at a plan),
+   not just high-stakes security calls. Use `/codex review` on diffs
+   before pushing, `/codex challenge` when a fix feels too easy, and
+   `/codex` consult mode for planning/strategy questions — whichever mode
+   fits what's actually being decided. Still always consult it before any
+   large or delicate action (the http-honesty stack merge being the
+   immediate case), and record what it said and how it changed the plan
+   for anything that actually moved the plan, the way this section does —
+   no need to log routine sanity-checks that didn't change anything.
+   Disagreement between Claude and Codex on a security-relevant call is a
+   signal to slow down and get the operator's read, not to pick whichever
+   answer is more convenient.
 
 ## Ecosystem leverage order
 
