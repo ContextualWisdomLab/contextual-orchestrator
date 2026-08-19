@@ -71,6 +71,20 @@ OPENAPI_SPEC = {
                 "responses": {"200": {"description": "Active policy"}},
             }
         },
+        "/api/v1/provider_readiness/latest": {
+            "get": {
+                "operationId": "get_latest_provider_readiness",
+                "summary": "Read or explicitly refresh bounded provider chat readiness",
+                "security": [{"admin_bearer_auth": []}],
+                "parameters": [{
+                    "name": "refresh",
+                    "in": "query",
+                    "required": False,
+                    "schema": {"type": "boolean", "default": False},
+                }],
+                "responses": {"200": {"description": "Provider readiness report"}},
+            }
+        },
         "/api/v1/analytics_snapshots/latest": {
             "get": {
                 "operationId": "get_latest_analytics_snapshot",

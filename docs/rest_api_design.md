@@ -19,6 +19,7 @@
 | `GET` | `/v1/batch/embeddings/{batch_id}` | Poll an embeddings batch; returns reduced vectors + recorded cost once completed |
 | `GET` | `/api/v1/agent_pools` | List model agents |
 | `GET` | `/api/v1/orchestration_policies/default_policy` | Read active policy |
+| `GET` | `/api/v1/provider_readiness/latest` | Read or explicitly refresh bounded provider chat readiness |
 | `GET` | `/api/v1/analytics_snapshots/latest` | Read local runtime KPI and guardrail snapshot |
 | `GET` | `/api/v1/sales_readiness/latest` | Read local enterprise-pilot readiness criteria and evidence |
 | `GET` | `/api/v1/commercial_readiness/latest` | Read KRW 2,000,000,000 commercial due-diligence readiness criteria and evidence |

@@ -68,9 +68,15 @@ class CostRoutingCoordinator:
             build_token_counter(postgres_dsn) if postgres_dsn else HeuristicTokenCounter()
         )
         self.policy = routing_policy or RoutingPolicy(self.config)
-        self.batch_backend: BatchBackend = batch_backend or LocalBatchBackend(
-            runner=lambda messages, mode: orchestrator.complete(messages, mode=mode)
-        )
+        if batch_backend is None:
+            client = getattr(orchestrator, "client", None)
+            local_concurrency = getattr(client, "local_concurrency", 1)
+            self.batch_backend = LocalBatchBackend(
+                runner=lambda messages, mode: orchestrator.complete(messages, mode=mode),
+                max_concurrency=local_concurrency,
+            )
+        else:
+            self.batch_backend = batch_backend
         self.embedding_batch_backend: EmbeddingBatchBackend = (
             embedding_batch_backend
             or LocalEmbeddingBatchBackend(token_counter=self.token_counter)

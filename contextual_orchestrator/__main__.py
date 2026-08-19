@@ -6,10 +6,144 @@ import argparse
 import json
 import os
 import sys
+from dataclasses import replace
 
-from .credentials import register_credential
-from .orchestrator import ModelClient, TaskOrchestrator, load_agents
+from .cost_ledger import PriceBook
+from .credentials import get_credential, register_credential
+from .kv_config import InMemoryConfigStore
+from .model_discovery import (
+    agent_from_discovered,
+    agent_id_for,
+    discover_all_models,
+    refresh_price_book,
+    select_top_n_cheapest_discovered_agents,
+)
+from .orchestrator import (
+    CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
+    MAX_LOCAL_CONCURRENCY,
+    ModelAgent,
+    ModelClient,
+    TaskOrchestrator,
+    load_agents,
+)
 from .server import SecurityConfig, serve
+
+DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
+DEFAULT_ADMIN_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
+DEFAULT_INFERENCE_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+
+
+def _positive_int(value: str) -> int:
+    """Parse a strictly positive integer for an argparse option."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("positive integer required") from exc
+    if parsed < 1:
+        raise argparse.ArgumentTypeError("positive integer required")
+    return parsed
+
+
+def _non_negative_int(value: str) -> int:
+    """Parse a non-negative integer for an argparse option (0 means "off")."""
+    try:
+        parsed = int(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("non-negative integer required") from exc
+    if parsed < 0:
+        raise argparse.ArgumentTypeError("non-negative integer required")
+    return parsed
+
+
+def _local_concurrency(value: str) -> int:
+    """Parse a bounded local batch concurrency value."""
+    parsed = _positive_int(value)
+    if parsed > MAX_LOCAL_CONCURRENCY:
+        raise argparse.ArgumentTypeError(
+            f"integer in 1..{MAX_LOCAL_CONCURRENCY} required"
+        )
+    return parsed
+
+
+def _json_object(value: str) -> dict[str, object]:
+    """Parse a JSON object for an argparse option, rejecting other JSON values."""
+    try:
+        parsed = json.loads(value)
+    except json.JSONDecodeError as exc:
+        raise argparse.ArgumentTypeError("valid JSON object required") from exc
+    if not isinstance(parsed, dict):
+        raise argparse.ArgumentTypeError("JSON object required")
+    return parsed
+
+
+def _resolve_auth_token(explicit: str, credential_name: str) -> str:
+    """Resolve a server bearer token from an explicit local value or the KV."""
+    if explicit:
+        return explicit
+    token = get_credential(credential_name)
+    if not token:
+        raise ValueError(f"server auth credential '{credential_name}' is not configured in the KV")
+    return token
+
+
+def _fast_mlsirm_runtime_status() -> tuple[dict[str, object], bool]:
+    """Report whether this interpreter can load the required judge contract."""
+    status: dict[str, object] = {
+        "python": sys.executable,
+        "package": "fast-mlsirm",
+    }
+    try:
+        import fast_mlsirm
+        from fast_mlsirm import (
+            CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1 as fast_contract,
+            ContextualOrchestratorJudge,
+            JudgeCriterion,
+            JudgeFormatError,
+        )
+    except ModuleNotFoundError as exc:
+        status.update(
+            {
+                "available": False,
+                "reason": "missing_dependency",
+                "missing_module": exc.name or "unknown",
+            }
+        )
+        return status, False
+    except Exception as exc:  # noqa: BLE001 - diagnostic command must fail closed
+        status.update(
+            {
+                "available": False,
+                "reason": "import_error",
+                "error_type": type(exc).__name__,
+            }
+        )
+        return status, False
+
+    checks = {
+        "judge_symbols": all(
+            callable(symbol)
+            for symbol in (ContextualOrchestratorJudge, JudgeCriterion, JudgeFormatError)
+        ),
+        "contextual_contract": fast_contract == CONTEXTUAL_ORCHESTRATOR_CONTRACT_V1,
+    }
+    available = all(checks.values())
+    status.update(
+        {
+            "available": available,
+            "version": getattr(fast_mlsirm, "__version__", "unknown"),
+            "contract": fast_contract,
+            "checks": checks,
+        }
+    )
+    return status, available
+
+
+def _check_fast_mlsirm_command() -> None:
+    """Validate the same-interpreter fast-mlsirm integration boundary."""
+    status, available = _fast_mlsirm_runtime_status()
+    print(json.dumps(status, ensure_ascii=False, sort_keys=True))
+    if not available:
+        raise SystemExit(1)
 
 
 def _register_credential_command(argv: list[str]) -> None:
@@ -55,10 +189,76 @@ def _register_credential_command(argv: list[str]) -> None:
     print(json.dumps({"registered": args.name, "backend": "kv"}, ensure_ascii=False))
 
 
+def _discover_models_command(argv: list[str]) -> None:
+    """Query every provider with a KV-registered credential and report the models found.
+
+    Never fabricates a credential: a provider with nothing registered in the KV
+    (see ``register-credential``) is silently skipped, so running this after
+    registering a subset of BYTEZ_API_KEY / NVIDIA_NIM_API_KEY /
+    NVIDIA_NIM_API_KEY_SUB / OPENROUTER_API_KEY / OPENAI_API_KEY still works.
+    """
+    parser = argparse.ArgumentParser(
+        prog="python -m contextual_orchestrator discover-models",
+        description="Discover models from every provider with a KV-registered credential.",
+    )
+    parser.add_argument(
+        "--agents-db",
+        default=None,
+        help="Persist discovered agents (added disabled; enable via the admin API) into this sqlite agent-pool file.",
+    )
+    parser.add_argument(
+        "--enable-cheapest",
+        type=_non_negative_int,
+        default=0,
+        metavar="N",
+        help="Enable the N cheapest discovered agents in --agents-db (auto-optimization bootstrap; "
+        "requires --agents-db; 0 disables, the default, leaving every discovered agent inert).",
+    )
+    args = parser.parse_args(argv)
+    if args.enable_cheapest and not args.agents_db:
+        parser.error("--enable-cheapest requires --agents-db")
+
+    discovered, errors = discover_all_models()
+    price_book = PriceBook(InMemoryConfigStore())
+    priced_count = refresh_price_book(discovered, price_book)
+
+    enabled_agent_ids: list[str] = []
+    if args.agents_db:
+        bootstrap = TaskOrchestrator(
+            [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=args.agents_db
+        )
+        bootstrap.sync_discovered_agents([agent_from_discovered(model) for model in discovered])
+        if args.enable_cheapest:
+            for model in select_top_n_cheapest_discovered_agents(discovered, price_book, args.enable_cheapest):
+                agent_id = agent_id_for(model)
+                bootstrap.patch_agent("default", agent_id, {"status": "active"})
+                enabled_agent_ids.append(agent_id)
+
+    report = {
+        "discovered_count": len(discovered),
+        "priced_count": priced_count,
+        "providers_with_errors": sorted({error.provider_name for error in errors}),
+        "enabled_agent_ids": enabled_agent_ids,
+        "models": [
+            {"provider": model.provider_name, "model": model.model_id, "agent_id": agent_id_for(model)}
+            for model in discovered
+        ],
+    }
+    print(json.dumps(report, ensure_ascii=False, sort_keys=True))
+    if errors and not discovered:
+        raise SystemExit(1)
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
         _register_credential_command(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "discover-models":
+        _discover_models_command(sys.argv[2:])
+        return
+    if len(sys.argv) > 1 and sys.argv[1] == "check-fast-mlsirm":
+        _check_fast_mlsirm_command()
         return
 
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
@@ -70,9 +270,15 @@ def main() -> None:
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
-    parser.add_argument("--auth-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_TOKEN", ""))
-    parser.add_argument("--admin-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN", ""))
-    parser.add_argument("--inference-token", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN", ""))
+    parser.add_argument("--auth-token", default="", help="Explicit local-development bearer token; prefer a KV token name.")
+    parser.add_argument("--admin-token", default="", help="Explicit local-development admin token; prefer a KV token name.")
+    parser.add_argument("--inference-token", default="", help="Explicit local-development inference token; prefer a KV token name.")
+    parser.add_argument("--auth-token-key", default=None,
+                        help="KV credential name for the single server bearer token.")
+    parser.add_argument("--admin-token-key", default=None,
+                        help="KV credential name for the admin bearer token.")
+    parser.add_argument("--inference-token-key", default=None,
+                        help="KV credential name for the inference bearer token.")
     parser.add_argument("--allow-public-bind", action="store_true")
     parser.add_argument("--insecure-disable-auth", action="store_true", help="Deprecated; API auth is always required.")
     parser.add_argument("--expose-trace-by-default", action="store_true")
@@ -82,8 +288,28 @@ def main() -> None:
                         help="Optional sqlite path so runtime agent-pool changes (add/patch/remove) survive restarts.")
     parser.add_argument("--provider-ca-bundle", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_PROVIDER_CA_BUNDLE") or None,
                         help="Path to a CA bundle used to verify provider TLS (e.g. a corporate gateway root).")
-    parser.add_argument("--insecure-skip-tls-verify", action="store_true",
-                        help="Dev only: do not verify provider TLS certificates (insecure).")
+    parser.add_argument("--allowed-provider-host", action="append", dest="allowed_provider_hosts", default=None,
+                        help="Explicit remote provider host allowlist; repeat for multiple hosts (default: unrestricted public hosts).")
+    parser.add_argument(
+        "--sampling-temperature",
+        "--temperature",
+        dest="sampling_temperature",
+        type=float,
+        default=0.2,
+        help="Default provider sampling temperature (default: 0.2; --temperature is a compatibility alias).",
+    )
+    parser.add_argument("--max-output-tokens", type=int, default=2048,
+                        help="Default provider output token cap (default: 2048).")
+    parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
+                        help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
+    parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
+                        help=f"Maximum simultaneous HTTP orchestration runs (default: 8; maximum: {MAX_LOCAL_CONCURRENCY}).")
+    parser.add_argument("--route-text-length-threshold", type=_positive_int, default=None,
+                        help="Auto-mode minimum prompt length that can trigger conduct instead of route.")
+    parser.add_argument("--conduct-hint-threshold", type=_positive_int, default=None,
+                        help="Auto-mode hint-count minimum that can trigger conduct instead of route.")
+    parser.add_argument("--chat-template-args", type=_json_object, default={},
+                        help="JSON kwargs forwarded to local mlx-lm chat templates, e.g. '{\"enable_thinking\":false}'.")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
     parser.add_argument("--budget-max-cost-usd", type=float, default=None,
@@ -94,7 +320,14 @@ def main() -> None:
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
 
-    client = ModelClient(ca_bundle=args.provider_ca_bundle, verify_tls=not args.insecure_skip_tls_verify)
+    client = ModelClient(
+        ca_bundle=args.provider_ca_bundle,
+        temperature=args.sampling_temperature,
+        max_output_tokens=args.max_output_tokens,
+        local_concurrency=args.local_concurrency,
+        chat_template_args=args.chat_template_args,
+        allowed_provider_hosts=args.allowed_provider_hosts,
+    )
     orchestrator = TaskOrchestrator(
         load_agents(args.agents),
         client=client,
@@ -105,28 +338,62 @@ def main() -> None:
         cache_ttl=args.cache_ttl,
     )
 
+    if args.conduct_hint_threshold is not None or args.route_text_length_threshold is not None:
+        overrides: dict[str, int] = {}
+        if args.conduct_hint_threshold is not None:
+            overrides["conduct_hint_threshold"] = args.conduct_hint_threshold
+        if args.route_text_length_threshold is not None:
+            overrides["route_text_length_threshold"] = args.route_text_length_threshold
+        orchestrator.policy = replace(orchestrator.policy, **overrides)
+
     if args.eval:
         print(json.dumps(orchestrator.compare_to_baseline(args.eval, mode=args.mode), ensure_ascii=False, indent=2))
         return
 
     if args.serve:
-        if not (args.auth_token or args.admin_token or args.inference_token):
-            parser.error(
-                "--serve requires --auth-token, split --admin-token/--inference-token, "
-                "or matching CONTEXTUAL_ORCHESTRATOR_* environment variables"
-            )
-        if not args.auth_token and (args.admin_token or args.inference_token) and not (
-            args.admin_token and args.inference_token
+        single_requested = bool(args.auth_token or args.auth_token_key)
+        split_requested = bool(
+            args.admin_token or args.inference_token or args.admin_token_key or args.inference_token_key
+        )
+        if single_requested and split_requested:
+            parser.error("choose either --auth-token or the split --admin-token/--inference-token mode")
+        if split_requested and not (
+            (args.admin_token or args.admin_token_key) and (args.inference_token or args.inference_token_key)
         ):
-            parser.error("split token mode requires both --admin-token and --inference-token")
+            parser.error(
+                "split token mode requires admin and inference tokens, "
+                "provided by --admin-token/--inference-token or "
+                "--admin-token-key/--inference-token-key"
+            )
+        try:
+            auth_token = (
+                _resolve_auth_token(args.auth_token, args.auth_token_key or DEFAULT_AUTH_TOKEN_KEY)
+                if not split_requested
+                else ""
+            )
+            admin_token = (
+                _resolve_auth_token(args.admin_token, args.admin_token_key or DEFAULT_ADMIN_TOKEN_KEY)
+                if split_requested
+                else ""
+            )
+            inference_token = (
+                _resolve_auth_token(args.inference_token, args.inference_token_key or DEFAULT_INFERENCE_TOKEN_KEY)
+                if split_requested
+                else ""
+            )
+        except ValueError as exc:
+            parser.error(str(exc))
+        if not (auth_token or admin_token or inference_token):
+            parser.error("--serve requires a KV auth credential or explicit local token")
         serve(
             orchestrator,
             host=args.host,
             port=args.port,
             security=SecurityConfig(
-                auth_token=args.auth_token,
-                admin_token=args.admin_token,
-                inference_token=args.inference_token,
+                auth_token=auth_token,
+                admin_token=admin_token,
+                inference_token=inference_token,
+                max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
             ),

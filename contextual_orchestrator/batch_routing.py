@@ -21,13 +21,13 @@ Config/thresholds come from KV, never ``os.getenv``.
 from __future__ import annotations
 
 import asyncio
-from dataclasses import dataclass, field
 import hashlib
 import json
 import time
-from typing import Any, Callable, Dict, List, Optional, Protocol
 import uuid
-
+from concurrent.futures import ThreadPoolExecutor
+from dataclasses import dataclass, field
+from typing import Any, Callable, Dict, List, Optional, Protocol
 
 _ROUTING_CATEGORY = "routing"
 
@@ -225,26 +225,36 @@ class LocalBatchBackend:
 
     name = "local"
 
-    def __init__(self, runner: Callable[[List[Dict[str, str]], str], Dict[str, Any]]) -> None:
+    def __init__(
+        self,
+        runner: Callable[[List[Dict[str, str]], str], Dict[str, Any]],
+        *,
+        max_concurrency: int = 1,
+    ) -> None:
+        if type(max_concurrency) is not int or max_concurrency < 1:
+            raise ValueError("max_concurrency must be a positive integer")
         self._runner = runner
+        self.max_concurrency = max_concurrency
         self._results: Dict[str, List[BatchResultItem]] = {}
 
     def submit(self, requests: List[BatchRequest], metadata: Optional[Dict[str, Any]] = None) -> BatchJob:
         """Run every request in-process and stash the results under a job id."""
         job_id = f"localbatch_{uuid.uuid4().hex}"
-        items: List[BatchResultItem] = []
-        for request in requests:
+        def run(request: BatchRequest) -> BatchResultItem:
             result = self._runner(request.messages, request.mode)
             answer = result.get("answer", "")
-            items.append(
-                BatchResultItem(
-                    custom_id=request.custom_id,
-                    answer=answer,
-                    attribution=dict(request.attribution),
-                    model=request.model,
-                    mode=result.get("mode", request.mode),
-                )
+            return BatchResultItem(
+                custom_id=request.custom_id,
+                answer=answer,
+                attribution=dict(request.attribution),
+                model=request.model,
+                mode=result.get("mode", request.mode),
             )
+        if self.max_concurrency == 1 or len(requests) <= 1:
+            items = [run(request) for request in requests]
+        else:
+            with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(requests))) as pool:
+                items = list(pool.map(run, requests))
         self._results[job_id] = items
         return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
 

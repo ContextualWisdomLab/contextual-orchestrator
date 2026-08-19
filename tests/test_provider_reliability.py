@@ -6,17 +6,20 @@ the capability a model-orchestration gateway is bought for.
 
 from __future__ import annotations
 
-from pathlib import Path
 import socket
+import ssl
 import sys
+import threading
 import urllib.error
+from concurrent.futures import ThreadPoolExecutor
+from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
-    ModelClient,
     TRANSIENT_HTTP_STATUS,
+    ModelClient,
     is_transient_error,
 )
 
@@ -34,6 +37,9 @@ def test_transient_classification_matches_status_and_network_errors() -> None:
     assert is_transient_error(urllib.error.URLError("dns"))
     assert is_transient_error(TimeoutError("read timeout"))
     assert is_transient_error(socket.timeout("slow"))
+    assert is_transient_error(ssl.SSLEOFError("peer closed TLS stream"))
+    assert is_transient_error(ssl.SSLSyscallError("SSL_ERROR_SYSCALL"))
+    assert not is_transient_error(ssl.SSLCertVerificationError("certificate verify failed"))
     assert not is_transient_error(ValueError("bad json"))
 
 
@@ -46,7 +52,7 @@ def test_retry_recovers_from_transient_failures_with_backoff() -> None:
             self._sleep = delays.append  # capture backoff instead of sleeping
             self.attempts = 0
 
-        def _send(self, agent: ModelAgent, payload: dict) -> str:  # type: ignore[override]
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
             if self.attempts < 3:
                 raise _http_error(503)
@@ -61,13 +67,88 @@ def test_retry_recovers_from_transient_failures_with_backoff() -> None:
     assert all(0.0 <= d <= client.retry_backoff_cap for d in delays)
 
 
+def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -> None:
+    class LocalDownClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=5, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.attempts += 1
+            raise urllib.error.URLError("local server is busy")
+
+    client = LocalDownClient()
+    agent = ModelAgent("local_worker", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    try:
+        client._send_with_retry(agent, {"model": agent.model})
+    except RuntimeError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("a failed local request must not succeed")
+    assert client.attempts == 1
+
+
+def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
+    class LocalFlakyClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=5, local_max_retries=1, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.attempts += 1
+            if self.attempts == 1:
+                raise urllib.error.URLError("local server restarted")
+            return "recovered"
+
+    client = LocalFlakyClient()
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
+    assert client.attempts == 2
+
+
+def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
+    class LocalFlakyClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0, local_max_retries=2, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            self.attempts += 1
+            if self.attempts < 3:
+                raise urllib.error.URLError("local server is restarting")
+            return "recovered"
+
+    client = LocalFlakyClient()
+    agent = ModelAgent("local_worker", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
+    assert client.attempts == 3
+
+
+def test_local_passthrough_retry_budget_is_not_capped_by_remote_retry_default() -> None:
+    class LocalRawFlakyClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0, local_max_retries=2, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            self.attempts += 1
+            if self.attempts < 3:
+                raise urllib.error.URLError("local server is restarting")
+            return {"ok": True}
+
+    client = LocalRawFlakyClient()
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    assert client._send_raw_with_retry(agent, "chat/completions", {}) == {"ok": True}
+    assert client.attempts == 3
+
+
 def test_permanent_error_is_not_retried() -> None:
     class BadRequestClient(ModelClient):
         def __init__(self) -> None:
             super().__init__(max_retries=5, retry_backoff=0.0)
             self.attempts = 0
 
-        def _send(self, agent: ModelAgent, payload: dict) -> str:  # type: ignore[override]
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
             self.attempts += 1
             raise _http_error(400)
 
@@ -169,6 +250,22 @@ def test_success_clears_prior_failures() -> None:
     orchestrator._record_success("primary_worker")
     assert orchestrator._circuit_open("primary_worker") is False
     assert "primary_worker" not in orchestrator._circuit
+
+
+def test_circuit_breaker_counts_concurrent_failures() -> None:
+    orchestrator, _ = _two_worker_orchestrator(down_id="primary_worker")
+    calls = orchestrator.circuit_failure_threshold * 4
+    barrier = threading.Barrier(calls, timeout=2.0)
+
+    def record_failure(_index: int) -> None:
+        barrier.wait()
+        orchestrator._record_failure("primary_worker")
+
+    with ThreadPoolExecutor(max_workers=calls) as pool:
+        list(pool.map(record_failure, range(calls)))
+
+    assert orchestrator._circuit["primary_worker"]["failures"] == float(calls)
+    assert orchestrator._circuit_open("primary_worker") is True
 
 
 def test_mock_path_is_unchanged_no_failover_no_circuit_state() -> None:

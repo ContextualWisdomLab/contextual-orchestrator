@@ -9,7 +9,7 @@ import secrets
 import threading
 import time
 import urllib.parse
-from typing import Any
+from typing import Any, Callable
 import uuid
 
 from .admin import ADMIN_HTML, ADMIN_TRANSLATIONS
@@ -19,7 +19,9 @@ from .cost_router import CostRoutingCoordinator
 from .batch_routing import BatchRequest
 from .orchestrator import (
     BudgetExceededError,
+    MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
+    _new_chat_completion_id,
     chat_completion_chunks,
     chat_completion_response,
     redact_value,
@@ -43,6 +45,8 @@ ALLOWED_CHAT_KEYS = {
 # Responses API body keys (`input` replaces `messages`).
 ALLOWED_RESPONSES_KEYS = {
     "model", "input", "instructions", "stream", "metadata", "reasoning",
+    "include", "prompt_cache_key", "client_metadata", "previous_response_id",
+    "conversation", "truncation", "max_output_tokens", "text",
 } | OPENAI_PASSTHROUGH_PARAM_KEYS
 ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
@@ -90,13 +94,23 @@ class SecurityConfig:
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
+    # Deployment may inject a real OIDC/JWT verifier (for example a Keyverse
+    # relying-party adapter). The core deliberately does not decode JWTs with
+    # an unsafe hand-rolled parser or own Keycloak admin credentials.
+    bearer_verifier: Callable[[str, str], bool] | None = None
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
 
     def __post_init__(self) -> None:
+        if self.auth_token and (self.admin_token or self.inference_token):
+            raise ValueError("single auth_token cannot be combined with split tokens")
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
+            raise ValueError(
+                f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
+            )
         self._run_semaphore = threading.BoundedSemaphore(self.max_concurrent_runs)
 
     def check_bind(self, host: str) -> None:
@@ -106,14 +120,26 @@ class SecurityConfig:
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
         """Validate bearer token for admin or inference scope."""
-        if not (self.auth_token or self.admin_token or self.inference_token):
+        if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
         raw = headers.get("authorization", "")
         if not raw.lower().startswith("bearer "):
             raise RequestError(401, "unauthorized", "bearer token is required")
         token = raw.split(" ", 1)[1].strip()
-        expected = self.auth_token or (self.admin_token if scope == "admin" else self.inference_token)
-        if not expected or not secrets.compare_digest(token, expected):
+        if self.bearer_verifier is not None:
+            try:
+                valid = bool(self.bearer_verifier(token, scope))
+            except Exception:  # noqa: BLE001 - an auth adapter failure is an auth denial
+                valid = False
+        else:
+            if scope == "admin":
+                expected = self.admin_token or self.auth_token
+            elif scope == "inference":
+                expected = self.inference_token or self.auth_token
+            else:
+                expected = ""
+            valid = bool(expected) and secrets.compare_digest(token, expected)
+        if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
 
     def check_rate_limit(self, key: str) -> None:
@@ -138,7 +164,9 @@ class SecurityConfig:
 
     def readiness_profile(self) -> dict[str, Any]:
         """Return a secret-free security profile for sales-readiness evidence."""
-        if self.admin_token and self.inference_token:
+        if self.bearer_verifier is not None:
+            auth_mode = "external_bearer_verifier"
+        elif self.admin_token and self.inference_token:
             auth_mode = "split_token"
         elif self.auth_token:
             auth_mode = "single_token"
@@ -303,6 +331,81 @@ def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str,
     return _strip_trace(safe_payload)
 
 
+def responses_sse_body(response: dict[str, Any]) -> str:
+    """Frame a completed Responses object as a valid SSE response."""
+    sequence = 0
+    frames: list[str] = []
+
+    def emit(event_type: str, **values: Any) -> None:
+        nonlocal sequence
+        payload = {"type": event_type, "sequence_number": sequence, **values}
+        sequence += 1
+        frames.append(
+            f"event: {event_type}\ndata: {json.dumps(payload, ensure_ascii=False)}\n\n"
+        )
+
+    in_progress = {**response, "status": "in_progress", "output": []}
+    emit("response.created", response=in_progress)
+    for output_index, item in enumerate(response.get("output", [])):
+        if not isinstance(item, dict):
+            continue
+        item_in_progress = {**item, "status": "in_progress"}
+        emit("response.output_item.added", output_index=output_index, item=item_in_progress)
+        if item.get("type") == "message":
+            for content_index, part in enumerate(item.get("content", [])):
+                if not isinstance(part, dict):
+                    continue
+                part_in_progress = {**part, "text": ""}
+                emit(
+                    "response.content_part.added",
+                    item_id=item.get("id"),
+                    output_index=output_index,
+                    content_index=content_index,
+                    part=part_in_progress,
+                )
+                if part.get("type") == "output_text":
+                    emit(
+                        "response.output_text.delta",
+                        item_id=item.get("id"),
+                        output_index=output_index,
+                        content_index=content_index,
+                        delta=part.get("text", ""),
+                    )
+                    emit(
+                        "response.output_text.done",
+                        item_id=item.get("id"),
+                        output_index=output_index,
+                        content_index=content_index,
+                        text=part.get("text", ""),
+                    )
+                emit(
+                    "response.content_part.done",
+                    item_id=item.get("id"),
+                    output_index=output_index,
+                    content_index=content_index,
+                    part=part,
+                )
+        elif item.get("type") == "function_call":
+            arguments = str(item.get("arguments", "{}"))
+            emit(
+                "response.function_call_arguments.delta",
+                item_id=item.get("id"),
+                output_index=output_index,
+                delta=arguments,
+            )
+            emit(
+                "response.function_call_arguments.done",
+                item_id=item.get("id"),
+                output_index=output_index,
+                name=item.get("name", ""),
+                arguments=arguments,
+            )
+        emit("response.output_item.done", output_index=output_index, item=item)
+    emit("response.completed", response=response)
+    frames.append("data: [DONE]\n\n")
+    return "".join(frames)
+
+
 def build_server(
     orchestrator: TaskOrchestrator,
     host: str = "127.0.0.1",
@@ -341,10 +444,49 @@ def build_server(
                         "status": "ok",
                         "service": "contextual-orchestrator",
                         "agent_count": len(orchestrator.agents),
+                        "candidate_count": len(orchestrator.candidates),
+                        "enabled_agent_count": len(orchestrator.agents),
                         "batch_backend": coordinator.batch_backend.name,
                         "embedding_batch_backend": coordinator.embedding_batch_backend.name,
+                        "provider_readiness": "unprobed",
                         "usage_record_count": len(coordinator.ledger.records()),
                     })
+                    return
+                if path == "/v1/models":
+                    self._authorize("inference")
+                    models: list[dict[str, Any]] = [{
+                        "id": "contextual-orchestrator",
+                        "object": "model",
+                        "created": 0,
+                        "owned_by": "contextual-orchestrator",
+                        "kind": "orchestrator",
+                        "status": "active",
+                        "readiness": "unprobed",
+                    }]
+                    model_groups: dict[str, list[Any]] = {}
+                    for agent in orchestrator.candidates:
+                        if not agent.model or agent.model == "contextual-orchestrator":
+                            continue
+                        model_groups.setdefault(agent.model, []).append(agent)
+                    for model, candidates in model_groups.items():
+                        representative = next(
+                            (candidate for candidate in candidates if not candidate.disabled),
+                            candidates[0],
+                        )
+                        models.append({
+                            "id": model,
+                            "object": "model",
+                            "created": 0,
+                            "owned_by": representative.provider_name or "contextual-orchestrator",
+                            "kind": "worker",
+                            "status": (
+                                "active"
+                                if any(not candidate.disabled for candidate in candidates)
+                                else "disabled"
+                            ),
+                            "readiness": "unprobed",
+                        })
+                    self._send({"object": "list", "data": models})
                     return
                 if path.startswith("/v1/batch/embeddings/"):
                     # Embeddings batch polling is an inference-scope surface, so
@@ -404,13 +546,19 @@ def build_server(
                     items = orchestrator.list_agents(page_number=page_number, page_size=page_size)
                     self._send({
                         "items": items,
-                        "total_count": len(orchestrator.agents),
+                        "total_count": len(orchestrator.candidates),
                         "page_number": page_number,
                         "page_size": page_size,
                     })
                     return
                 if path == "/api/v1/orchestration_policies/default_policy":
                     self._send(orchestrator.admin_state()["policy"])
+                    return
+                if path == "/api/v1/provider_readiness/latest":
+                    raw_refresh = (query.get("refresh") or ["false"])[0].lower()
+                    if raw_refresh not in {"true", "false"}:
+                        raise ValueError("refresh must be true or false")
+                    self._send(orchestrator.provider_readiness_report(refresh=raw_refresh == "true"))
                     return
                 if path == "/api/v1/analytics_snapshots/latest":
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
@@ -875,7 +1023,10 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    self._send(proxied)
+                    if body.get("stream") is True:
+                        self._send_sse(responses_sse_body(proxied))
+                    else:
+                        self._send(proxied)
                     return
 
                 if path == "/admin/simulate":
@@ -1022,7 +1173,7 @@ def build_server(
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""
             run_id = f"run_{uuid.uuid4().hex}"
-            completion_id = f"chatcmpl-{int(time.time() * 1000)}"
+            completion_id = _new_chat_completion_id()
             created = int(time.time())
 
             def frame(delta: dict[str, Any], finish: str | None = None) -> str:

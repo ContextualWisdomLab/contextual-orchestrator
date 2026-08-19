@@ -5,7 +5,11 @@
 
 Stdlib Python lab for a single API that routes, delegates, verifies, and synthesizes work across a configurable pool of OpenAI-compatible model agents.
 
-This is not a Sakana AI product or a reproduction of their trained models. It is a small implementation of the public architecture pattern: expose one model-like interface while keeping the agent pool, routing, workflow, and verification logic behind it.
+This is not a Sakana AI product or a reproduction of their trained models. It is
+a small implementation of the public architecture pattern: expose one
+model-like orchestration candidate while keeping the worker pool, routing,
+workflow, and verification logic behind it. `contextual-orchestrator` is the
+public control-plane model; it is not just an HTTP gateway.
 
 ## Quick Start
 
@@ -17,8 +21,9 @@ python -m contextual_orchestrator "Summarize why model orchestration helps long 
 Run the OpenAI-compatible subset:
 
 ```bash
-export CONTEXTUAL_ORCHESTRATOR_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
-python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000
+local_token="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')"
+python -m contextual_orchestrator --serve --agents examples/agents.mock.json --port 8000 \
+  --auth-token "$local_token"
 ```
 
 Admin console:
@@ -29,14 +34,15 @@ http://127.0.0.1:8000/admin
 
 ```bash
 curl -s http://127.0.0.1:8000/v1/chat/completions \
-  -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN" \
+  -H "authorization: Bearer $local_token" \
   -H 'content-type: application/json' \
   -d '{"model":"contextual-orchestrator","messages":[{"role":"user","content":"Analyze this code review task and verify the answer."}]}' | jq .
 ```
 
 HTTP serving is hardened for local lab use:
 
-- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token` and `--inference-token` to separate operator and runtime access, or `--auth-token` / `CONTEXTUAL_ORCHESTRATOR_TOKEN` for one local-development token.
+- `/admin`, `/admin/state`, `/api/v1/*`, and `/v1/chat/completions` require a Bearer token. Use `--admin-token-key` and `--inference-token-key` to resolve split tokens from the KV, or `--auth-token-key` for one token. Explicit `--auth-token`/split-token values are local-development escape hatches; the CLI no longer reads auth secrets from environment variables.
+- A production deployment that uses the ecosystem identity plane must inject a reviewed `bearer_verifier` into `SecurityConfig` to validate Keyverse-issued OIDC tokens (issuer, audience, signature, expiry, and scope). The core does not hand-roll JWT parsing or hold Keycloak admin credentials; a static bearer token is not a Keyverse integration.
 - Binding to `0.0.0.0` or `::` requires `--allow-public-bind`.
 - JSON request bodies, chat message roles, orchestration modes, body sizes, request rate, and concurrent run counts are validated before orchestration runs.
 - Full orchestration traces are not returned by default. Set `include_orchestration_trace: true` per chat request or start with `--expose-trace-by-default` when the caller is trusted.
@@ -60,7 +66,39 @@ Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints.
 }
 ```
 
+For a local `mlx-lm` OpenAI-compatible server, use the explicit `mlx://` scheme. It is loopback-only, does not require a credential, and is translated to HTTP only after the loopback check:
+
+```json
+{
+  "agents": [
+    {
+      "id": "local_fast_agent",
+      "model": "mlx-community/llama-3.2-3b-instruct-4bit",
+      "base_url": "mlx://127.0.0.1:8080/v1",
+      "provider_name": "mlx-lm",
+      "tags": ["reasoning", "coding", "verification"]
+    }
+  ]
+}
+```
+
+The full local candidate registry is [examples/agents.local.json](examples/agents.local.json).
+It contains the public `contextual-orchestrator` candidate, discovered MLX
+worker models, and every discovered llama.cpp/LM Studio candidate. Discovery
+does not decide governance state: seed candidates are enabled by default, while
+`disabled` is reserved for an explicit operator/admin quarantine or a persisted
+removal tombstone. The contextual-orchestrator record is excluded from internal
+roles because this implementation has no bounded recursive self-call protocol;
+that is a routing safety constraint, not a disabled candidate. The registry is
+explicit; runtime discovery does not silently change the pool.
+
+Run an evaluation against that server with `--temperature 0` for repeatable judging. For reasoning-capable mlx models, pass `--chat-template-args '{"enable_thinking":false}'` when a short structured judge response is required. `--local-concurrency N` enables bounded concurrent local batch requests (`1..64`; the current measured starting point for this server is `8`); when serving HTTP, set `--max-concurrent-runs N` explicitly as well if the measured batch concurrency exceeds the secure default of `8`. Keep interactive route/conduct requests on the default sequential path.
+
+Model-based conduct verification requires `fast-mlsirm` in the same runtime and fails closed when it is absent or broken; fast-mlsirm sends its judge completion through this contextual-orchestrator gateway, so no direct provider fallback is used. “Same runtime” means that the exact interpreter used for the live run can import both packages: install both checkouts into one environment (prefer editable installs), or expose both source roots with `PYTHONPATH` during a source run. Before a live judge benchmark, run `python -m contextual_orchestrator check-fast-mlsirm` with that exact interpreter. It prints the interpreter, package version, transitive-import status, and contextual contract check, and exits nonzero on a missing dependency or contract mismatch. Do not run the preflight in one virtual environment and the judge in another. See [ADR 0001](docs/planning/adrs/0001-fail-closed-model-judgment.md).
+
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
+
+Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. See [docs/kv-credentials.md](docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
 
 Seed the credential into the KV once at bootstrap:
 
@@ -68,7 +106,13 @@ Seed the credential into the KV once at bootstrap:
 echo "$OPENAI_API_KEY" | python -m contextual_orchestrator register-credential --name OPENAI_API_KEY --value-stdin
 ```
 
-Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Set `CONTEXTUAL_ORCHESTRATOR_ALLOWED_PROVIDER_HOSTS` to a comma-separated host allowlist when only approved model gateways should be reachable. External calls use a timeout and default output token cap.
+For a persistent KV-backed server token, seed a credential such as
+`CONTEXTUAL_ORCHESTRATOR_TOKEN` and start with
+`--auth-token-key CONTEXTUAL_ORCHESTRATOR_TOKEN`. The in-memory credential
+backend is process-local and is suitable only for tests; production auth
+registration and OIDC client secrets belong to the deployment/KV boundary.
+
+Non-mock providers must use `https://` URLs and a **resolvable KV credential** — a non-mock agent whose credential is missing raises `NotConfigured` rather than falling back to an environment variable. The runtime blocks loopback, private, link-local, multicast, and reserved provider addresses before sending a key. Pass `--allowed-provider-host HOST` once per approved gateway when an explicit host allowlist is required; it is bound at client construction and is not changed by request-time environment variables. External calls use a timeout and default output token cap.
 
 > The legacy `api_key_env` field is still accepted for back-compat, but its value is now treated as the **credential name** in the KV, not as an environment variable to read. This supersedes the old `api_key_env` env pattern.
 
@@ -76,6 +120,7 @@ Non-mock providers must use `https://` URLs and a **resolvable KV credential** �
 
 One public interface:
 
+- `contextual-orchestrator` is the model-like control-plane candidate exposed to callers. `/v1/models` lists it first, followed by every configured worker candidate, including disabled candidates with their status.
 - `/v1/chat/completions` accepts normal chat messages, and `"stream": true` returns an OpenAI-compatible `text/event-stream` of `chat.completion.chunk` deltas terminated by `data: [DONE]`. In **route** mode the worker's tokens are streamed live as they arrive from the provider (real token streaming); in **conduct** mode the multi-step answer is produced then framed as deltas (a workflow can't honestly token-stream a synthesizer that hasn't run yet).
 - `TaskOrchestrator.complete()` decides whether to route to one worker or run a short workflow.
 - `TaskOrchestrator.compare_to_baseline(prompts, mode)` (CLI `--eval PROMPT...`) measures the orchestration engine against a single-worker baseline — per-prompt and aggregate latency plus a structural coverage delta (contributing steps + verifier-pass presence). It is a measured tradeoff report, not a human-quality claim.
@@ -125,7 +170,7 @@ Local spend observability, aggregated from in-memory workflow runs. It is honest
 
 ```bash
 curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
-  -H "authorization: Bearer $CONTEXTUAL_ORCHESTRATOR_TOKEN" | jq '.totals, .by_model, .budget'
+  -H "authorization: Bearer $local_token" | jq '.totals, .by_model, .budget'
 ```
 
 - **Tokens.** `by_model[].output_tokens` uses the provider-reported `usage.completion_tokens` when a real worker returns it, and falls back to a `~4 chars/token` estimate otherwise. Each row carries `usage_source`: `reported` (all steps reported), `mixed`, or `estimated`. `estimated_output_tokens` is always the estimate, kept alongside for comparison. `measurement_status` is `local_runtime_estimate`, not production telemetry.
@@ -192,7 +237,10 @@ is read from a **KV config store**, never `os.getenv`.
   backend (local in-process backend standalone), and records one usage-ledger row
   per original vector with the full attribution dimensions (service, team,
   group, company, provider) carried in `metadata`.
-- **Health.** `GET /healthz` is an unauthenticated liveness probe.
+- **Health.** `GET /healthz` is an unauthenticated liveness probe; it never
+  claims that an upstream chat worker is serving. Admins can use
+  `GET /api/v1/provider_readiness/latest?refresh=true` for one bounded,
+  non-retrying chat probe per enabled worker.
 - **Standalone + optional pg-llm-batch integration.** The hub runs standalone
   with the in-memory config store and local batch backend; wiring a Postgres DSN
   and an installed/deployed `pg_llm_batch` client activates the KV/secret stores,

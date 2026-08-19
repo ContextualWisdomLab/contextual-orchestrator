@@ -20,11 +20,17 @@ register_credential("OPENAI_API_KEY", value)   # writes into the KV
 
 The orchestrator resolves an agent's provider key through this seam only:
 
-- `ModelClient.chat()` calls `get_credential(agent.credential_name)`.
-- `ModelClient._send()` reads the key the same way for the outgoing request.
+- Remote `ModelAgent` records use `get_credential(agent.credential_name)`.
+- Direct `mlx://` workers are intentionally keyless and never receive a
+  provider credential.
+- Authenticated loopback `local://` gateways may use the separate,
+  explicitly named `ModelAgent.local_credential_key`.
+- `ModelClient._send()` resolves the transport-specific key before building
+  the outgoing request.
 - `ModelClient._validate_provider()` requires the credential to be **resolvable**
-  before any egress. A non-mock agent whose credential is missing raises
-  `NotConfigured` — it never silently falls back to `os.getenv`.
+  before any egress when that transport names a key. A non-mock agent whose
+  credential is missing raises `NotConfigured` — it never silently falls back
+  to `os.getenv`.
 
 Mock agents (`base_url` starting with `mock://`) early-return before any
 credential logic and stay keyless.
@@ -43,6 +49,31 @@ names the credential to resolve from the KV:
 string is treated as the **credential name** in the KV — it is *not* read as an
 environment variable. `ModelAgent.credential_name` returns `api_key_env` when
 present, otherwise `credential_key`.
+
+### Direct MLX versus an authenticated local gateway
+
+These schemes have different credential contracts:
+
+```json
+{ "id": "mlx_worker", "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "base_url": "mlx://127.0.0.1:18083/v1" }
+```
+
+The direct `mlx://` transport is a loopback-only, keyless mlx-lm server. A
+`credential_key` or remote `OPENAI_API_KEY` is never forwarded to it. A
+`local://` URL instead denotes the contextual-orchestrator loopback gateway;
+when that gateway requires bearer authentication, configure only its explicit
+local token name:
+
+```json
+{ "id": "mlx_gateway", "model": "mlx-community/gemma-4-e4b-it-4bit",
+  "base_url": "local://127.0.0.1:18084/v1",
+  "local_credential_key": "LOCAL_GATEWAY_TOKEN" }
+```
+
+The gateway owns worker template settings, so `chat_template_kwargs` is sent
+only to direct `mlx://` workers. Missing local gateway credentials fail closed;
+they do not fall back to an OpenAI credential or an unauthenticated request.
 
 ## Backends
 
@@ -146,6 +177,69 @@ principle **"No os.getenv, values from KV"**, that source moves to the KV:
 - Env is demoted to bootstrap transport for connecting to the KV.
 
 `api_key_env` is retained only as a back-compat *credential name* alias.
+
+## Server authentication and Keyverse
+
+Provider credentials and gateway bearer authentication are separate concerns.
+The CLI resolves named server tokens from this KV when `--auth-token-key`,
+`--admin-token-key`, or `--inference-token-key` is used; it does not read the
+legacy `CONTEXTUAL_ORCHESTRATOR_*TOKEN` environment variables at request time.
+Explicit token flags remain local-development escape hatches.
+
+For production ecosystem access, construct `SecurityConfig` with a reviewed
+`bearer_verifier` that validates Keyverse-issued OIDC tokens. The adapter must
+own issuer/audience/signature/expiry/scope validation and key rotation; do not
+decode JWTs with a string split or place Keycloak admin credentials in this
+repository. Keyverse RP registration, desired-state reconciliation, and
+confidential-client secret placement remain deployment-controller operations.
+
+## Multi-provider auto-discovery
+
+Once a provider's credential is registered in the KV, `contextual_orchestrator`
+can discover that provider's available models and turn them into agent-pool
+candidates automatically — no hand-written `agents.json` entry required.
+`contextual_orchestrator/model_discovery.py` covers five providers out of the
+box, all resolved through `get_credential` (never fabricated, never read from
+`os.getenv`):
+
+| Provider          | KV credential name       | Auth header       |
+| ------------------ | ------------------------ | ------------------ |
+| OpenAI              | `OPENAI_API_KEY`         | `Bearer <token>`   |
+| OpenRouter          | `OPENROUTER_API_KEY`     | `Bearer <token>`   |
+| NVIDIA NIM (primary)| `NVIDIA_NIM_API_KEY`     | `Bearer <token>`   |
+| NVIDIA NIM (sub)    | `NVIDIA_NIM_API_KEY_SUB` | `Bearer <token>`   |
+| Bytez               | `BYTEZ_API_KEY`          | `Key <token>`      |
+
+Bytez's `Key <token>` scheme (rather than `Bearer`) is why `ModelAgent` has an
+`auth_scheme` field (default `"Bearer"`) — set it per agent when a provider
+doesn't use the OpenAI-compatible default.
+
+Register any subset of the five keys, then discover:
+
+```bash
+echo "$OPENROUTER_API_KEY" | python -m contextual_orchestrator \
+    register-credential --name OPENROUTER_API_KEY --value-stdin
+
+python -m contextual_orchestrator discover-models --agents-db state/pool.db
+```
+
+A provider with nothing registered is silently skipped — registering one key
+or all five both work. `discover-models` prints a JSON report
+(`discovered_count`, `priced_count`, `providers_with_errors`, and each
+`{provider, model, agent_id}` found) and, with `--agents-db`, persists the
+discovered agents into the same sqlite agent-pool file `--serve --agents-db`
+reads — the same durable-overlay mechanism the admin console's "add agent"
+uses (`TaskOrchestrator.sync_discovered_agents`, an idempotent upsert of
+`add_agent`/`patch_agent`'s existing persistence path). Discovered agents are
+added **disabled**, so a newly found model never starts serving traffic
+before an operator opts it in.
+
+Cost-based auto-optimization reuses the existing price-table selector rather
+than adding a new one: `model_discovery.refresh_price_book` writes any
+provider-reported per-token pricing into `PriceBook`, and
+`model_discovery.select_cheapest_discovered_agent` calls
+`batch_routing.cheapest_upstream` to pick the lowest-cost candidate among
+discovered models for a representative request shape.
 
 ## Gateway direction
 
