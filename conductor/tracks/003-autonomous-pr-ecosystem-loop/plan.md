@@ -1724,3 +1724,27 @@ made from stale evidence.
    its exact head.
 3. Keep sweep limits at `0/0` until the central scheduler fix is merged and
    its global-budget behavior is live-verified.
+
+## Status as of 2026-08-19, iteration 36 — #1128 local proof is green while hosted final gates queue
+
+The exact `.github#1128` worktree at head
+`e33536ba95a6fd6ff185b857ac2955835b80471e` was independently revalidated:
+the full suite passed (`1222 passed, 16 subtests passed`), both changed
+workflow files passed actionlint parsing with local shellcheck/pyflakes
+integrations disabled, and `git diff --check` passed. This strengthens the
+feature evidence but does not replace the hosted `opencode-review` and `strix`
+required contexts, which remain queued with no failure and no review decision.
+
+The central scheduler fix #1139 remains at
+`7476d4a152d561ce5942befc91aee21b09e86afc`, with its required checks queued.
+No current-head run or review was changed, and no merge or sweep-limit change
+was attempted while hosted gates were non-terminal.
+
+### Next iteration checklist
+
+1. Re-read #1128's two hosted final gates; if both become terminal-successful,
+   verify live head and required contexts immediately before a normal merge.
+2. Keep #1139's queue intact and use its first terminal failure, if any, as
+   the next root-cause repair target.
+3. Keep both sweep limits at `0/0` until the scheduler fix is merged and
+   live-verified.
