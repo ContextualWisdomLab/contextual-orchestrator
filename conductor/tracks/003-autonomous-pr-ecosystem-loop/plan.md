@@ -2387,3 +2387,22 @@ was used.
    metadata-free workflow-run supersede and confirm no pending buildup.
 3. Recheck plan PR #758 and keep both sweep limits at `0/0` until #1139 is
    merged and live-verified.
+
+## Status as of 2026-08-20, iteration 65 — pre-merge no-op regeneration cleaned
+
+While PR #1155 was still waiting for hosted checks, three new metadata-free
+pending scheduler runs (`32268347536`, `32268273339`, and `32268010552`)
+regenerated on the old main workflow. Each matched the established no-PR,
+no-jobs evidence; all three were cancelled and verified
+`completed/cancelled`. PR #1155 remains exact-head
+`3626e5eaee95fdfda36c4d079b8e191521fdec74`, and plan PR #758 remains exact-head
+`c844b7f6e4080370e334362cf04e6d2a023412a2`; both retain normal auto-merge.
+Main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve updated PR current-head checks and wait for their required runner
+   transition; do not bypass CI.
+2. After PR #1155 reaches main, verify both concurrency fixes with live
+   no-target and metadata-free workflow-run events.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
