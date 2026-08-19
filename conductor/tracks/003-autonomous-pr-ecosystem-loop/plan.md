@@ -2161,3 +2161,21 @@ failure. The source branch's complete local suite also passed: `1217 passed,
    group by observing an older duplicate cancel on a subsequent no-target
    dispatch, then verify main and the candidate queue.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 53 — recurring duplicate reduced again
+
+At `2026-08-19T14:39:04Z`, the unchanged main SHA still produced a newer
+unscoped `repository_dispatch` scheduler run (`32265285678`). The older
+queued duplicate (`32263631059`) was cancelled and verified
+`completed/cancelled`; the newer run was preserved. PR #1155 remains at exact
+head `762a999bf66db0bae2e6fc7455e1dc0c83268e1e` with normal auto-merge enabled,
+but its required hosted checks remain queued and main is still
+`bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Continue the safe newest-only cleanup for duplicate no-target dispatches
+   while preserving all PR current-head evidence.
+2. Act on the first terminal result for PR #1155; after merge, verify the
+   stable concurrency key with a live no-target dispatch transition.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
