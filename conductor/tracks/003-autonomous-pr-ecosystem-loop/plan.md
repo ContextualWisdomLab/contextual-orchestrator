@@ -1127,3 +1127,39 @@ The central queue fix remains in `.github#1139` at
 `3dd3b634ca54f26d7719e972630d8a10e9eae3e7`, and the temporary org sweep
 variables remain `0/0` until that workflow is merged and its global-budget
 behavior is live-verified.
+
+## Status as of 2026-08-19, iteration 12 — queue remains the blocker; PII design started
+
+The live paginated snapshot is now `166` open contextual-orchestrator PRs:
+`160 CHANGES_REQUESTED`, `4 REVIEW_REQUIRED`, and `2` without a review
+decision. `.github` has `146` open PRs (`53 CHANGES_REQUESTED`, `93` without
+a review decision). A REST current-head Check Run audit still finds `17`
+contextual-orchestrator PRs with failures: `14` include `strix`, `4` include
+Semgrep, and `#96` has the full-suite failure (the overlaps are counted once).
+
+The Semgrep failures are not a new finding family. Runs for #650, #662, #663,
+and #673 all scanned old branch trees from August 16–17 and reported the same
+five pre-main findings: three fixed SQL-template sites in `cost_ledger.py`,
+the removed insecure TLS context in `orchestrator.py`, and the old dynamic
+urllib use. Those PR heads predate the merged fixes and need a branch update;
+do not weaken Semgrep or close these feature PRs as if they were redundant.
+
+The representative Strix overflow remains evidenced by contextual-orchestrator
+#576 run `31943964967`, job `95157106075`: provider context length was exceeded
+(`1438805` requested versus `1000000`) with `Vulnerabilities 0`. The classifier
+fix is on `.github#1138` at `1f4f5e0968852e453918a1c11af8e0870434739d`; its
+exact-head Strix run `32244899442` is still queued. The global scheduler fix
+remains `.github#1139` at `3dd3b634ca54f26d7719e972630d8a10e9eae3e7`, with
+run `32242960444` also queued. The Actions queue was `712` at this snapshot;
+`ORG_SWEEP_REVIEW_DISPATCH_LIMIT=0` and
+`ORG_SWEEP_BRANCH_UPDATE_LIMIT=0` remain in force, so restore neither until
+#1139 is merged and its global-budget behavior is live-verified.
+
+The overdue PII follow-up now has a concrete proposed design ADR on
+contextual-orchestrator#762, commit
+`3b685af971036fe61153b43eab674f4bc534390f`: route-owned purposes, a verified
+Keyverse principal, field-level AEAD/KMS envelopes, rotation/revocation,
+tenant-bound associated data, and fail-closed acceptance evidence. It is a
+design-only PR; ADR 0010 remains honest that runtime authorization and
+encryption are not implemented. Its required checks are pending, so do not
+accept the ADR as implemented yet.
