@@ -610,3 +610,82 @@ count actually went down instead of only up.
    keeps eating 100% of iteration time regardless, that's a signal to
    explicitly timebox future iterations rather than letting backlog work
    expand to fill all available time.
+
+## Status as of 2026-08-19, iteration 8 — the PII item, finally, plus a real strix install fix
+
+**PII masking, actually done (not just researched)**: found the concrete
+mechanism in *this* repo (not `gyeot`/`naruon` — those didn't have it;
+this gateway did). `SECRET_PATTERNS` in `orchestrator.py` mixed a blanket
+email-address regex in with genuine credential patterns, and
+`server.py`'s `_response_payload` applied `redact_value` to every API
+response unconditionally. Every email address in every response this
+gateway ever served was replaced with `[REDACTED]` — for `naruon` (an
+email workspace app) that's not a cosmetic bug, it's the product's core
+data being destroyed on every pass through the gateway.
+
+`governance-risk-compliance`'s own README already states the org policy
+in one sentence: PII is protected by purpose-limited authorization,
+encryption, and audit logging, not masking. Implemented the safe,
+honest-about-scope part of that this iteration: removed the email
+pattern (credentials-only redaction now), left the existing audit-event
+trail untouched (it already covers the "audit" leg), and wrote
+`docs/planning/adrs/0010-pii-audit-not-mask.md` explicitly flagging
+purpose-limited authorization and field-level encryption as **not
+done** — tracked follow-up, not silently implied complete. Shipped as
+**#756**. Full suite green (414 + 10 fuzz), semgrep clean.
+
+**Follow-up this ADR explicitly does not cover** (next real PII work,
+whenever picked up): design caller/role-scoped access control for PII
+fields in responses, and field-level encryption for PII at rest in the
+audit/analytics store.
+
+**strix.yml had the same install-time conflict pip-audit did**: the
+central `strix.yml`'s "Install Strix" step does a *real* `pip install
+--require-hashes -r requirements-strix-ci-hashes.txt` (not an audit),
+which hit the identical strix-agent/cryptography resolver conflict.
+`--no-deps` alone (not `--disable-pip`, which doesn't apply to a real
+install) fixes it — verified locally with `--dry-run` before pushing to
+`.github` branch `fix/strix-agent-1.5.3-cryptography-override-20260818`
+(PR #1121). Checked `opencode-review-dispatch.yml`'s Dockerfile and
+`install-base-python-locks.py` for other real installs of this file:
+none found.
+
+**5 Dependabot alerts on `.github`, triaged**: all 5 (2×`cryptography`
+Bleichenbacher-oracle, 3×`aiohttp`) are **stale, already fixed** —
+current pins (`cryptography==50.0.0`, `aiohttp==3.14.3`) already meet or
+exceed each alert's `first_patched_version`. Dependabot hasn't re-scanned
+since the fixing commits landed (`created_at == updated_at` on all 5,
+dated 2026-08-04/05, predating the fixes). No action needed; they should
+auto-close on Dependabot's next scan. Don't manually dismiss — that would
+misrepresent an already-fixed state as "not applicable" for the audit
+record.
+
+**Noticed but not yet triaged**: `contextual-orchestrator` itself has
+open Dependabot PR branches too (`dependabot/pip/hypothesis-6.165.3`,
+`dependabot/pip/uv-0.12.3`, seen via `git pull` fetching all refs) — not
+checked yet this session.
+
+### Next iteration checklist (supersedes prior ones)
+
+1. Merge #753 (this file's own PR) and #756 (PII fix) once green —
+   dismiss-stale-reviews + admin-merge, as established.
+2. Merge `.github#1121` once green (now has 3 commits: atheris bump,
+   pip-audit `--disable-pip --no-deps`, strix.yml `--no-deps`) — this
+   should be the last blocker for that PR.
+3. Check `contextual-orchestrator`'s own Dependabot PRs
+   (`gh pr list --author app/dependabot` or similar) — not yet looked at
+   this session, unknown how many or whether they're blocked by the same
+   issues as everything else.
+4. Design (don't necessarily implement in one sitting) the two PII
+   follow-ups from ADR 0010: purpose-limited authorization scoping who
+   sees PII in responses, and field-level encryption for PII at rest.
+   This is real, non-trivial design work — timebox it rather than letting
+   it become another "started but never finished" item.
+5. Re-pull the full PR snapshot and get real checks-red/CHANGES_REQUESTED
+   counts against the iteration-2 baseline (81 red, 119 CHANGES_REQUESTED
+   out of ~214) — five root-cause fixes should be on `main` by next
+   iteration (Semgrep, SSRF, atheris/cp314, pip-audit, PII-masking), this
+   is overdue for a real before/after comparison.
+6. Check whether `noema`/`IRT-bibliography-set`/other repos have their own
+   classic-branch-protection `enforce_admins: true` layer in addition to
+   their ruleset.
