@@ -783,6 +783,7 @@ class ModelClient:
         messages: list[ChatMessage],
         temperature: float | None = None,
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str | None = None,
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries."""
         self._local.usage = None
@@ -808,6 +809,8 @@ class ModelClient:
             payload["chat_template_kwargs"] = self.chat_template_args
         if metadata:
             payload["metadata"] = dict(metadata)
+        if reasoning_effort and reasoning_effort != "auto":
+            payload["reasoning_effort"] = reasoning_effort
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_with_retry(agent, payload, destination)
 
@@ -1309,7 +1312,15 @@ class ModelClient:
         """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
         echoed = {
             key: payload[key]
-            for key in ("model", "response_format", "tools", "tool_choice", "temperature", "max_tokens")
+            for key in (
+                "model",
+                "response_format",
+                "tools",
+                "tool_choice",
+                "temperature",
+                "max_tokens",
+                "reasoning_effort",
+            )
             if key in payload
         }
         if endpoint.strip("/") == "responses":
@@ -1899,6 +1910,8 @@ class TaskOrchestrator:
             if key not in self._ORCHESTRATION_ONLY_KEYS
         }
         upstream["model"] = agent.model
+        if upstream.get("reasoning_effort") == "auto":
+            upstream.pop("reasoning_effort")
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
@@ -1920,15 +1933,16 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         mode: str = "auto",
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str = "auto",
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
         if self._cache is None:
-            return self._dispatch(messages, mode, metadata)
-        key = self._cache_key(messages, mode, metadata)
+            return self._dispatch(messages, mode, metadata, reasoning_effort)
+        key = self._cache_key(messages, mode, metadata, reasoning_effort)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._dispatch(messages, mode, metadata)
+        result = self._dispatch(messages, mode, metadata, reasoning_effort)
         self._cache.put(key, result)
         return result
 
@@ -1937,11 +1951,12 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         mode: str,
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str = "auto",
     ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
         if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
-            return self.route_once(messages, metadata=metadata)
-        return self.conduct(messages, metadata=metadata)
+            return self.route_once(messages, metadata=metadata, reasoning_effort=reasoning_effort)
+        return self.conduct(messages, metadata=metadata, reasoning_effort=reasoning_effort)
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
@@ -2000,9 +2015,15 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         mode: str,
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str = "auto",
     ) -> str:
         payload = json.dumps(
-            {"mode": mode, "messages": messages, "metadata": metadata or {}},
+            {
+                "mode": mode,
+                "messages": messages,
+                "metadata": metadata or {},
+                "reasoning_effort": reasoning_effort,
+            },
             sort_keys=True,
             ensure_ascii=False,
         )
@@ -2014,13 +2035,19 @@ class TaskOrchestrator:
         mode: str = "auto",
         workflow_run_id: str | None = None,
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str = "auto",
     ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode, metadata=metadata)
+        result = self.complete(
+            messages,
+            mode=mode,
+            metadata=metadata,
+            reasoning_effort=reasoning_effort,
+        )
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -2440,13 +2467,19 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str = "auto",
     ) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         start = time.perf_counter()
         answer, served_id, usage = self._invoke(
-            agent, messages, text=text, role="worker", metadata=metadata
+            agent,
+            messages,
+            text=text,
+            role="worker",
+            metadata=metadata,
+            reasoning_effort=reasoning_effort,
         )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
@@ -2474,13 +2507,16 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str = "auto",
     ) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
         plan_source = "template"
         if self.policy.workflow_planning == "generated":
             try:
-                steps = self._plan_generated(task, metadata=metadata)
+                steps = self._plan_generated(
+                    task, metadata=metadata, reasoning_effort=reasoning_effort
+                )
                 plan_source = "generated"
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
                 steps = self._plan(task)
@@ -2509,7 +2545,12 @@ class TaskOrchestrator:
             ]
             start = time.perf_counter()
             output, served_id, usage = self._invoke(
-                agent, step_messages, text=task, role=step.role, metadata=metadata
+                agent,
+                step_messages,
+                text=task,
+                role=step.role,
+                metadata=metadata,
+                reasoning_effort=reasoning_effort,
             )
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
@@ -2557,6 +2598,7 @@ class TaskOrchestrator:
         self,
         task: str,
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str = "auto",
     ) -> list[WorkflowStep]:
         """Ask the planner model to generate the workflow (Conductor, arXiv:2512.04388).
 
@@ -2582,11 +2624,10 @@ class TaskOrchestrator:
             {"role": "system", "content": system},
             {"role": "user", "content": task},
         ]
-        raw = self.client.chat(
-            planner,
-            plan_messages,
-            **({"metadata": metadata} if metadata else {}),
-        )
+        chat_kwargs = {"metadata": metadata} if metadata else {}
+        if reasoning_effort != "auto":
+            chat_kwargs["reasoning_effort"] = reasoning_effort
+        raw = self.client.chat(planner, plan_messages, **chat_kwargs)
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -2666,6 +2707,7 @@ class TaskOrchestrator:
         text: str,
         role: str,
         metadata: dict[str, Any] | None = None,
+        reasoning_effort: str = "auto",
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -2678,10 +2720,13 @@ class TaskOrchestrator:
         last_error: Exception | None = None
         for agent in candidates:
             try:
+                chat_kwargs = {"metadata": metadata} if metadata else {}
+                if reasoning_effort != "auto":
+                    chat_kwargs["reasoning_effort"] = reasoning_effort
                 output = self.client.chat(
                     agent,
                     messages,
-                    **({"metadata": metadata} if metadata else {}),
+                    **chat_kwargs,
                 )
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc

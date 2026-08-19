@@ -43,6 +43,7 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
         "response_format": {"type": "json_schema", "json_schema": {"name": "x", "schema": {}}},
         "temperature": 0.1,
         "mode": "auto",  # orchestration-only, must be stripped upstream
+        "reasoning_effort": "auto",  # orchestrator default, must be omitted upstream
     }
     result = orch.proxy_completion(body)
 
@@ -52,8 +53,20 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
     assert result["echo"]["response_format"] == body["response_format"]
     assert result["echo"]["temperature"] == 0.1
     assert "mode" not in result["echo"]
+    assert "reasoning_effort" not in result["echo"]
     # model overridden to the selected agent's model.
     assert result["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
+
+
+def test_proxy_completion_forwards_explicit_reasoning_effort() -> None:
+    result = _build().proxy_completion(
+        {
+            "messages": [{"role": "user", "content": "reason carefully"}],
+            "reasoning_effort": "high",
+        }
+    )
+
+    assert result["echo"]["reasoning_effort"] == "high"
 
 
 def test_proxy_completion_forwards_tools() -> None:

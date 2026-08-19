@@ -123,6 +123,7 @@ class CostRoutingCoordinator:
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
         metadata: Optional[Dict[str, Any]] = None,
+        reasoning_effort: str = "auto",
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -135,7 +136,9 @@ class CostRoutingCoordinator:
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
 
-        if decision.channel == "batch":
+        # Explicit provider reasoning controls require the synchronous path;
+        # the batch contract has no per-request reasoning field.
+        if decision.channel == "batch" and reasoning_effort == "auto":
             request = BatchRequest(
                 messages=messages,
                 model=model_name,
@@ -154,7 +157,11 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        run_kwargs: dict[str, Any] = {"mode": mode, "workflow_run_id": workflow_run_id}
+        run_kwargs: dict[str, Any] = {
+            "mode": mode,
+            "workflow_run_id": workflow_run_id,
+            "reasoning_effort": reasoning_effort,
+        }
         if metadata:
             run_kwargs["metadata"] = dict(metadata)
         result = self.orchestrator.run(messages, **run_kwargs)

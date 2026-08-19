@@ -52,6 +52,7 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
+ALLOWED_REASONING_EFFORTS = {"auto", "none", "low", "medium", "high"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -210,6 +211,18 @@ def _validate_mode(mode: Any) -> str:
     if not isinstance(mode, str) or mode not in ALLOWED_MODES:
         raise RequestError(400, "invalid_mode", "mode must be auto, route, or conduct")
     return mode
+
+
+def _validate_reasoning_effort(value: Any) -> str:
+    if value is None:
+        return "auto"
+    if type(value) is not str or value not in ALLOWED_REASONING_EFFORTS:
+        raise RequestError(
+            400,
+            "invalid_reasoning_effort",
+            "reasoning_effort must be auto, none, low, medium, or high",
+        )
+    return value
 
 
 def _validate_messages(messages: Any) -> list[dict[str, Any]]:
@@ -897,6 +910,7 @@ def build_server(
 
                 if path == "/v1/chat/completions":
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
+                    reasoning_effort = _validate_reasoning_effort(body.get("reasoning_effort"))
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
                         # response_format / tools cannot be merged across agents;
                         # proxy the full request to one agent and return it verbatim.
@@ -950,6 +964,7 @@ def build_server(
                         model_name=model_name,
                         workflow_run_id=f"run_{uuid.uuid4().hex}",
                         metadata=request_metadata,
+                        reasoning_effort=reasoning_effort,
                     ))
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
