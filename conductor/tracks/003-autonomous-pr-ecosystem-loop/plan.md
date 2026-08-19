@@ -1212,3 +1212,29 @@ the cancellation request. It is the same provider-held state recorded in
 iteration 14; do not repeat the cancellation request while GitHub has not
 changed the run state. All current-head runs remain preserved, and both org
 sweep variables remain `0`.
+
+## Status as of 2026-08-19, iteration 16 — protection audit completed without policy writes
+
+The next-repository protection audit was read-only and covered the default
+branches of `noema`, `IRT-bibliography-set`, `naruon`, `keyverse`,
+`governance-risk-compliance`, and `gyeot`.
+
+* `noema/main` has no classic branch protection and one active central
+  security-workflow ruleset (`18794436`) with no bypass actor.
+* `IRT-bibliography-set/main` has neither classic protection nor an active
+  ruleset in the API response.
+* `keyverse/main` has no classic protection and the central ruleset
+  `18156473` with its organization-admin bypass.
+* `governance-risk-compliance/develop` and `gyeot/develop` have no classic
+  protection and inherit the active central ruleset.
+* `naruon/develop` is the exception: classic protection has
+  `enforce_admins=true`, and three active rulesets exist (`18156473`,
+  `17214772`, and `15586698`). Only the central ruleset carries the
+  organization-admin bypass; the extra default-branch rulesets have empty
+  bypass actors. Treat naruon as normal-review-only until its own policy
+  owner explicitly changes that configuration.
+
+No protection or bypass configuration was modified. The queue remains hosted
+runner-bound: the latest observed queue was `591`, the three exact-head fix
+runs (#1138, #1139, and #762) remained queued, and both org sweep variables
+remained `0`.
