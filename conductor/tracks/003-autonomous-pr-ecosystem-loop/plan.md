@@ -2230,3 +2230,21 @@ merge, self-approval, or CI bypass was used. PR #1128, #1139, #1142, and
 2. Verify each protected merge on live main before advancing the candidate
    queue or changing sweep limits.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 57 — six-way duplicate dispatch burst reduced
+
+The next live scheduler snapshot contained six no-target
+`repository_dispatch` runs for the same main SHA, each with only a queued
+`scan-pr-queue` job and a skipped org sweep. The newest
+`32266217283` was preserved; older duplicates `32266217222`, `32266195331`,
+`32266194884`, `32266193622`, and `32266182935` were cancelled and all five
+verified `completed/cancelled`. This confirms the pre-merge defect is still
+active, while the source fix remains isolated in PR #1155.
+
+### Next iteration checklist
+
+1. Preserve only the newest same-main no-target dispatch until #1155 reaches
+   main; never cancel target PR or current-head evidence.
+2. Recheck hosted runner assignment and merge PR #1155 normally when all
+   required contexts succeed.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
