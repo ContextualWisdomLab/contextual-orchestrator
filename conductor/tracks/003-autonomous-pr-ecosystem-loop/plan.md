@@ -2497,3 +2497,22 @@ plan PR #758 current-head evidence remains untouched; main is still
 2. Monitor both auto-merge PRs for runner assignment and terminal success;
    after merge, verify both concurrency fixes on main.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 71 — mergeability confirmed, no-op pair removed
+
+PR #1155 is live-mergeable with exact head
+`3626e5eaee95fdfda36c4d079b8e191521fdec74`, normal squash auto-merge enabled,
+and no review or merge conflict blocker; only required checks remain queued.
+The old main workflow generated two metadata-free no-op pending runs
+(`32269229755` and `32269225941`), both were cancelled and verified
+`completed/cancelled`. Plan PR #758 is likewise mergeable at exact head
+`e742b8abbd0ea9c498a058485aca62ce228ccd3c`, with normal auto-merge enabled.
+Main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve the mergeable exact-head PR evidence and cancel only regenerated
+   no-PR/no-jobs scheduler runs before PR #1155 reaches main.
+2. Merge through normal auto-merge as soon as all required contexts are
+   terminal-successful, then verify both concurrency fixes on main.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
