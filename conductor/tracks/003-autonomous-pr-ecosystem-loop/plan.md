@@ -2603,3 +2603,35 @@ still exact-head, mergeable, and normal auto-merge enabled; main remains
 2. Merge both PRs normally after required contexts succeed, then verify main
    and live scheduler behavior.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 76 — current-main rebase and exit-gate review fixes
+
+`.github#1155` was updated against the live main SHA
+`c47bee591c3d95bd305f2130833ed3a4780d2d1d`; its exact branch head is now
+`f73e43e454ac03f851d6432be7c5be7e0362fc81`, normal squash auto-merge remains
+enabled, and no hosted check has failed. The exact head passed the focused
+contract suite (`51 passed`), the full suite (`1223 passed, 16 subtests
+passed`), `git diff --check`, and targeted `actionlint` for
+`.github/workflows/pr-review-merge-scheduler.yml`.
+
+This plan PR's current exact head is
+`1710744de4dafdd96c56fe518fad0a77ce8c2fe1`, with normal squash auto-merge
+enabled. The two still-valid CodeRabbit findings were verified against the
+plan and fixed: every PR snapshot now records and validates current
+mergeability/head evidence, and the shared ruleset `18156473` is explicitly
+scoped before any bypass change. All current review threads are resolved; its
+new hosted checks are queued with no failure. The contextual-orchestrator main
+SHA remains `7eb459ee72c37dead5d25f284dfa4546f149fbe1`.
+
+The regenerated metadata-free scheduler run `32314719015` had no PR metadata
+and zero jobs; it was canceled and verified `completed/cancelled`. The
+metadata-free pending count is zero at this observation.
+
+### Next iteration checklist
+
+1. Preserve exact-head checks and inspect the first terminal result; cancel
+   only newly proven no-PR/no-jobs scheduler runs.
+2. Let #1155 and #758 merge through normal auto-merge after all current-head
+   required contexts succeed, then verify both main branches and scheduler
+   concurrency behavior live.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
