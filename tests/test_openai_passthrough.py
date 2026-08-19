@@ -86,6 +86,7 @@ def test_provider_feature_request_always_collects_multiple_attempts() -> None:
 
     assert len(calls) == 3  # two independent candidates plus one synthesizer
     assert result["object"] == "chat.completion"
+    assert "response_format" not in calls[0][1]
     assert calls[-1][1]["response_format"] == {"type": "json_object"}
     assert "mode" not in calls[-1][1]
     assert "reasoning_effort" not in calls[-1][1]

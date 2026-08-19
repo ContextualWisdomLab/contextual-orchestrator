@@ -2036,6 +2036,15 @@ class TaskOrchestrator:
             if key not in self._ORCHESTRATION_ONLY_KEYS
         }
         upstream["model"] = agent.model
+        response_format = upstream.get("response_format")
+        if isinstance(response_format, dict) and response_format.get("type") in {
+            "json_object",
+            "json_schema",
+        }:
+            # Candidate workers supply evidence; only the final synthesizer must
+            # satisfy the caller's structured-output contract. This keeps a
+            # provider capability gap from eliminating every independent worker.
+            upstream.pop("response_format", None)
         requested_reasoning_effort = upstream.get("reasoning_effort")
         if requested_reasoning_effort == "auto" or (
             isinstance(requested_reasoning_effort, str)
