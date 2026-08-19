@@ -1357,3 +1357,23 @@ status context is CodeRabbit success due rate limiting; no independent review
 for the new head exists yet. The PR remains open and `mergeable_state=dirty`;
 do not call it green or mergeable until hosted checks and the normal review
 gate produce terminal evidence.
+
+## Status as of 2026-08-19, iteration 21 — stale Semgrep branch update is conflict-bound
+
+The next independent stale-Semgrep candidate was contextual-orchestrator #650,
+currently `1e5e60c0d1aacca8a220eeca19a731d9345747e0` against old base
+`6841b71935e0b7cb98fb52bcb4709cc5100c8d87`; protected `main` is now
+`7eb459ee72c37dead5d25f284dfa4546f149fbe1`. Its current checks include a
+terminal failure for `Semgrep (multi-language SAST)` while the other security,
+coverage, full-suite, and review-wrapper checks are terminal success or
+neutral. The normal GitHub update-branch API was attempted with an exact
+`expected_head_sha` and correctly returned HTTP 422 (`merge conflict between
+base and head`), so no remote branch mutation occurred.
+
+A local merge-tree/merge rehearsal confirmed that this is not a one-file
+refresh: the branch conflicts in `contextual_orchestrator/__main__.py`,
+`cost_ledger.py`, `orchestrator.py`, both Atheris requirement files,
+`pyproject.toml`, and five related test files, in addition to the earlier
+fuzz/docs conflict set. Do not auto-resolve or force-push a 1,000-line feature
+branch; retain #650 as conflict-bound and continue with current-head fixes or
+independently reviewable PRs.
