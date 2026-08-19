@@ -2092,3 +2092,26 @@ made.
    queued workload appears; do not cancel current-head evidence to force
    scheduling.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 50 — duplicate central scans reduced
+
+At `2026-08-19T14:22:47Z`, the live scheduler workflow was inspected at
+`main`. Eleven queued `repository_dispatch` runs titled `merge-scheduler`
+targeted the same `.github` main SHA and contained only a queued
+`scan-pr-queue` job; their `org-queue-sweep` jobs were skipped. The newest run
+`32263563429` was preserved, while the ten older duplicate runs were
+cancelled and independently verified `completed/cancelled`.
+
+The four candidate bootstrap jobs remained queued immediately afterward, so
+this safe duplicate reduction did not yet create a runner transition. No PR
+required run, target-repository dispatch, current-head evidence, sweep limit,
+or policy gate was changed.
+
+### Next iteration checklist
+
+1. Monitor the preserved scheduler run and the four exact-head bootstrap jobs;
+   act on the first runner assignment or terminal result.
+2. If duplicate no-target scheduler scans reappear, preserve only the newest
+   same-main scan and verify each older cancellation; never apply this rule to
+   target PR dispatches.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
