@@ -2360,3 +2360,30 @@ remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
 2. Recheck both auto-merge PRs for terminal required checks and verify main
    after any protected merge.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 64 — metadata-free workflow-run deduplication submitted
+
+The no-op cleanup exposed a source-level sibling defect: metadata-free
+`workflow_run` events created pending scheduler runs even though all jobs were
+skipped. PR #1155 now adds a stable
+`workflow-run-no-pr-{repository}` concurrency group and enables
+`cancel-in-progress` only for that metadata-free workflow-run case. PR-scoped
+workflow runs, schedules, pushes, repository target dispatches, and org sweeps
+retain their existing groups and cancellation behavior. A static contract
+assertion, `actionlint`, `git diff --check`, and the full local suite all pass
+(`1217 passed, 16 subtests passed`).
+
+The updated PR exact head is
+`3626e5eaee95fdfda36c4d079b8e191521fdec74`; normal squash auto-merge remains
+enabled, with required checks newly queued. Main is still
+`bbedc1a51ec1a2421f129955c629b3cd0507a4ec`; no sweep-limit or policy bypass
+was used.
+
+### Next iteration checklist
+
+1. Monitor PR #1155's updated exact-head checks and merge it only through
+   normal auto-merge after terminal success.
+2. Verify main contains both stable concurrency fixes, then observe a live
+   metadata-free workflow-run supersede and confirm no pending buildup.
+3. Recheck plan PR #758 and keep both sweep limits at `0/0` until #1139 is
+   merged and live-verified.
