@@ -1748,3 +1748,26 @@ was attempted while hosted gates were non-terminal.
    the next root-cause repair target.
 3. Keep both sweep limits at `0/0` until the scheduler fix is merged and
    live-verified.
+
+## Status as of 2026-08-19, iteration 37 — current #1128 jobs are runner-queued, not stale
+
+At `2026-08-19T13:21:35Z`, the exact-head rollup still showed #1128 at
+`e33536ba95a6fd6ff185b857ac2955835b80471e` with no failures and only two
+pending required jobs. Their live CheckRun details are:
+
+- `strix`: run `32239172422`, job `96069651307`, queued since
+  `2026-08-19T12:35:47Z`.
+- `opencode-review`: run `32239172302`, job `96079256591`, queued since
+  `2026-08-19T13:09:09Z`.
+
+Both jobs target the current PR head, so neither is stale queue hygiene. The
+central #1139 scheduler fix remains at `7476d4a...` with its required checks
+queued. Preserve these jobs; do not cancel or rerun them merely to force a
+state transition, and do not merge while either required context is pending.
+
+### Next iteration checklist
+
+1. Re-read these two job IDs and the exact head; act only when one terminates.
+2. If both pass, perform the immediate live-head/review/protection check and
+   normal protected merge for #1128 if the rules permit it.
+3. Otherwise repair the first terminal failure and keep sweep limits at `0/0`.
