@@ -2115,3 +2115,29 @@ or policy gate was changed.
    same-main scan and verify each older cancellation; never apply this rule to
    target PR dispatches.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 51 — scheduler deduplication fix submitted
+
+At `2026-08-19T14:29:31Z`, PR #1155 was opened from exact head
+`762a999bf66db0bae2e6fc7455e1dc0c83268e1e` to fix the root cause found in
+iteration 50. The central scheduler previously used `github.run_id` as the
+fallback concurrency key for unscoped `repository_dispatch` events, so each
+duplicate scan bypassed cancellation. The workflow now uses a stable
+repository-level key, keeps `org_sweep == true` in its own group, and retains
+the existing target-PR groups. The new static contract test and the full
+`tests/test_required_workflow_queue_contract.py` file pass (`51 passed`),
+along with `git diff --check` and `actionlint`.
+
+PR #1155 has normal squash auto-merge enabled. Its first scheduler run was
+cancelled by the subsequent same-group run, providing live confirmation that
+the new concurrency key is effective; the newest run and all other required
+checks are still queued without a terminal failure. No sweep-limit variable
+was changed.
+
+### Next iteration checklist
+
+1. Monitor PR #1155's exact-head checks and merge it only through normal
+   auto-merge after every required context is terminal-successful.
+2. Verify `main` contains the scheduler fix after merge, then recheck the
+   candidate PR queue and current-head evidence.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
