@@ -99,6 +99,27 @@ def test_auto_protocol_falls_back_only_when_chat_endpoint_is_unsupported() -> No
     assert calls == ["chat/completions", "responses"]
 
 
+def test_auto_protocol_retries_without_temperature_after_provider_capability_rejection() -> None:
+    client = ModelClient()
+    agent = ModelAgent("auto_agent", "gpt-reasoning", "https://provider.example/v1")
+    calls: list[dict] = []
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/chat/completions", 400, "bad request", {}, io.BytesIO(b"{}")
+    )
+
+    def send(_agent, endpoint, payload, _destination=None, _timeout=None):
+        assert endpoint == "chat/completions"
+        calls.append(payload)
+        if "temperature" in payload:
+            raise error
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    client._send_provider_json = send  # type: ignore[method-assign]
+    assert client._send(agent, {"messages": [{"role": "user", "content": "question"}], "temperature": 0.2}) == "ok"
+    assert calls[0]["temperature"] == 0.2
+    assert "temperature" not in calls[1]
+
+
 def test_provider_protocol_rejects_unknown_values() -> None:
     with pytest.raises(ValueError):
         ModelAgent("bad_agent", provider_protocol="xml")

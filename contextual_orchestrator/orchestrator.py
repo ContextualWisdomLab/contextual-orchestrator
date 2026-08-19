@@ -952,9 +952,14 @@ class ModelClient:
         try:
             data = self._send_provider_json(agent, "chat/completions", normalized, destination, timeout)
         except urllib.error.HTTPError as exc:
-            if agent.provider_protocol != "auto" or exc.code not in UNSUPPORTED_ENDPOINT_STATUSES:
+            if agent.provider_protocol == "auto" and exc.code == 400 and "temperature" in normalized:
+                retry_payload = dict(normalized)
+                retry_payload.pop("temperature", None)
+                data = self._send_provider_json(agent, "chat/completions", retry_payload, destination, timeout)
+            elif agent.provider_protocol != "auto" or exc.code not in UNSUPPORTED_ENDPOINT_STATUSES:
                 raise
-            return self._send_responses(agent, normalized, destination, timeout=timeout)
+            else:
+                return self._send_responses(agent, normalized, destination, timeout=timeout)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -1295,6 +1300,22 @@ class ModelClient:
         for attempt in range(retry_limit + 1):
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
+            except urllib.error.HTTPError as exc:
+                if agent.provider_protocol == "auto" and exc.code == 400 and "temperature" in payload:
+                    retry_payload = dict(payload)
+                    retry_payload.pop("temperature", None)
+                    try:
+                        return self._send_raw(agent, endpoint, retry_payload, destination)
+                    except Exception as retry_error:  # noqa: BLE001 - classify the negotiated retry below
+                        last_error = retry_error
+                        if attempt >= retry_limit or not is_transient_error(retry_error):
+                            break
+                        self._sleep(self._backoff_delay(attempt))
+                        continue
+                last_error = exc
+                if attempt >= retry_limit or not is_transient_error(exc):
+                    break
+                self._sleep(self._backoff_delay(attempt))
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
