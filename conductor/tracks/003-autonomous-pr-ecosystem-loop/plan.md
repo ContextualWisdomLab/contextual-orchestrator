@@ -1412,3 +1412,23 @@ action is to re-read these exact heads after hosted queue progress, then merge
 only a fully terminal, policy-allowed candidate through the normal protected
 path (using the documented admin fallback only when the independent-review
 requirement alone is demonstrably unsatisfiable).
+
+## Status as of 2026-08-19, iteration 24 — Noema sidecar contract failure repaired
+
+The current-head audit found a real `.github#1120` failure at
+`85534334d4ae7672c7f2dc23baa0cff2ef8079b6`: the hosted hourly contract suite
+reported `1,220 passed, 2 failed` because private repositories could select the
+multi-provider sidecar and the generated OpenCode inline config defined
+`contextual-orchestrator` without including it in `enabled_providers`. The
+minimal repair requires the sidecar branch only when
+`TARGET_REPOSITORY_PRIVATE=false`, adds the provider to that exact allowlist,
+and updates the workflow blob-hash contract to the resulting file hash.
+
+Local verification on commit `c6bb739db213161b39f137640bd835354a4ba529`
+passed the full `.github` suite (`1222 passed, 16 subtests passed`), focused
+contract coverage, `actionlint` workflow parsing with local shellcheck/pyflakes
+integrations disabled, and `git diff --check`. The commit was pushed after an
+exact remote-head guard. PR #1120 is now `mergeable=true` but blocked with 17
+queued and one in-progress hosted check; no current-head formal approval exists.
+The next active failure candidate is `.github#1128`, whose prior exact-head
+Strix job failed and requires log-level diagnosis before any dismissal or merge.
