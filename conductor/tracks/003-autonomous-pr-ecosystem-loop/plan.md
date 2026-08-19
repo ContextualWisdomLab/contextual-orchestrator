@@ -1673,3 +1673,29 @@ was attempted.
    protection before any merge.
 3. Keep `ORG_SWEEP_REVIEW_DISPATCH_LIMIT` and
    `ORG_SWEEP_BRANCH_UPDATE_LIMIT` at `0` until the central fix is live.
+
+## Status as of 2026-08-19, iteration 34 — no safe new repair while hosted queue remains non-terminal
+
+The next current candidate, `.github#1147`, is a large 56-file,
+2,812-line ecosystem capability-catalog feature at exact head
+`86c4d7d52c346616ad9a64cd55cece543bfbae37`. Its current rollup showed
+in-progress/queued checks but no terminal failure and no review decision. The
+diff was fetched locally for scope inspection; no speculative change was made
+to a large feature branch without a concrete failing check.
+
+The active exact-head candidates remain unchanged: #1139 at
+`7476d4a152d561ce5942befc91aee21b09e86afc` has queued required checks, and
+#1128 at `e33536ba95a6fd6ff185b857ac2955835b80471e` has queued `opencode-review`
+and `strix`. The REST Actions queue endpoint continues to return secondary
+rate-limit responses; a broader 50-PR GraphQL rollup timed out, so neither was
+used as evidence for a mutation. No current-head run, review, branch, merge,
+or sweep-limit was changed.
+
+### Next iteration checklist
+
+1. Use small GraphQL rollups only for #1139 and #1128 until terminal evidence
+   appears; avoid broad queries that time out or amplify API pressure.
+2. On a terminal failure, inspect its exact log and make the smallest root
+   cause repair; do not alter #1147 without failure evidence.
+3. Keep both sweep limits at `0` and do not merge while required checks remain
+   queued.
