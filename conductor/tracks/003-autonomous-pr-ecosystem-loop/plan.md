@@ -532,3 +532,81 @@ still green.
    iteration 1, still not started, now five iterations overdue. If the
    merge backlog keeps eating every iteration, carve out explicit time
    for this next iteration regardless.
+
+## Status as of 2026-08-19, iteration 7 — the merge path works at scale now
+
+Merged **#746, #747, #748** via `gh pr merge --admin --squash
+--delete-branch` (dismissing stale mechanical opencode-agent reviews
+first, per the now-standard procedure). **#749 and #752 closed as
+redundant**: once #746 merged, its own scope turned out to already
+include equivalent-or-better fixes for what both of those PRs were
+solving —
+- #746 shipped its own from-scratch DNS-pinned, non-redirect-following
+  `_open_provider` (superset of #749's `_RefuseRedirectHandler` fix), and
+- #746 *also* independently fixed the atheris/cp314 issue as part of its
+  own scope (`fuzz/requirements-atheris.*` bumped to `atheris==3.1.0`,
+  **and** `fuzz.yml`'s `python-version` changed to `3.12` — a cleaner fix
+  than #752's, since 3.12 is a version atheris 3.1.0 actually ships a
+  wheel for, rather than #752's `--python-version 3.11 --universal`
+  workaround).
+
+**Lesson for future iterations**: before spending effort resolving a
+branch-update conflict or debugging a CI failure on an older, smaller fix
+PR, check whether a large, actively-evolving PR (like #746) already
+solved the same problem as part of its own scope — closing as redundant
+with a clear comment is faster and cleaner than re-fighting a conflict.
+
+Verified main after all four merges: full suite green (414 unit + 10
+fuzz), and confirmed `ModelClient.__init__` now hard-rejects
+`verify_tls=False` (raises `ValueError` rather than ever calling
+`ssl._create_unverified_context()`) — the stricter design #746 chose over
+main's previous gated-with-nosemgrep approach.
+
+Found and fixed a second-order bug in `.github`'s pip-audit fix from
+iteration 6: `--no-deps` alone does **not** stop pip's resolver from
+flagging the strix-agent/cryptography declared-range conflict (only
+`--disable-pip --no-deps` together do, confirmed by testing locally
+against the real files before pushing) — and `--disable-pip` requires
+every requirement to be an exact pin, which `requirements-strix-ci.txt`
+(the raw, hand-maintained input; `protobuf<7.0.0` is intentionally a
+range) doesn't satisfy. Final fix: `--disable-pip --no-deps` only for the
+compiled `*-hashes.txt` an override applies to; skip auditing its raw
+non-hashed input counterpart entirely (documented why: it's never itself
+a `pip install --require-hashes` target). Pushed to `.github#1121`, whose
+checks are re-running as of this iteration's end.
+
+**Aggregate counts, first real movement**: `contextual-orchestrator` open
+PRs 214 → 210; `.github` open PRs 147 → 145. Modest net (new PRs keep
+being created by other active agents/automation in parallel — confirmed
+real: saw fresh pushes to unrelated `cursor/bc-*` branches and a
+brand-new `github-hourly-review-repair.yml` land on `.github` main
+mid-iteration, none of it mine), but the *first* iteration where the
+count actually went down instead of only up.
+
+### Next iteration checklist (supersedes prior ones)
+
+1. Check `.github#1121`'s fresh CI run (pushed at end of this iteration) —
+   merge once green using the now-standard dismiss-stale-reviews +
+   admin-merge procedure.
+2. Re-pull the full `contextual-orchestrator` PR snapshot (paginated
+   GraphQL) and get real checks-red / CHANGES_REQUESTED counts now that
+   four merges (#750, #746, #747, #748) carrying the Semgrep, SSRF, JSON-
+   depth, and (via #746) atheris fixes are all on `main`. This is the
+   first iteration where that comparison should show a real drop, not
+   just "give it more time."
+3. Sample more of the remaining backlog for shared root causes the same
+   way — don't assume everything left is atheris/Semgrep-shaped; there
+   are likely more single-root-cause clusters like those two.
+4. Check whether `noema`/`IRT-bibliography-set`/other repos have their own
+   classic-branch-protection `enforce_admins: true` layer in addition to
+   their ruleset before assuming they're unblocked the same way
+   `contextual-orchestrator` now is.
+5. Check the 5 Dependabot alerts on `.github`'s default branch (still not
+   triaged, six iterations running).
+6. **Start the PII-masking-alternative research** (governance-risk-
+   compliance + `gyeot`/`naruon`) — authorized since iteration 1, still
+   not started, now six iterations overdue. The merge backlog has a
+   working, faster path now (four merges this iteration alone); if it
+   keeps eating 100% of iteration time regardless, that's a signal to
+   explicitly timebox future iterations rather than letting backlog work
+   expand to fill all available time.
