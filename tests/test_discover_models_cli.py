@@ -124,6 +124,66 @@ def test_enable_cheapest_requires_agents_db() -> None:
     assert "--agents-db" in stderr.getvalue()
 
 
+def test_auto_discovery_can_retain_seed_agents_when_provider_is_unavailable() -> None:
+    from contextual_orchestrator.model_discovery import ProviderDiscoveryError
+    from contextual_orchestrator.orchestrator import ModelAgent
+
+    seed = ModelAgent(
+        "gateway_agent",
+        "",
+        base_url="https://gateway.example/v1",
+        credential_key="GATEWAY_KEY",
+    )
+    stdout = StringIO()
+    stderr = StringIO()
+
+    class _FakeOrchestrator:
+        def compare_to_baseline(self, prompts, mode):
+            return {"prompts": prompts, "mode": mode}
+
+    try:
+        with (
+            patch.object(
+                sys,
+                "argv",
+                [
+                    "contextual-orchestrator",
+                    "--agents",
+                    "ignored.json",
+                    "--auto-discover-model-agents",
+                    "--allow-discovery-failures",
+                    "--eval",
+                    "probe",
+                ],
+            ),
+            patch.object(sys, "stdout", stdout),
+            patch.object(sys, "stderr", stderr),
+            patch(
+                "contextual_orchestrator.__main__.load_agents",
+                return_value=[seed],
+            ),
+            patch(
+                "contextual_orchestrator.__main__.expand_blank_agents",
+                return_value=(
+                    [],
+                    [ProviderDiscoveryError("gateway", "budget exceeded")],
+                ),
+            ),
+            patch(
+                "contextual_orchestrator.__main__.TaskOrchestrator",
+                return_value=_FakeOrchestrator(),
+            ) as orchestrator,
+        ):
+            from contextual_orchestrator.__main__ import main
+
+            main()
+    finally:
+        pass
+
+    assert "model discovery incomplete" in stderr.getvalue()
+    assert orchestrator.call_args.args[0] == [seed]
+
+
 def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) -> None:
     from contextual_orchestrator import TaskOrchestrator
     from contextual_orchestrator.orchestrator import ModelAgent

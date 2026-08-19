@@ -261,6 +261,11 @@ def main() -> None:
         action="store_true",
         help="Expand blank remote seed agents into the provider model pool; do not select a model in the caller.",
     )
+    parser.add_argument(
+        "--allow-discovery-failures",
+        action="store_true",
+        help="Keep seed agents when provider model discovery fails; requests still fail until a model is available.",
+    )
     parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
@@ -336,7 +341,15 @@ def main() -> None:
             exclude_model_ids=(embedding_model,) if embedding_model else (),
         )
         if discovery_errors:
-            parser.error("; ".join(str(error) for error in discovery_errors))
+            if not args.allow_discovery_failures:
+                parser.error("; ".join(str(error) for error in discovery_errors))
+            print(
+                "warning: model discovery incomplete; retaining seed agents: "
+                + "; ".join(str(error) for error in discovery_errors),
+                file=sys.stderr,
+            )
+            if not agents:
+                agents = load_agents(args.agents)
     orchestrator = TaskOrchestrator(
         agents,
         client=client,
