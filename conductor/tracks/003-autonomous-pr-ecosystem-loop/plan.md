@@ -982,4 +982,18 @@ Before #759, the integration-head ancestry audit proved **42** open PR heads fro
 3. Finish `.github#1139` through its own fresh checks/review and normal merge.
 4. Use the repaired scheduler for the `CHANGES_REQUESTED` sweep; inspect review bodies before treating any rejection as mechanical.
 5. Revisit ADR 0010's purpose-limited PII authorization and field-level encryption follow-ups.
-6. Continue the live classic-protection audit, then revert temporary bypass changes only after the documented exit condition is actually met.
+6. Continue the live classic-protection audit, then revert temporary bypass changes only after the documented exit condition is actually met.## Completion update — 2026-08-19
+
+**PR #759 merged** at main commit `7eb459ee72c37dead5d25f284dfa4546f149fbe1` from exact head `f5dbf582df15ecd9cf444b6d92874b3b7153a016`. The published tree is exactly the tested integration tree (`fdf2fbec`); fresh required checks were terminal green, including Strix and coverage-evidence. OpenCode's required wrapper completed successfully but submitted no review; the documented admin fallback was used only for that unsatisfiable independent approval requirement, with no CI check bypass and zero unresolved threads.
+
+The live, guarded superseded sweep then closed **42** PRs whose current heads were verified as ancestors of integration commit `c1aa96a` immediately before each comment and close. Non-ancestors were preserved, including #739. Queue metrics afterward were **166 open PRs, 160 `CHANGES_REQUESTED`, 5 `REVIEW_REQUIRED`, and 60 failing status-search results**. The reduction is evidence of the integrated stack removal, not permission to dismiss the remaining cohort without reading each review.
+
+PR #760 was closed as a duplicate of this canonical plan PR. The next queue task is the remaining non-ancestor review sweep; `.github#1139` is the scheduler repair that will remove the structural `CHANGES_REQUESTED` deadlock once its own normal checks/review complete.
+
+### Next continuation checklist
+
+1. Let this canonical docs PR (#758) complete its normal checks and review, then merge it without replacing the live evidence above.
+2. Finish `.github#1139` through its normal checks and review; verify its current head before any merge.
+3. Re-snapshot the remaining 160 `CHANGES_REQUESTED` PRs, inspect bodies, and use the repaired scheduler only for stale-base cases; preserve genuine findings.
+4. Revisit ADR 0010's purpose-limited PII authorization and field-level encryption follow-ups.
+5. Continue the classic-protection audit and revert temporary bypass changes only when the documented exit condition is actually met.
