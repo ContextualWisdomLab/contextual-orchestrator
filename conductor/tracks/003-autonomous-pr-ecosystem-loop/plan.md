@@ -1699,3 +1699,28 @@ or sweep-limit was changed.
    cause repair; do not alter #1147 without failure evidence.
 3. Keep both sweep limits at `0` and do not merge while required checks remain
    queued.
+
+## Status as of 2026-08-19, iteration 35 — #1128 is near green; only OpenCode and Strix remain
+
+At `2026-08-19T13:16:37Z`, the exact-head GraphQL rollup for
+`.github#1128` at `e33536ba95a6fd6ff185b857ac2955835b80471e` showed no failed
+checks and terminal success for coverage evidence, CodeQL compatibility and
+merge preview, dependency/security scans, Noema, path policy, and the hourly
+contract. Only `opencode-review` and `strix` remained queued. The PR is still
+`MERGEABLE/BLOCKED` with no review decision, so it is a possible normal merge
+candidate only after those two required contexts are terminal-successful.
+
+`.github#1139` remains at `7476d4a152d561ce5942befc91aee21b09e86afc` with its
+required set queued and no failures or independent approval. The classic
+protection REST re-read was rate-limited; no protection or merge decision was
+made from stale evidence.
+
+### Next iteration checklist
+
+1. Re-read #1128's `opencode-review` and `strix`; if both pass, re-read the
+   live head, reviews, protection, and required contexts immediately before a
+   normal protected merge.
+2. Keep #1139 queued checks intact and repair any first terminal failure at
+   its exact head.
+3. Keep sweep limits at `0/0` until the central scheduler fix is merged and
+   its global-budget behavior is live-verified.
