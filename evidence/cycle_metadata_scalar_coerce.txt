@@ -1,0 +1,2 @@
+metadata values: bool/int/float coerce to strings; nested objects/arrays fail-closed.
+Local: 1242 passed.

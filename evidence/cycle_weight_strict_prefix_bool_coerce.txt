@@ -1,0 +1,3 @@
+message weight digit/"0.0"/"1.0" coerce; message prefix false coerce forms;
+tool.function.strict + response_format/text.format strict bool coerce.
+Local: 1184 passed.

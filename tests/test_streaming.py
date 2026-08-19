@@ -100,7 +100,7 @@ def _serve() -> tuple[object, int, str]:
 def test_http_stream_true_returns_event_stream_and_reconstructs_answer() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
-    payload = {"messages": [{"role": "user", "content": "stream please"}]}
+    payload = {"model": "mock-generalist", "messages": [{"role": "user", "content": "stream please"}]}
     try:
         # Non-streaming reference answer.
         _, ref_ct, ref_body = _post(url, payload, token)
@@ -129,7 +129,7 @@ def test_http_stream_false_is_unchanged_json() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     try:
-        status, content_type, body = _post(url, {"messages": [{"role": "user", "content": "hi"}], "stream": False}, token)
+        status, content_type, body = _post(url, {"model": "mock-generalist", "messages": [{"role": "user", "content": "hi"}], "stream": False}, token)
     finally:
         server.shutdown()
     assert status == 200
@@ -143,7 +143,7 @@ def test_http_stream_non_boolean_is_rejected() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     try:
-        status, _, body = _post(url, {"messages": [{"role": "user", "content": "hi"}], "stream": "yes"}, token)
+        status, _, body = _post(url, {"model": "mock-generalist", "messages": [{"role": "user", "content": "hi"}], "stream": "yes"}, token)
     finally:
         server.shutdown()
     assert status == 400
