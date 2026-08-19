@@ -2141,3 +2141,22 @@ without a terminal failure. No sweep-limit variable was changed.
 2. Verify `main` contains the scheduler fix after merge, then recheck the
    candidate PR queue and current-head evidence.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 52 — pre-merge duplicate still reproduced
+
+At `2026-08-19T14:22:33Z`, another unscoped `repository_dispatch` scheduler
+run (`32263631059`) appeared against the unchanged main SHA, confirming that
+the defect remains live until PR #1155 merges. The newer run was preserved;
+the previous duplicate (`32263563429`) had the same queued `scan-pr-queue`
+job and was cancelled, then verified `completed/cancelled`. PR #1155's
+current-head required checks remain untouched and queued without terminal
+failure.
+
+### Next iteration checklist
+
+1. Continue preserving only the newest same-main unscoped dispatch while PR
+   #1155 is waiting for hosted runners.
+2. After merge, verify the stable `repo-dispatch-{repository}` concurrency
+   group by observing an older duplicate cancel on a subsequent no-target
+   dispatch, then verify main and the candidate queue.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
