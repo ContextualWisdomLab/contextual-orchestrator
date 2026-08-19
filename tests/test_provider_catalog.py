@@ -382,6 +382,12 @@ def test_bytez_client_fails_closed_on_missing_credential_or_unsupported_output()
     with pytest.raises(ProviderCatalogUnavailable, match="response shape is unsupported"):
         client.chat(agent, [{"role": "user", "content": "hello"}])
 
+    empty_mapping_client = ProviderAwareModelClient(
+        bytez_request=lambda _agent, _messages, _credential: {"output": {}}
+    )
+    with pytest.raises(ProviderCatalogUnavailable, match="response shape is unsupported"):
+        empty_mapping_client.chat(agent, [{"role": "user", "content": "hello"}])
+
 
 def test_non_bytez_client_delegates_to_existing_model_client_mock_path() -> None:
     """Provider awareness leaves the existing mock/OpenAI-compatible behavior unchanged."""

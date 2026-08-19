@@ -324,6 +324,7 @@ class PostgresProviderCatalogStore:  # pragma: no cover - production database ad
         self._schema_ready = True
 
     def upsert_account(self, account: ProviderAccount) -> None:
+        """Create or update one provider account in the catalog."""
         with self._connect() as connection:
             self._ensure_schema(connection)
             with connection.cursor() as cursor:
@@ -331,6 +332,7 @@ class PostgresProviderCatalogStore:  # pragma: no cover - production database ad
             connection.commit()
 
     def replace_catalog(self, account: ProviderAccount, models: Sequence[DiscoveredModel]) -> None:
+        """Replace the account's enabled models and record a refresh."""
         started_at = _utc_now()
         unique = {model.model_name: model for model in models if model.model_name}
         with self._connect() as connection:
@@ -408,6 +410,7 @@ class PostgresProviderCatalogStore:  # pragma: no cover - production database ad
             connection.commit()
 
     def record_failure(self, account: ProviderAccount, error_code: str) -> None:
+        """Record a failed catalog refresh for one provider account."""
         started_at = _utc_now()
         with self._connect() as connection:
             self._ensure_schema(connection)
@@ -425,12 +428,15 @@ class PostgresProviderCatalogStore:  # pragma: no cover - production database ad
             connection.commit()
 
     def enabled_models(self) -> list[CatalogModelRecord]:
+        """Return models from enabled provider accounts."""
         return self._read_models(enabled_accounts_only=True)
 
     def all_models(self) -> list[CatalogModelRecord]:
+        """Return models from enabled and disabled provider accounts."""
         return self._read_models(enabled_accounts_only=False)
 
     def has_models(self, provider_account_id: str) -> bool:
+        """Report whether an account has at least one enabled model."""
         with self._connect() as connection:
             self._ensure_schema(connection)
             with connection.cursor() as cursor:

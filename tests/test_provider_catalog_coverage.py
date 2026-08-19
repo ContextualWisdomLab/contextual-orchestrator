@@ -81,6 +81,7 @@ def test_model_normalization_covers_specialized_capabilities_and_bad_values() ->
                     "pricing": {"prompt": object(), "completion": True},
                     "capabilities": ["", 7, "x" * 129, "CUSTOM"],
                 },
+                {"id": "code/coder-model"},
                 {"id": "x" * 513},
             ]
         }
@@ -95,7 +96,8 @@ def test_model_normalization_covers_specialized_capabilities_and_bad_values() ->
     assert invalid.context_window is None
     assert invalid.input_price_usd_per_million is None
     assert invalid.output_price_usd_per_million is None
-    assert len(by_name) == 5
+    assert by_name["code/coder-model"].capabilities == ("chat", "coding")
+    assert len(by_name) == 6
 
 
 def test_candidate_tags_cover_multimodal_and_empty_slug_fallback() -> None:
@@ -126,6 +128,29 @@ def test_empty_catalog_factory_fails_closed() -> None:
     """Runtime construction never falls back to an implicit mock worker."""
     with pytest.raises(catalog.ProviderCatalogUnavailable, match="no enabled agents"):
         catalog.build_catalog_orchestrator(catalog.InMemoryProviderCatalogStore())
+
+
+def test_refresh_rejects_empty_discovery_without_fabricating_candidates() -> None:
+    """An empty provider response is recorded and cannot bootstrap an agent pool."""
+    account = catalog.DEFAULT_PROVIDER_ACCOUNTS[0]
+    catalog.bootstrap_provider_credentials(
+        {account.credential_name: "secret"},
+        require_all=False,
+        accounts=(account,),
+    )
+    service = catalog.ProviderCatalogService(
+        store=catalog.InMemoryProviderCatalogStore(),
+        accounts=(account,),
+        discover=lambda _account, _credential: [],
+    )
+
+    with pytest.raises(catalog.ProviderCatalogUnavailable, match="no usable provider model"):
+        service.refresh_all()
+    assert service.last_refresh_summary["provider_accounts"][account.provider_account_id] == {
+        "status": "failed",
+        "model_count": 0,
+        "error_code": "catalog_contains_no_models",
+    }
 
 
 def test_bytez_string_output_streaming_and_passthrough_guard() -> None:
@@ -159,6 +184,31 @@ def test_non_bytez_stream_and_proxy_keep_existing_mock_behavior() -> None:
     assert "".join(chunks)
     raw = client.proxy_send(agent, "/responses", {"input": "hello"})
     assert isinstance(raw, dict)
+
+
+def test_agent_tags_cover_role_without_chat_capability() -> None:
+    """Reasoning-only models receive role tags without inheriting chat tags."""
+    account = catalog.DEFAULT_PROVIDER_ACCOUNTS[0]
+    store = catalog.InMemoryProviderCatalogStore()
+    store.replace_catalog(
+        account,
+        [
+            catalog.DiscoveredModel(
+                model_name="reasoning-only",
+                display_name="Reasoning Only",
+                capabilities=("reasoning",),
+                modalities=("text",),
+                context_window=128_000,
+                input_price_usd_per_million=1.0,
+                output_price_usd_per_million=1.0,
+            )
+        ],
+    )
+
+    agent = catalog.ProviderCatalogService(store=store, accounts=(account,)).candidate_agents()[0]
+
+    assert {"planning", "research", "verification"}.issubset(agent.tags)
+    assert "writing" not in agent.tags
 
 
 def test_scalar_capability_and_extreme_context_helpers() -> None:
