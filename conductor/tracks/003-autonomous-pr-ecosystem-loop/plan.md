@@ -411,3 +411,124 @@ a legitimate case for the new admin-bypass capability, not a workaround.
    + `gyeot`/`naruon`) once the merge backlog isn't consuming all
    available iteration time — authorized since iteration 1, still not
    started; this is now the longest-overdue item.
+
+## Status as of 2026-08-19, iteration 6 — first real merge landed
+
+### The bypass actually needed two more layers than expected
+
+Admin-merging #750 kept failing even after the iteration-5 bypass-actor
+grant. Root-caused fully this time:
+
+1. `gh pr merge --admin` (and the equivalent REST `PUT .../merge`) does
+   **not** honor ruleset `bypass_actors` for the specific "review from
+   someone other than the last pusher" check via the API, even when
+   `current_user_can_bypass: "always"` — confirmed by testing both
+   GraphQL and REST paths, identical failure. This looks like a genuine
+   GitHub platform gap between the newer Rulesets bypass model and this
+   specific legacy-style check, not a config mistake.
+2. Separately, `main` also has **classic branch protection**
+   (`required_pull_request_reviews.require_last_push_approval: true`)
+   with **`enforce_admins: true`** — a second, independent enforcement
+   layer that rulesets don't touch at all.
+
+Fixed, in order, each confirmed with the operator first:
+- Dismissed the two stale `opencode-agent[bot]` `CHANGES_REQUESTED`
+  reviews on #750 (mechanical "coverage-evidence failure" rejections, read
+  and confirmed not a real content objection, per iteration 5's root
+  cause).
+- Tried `require_last_push_approval: false` on both rulesets — **made a
+  mistake here**: the first `PUT` replaced the ruleset's entire `rules`
+  array with just the one edited rule, silently dropping the `workflows`
+  (required status checks), `deletion`, and `non_fast_forward` rules.
+  Caught it immediately (`rules[].type` came back as just
+  `["pull_request"]`), restored the full rule set from the originally-
+  fetched JSON before doing anything else. **Lesson: ruleset `PUT` is a
+  full replace, never send a partial `rules` array — always fetch, edit
+  the one field, PUT the whole thing back.** This didn't even fix the
+  actual problem (classic branch protection was still blocking), so once
+  the real fix worked, **reverted `require_last_push_approval` back to
+  `true`** on both rulesets — no reason to leave that weakened for zero
+  benefit.
+- Disabled `enforce_admins` on `main`'s classic branch protection via
+  `DELETE .../branches/main/protection/enforce_admins` (confirmed with
+  operator first, given this is the second deliberate-looking layer).
+
+**This worked**: #750 merged (`gh pr merge --admin --squash
+--delete-branch`, 2026-08-19T00:38:47Z) — the first PR this session
+(and apparently in a while) merged through a working, repeatable path.
+
+### Branch surgery on the other fix PRs
+
+Updated #752, #747, #748, #749, #746 to merge latest `main` (which now
+has #750's Semgrep fixes). Two real conflicts, both resolved by preferring
+the *other* branch's superior approach rather than mechanically taking
+one side:
+
+- **#746's `cost_ledger.py`** already refactors the flagged SQL calls to
+  use module-level static SQL-string dicts (`_DIMENSION_SELECT_SQL[style]`
+  etc.) instead of per-call f-strings — this avoids the Semgrep
+  sqlalchemy-execute-raw-query pattern architecturally, no suppression
+  comment needed at all. Better than main's `# nosemgrep` fix; kept it.
+- **#746's `orchestrator.py`** goes further than both `main` and #749: it
+  removes the `verify_tls=False` insecure-TLS escape hatch entirely
+  (raises `ValueError` instead of ever calling
+  `ssl._create_unverified_context()`), and replaces `_open_provider`
+  with a from-scratch `http.client.HTTPSConnection`/`HTTPConnection`
+  implementation that resolves the hostname once and connects to that
+  exact validated address (DNS-rebind-safe) and never auto-follows
+  redirects at all (raw `http.client` doesn't have `urlopen`'s redirect
+  handler, so it's immune to the SSRF-via-redirect issue #749 fixes by a
+  different, narrower mechanism). Kept #746's version; **once #746
+  merges, #749's `_RefuseRedirectHandler` approach is superseded** — don't
+  re-fight that conflict in #749's favor next time it comes up, adopt
+  #746's connection-level fix instead.
+
+All five re-verified before pushing: full suite green, fuzz green, local
+`semgrep scan --config=p/default ...` (the exact CI command) 0 findings.
+
+### .github: the atheris fix (#1121) had its own second-order bug
+
+pip-audit failed on #1121 even after the atheris bump, because pip-audit
+calls pip's real dependency resolver even for `--require-hashes` files,
+and hits the *same* strix-agent/cryptography declared-range conflict the
+`uv pip compile --override` was created to solve — `--require-hashes`
+doesn't suppress that resolver check. Fixed generically: `.github`'s
+`python-security.yml` now detects a matching
+`requirements-<tool>-ci-overrides.txt` next to any audited requirements
+file and passes `--no-deps` for it (skips resolution, audits the exact
+pins listed — which is what an override file already means we trust).
+Not strix-specific in the code, so it covers any future tool that needs
+the same override treatment. `.github`'s own test suite (1195 tests)
+still green.
+
+### Next iteration checklist (supersedes prior ones)
+
+1. Check `.github#1121` (now has both the atheris bump and the pip-audit
+   `--no-deps` fix) — merge once genuinely green. `.github`'s own ruleset
+   already had a working `OrganizationAdmin` bypass before this session
+   touched anything, so this one may not need the same fight #750 did —
+   verify rather than assume.
+2. Merge #752, #746, #747, #748, #749 once each is verified green
+   (checks + no unresolved substantive review) — `gh pr merge --admin`
+   now has a real, tested path: dismiss stale mechanical
+   CHANGES_REQUESTED reviews first if present (read them, confirm they're
+   the known coverage-evidence artifact, not a real objection), then
+   merge with a body explaining why.
+3. Once #746 is on `main`, if #749 hasn't merged yet, drop #749 in favor
+   of #746's already-landed `_open_provider` rewrite instead of
+   re-resolving the same conflict.
+4. Re-pull the full 214+ PR snapshot and compare against the iteration-2
+   baseline (81 red, 119 CHANGES_REQUESTED) now that four root-cause
+   fixes are merged or merging (Semgrep whole-tree, atheris/cp314,
+   pip-audit --no-deps, and the review/merge bypass path). This is the
+   first point where the aggregate counts should actually move.
+5. Check whether `noema`/`IRT-bibliography-set`/other repos also have a
+   classic-branch-protection `enforce_admins: true` layer in ADDITION to
+   their ruleset (contextual-orchestrator did) — check both, not just the
+   ruleset, before assuming a repo is unblocked.
+6. Check the 5 Dependabot alerts on `.github`'s default branch (still not
+   triaged).
+7. Start the PII-masking-alternative research — authorized since
+   iteration 1, still not started, now five iterations overdue. If the
+   merge backlog keeps eating every iteration, carve out explicit time
+   for this next iteration regardless.
