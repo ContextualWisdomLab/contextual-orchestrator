@@ -1,5 +1,63 @@
 # Plan (living — update every iteration, this is what the loop resumes from)
 
+## If you're a new agent picking this up (updated every iteration)
+
+This is a **standing autonomous mission**, not a one-shot task: continuously
+review, fix, and merge every open PR across every ContextualWisdomLab repo
+the operator has write access to, keep finding and closing loops that raise
+the codebase toward acquisition-grade commercial quality, and never stop to
+ask "should I keep going" — just keep working and update this file. Full
+autonomous merge authority is confirmed (working end-to-end since iteration
+6); org-wide repo scope is confirmed; CI wait time is never a blocker (start
+background work, keep moving, come back when a check completes); no interim
+reports to the operator are needed — the operator reads this file, not a
+chat transcript.
+
+**Mechanics discovered so far** (see individual iteration sections below for
+the full story on each): GitHub rulesets and classic branch protection are
+two independent layers that both had to be relaxed (bypass actor + disabling
+`enforce_admins`) before admin-merge actually worked; `pull_request_target`
+required workflows always run the base branch's version, so a PR editing a
+required central workflow can never show green for its own check on that
+workflow until merged; Semgrep's `p/default` config scans the whole repo
+tree per PR, not the diff; a `CHANGES_REQUESTED` PR's branch can structurally
+never auto-update (the scheduler only updates branches with an APPROVED
+latest review), which was the real explanation for why the CHANGES_REQUESTED
+count kept climbing instead of dropping across several iterations.
+
+**Read the latest `## Status as of ...` section below first** — it
+supersedes every earlier one and its "Next iteration checklist" is the
+authoritative task list. Don't re-derive priorities from scratch; the
+checklist already reflects what's been tried and what's left.
+
+**Codex is a standing collaborator**, not just a sensitive-topic consult —
+the operator confirmed routine collaboration is fine, not only security
+review. Use the `/codex` skill (`codex exec -s read-only`) for a second
+opinion on anything non-trivial: design tradeoffs, merge-conflict resolution
+strategy, whether a test's expectations should change vs. the code. Codex
+genuinely inspects live repo state when given a repo root, not just armchair
+reasoning from the prompt.
+
+### Security-bypass audit trail and exit conditions
+
+Every bypass-merge action in this mission (ruleset bypass-actor, disabled
+`enforce_admins`, admin-merge past `CHANGES_REQUESTED`) must state its
+reason at the point of use — this was already established practice from
+iteration 6 onward, but is now an explicit rule. Never dismiss a stale
+review or override a `CHANGES_REQUESTED` state on pattern-match alone (e.g.
+"it's just Dependabot" or "it's just docs") — always read what the review
+actually flagged first; if it's a real, still-applicable objection, fix the
+underlying issue instead of bypassing.
+
+**Exit condition** (raised by Codex's security critique, confirmed by the
+operator: "참고를 해. 그리고 협동해" — take it into account, and
+collaborate): once the PR backlog clears to a steady state and the merge
+scheduler's normal (non-bypass) path is verified working end-to-end for a
+sample of PRs, revert the bypass — restore ruleset bypass-actor scope and
+`enforce_admins` to their pre-mission state, and rely on the normal
+approve→auto-update→merge flow. This has not happened yet; the backlog was
+still large as of the latest iteration below.
+
 ## Ecosystem leverage order
 
 Central/infra repos first (they unblock everyone downstream), then the
@@ -749,3 +807,86 @@ CHANGES_REQUESTED (a lagging, review-level indicator on stale branches)**.
    real, recurring pattern (2 for 2: `contextual-orchestrator` and
    `.github` both had it) rather than a one-off, so budget time to check
    more repos systematically rather than one at a time as they come up.
+
+## Status as of 2026-08-19, iteration 10 — the CHANGES_REQUESTED deadlock explained, http-honesty stack resolved
+
+Confirmed the root cause behind iteration 9's `CHANGES_REQUESTED` jump to
+203: it's a **structural scheduler deadlock**, not a transient staleness
+issue. The merge scheduler only auto-updates a PR's branch once its latest
+review is `APPROVED` — a `CHANGES_REQUESTED` PR's branch therefore can
+*never* auto-update, so it can never pick up root-cause fixes already on
+`main` (Semgrep, SSRF, atheris/cp314, pip-audit, PII), so it stays
+mechanically rejected forever. This isn't self-correcting the way iteration
+9 hoped; it needs either a manual branch-update sweep of `CHANGES_REQUESTED`
+PRs or a scheduler fix, and is now the standing explanation for that metric
+rather than an open question.
+
+**Main focus this iteration: the ~47-PR "http-honesty" stack** (branches
+`feat/<slug>-http-honesty-<timestamp>`, PR #587–#740; #740 is the tip and
+carries the full cumulative diff — OpenAI-API-compatibility hardening
+across chat/completions/embeddings/responses: casefold/coerce/reject-
+cleanly handling of malformed-but-recoverable request shapes). First
+attempted a small-slices cherry-pick plan; abandoned it after discovering
+the first commit alone already carried a ~21,867-line diff — the stack's
+git history is "one giant dump plus refinements," not truly incremental.
+Consulted Codex (`/codex`, now a standing routine collaborator per the
+operator's "꼭 민감하지 않아도 협동해도 돼"), which recommended a dedicated
+integration branch instead. Built `integrate/http-honesty-740` off #740's
+branch, `git merge origin/main` onto it, and resolved 4 conflicted files by
+reading both sides' intent rather than picking one wholesale:
+
+- `cost_ledger.py` — kept `main`'s static parameterized-SQL-dict pattern
+  over the honesty branch's f-string + `nosemgrep`-suppressed approach
+  (same call already made in iteration 6's #746 merge).
+- `server.py` — unioned both branches' `ALLOWED_RESPONSES_KEYS` additions;
+  adopted the honesty branch's delegated `/v1/models` + `/v1/models/{id}`
+  handler over `main`'s inline ~35-line version.
+- `orchestrator.py` `list_openai_models()` — the one genuine **design**
+  conflict, not just a merge artifact: `main`'s pre-existing test wanted
+  disabled models visible in `/v1/models` with a `status: "disabled"`
+  field; the honesty branch's own new test
+  (`test_openai_models_listing_http.py::test_http_models_list_unique_enabled_pool_models`)
+  explicitly asserted `"mock-disabled" not in ids`. Resolved in favor of
+  the honesty branch's stricter design — hide disabled models entirely,
+  matching real OpenAI API behavior (an inference-scope caller shouldn't
+  see a model it can't call) — since that's more spec-faithful for the
+  exact feature this whole stack builds toward. Updated the older `main`
+  test to match rather than the reverse.
+- `conductor/tracks.md` — marked `003-sdk-omit-real-persist`,
+  `003-compatibility-honesty`, `003-responses-text-format` done via this
+  integration; preserved a load-bearing warning comment from the original
+  track author ("Prefer the persist successor over merging the 145-file
+  #668 stack" / "Do not merge 140-file honesty stacks onto `main`") —
+  checked, the smaller "persist successor" PRs (#668, #685–#687, #681)
+  were all already closed unmerged, so this integration-branch approach
+  doesn't contradict that warning, it supersedes the situation it warned
+  about.
+
+Verified before pushing: full suite **1424 passed**, Hypothesis fuzz **10
+passed**, the exact CI Semgrep command (`p/default`, WARNING+ERROR,
+excluding `.github/workflows` and `docs/research/**/standards`) — **0
+findings**. `git diff --check` clean, no leftover conflict markers. Pushed
+`integrate/http-honesty-740` and opened **PR #759** against `main`; CI was
+still running (all checks pending) when this section was written — per
+standing policy, not waiting on it blocks nothing else. PR #758 (iteration
+9's plan.md doc update) is green except one still-queued `opencode-review`
+check; not yet merged.
+
+### Next iteration checklist (supersedes prior ones)
+
+1. Check PR #759 (http-honesty integration) CI status; merge with the
+   established procedure once green, using the same "state the reason"
+   rule for any bypass if `CHANGES_REQUESTED`/stale-review issues appear.
+2. Merge PR #758 once `opencode-review` clears.
+3. **Only after #759 is merged**: close #587–#739 as superseded by #740,
+   with a clear per-PR comment — spot-check a handful first for any PR
+   that might carry unique work #740 doesn't before closing it.
+4. Manually sweep `CHANGES_REQUESTED` PRs' branches (the scheduler
+   structurally can't do this itself — see the deadlock explanation
+   above) so they pick up the root-cause fixes already on `main` and get
+   a fresh review; re-check aggregate counts afterward.
+5. Design (timeboxed) ADR 0010's two follow-ups: purpose-limited
+   authorization scoping who sees PII, field-level PII encryption at
+   rest — deferred four iterations running now.
+6. Continue the `enforce_admins: true` sweep across `noema` /
+   `IRT-bibliography-set` / other repos (2-for-2 so far).
