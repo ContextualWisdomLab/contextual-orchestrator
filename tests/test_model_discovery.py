@@ -113,6 +113,27 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert discovered[1].prompt_price_per_1k is None
 
 
+def test_discover_local_gateway_normalizes_only_the_transport_scheme() -> None:
+    register_credential("LOCAL_GATEWAY_KEY", "local-secret")
+    source = ProviderModelSource(
+        provider_name="local_gateway",
+        credential_name="LOCAL_GATEWAY_KEY",
+        list_url="local://host.docker.internal:8080/v1/models",
+        chat_base_url="local://host.docker.internal:8080/v1",
+    )
+    seen_requests = []
+
+    def urlopen(request, timeout=None):
+        seen_requests.append(request)
+        return _Response({"data": [{"id": "local-model"}]})
+
+    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+        discovered = discover_provider_models(source)
+
+    assert seen_requests[0].full_url == "http://host.docker.internal:8080/v1/models"
+    assert [model.model_id for model in discovered] == ["local-model"]
+
+
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     register_credential("BYTEZ_API_KEY", "bytez-secret")
     payload = {
