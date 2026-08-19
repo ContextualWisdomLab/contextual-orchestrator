@@ -2179,3 +2179,20 @@ but its required hosted checks remain queued and main is still
 2. Act on the first terminal result for PR #1155; after merge, verify the
    stable concurrency key with a live no-target dispatch transition.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 54 — stale PR #1149 evidence removed
+
+The live `pull_request_target` inventory found five non-terminal runs for PR
+#1149 at obsolete head `9559e04b9489a2f33173db204c6a93283311063d`; the PR's
+current head is `6e8938ffb0d1e2782b4f233bc1a2a18fd910b69b`. Those five stale
+runs (`32261320886`, `32261320859`, `32261320867`, `32261320860`, and
+`32261320838`) were cancelled and all verified `completed/cancelled`. All
+other inspected active PR runs matched their live PR heads and were preserved.
+
+### Next iteration checklist
+
+1. Re-scan active runs after the queue settles and cancel only another exact
+   stale-head or closed-PR set with matching evidence.
+2. Continue preserving the newest no-target scheduler dispatch until PR #1155
+   merges, then verify the fix on live `main`.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
