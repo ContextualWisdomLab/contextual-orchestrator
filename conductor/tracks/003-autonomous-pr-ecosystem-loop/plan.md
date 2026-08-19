@@ -1930,3 +1930,27 @@ changed.
    continue with the exact-head merge or root-cause repair procedure.
 3. Keep `ORG_SWEEP_REVIEW_DISPATCH_LIMIT=0` and
    `ORG_SWEEP_BRANCH_UPDATE_LIMIT=0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 44 — stale cleanup released a current Strix runner
+
+At `2026-08-19T13:49:23Z`, two additional queued runs for closed #1063 were
+discovered after the first cancellation batch. The closed state and exact HEAD
+`20629ff74139777453fd22a39674ca2cc83e5d16` were re-read before cancellation;
+runs `32257054130` and `32257054136` were cancelled and verified
+`completed/cancelled`. No queued run for the closed #1016, #1013, or #1063
+HEADs remained.
+
+The cleanup produced a meaningful current-head transition: #1128's `strix`
+job `96069651307` moved from queued to `in_progress` on runner
+`GitHub Actions 1001063752` at `2026-08-19T13:47:07Z`. #1128's
+`opencode-review`, #1138's `coverage-evidence`, and #1142's current scheduler
+run remain queued and were preserved. No merge, rerun, sweep-limit, or review
+policy change was made.
+
+### Next iteration checklist
+
+1. Monitor #1128 `strix` job `96069651307`; if it terminates, inspect the exact
+   result at head `e33536ba...` before deciding whether auto-merge can proceed.
+2. Preserve the remaining current-head queued jobs and perform the same stale
+   closed-PR scan if the queue fills again.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
