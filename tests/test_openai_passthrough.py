@@ -1,8 +1,8 @@
-"""Full OpenAI passthrough: response_format / tools / the Responses API.
+"""Multi-agent provider-shaped requests: response_format / tools / Responses API.
 
-Requests carrying provider features the multi-agent verifier cannot merge are
-proxied to one agent so the full provider response shape survives, while plain
-prompts keep the orchestration (routing/verification) path.
+Requests carrying provider features are collected from multiple independent
+attempts and synthesized while the full provider response shape survives.
+Plain prompts keep the orchestration (routing/verification) path.
 """
 
 from __future__ import annotations
@@ -25,7 +25,12 @@ from contextual_orchestrator.server import SecurityConfig, build_server, respons
 def _build() -> TaskOrchestrator:
     return TaskOrchestrator(
         agents=[
-            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+            ModelAgent(
+                "planner_agent",
+                "mock-planner",
+                tags=("planning", "reasoning"),
+                reasoning_efforts=("high", "xhigh"),
+            ),
             ModelAgent("disabled_builder_duplicate", "mock-builder", disabled=True),
             ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation")),
             ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "review")),
@@ -58,9 +63,38 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
     assert result["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
 
 
+def test_provider_feature_request_always_collects_multiple_attempts() -> None:
+    orch = _build()
+    calls: list[tuple[str, dict]] = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append((agent.id, payload))
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": agent.id}}],
+            "echo": {key: payload[key] for key in ("response_format", "model") if key in payload},
+        }
+
+    orch.client.proxy_send = proxy_send
+    result = orch.proxy_completion({
+        "messages": [{"role": "user", "content": "extract JSON"}],
+        "response_format": {"type": "json_object"},
+        "mode": "auto",
+        "reasoning_effort": "auto",
+    })
+
+    assert len(calls) == 3  # two independent candidates plus one synthesizer
+    assert result["object"] == "chat.completion"
+    assert calls[-1][1]["response_format"] == {"type": "json_object"}
+    assert "mode" not in calls[-1][1]
+    assert "reasoning_effort" not in calls[-1][1]
+
+
 def test_proxy_completion_forwards_explicit_reasoning_effort() -> None:
     result = _build().proxy_completion(
         {
+            "model": "mock-planner",
             "messages": [{"role": "user", "content": "reason carefully"}],
             "reasoning_effort": "high",
         }

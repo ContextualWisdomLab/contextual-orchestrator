@@ -36,7 +36,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "response_format", "tools", "tool_choice", "functions", "function_call",
     "modalities", "prediction", "store", "service_tier",
 }
-# Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
+# Provider-shaped requests enter the multi-agent structured synthesis boundary.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
@@ -52,7 +52,7 @@ ALLOWED_BATCH_KEYS = {"requests", "attribution", "routing", "model"}
 ALLOWED_EMBEDDINGS_BATCH_KEYS = {"model", "input", "inputs", "endpoint", "metadata", "attribution"}
 ALLOWED_MESSAGE_ROLES = {"system", "user", "assistant", "tool"}
 ALLOWED_MODES = {"auto", "route", "conduct"}
-ALLOWED_REASONING_EFFORTS = {"auto", "none", "low", "medium", "high"}
+ALLOWED_REASONING_EFFORTS = {"auto", "none", "minimal", "low", "medium", "high", "xhigh"}
 ALLOWED_SIMULATE_KEYS = {"prompt", "mode", "include_orchestration_trace"}
 ALLOWED_WORKFLOW_KEYS = {"prompt_text", "run_mode", "include_orchestration_trace"}
 ALLOWED_EVALUATION_KEYS = {"prompts", "prompt_text", "run_mode", "include_orchestration_trace"}
@@ -220,7 +220,7 @@ def _validate_reasoning_effort(value: Any) -> str:
         raise RequestError(
             400,
             "invalid_reasoning_effort",
-            "reasoning_effort must be auto, none, low, medium, or high",
+            "reasoning_effort must be auto, none, minimal, low, medium, high, or xhigh",
         )
     return value
 
@@ -912,14 +912,14 @@ def build_server(
                     _reject_unknown_keys(body, ALLOWED_CHAT_KEYS)
                     reasoning_effort = _validate_reasoning_effort(body.get("reasoning_effort"))
                     if PASSTHROUGH_TRIGGER_KEYS & set(body):
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
+                        # Preserve response_format/tools while collecting and synthesizing
+                        # multiple provider-shaped agent responses.
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
                         )
                         orchestrator.record_analytics_event(
-                            "chat_completion_passthrough",
+                            "chat_completion_structured_orchestration",
                             {
                                 "endpoint_path": "/v1/chat/completions",
                                 "actor_scope": "inference",
@@ -1065,15 +1065,15 @@ def build_server(
                     self._send(_response_payload(retrieved, include_trace=True))
                     return
                 if path == "/v1/responses":
-                    # The Responses API has no chat-completions verifier equivalent,
-                    # so every request is proxied to one agent verbatim.
+                    # Responses input is also collected and synthesized across agents;
+                    # the final response keeps the Responses wire shape.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
                     started_at = time.perf_counter()
                     proxied = self._run(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
                     )
                     orchestrator.record_analytics_event(
-                        "responses_passthrough",
+                        "responses_structured_orchestration",
                         {
                             "endpoint_path": "/v1/responses",
                             "actor_scope": "inference",
