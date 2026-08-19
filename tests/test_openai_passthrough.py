@@ -315,6 +315,36 @@ def test_provider_feature_json_object_negotiates_prompt_only_on_provider_rejecti
     assert json.loads(result["choices"][0]["message"]["content"]) == {"status": "ok"}
 
 
+def test_provider_feature_synthesis_omits_embedded_images_from_final_prompt() -> None:
+    orch = _build()
+    calls = []
+
+    def proxy_send(agent, endpoint, payload):
+        calls.append(payload)
+        return {
+            "object": "chat.completion",
+            "model": agent.model,
+            "choices": [{"message": {"role": "assistant", "content": '{"regions": []}'}}],
+        }
+
+    orch.client.proxy_send = proxy_send
+    orch.proxy_completion({
+        "messages": [{
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "locate regions"},
+                {"type": "image_url", "image_url": {"url": "data:image/png;base64,SECRET"}},
+            ],
+        }],
+        "response_format": {"type": "json_object"},
+    })
+
+    synthesis_prompt = calls[-1]["messages"][1]["content"]
+    assert "image_url" not in synthesis_prompt
+    assert "data:image/" not in synthesis_prompt
+    assert "independent visual candidate evidence" in synthesis_prompt
+
+
 def test_provider_feature_json_schema_repairs_invalid_final_synthesis() -> None:
     orch = _build()
     schema = {

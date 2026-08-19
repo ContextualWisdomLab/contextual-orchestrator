@@ -2123,7 +2123,30 @@ class TaskOrchestrator:
         return upstream
 
     @staticmethod
+    def _provider_feature_synthesis_source(value: Any) -> Any:
+        """Keep text evidence while excluding binary image payloads from synthesis."""
+        if isinstance(value, str):
+            return (
+                "[embedded image data omitted; use independent visual candidate evidence]"
+                if "data:image/" in value
+                else value
+            )
+        if isinstance(value, list):
+            return [TaskOrchestrator._provider_feature_synthesis_source(item) for item in value]
+        if isinstance(value, dict):
+            if value.get("type") in {"image", "image_url", "input_image"} or any(
+                key in value for key in ("image_url", "input_image")
+            ):
+                return "[image content omitted; use independent visual candidate evidence]"
+            return {
+                key: TaskOrchestrator._provider_feature_synthesis_source(item)
+                for key, item in value.items()
+            }
+        return value
+
+    @classmethod
     def _provider_feature_synthesis_body(
+        cls,
         body: dict[str, Any],
         endpoint: str,
         candidates: list[dict[str, Any]],
@@ -2201,7 +2224,7 @@ class TaskOrchestrator:
                     "role": "user",
                     "content": (
                         "Original messages:\n"
-                        f"{json.dumps(body.get('messages'), ensure_ascii=False)}\n\n"
+                        f"{json.dumps(cls._provider_feature_synthesis_source(body.get('messages')), ensure_ascii=False)}\n\n"
                         "Candidate responses:\n"
                         f"{json.dumps(candidates, ensure_ascii=False)}"
                     ),
