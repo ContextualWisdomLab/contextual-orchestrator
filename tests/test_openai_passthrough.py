@@ -149,6 +149,7 @@ def test_provider_feature_json_schema_preserves_schema_and_synthesizes_valid_val
     assert len(calls) == 3
     assert calls[-1]["response_format"]["type"] == "json_schema"
     assert calls[-1]["response_format"]["json_schema"]["schema"] == schema
+    assert json.dumps(schema, ensure_ascii=False, separators=(",", ":")) in calls[-1]["messages"][0]["content"]
     value = json.loads(result["choices"][0]["message"]["content"])
     assert value == {"status": "ok"}
 

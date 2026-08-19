@@ -1994,6 +1994,14 @@ class TaskOrchestrator:
                 " Return only the single valid JSON value required by response_format. "
                 "Do not add an explanation, Markdown fence, or any text before or after it."
             )
+        if isinstance(response_format, dict) and response_format.get("type") == "json_schema":
+            schema_wrapper = response_format.get("json_schema")
+            schema = schema_wrapper.get("schema") if isinstance(schema_wrapper, dict) else None
+            if isinstance(schema, dict):
+                synthesis_instruction += (
+                    " The required JSON Schema is exactly: "
+                    f"{json.dumps(schema, ensure_ascii=False, separators=(',', ':'))}"
+                )
         final_body = {
             key: value
             for key, value in body.items()
