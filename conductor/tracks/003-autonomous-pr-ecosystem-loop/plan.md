@@ -1618,3 +1618,33 @@ and no merge or sweep-limit change was attempted.
 3. After #1139 is terminal-successful, re-read current reviews and branch
    protection, then use the documented review-only admin fallback if and only
    if the independent approval remains unsatisfiable.
+
+## Status as of 2026-08-19, iteration 32 — recent `.github` sweep found no new terminal failure
+
+A GraphQL rollup of the thirty most recently updated open `.github` PRs found
+no new current-head failing check that was ready for a repair. Newer PRs such
+as #1147 still have checks in progress or queued; they are not green evidence.
+
+PR #1067 is a useful review-gate sample: its exact head is
+`e3b673f8a302d24acb88d35ab25abaaeaa325c1a`, its current check rollup is
+terminal-successful, but `reviewDecision=CHANGES_REQUESTED` and
+`mergeStateStatus=DIRTY`. The two OpenCode review bodies were read in full;
+both reject only the known mechanical `coverage-evidence result was failure`
+condition (runs `32190682607` and `32193040239`) and explicitly describe the
+merge-conflict path. This is evidence for a stale mechanical review, not a
+new code finding, but the PR is still conflicting, so no dismissal, branch
+update, or merge was attempted.
+
+The active central fix remains `.github#1139` at
+`7476d4a152d561ce5942befc91aee21b09e86afc`, with required work queued and no
+independent approval. Keep current-head runs intact and continue the exact
+terminal-gate loop.
+
+### Next iteration checklist
+
+1. Re-read #1139 and #1128 with a low-rate GraphQL rollup; act only on a
+   terminal failure or a fully terminal required set.
+2. Preserve #1067's review until its conflicting branch can be safely
+   refreshed and its current-head evidence is re-established; do not dismiss
+   it solely because the old check is now green.
+3. Keep the sweep limits at `0/0` until #1139 is merged and live-verified.
