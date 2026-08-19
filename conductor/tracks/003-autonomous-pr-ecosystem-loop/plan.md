@@ -1535,3 +1535,30 @@ change was attempted; both sweep limits remain `0`.
    fresh Strix retry by exact head before any merge or dismissal decision.
 3. Record a second paginated queue snapshot only after one scheduler interval;
    do not treat the current partial stale scan as the exit-gate snapshot.
+
+## Status as of 2026-08-19, iteration 29 — current candidates remain queued; broad stale scan rate-limited
+
+After the three verified stale cancellations, exact-head re-reads still show
+`.github#1139` at `3dd3b634ca54f26d7719e972630d8a10e9eae3e7` with seven
+required checks queued, `.github#1120` at
+`c6bb739db213161b39f137640bd835354a4ba529` with sixteen queued checks, and
+the `.github#1128` retry job `96069651307` queued at head
+`e33536ba95a6fd6ff185b857ac2955835b80471e`. The current-head queue was not
+cancelled.
+
+The full 20-repository stale-dispatch comparison was retried with bounded
+concurrency after the initial timeout, but GitHub returned secondary API
+rate-limit responses before the inventory could be completed. No additional
+run was cancelled on partial evidence. Pause broad API scraping, preserve the
+known current-head runs, and keep both sweep limits at `0` until the next
+normal scheduler interval and a successful low-rate re-read.
+
+### Next iteration checklist
+
+1. Use a low-rate REST pass after the secondary limit clears; finish the
+   repo-wide stale comparison or leave unresolved candidates untouched.
+2. Re-read the three exact candidate heads and required contexts; merge only a
+   fully terminal required set, with the documented admin fallback only for
+   the unsatisfiable independent-review gate.
+3. If #1139 merges, verify the live workflow and queue trend before changing
+   either org sweep variable; otherwise keep them at `0/0`.
