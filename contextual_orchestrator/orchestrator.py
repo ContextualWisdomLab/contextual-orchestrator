@@ -1926,11 +1926,14 @@ class TaskOrchestrator:
             }
             for index, agent in enumerate(workers)
         ]
-        synthesizer = (
-            workers[0]
+        synthesis_agents = (
+            [workers[0]]
             if requested_model is not None and requested_model != "contextual-orchestrator"
-            else self._select_agent(text, "synthesizer")
+            else self._ranked_agents(text, "synthesizer")
         )
+        if not synthesis_agents:
+            raise RuntimeError("no enabled synthesis agent is configured")
+        synthesizer = synthesis_agents[0]
         synthesized = self.client.proxy_send(
             synthesizer,
             endpoint,
@@ -1945,7 +1948,8 @@ class TaskOrchestrator:
             and response_format.get("type") == "json_schema"
             and not self._provider_feature_response_matches_schema(normalized, response_format, endpoint)
         ):
-            for _ in range(2):
+            for retry_index in range(2):
+                synthesizer = synthesis_agents[(retry_index + 1) % len(synthesis_agents)]
                 synthesized = self.client.proxy_send(
                     synthesizer,
                     endpoint,

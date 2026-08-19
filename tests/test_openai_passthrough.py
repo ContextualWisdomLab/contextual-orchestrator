@@ -163,9 +163,11 @@ def test_provider_feature_json_schema_repairs_invalid_final_synthesis() -> None:
         "additionalProperties": False,
     }
     calls = []
+    agents = []
 
     def proxy_send(agent, endpoint, payload):
         calls.append(payload)
+        agents.append(agent.id)
         if len(calls) < 3:
             content = '{"status":"candidate"}'
         elif len(calls) == 3:
@@ -188,6 +190,7 @@ def test_provider_feature_json_schema_repairs_invalid_final_synthesis() -> None:
     })
 
     assert len(calls) == 4
+    assert agents[2] != agents[3]
     assert json.loads(result["choices"][0]["message"]["content"]) == {"status": "ok"}
     assert "Previous invalid synthesis" in calls[-1]["messages"][1]["content"]
 

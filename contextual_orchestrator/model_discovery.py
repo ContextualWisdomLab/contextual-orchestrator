@@ -17,7 +17,7 @@ import json
 import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from .batch_routing import cheapest_upstream
@@ -188,6 +188,56 @@ def discover_provider_models(
     if source.style == "bytez":
         return _parse_bytez(payload, source)
     return _parse_openai_compatible(payload, source)
+
+
+def expand_blank_agents(
+    agents: list[ModelAgent], *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
+) -> tuple[list[ModelAgent], list[ProviderDiscoveryError]]:
+    """Expand blank seed agents into the provider's discovered model pool.
+
+    Discovery supplies candidates; it does not rank model quality or select a
+    winner. Existing explicit model configurations and mock agents remain
+    unchanged. A blank remote seed with no discoverable candidates is returned
+    as an error so startup cannot issue a request without a model contract.
+    """
+    expanded: list[ModelAgent] = []
+    errors: list[ProviderDiscoveryError] = []
+    for seed in agents:
+        if seed.model or seed.base_url.startswith("mock://"):
+            expanded.append(seed)
+            continue
+        credential_name = seed.credential_name
+        if not credential_name:
+            errors.append(ProviderDiscoveryError(seed.id, "blank agent has no provider credential"))
+            continue
+        source = ProviderModelSource(
+            provider_name=seed.provider_name or seed.id,
+            credential_name=credential_name,
+            list_url=seed.base_url.rstrip("/") + "/models",
+            chat_base_url=seed.base_url,
+            auth_scheme=seed.auth_scheme,
+        )
+        try:
+            discovered = discover_provider_models(source, timeout=timeout)
+        except ProviderDiscoveryError as exc:
+            errors.append(exc)
+            continue
+        if not discovered:
+            errors.append(ProviderDiscoveryError(source.provider_name, "no models discovered"))
+            continue
+        for model in discovered:
+            expanded.append(
+                replace(
+                    seed,
+                    id=f"{seed.id}_{agent_id_for(model)}",
+                    model=model.model_id,
+                    base_url=model.chat_base_url,
+                    credential_key=model.credential_name,
+                    auth_scheme=model.auth_scheme,
+                    provider_name=model.provider_name,
+                )
+            )
+    return expanded, errors
 
 
 def discover_all_models(

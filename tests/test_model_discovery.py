@@ -27,6 +27,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     agent_id_for,
     discover_all_models,
     discover_provider_models,
+    expand_blank_agents,
     refresh_price_book,
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
@@ -153,6 +154,47 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
     assert len(errors) == 1
     assert errors[0].provider_name == "openai"
+
+
+def test_expand_blank_agents_registers_every_discovered_model_without_ranking() -> None:
+    register_credential("GATEWAY_KEY", "gateway-secret")
+    seed = ModelAgent(
+        "gateway_agent",
+        "",
+        base_url="https://gateway.example/v1",
+        credential_key="GATEWAY_KEY",
+        tags=("vision", "reasoning"),
+    )
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response({"data": [{"id": "model-a"}, {"id": "model-b"}]}),
+    ):
+        agents, errors = expand_blank_agents([seed])
+
+    assert errors == []
+    assert [agent.model for agent in agents] == ["model-a", "model-b"]
+    assert all(agent.tags == seed.tags for agent in agents)
+    assert all(agent.disabled is False for agent in agents)
+
+
+def test_expand_blank_agents_fails_closed_when_provider_catalog_is_empty() -> None:
+    seed = ModelAgent(
+        "gateway_agent",
+        "",
+        base_url="https://gateway.example/v1",
+        credential_key="GATEWAY_KEY",
+    )
+    register_credential("GATEWAY_KEY", "gateway-secret")
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        return_value=_Response({"data": []}),
+    ):
+        agents, errors = expand_blank_agents([seed])
+
+    assert agents == []
+    assert len(errors) == 1
 
 
 def test_agent_id_for_is_two_word_snake_case() -> None:

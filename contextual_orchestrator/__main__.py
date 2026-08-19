@@ -17,6 +17,7 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    expand_blank_agents,
     refresh_price_book,
     select_top_n_cheapest_discovered_agents,
 )
@@ -266,6 +267,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Route or conduct chat requests across model agents.")
     parser.add_argument("prompt", nargs="?", help="User prompt for CLI mode.")
     parser.add_argument("--agents", default="examples/agents.mock.json", help="Agent config JSON.")
+    parser.add_argument(
+        "--auto-discover-model-agents",
+        action="store_true",
+        help="Expand blank remote seed agents into the provider model pool; do not select a model in the caller.",
+    )
     parser.add_argument("--state-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_STATE_DB", "") or None,
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
@@ -336,8 +342,13 @@ def main() -> None:
         chat_template_args=args.chat_template_args,
         allowed_provider_hosts=args.allowed_provider_hosts,
     )
+    agents = load_agents(args.agents)
+    if args.auto_discover_model_agents:
+        agents, discovery_errors = expand_blank_agents(agents)
+        if discovery_errors:
+            parser.error("; ".join(str(error) for error in discovery_errors))
     orchestrator = TaskOrchestrator(
-        load_agents(args.agents),
+        agents,
         client=client,
         state_db=args.state_db,
         agents_db=args.agents_db,
