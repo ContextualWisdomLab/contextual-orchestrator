@@ -1451,3 +1451,21 @@ silence Strix, weaken the Strix classifier/gate, or close the feature PR. Keep
 #1128 unmerged and preserve the failed evidence until a fresh exact-head Strix
 run either produces a real line-specific finding or confirms the false
 positive; any future dismissal must cite the path-line source comparison.
+
+## Status as of 2026-08-19, iteration 26 — fresh Strix evidence is queued without a mergeable candidate
+
+After the plan update, contextual-orchestrator PR #758 is at
+`a8152051506fff1447a6368b0564f4092e31e761`, with its hosted required checks
+re-queued and no independent approval. `.github#1120` remains at
+`c6bb739db213161b39f137640bd835354a4ba529`; its repaired hourly contract check
+is successful, but the remaining required checks are queued and no current-head
+formal approval exists. `.github#1139` remains at
+`3dd3b634ca54f26d7719e972630d8a10e9eae3e7`; the branch protection required
+contexts include CodeQL compatibility, coverage evidence, and OpenCode review,
+and the current required work is not terminally satisfied. No merge, review
+dispatch, branch update, or sweep-limit change was attempted.
+
+The fresh exact-head Strix retry for `.github#1128` is run attempt 2,
+job `96069651307`, on head `e33536ba95a6fd6ff185b857ac2955835b80471e`, and
+remains queued. Preserve the original finding and wait for this terminal
+result before recording a dismissal or taking any PR action.
