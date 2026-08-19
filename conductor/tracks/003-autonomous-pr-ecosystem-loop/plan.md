@@ -1117,7 +1117,9 @@ The minimal remediation is on `.github#1138`, commit
 backend-unavailable classifier for context-window overflow markers while
 retaining the existing fail-closed vulnerability regex. The focused workflow
 contract and fallback tests pass (`65 passed`), `actionlint` passes, and the
-full Strix shell self-test is still running separately. The PR is open and
+full Strix shell self-test was intentionally stopped after it exceeded the
+focused change's validation scope; no pass/fail claim is based on that
+interrupted run. The PR is open and
 `mergeable=true`, but its required checks are queued; do not merge until the
 current head has green required checks and the normal review/protection gate.
 
