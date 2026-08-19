@@ -1432,3 +1432,22 @@ exact remote-head guard. PR #1120 is now `mergeable=true` but blocked with 17
 queued and one in-progress hosted check; no current-head formal approval exists.
 The next active failure candidate is `.github#1128`, whose prior exact-head
 Strix job failed and requires log-level diagnosis before any dismissal or merge.
+
+## Status as of 2026-08-19, iteration 25 — Strix report on `.github#1128` is a verified false positive
+
+The prior `.github#1128` Strix failure (`32239172422`, job `96025752507`) was
+read to the finding level, not dismissed from its summary. It reported one
+CRITICAL “Hardcoded Test Lob API Key” at
+`.github/workflows/hourly-nvidia-nim-review-repair.yml:30`, but the exact
+current PR diff shows that line is only the existing path literal
+`tests/test_hourly_autofix_context_quality_gate.py`; the PR adds a quarantine
+caller, documentation, and contract test, and introduces no Lob integration,
+API key, authorization header, or secret value. A repository search over every
+changed security/workflow/test file found no `lob` or hardcoded API-key value.
+
+This is a model attribution false positive, not a provider outage and not a
+real secret remediation. Do not rename the established test path merely to
+silence Strix, weaken the Strix classifier/gate, or close the feature PR. Keep
+#1128 unmerged and preserve the failed evidence until a fresh exact-head Strix
+run either produces a real line-specific finding or confirms the false
+positive; any future dismissal must cite the path-line source comparison.
