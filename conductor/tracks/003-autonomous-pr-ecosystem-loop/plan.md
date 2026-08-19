@@ -2406,3 +2406,22 @@ Main remains `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
 2. After PR #1155 reaches main, verify both concurrency fixes with live
    no-target and metadata-free workflow-run events.
 3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-20, iteration 66 — no-op backlog remains clear
+
+The live audit after the updated source push shows zero pending scheduler
+`workflow_run` runs with no PR metadata. Actions still has substantial general
+load (`1009 queued / 14 in-progress`), but PR #1155 remains exact-head
+`3626e5eaee95fdfda36c4d079b8e191521fdec74` and plan PR #758 remains exact-head
+`9f3896c1bf1f2ce9617b4588181fe53edac5c436`; both normal auto-merge requests
+are enabled and all selected required checks are still queued. Main remains
+`bbedc1a51ec1a2421f129955c629b3cd0507a4ec`.
+
+### Next iteration checklist
+
+1. Preserve the two exact-head PR check sets while waiting for hosted runner
+   assignment; inspect the first terminal result rather than rerunning queued
+   evidence.
+2. After PR #1155 merges, verify the stable repository dispatch and
+   metadata-free workflow-run concurrency behavior on main.
+3. Keep both sweep limits at `0/0` until #1139 is merged and live-verified.
