@@ -2150,7 +2150,8 @@ the defect remains live until PR #1155 merges. The newer run was preserved;
 the previous duplicate (`32263563429`) had the same queued `scan-pr-queue`
 job and was cancelled, then verified `completed/cancelled`. PR #1155's
 current-head required checks remain untouched and queued without terminal
-failure.
+failure. The source branch's complete local suite also passed: `1217 passed,
+16 subtests passed`.
 
 ### Next iteration checklist
 
