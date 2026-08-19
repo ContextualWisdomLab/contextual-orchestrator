@@ -2004,3 +2004,37 @@ current-head jobs remain untouched and sweep limits remain `0/0`.
 2. Preserve #1142 and #1138's single pending jobs and the #1139 queued set.
 3. Do not retry orphan run `32216087004` unless its API state changes; keep
    both sweep limits at `0/0` until #1139 is merged and live-verified.
+
+## Status as of 2026-08-19, iteration 47 — merge #1140 and refresh all central candidates
+
+At `2026-08-19T14:07:34Z`, `.github#1140` was verified merged at
+`2026-08-19T13:58:24Z`; merge commit `bbedc1a51ec1a2421f129955c629b3cd0507a4ec`
+is also the live `main` commit. Twenty-two stale/superseded runs were
+cancelled and verified: 13 runs for merged #1140 and 9 runs for old #1147
+HEAD `86c4d7d...`. #1147 remains open at new exact HEAD
+`20709cbbbc98fb27188a00c9d29b375bc7612f96` with its existing normal squash
+auto-merge request.
+
+The main advance made the near-green candidates `BEHIND`, so they were not
+left with stale evidence. Normal branch updates against live `main` produced
+these new exact HEADs:
+
+- #1139: `82b66ace61f7b1b81aed0203bbc85bf688119eef`
+- #1128: `2e7f20dab0dd3963936c645c65869218c7af9091`
+- #1142: `217e0ef900f7aaeee5158c364c632a6efefd8bc5`
+- #1138: `99bcee074d384d54bf368f199d9567947496fd86`
+
+Each new HEAD has the live `main` commit as its base, retains normal squash
+auto-merge, and has a fresh required-check set queued with no terminal failure.
+The old Strix/coverage successes were intentionally not reused after the base
+advance. No required CI was bypassed and sweep limits remain `0/0`.
+
+### Next iteration checklist
+
+1. Monitor the four refreshed current-head required sets; on the first terminal
+   failure, inspect its exact log and repair only the root cause.
+2. On a fully terminal-successful set, re-read exact HEAD, review state,
+   protection, and mergeability, then verify the protected auto-merge commit on
+   live `main`.
+3. Re-scan and cancel only newly stale closed/superseded runs; keep both sweep
+   limits at `0/0` until #1139 is merged and live-verified.
