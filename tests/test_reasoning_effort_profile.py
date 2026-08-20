@@ -20,6 +20,7 @@ from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
     PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD,
     WORKFLOW_ROLES,
     EffortProfileError,
+    apply_request_profile,
     default_role_effort_catalog,
     estimate_theta,
     estimate_theta_rmse,
@@ -27,6 +28,7 @@ from contextual_orchestrator.reasoning_effort_profile import (  # noqa: E402
     production_default_change_allowed,
     run_equal_budget_ablation,
     snapshot_role_effort_catalog,
+    _estimated_tokens_used,
 )
 
 
@@ -251,6 +253,135 @@ def test_production_gate_rejects_junk_and_estimated_status() -> None:
     unlocked["robustness_passed"] = True
     unlocked["measurement_status"] = "estimated"
     assert production_default_change_allowed(unlocked) is False
+
+
+def test_profile_validation_covers_numeric_bounds_and_fallbacks() -> None:
+    invalid_profiles = (
+        {"max_output_tokens": -1},
+        {"max_calls": 0},
+        {"max_workflow_steps": 0},
+        {"temperature": -0.1},
+        {"temperature": 2.1},
+        {"top_p": 0.0},
+        {"top_p": 1.1},
+        {"access_list_scope": "private"},
+        {"unsupported_provider_fallback": "retry"},
+        {"profile_version": "reasoning_effort_profile.v2"},
+    )
+    for invalid in invalid_profiles:
+        try:
+            parse_reasoning_effort_profile(invalid)
+        except EffortProfileError:
+            continue
+        raise AssertionError(f"invalid profile was accepted: {invalid!r}")
+
+
+def test_request_profile_handles_omission_and_wrong_type() -> None:
+    payload = apply_request_profile(
+        {}, None, supports_reasoning_effort=False, default_max_output_tokens=99
+    )
+    assert payload == {"max_tokens": 99}
+    try:
+        apply_request_profile(
+            {}, object(), supports_reasoning_effort=True, default_max_output_tokens=99
+        )
+    except EffortProfileError:
+        return
+    raise AssertionError("non-profile objects must fail closed")
+
+
+def test_estimator_rejects_invalid_factors_and_budget_overflow() -> None:
+    invalid_calls = (
+        {"reasoning_effort": "unknown"},
+        {"reasoning_effort": "medium", "access_list_scope": "private"},
+        {"reasoning_effort": "medium", "extra_workflow_steps": -1},
+        {"reasoning_effort": "medium", "extra_recursion_depth": -1},
+    )
+    for kwargs in invalid_calls:
+        try:
+            estimate_theta_rmse(
+                (1.0,),
+                extra_workflow_steps=kwargs.pop("extra_workflow_steps", 0),
+                extra_recursion_depth=kwargs.pop("extra_recursion_depth", 0),
+                temperature=0.2,
+                **kwargs,
+            )
+        except EffortProfileError:
+            continue
+        raise AssertionError(f"invalid estimator factors were accepted: {kwargs!r}")
+    try:
+        _estimated_tokens_used("high", 4, 2, 1)
+    except EffortProfileError:
+        pass
+    else:
+        raise AssertionError("budget overflow must fail closed")
+
+
+def test_snapshot_rejects_wrong_profile_type_and_release_gate_is_strict() -> None:
+    catalog = default_role_effort_catalog()
+    catalog["judge"] = object()  # type: ignore[assignment]
+    try:
+        snapshot_role_effort_catalog(catalog)
+    except EffortProfileError:
+        pass
+    else:
+        raise AssertionError("snapshot accepted a non-profile role")
+    measured = {
+        "single_model_baseline": {"rmse": 1.0},
+        "role_differentiated": {"rmse": 0.9},
+        "measurement_status": "measured",
+        "robustness_passed": False,
+    }
+    assert production_default_change_allowed(measured) is False
+    measured["robustness_passed"] = True
+    assert production_default_change_allowed(measured) is False
+    measured["role_differentiated"] = {"rmse": 0.1}
+    assert production_default_change_allowed(measured) is True
+    measured["single_model_baseline"] = {"rmse": float("nan")}
+    assert production_default_change_allowed(measured) is False
+
+
+def test_request_profile_separates_native_effort_and_sampling_controls() -> None:
+    profile = parse_reasoning_effort_profile(
+        {
+            "reasoning_effort": "high",
+            "max_output_tokens": 321,
+            "temperature": 0.7,
+            "top_p": 0.8,
+            "seed": 11,
+        }
+    )
+    payload = apply_request_profile(
+        {"model": "provider-model", "stream": False},
+        profile,
+        supports_reasoning_effort=True,
+        default_max_output_tokens=2048,
+    )
+    assert payload["reasoning_effort"] == "high"
+    assert payload["max_tokens"] == 321
+    assert payload["temperature"] == 0.7
+    assert payload["top_p"] == 0.8
+    assert payload["seed"] == 11
+
+
+def test_request_profile_fails_closed_or_omits_when_support_is_unproven() -> None:
+    profile = parse_reasoning_effort_profile({"reasoning_effort": "high"})
+    try:
+        apply_request_profile(
+            {}, profile, supports_reasoning_effort=False, default_max_output_tokens=2048
+        )
+    except EffortProfileError as exc:
+        assert "unproven" in str(exc)
+    else:
+        raise AssertionError("unproven provider effort must fail closed")
+    omitted = parse_reasoning_effort_profile(
+        {"reasoning_effort": "high", "unsupported_provider_fallback": "omit"}
+    )
+    payload = apply_request_profile(
+        {}, omitted, supports_reasoning_effort=False, default_max_output_tokens=2048
+    )
+    assert "reasoning_effort" not in payload
+    assert payload["max_tokens"] == omitted.max_output_tokens
 
 
 def test_opt_in_catalog_attaches_identical_snapshot_on_route_and_conduct() -> None:

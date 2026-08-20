@@ -35,6 +35,7 @@ from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .reasoning_effort_profile import (
     ReasoningEffortProfile,
+    apply_request_profile,
     snapshot_role_effort_catalog,
 )
 
@@ -152,7 +153,7 @@ class _FastMLSIJudgeAdapter:
     def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
-        output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="verifier")
+        output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="judge")
         return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
 
     def complete_structured(
@@ -168,13 +169,19 @@ class _FastMLSIJudgeAdapter:
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
-        response = self.orchestrator.proxy_completion({
+        request = {
             "model": agent.model,
             "messages": messages,
             "temperature": self.orchestrator.client.temperature,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        })
+        }
+        effort_profile = self.orchestrator._role_effort_profile("judge")
+        response = (
+            self.orchestrator.proxy_completion(request, effort_profile=effort_profile)
+            if effort_profile is not None
+            else self.orchestrator.proxy_completion(request)
+        )
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
@@ -260,6 +267,9 @@ class ModelAgent:
     # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
     # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
     auth_scheme: str = "Bearer"
+    # ``None`` means provider support is unproven. Opt-in effort profiles then
+    # fail closed unless the profile explicitly requests the safe ``omit`` fallback.
+    reasoning_effort_supported: bool | None = None
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
@@ -269,6 +279,8 @@ class ModelAgent:
             raise ValueError("local_credential_key requires a local:// gateway URL")
         if not self.auth_scheme or type(self.auth_scheme) is not str:
             raise ValueError("auth_scheme must be a non-empty string")
+        if self.reasoning_effort_supported not in (None, True, False):
+            raise TypeError("reasoning_effort_supported must be true, false, or null")
 
     def to_config(self) -> dict[str, Any]:
         """Round-trippable agent configuration (from_dict(to_config(a)) == a)."""
@@ -285,6 +297,7 @@ class ModelAgent:
             "provider_exclusions": list(self.provider_exclusions),
             "local_credential_key": self.local_credential_key,
             "auth_scheme": self.auth_scheme,
+            "reasoning_effort_supported": self.reasoning_effort_supported,
         }
 
     @property
@@ -314,6 +327,7 @@ class ModelAgent:
             provider_exclusions=tuple(value.get("provider_exclusions", value.get("provider_exclusion", ()))),
             local_credential_key=value.get("local_credential_key", ""),
             auth_scheme=value.get("auth_scheme", "Bearer"),
+            reasoning_effort_supported=value.get("reasoning_effort_supported"),
         )
 
 
@@ -773,6 +787,7 @@ class ModelClient:
         messages: list[ChatMessage],
         temperature: float | None = None,
         top_p: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
@@ -816,8 +831,27 @@ class ModelClient:
             payload["frequency_penalty"] = effective_frequency
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
+        payload = self.apply_effort_profile(agent, payload, effort_profile)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_with_retry(agent, payload, destination)
+
+    def apply_effort_profile(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        profile: ReasoningEffortProfile | None,
+    ) -> dict[str, Any]:
+        """Apply an opt-in profile while proving provider support before egress."""
+        supports = (
+            agent.reasoning_effort_supported is True
+            or (agent.reasoning_effort_supported is None and agent.base_url.startswith("mock://"))
+        )
+        return apply_request_profile(
+            payload,
+            profile,
+            supports_reasoning_effort=supports,
+            default_max_output_tokens=self.max_output_tokens,
+        )
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
@@ -1067,7 +1101,13 @@ class ModelClient:
             connection.close()
             raise
 
-    def stream_chat(self, agent: ModelAgent, messages: list[ChatMessage], temperature: float | None = None):
+    def stream_chat(
+        self,
+        agent: ModelAgent,
+        messages: list[ChatMessage],
+        temperature: float | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
+    ):
         """Yield content deltas from a mock or OpenAI-compatible streaming endpoint.
 
         Real token streaming: the provider is called with stream=true and its SSE deltas
@@ -1090,6 +1130,7 @@ class ModelClient:
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
+        payload = self.apply_effort_profile(agent, payload, effort_profile)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             yield from self._stream_send(agent, payload, destination)  # pragma: no cover
 
@@ -1313,6 +1354,7 @@ class ModelClient:
         temperature: float | None = None,
         poll_interval: float = 5.0,
         poll_timeout: float = 3600.0,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Run many chat requests through the provider's Batch API and return results by id.
 
@@ -1326,11 +1368,11 @@ class ModelClient:
                 for custom_id, messages in requests.items()
             }
         elif _is_local_provider_url(agent.base_url):
-            results = self._local_batch_chat(agent, requests, temperature)
+            results = self._local_batch_chat(agent, requests, temperature, effort_profile)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
             results = self._batch_run(  # pragma: no cover
-                agent, requests, temperature, poll_interval, poll_timeout, destination
+                agent, requests, temperature, poll_interval, poll_timeout, destination, effort_profile
             )
         return _validate_batch_results(requests, results)
 
@@ -1339,10 +1381,20 @@ class ModelClient:
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
         temperature: float | None,
+        effort_profile: ReasoningEffortProfile | None,
     ) -> dict[str, dict[str, Any]]:
         """Run local OpenAI-compatible requests concurrently through mlx-lm."""
         def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
-            content = self.chat(agent, messages, temperature=temperature)
+            content = (
+                self.chat(
+                    agent,
+                    messages,
+                    temperature=temperature,
+                    effort_profile=effort_profile,
+                )
+                if effort_profile is not None
+                else self.chat(agent, messages, temperature=temperature)
+            )
             return custom_id, {"content": content, "usage": self.take_usage()}
 
         if self.local_concurrency == 1 or len(requests) <= 1:
@@ -1355,10 +1407,11 @@ class ModelClient:
         self,
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
-        temperature: float,
+        temperature: float | None,
         poll_interval: float,
         poll_timeout: float,
         destination: ProviderDestination | None = None,
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
         lines = [
@@ -1366,12 +1419,11 @@ class ModelClient:
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
+                "body": self.apply_effort_profile(agent, {
                     "model": agent.model,
                     "messages": messages,
                     "temperature": self.temperature if temperature is None else temperature,
-                    "max_tokens": self.max_output_tokens,
-                },
+                }, effort_profile),
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
         ]
@@ -1793,7 +1845,11 @@ class TaskOrchestrator:
     )
 
     def proxy_completion(
-        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
+        self,
+        body: dict[str, Any],
+        *,
+        endpoint: str = "chat/completions",
+        effort_profile: ReasoningEffortProfile | None = None,
     ) -> dict[str, Any]:
         """Passthrough a full OpenAI request to the primary agent, returning its raw response.
 
@@ -1825,6 +1881,7 @@ class TaskOrchestrator:
             if key not in self._ORCHESTRATION_ONLY_KEYS
         }
         upstream["model"] = agent.model
+        upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
@@ -1873,7 +1930,13 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         agent = self._select_agent(text, "worker")
         parts: list[str] = []
-        for delta in self.client.stream_chat(agent, messages):
+        effort_profile = self._role_effort_profile("worker")
+        stream = (
+            self.client.stream_chat(agent, messages, effort_profile=effort_profile)
+            if effort_profile is not None
+            else self.client.stream_chat(agent, messages)
+        )
+        for delta in stream:
             parts.append(delta)
             yield delta
         answer = "".join(parts)
@@ -1986,10 +2049,15 @@ class TaskOrchestrator:
 
         answers: dict[int, dict[str, Any]] = {}
         for agent_id, requests in requests_by_agent.items():
-            results = _validate_batch_results(
-                requests,
-                self.client.batch_chat(agents_by_id[agent_id], requests),
+            effort_profile = self._role_effort_profile("worker")
+            batch = (
+                self.client.batch_chat(
+                    agents_by_id[agent_id], requests, effort_profile=effort_profile
+                )
+                if effort_profile is not None
+                else self.client.batch_chat(agents_by_id[agent_id], requests)
             )
+            results = _validate_batch_results(requests, batch)
             for custom_id, result in results.items():
                 try:
                     prefix, suffix = custom_id.rsplit("_", 1)
@@ -2442,6 +2510,12 @@ class TaskOrchestrator:
             }
         )
 
+    def _role_effort_profile(self, role: str) -> ReasoningEffortProfile | None:
+        """Return the opt-in profile bound to one workflow role."""
+        if self.role_effort_catalog is None:
+            return None
+        return self.role_effort_catalog.get(role)
+
     def _with_effort_snapshot(self, result: dict[str, Any]) -> dict[str, Any]:
         """Attach a replayable role-effort snapshot when the operator opted in.
 
@@ -2480,10 +2554,16 @@ class TaskOrchestrator:
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
-        raw = self.client.chat(planner, [
+        planner_messages = [
             {"role": "system", "content": system},
             {"role": "user", "content": task},
-        ])
+        ]
+        effort_profile = self._role_effort_profile("planner")
+        raw = (
+            self.client.chat(planner, planner_messages, effort_profile=effort_profile)
+            if effort_profile is not None
+            else self.client.chat(planner, planner_messages)
+        )
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -2569,7 +2649,12 @@ class TaskOrchestrator:
         last_error: Exception | None = None
         for agent in candidates:
             try:
-                output = self.client.chat(agent, messages)
+                effort_profile = self._role_effort_profile(role)
+                output = (
+                    self.client.chat(agent, messages, effort_profile=effort_profile)
+                    if effort_profile is not None
+                    else self.client.chat(agent, messages)
+                )
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
                 self._record_failure(agent.id)
