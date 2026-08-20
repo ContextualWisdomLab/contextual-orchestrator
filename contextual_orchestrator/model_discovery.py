@@ -18,7 +18,7 @@ import math
 import re
 import urllib.error
 import urllib.request
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
 from .credentials import get_credential
@@ -121,17 +121,70 @@ def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> 
         return json.loads(response.read().decode("utf-8"))
 
 
+def _valid_price_component(value: object) -> bool:
+    """Return whether one price component is finite, numeric, and non-negative."""
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return False
+    try:
+        numeric = float(value)
+    except (TypeError, ValueError, OverflowError):
+        return False
+    return math.isfinite(numeric) and numeric >= 0.0
+
+
 def _price_per_1k(value: Any) -> float | None:
-    """OpenAI-compatible providers report USD price per single token; convert to per-1K."""
+    """Convert a trustworthy per-token USD price to per-1K, else return unknown."""
     if value is None or isinstance(value, bool):
         return None
     try:
-        price = float(value)
-    except (TypeError, ValueError):
+        per_1k = float(value) * 1000
+    except (TypeError, ValueError, OverflowError):
         return None
-    if not math.isfinite(price) or price < 0:
-        return None
-    return price * 1000
+    return per_1k if _valid_price_component(per_1k) else None
+
+
+def _serving_identity(model: DiscoveredModel) -> tuple[str, str]:
+    """Return the durable agent identity used by discovery synchronization."""
+    return (model.provider_name, model.model_id)
+
+
+def _source_tiebreaker(model: DiscoveredModel) -> tuple[str, str, str, str]:
+    """Choose deterministic transport metadata for an ambiguous duplicate row."""
+    return (
+        model.credential_name,
+        model.chat_base_url,
+        model.auth_scheme,
+        model.currency_code,
+    )
+
+
+def _deduplicate_discovered_models(
+    discovered: list[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Collapse duplicate agent identities and withhold conflicting price evidence.
+
+    Exact duplicate catalog rows become one candidate. When the same provider/model
+    identity is repeated with conflicting metadata or prices, one deterministic
+    transport record is retained but its prices become unknown. Provider row order
+    therefore cannot fabricate a cheaper bootstrap candidate or consume failover
+    capacity twice.
+    """
+    unique: dict[tuple[str, str], DiscoveredModel] = {}
+    for model in discovered:
+        identity = _serving_identity(model)
+        previous = unique.get(identity)
+        if previous is None:
+            unique[identity] = model
+            continue
+        if previous == model:
+            continue
+        chosen = min((previous, model), key=_source_tiebreaker)
+        unique[identity] = replace(
+            chosen,
+            prompt_price_per_1k=None,
+            completion_price_per_1k=None,
+        )
+    return list(unique.values())
 
 
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
@@ -155,7 +208,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
                 completion_price_per_1k=_price_per_1k(pricing.get("completion")),
             )
         )
-    return discovered
+    return _deduplicate_discovered_models(discovered)
 
 
 def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
@@ -178,7 +231,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
                 # per-1k pricing unset is more honest than a misleading estimate.
             )
         )
-    return discovered
+    return _deduplicate_discovered_models(discovered)
 
 
 def discover_provider_models(
@@ -217,7 +270,7 @@ def discover_all_models(
             discovered.extend(discover_provider_models(source, timeout=timeout))
         except ProviderDiscoveryError as exc:
             errors.append(exc)
-    return discovered, errors
+    return _deduplicate_discovered_models(discovered), errors
 
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
@@ -248,95 +301,85 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     )
 
 
-def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook") -> int:
-    """Write every discovered model's known pricing into the price book.
+def _currency_is_comparable(currency_code: object, default_currency: object) -> bool:
+    """Return whether two ISO-style currency codes can be compared directly."""
+    return (
+        isinstance(currency_code, str)
+        and isinstance(default_currency, str)
+        and currency_code.strip().upper() == default_currency.strip().upper()
+        and bool(currency_code.strip())
+    )
 
-    Returns the number of price rows written. A model without provider-reported
-    pricing is skipped rather than defaulted to zero. Discovery ranking treats
-    that absence as unknown price evidence, never as proof that the model is free.
+
+def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook") -> int:
+    """Write complete, comparable provider pricing into the discovery price book.
+
+    Both prompt and completion prices are required for the fixed 1K+1K ranking
+    workload. Partial, conflicting, non-finite, negative, or cross-currency
+    evidence remains unknown rather than acquiring an invented zero component.
     """
     from .cost_ledger import PriceEntry
 
-    claims: dict[tuple[str, str], list[tuple[float | None, float | None, str]]] = {}
-    for model in discovered:
-        identity = (model.provider_name, model.model_id)
-        claims.setdefault(identity, []).append(
-            (
-                model.prompt_price_per_1k,
-                model.completion_price_per_1k,
-                model.currency_code,
-            )
-        )
-
     written = 0
-    for (provider_name, model_name), rows in claims.items():
-        if any(
-            not _is_valid_price_component(value)
-            for row in rows
-            for value in row[:2]
-        ) or any(row != rows[0] for row in rows[1:]):
-            continue
-        prompt_price, completion_price, currency_code = rows[0]
-        if prompt_price is None or completion_price is None:
+    for model in _deduplicate_discovered_models(discovered):
+        if not (
+            _valid_price_component(model.prompt_price_per_1k)
+            and _valid_price_component(model.completion_price_per_1k)
+            and _currency_is_comparable(
+                model.currency_code,
+                price_book.default_currency,
+            )
+        ):
             continue
         price_book.set_price(
             PriceEntry(
-                provider_name=provider_name,
-                model_name=model_name,
-                prompt_price_per_1k=prompt_price,
-                completion_price_per_1k=completion_price,
-                currency_code=currency_code,
+                provider_name=model.provider_name,
+                model_name=model.model_id,
+                prompt_price_per_1k=float(model.prompt_price_per_1k),
+                completion_price_per_1k=float(model.completion_price_per_1k),
+                currency_code=model.currency_code.strip().upper(),
             )
         )
         written += 1
     return written
 
 
-def _is_valid_price_component(value: Any) -> bool:
-    """Return whether one provider price is finite and non-negative."""
-    return (
-        value is not None
-        and not isinstance(value, bool)
-        and isinstance(value, (int, float))
-        and math.isfinite(value)
-        and value >= 0
-    )
-
-
-def _unique_discovered_models(
-    discovered: list[DiscoveredModel],
-) -> list[DiscoveredModel]:
-    """Keep one deterministic row per provider/model serving identity."""
-    unique: dict[tuple[str, str], DiscoveredModel] = {}
-    for model in discovered:
-        unique.setdefault((model.provider_name, model.model_id), model)
-    return list(unique.values())
-
-
 def _discovery_price_key(
     model: DiscoveredModel,
     price_book: "PriceBook",
 ) -> tuple[int, float, str, str]:
-    """Rank known prices first, then deterministically order unknown prices."""
-    entry = price_book.get_price(model.provider_name, model.model_id)
-    if entry is None or not _is_trustworthy_price_entry(entry, price_book):
-        return (1, 0.0, model.provider_name, model.model_id)
-    cost, _currency = price_book.compute_cost(
-        model.provider_name,
-        model.model_id,
-        1000,
-        1000,
-    )
+    """Rank comparable trustworthy prices first, then deterministic unknowns."""
+    unknown = (1, 0.0, model.provider_name, model.model_id)
+    try:
+        entry = price_book.get_price(model.provider_name, model.model_id)
+    except (TypeError, ValueError, OverflowError):
+        return unknown
+    if entry is None:
+        return unknown
+    if not (
+        _valid_price_component(entry.prompt_price_per_1k)
+        and _valid_price_component(entry.completion_price_per_1k)
+        and _currency_is_comparable(
+            entry.currency_code,
+            price_book.default_currency,
+        )
+    ):
+        return unknown
+    try:
+        cost, currency = price_book.compute_cost(
+            model.provider_name,
+            model.model_id,
+            1000,
+            1000,
+        )
+    except (TypeError, ValueError, OverflowError):
+        return unknown
+    if not (
+        _valid_price_component(cost)
+        and _currency_is_comparable(currency, price_book.default_currency)
+    ):
+        return unknown
     return (0, cost, model.provider_name, model.model_id)
-
-
-def _is_trustworthy_price_entry(entry: Any, price_book: "PriceBook") -> bool:
-    """Accept only complete, finite prices in the book's comparison currency."""
-    return (
-        entry.currency_code == price_book.default_currency
-        and _is_valid_price_component(entry.prompt_price_per_1k)
-        and _is_valid_price_component(entry.completion_price_per_1k)
-    )
 
 
 def _provider_family(provider_name: str) -> str:
@@ -355,21 +398,23 @@ def select_cheapest_discovered_agent(
     sort first; when every candidate is unpriced, provider and model identifiers
     provide deterministic fallback ordering without inventing a monetary value.
     """
-    unique = _unique_discovered_models(discovered)
-    if not unique:
+    eligible = _deduplicate_discovered_models(discovered)
+    if not eligible:
         return None
-    return min(unique, key=lambda model: _discovery_price_key(model, price_book))
+    return min(eligible, key=lambda model: _discovery_price_key(model, price_book))
 
 
 def select_top_n_cheapest_discovered_agents(
     discovered: list[DiscoveredModel], price_book: "PriceBook", limit: int
 ) -> list[DiscoveredModel]:
-    """Return up to ``limit`` candidates with known prices before unknown ones."""
-    if limit <= 0 or not discovered:
+    """Return up to ``limit`` unique candidates, known-priced before unknown."""
+    if limit <= 0:
         return []
-    discovered = _unique_discovered_models(discovered)
+    eligible = _deduplicate_discovered_models(discovered)
+    if not eligible:
+        return []
     return sorted(
-        discovered,
+        eligible,
         key=lambda model: _discovery_price_key(model, price_book),
     )[:limit]
 
@@ -386,13 +431,16 @@ def select_bootstrap_discovered_agents(
     capacity is filled in the same deterministic cost order. NVIDIA NIM primary
     and sub credentials are one outage domain, so they participate in the second
     pass only after independently hosted providers have had a chance to enter.
+    Duplicate serving identities never consume capacity twice.
     """
-    if limit <= 0 or not discovered:
+    if limit <= 0:
         return []
-    discovered = _unique_discovered_models(discovered)
+    eligible = _deduplicate_discovered_models(discovered)
+    if not eligible:
+        return []
 
     ranked = sorted(
-        discovered,
+        eligible,
         key=lambda model: _discovery_price_key(model, price_book),
     )
     selected: list[DiscoveredModel] = []
