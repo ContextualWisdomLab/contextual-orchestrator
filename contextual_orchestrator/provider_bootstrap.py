@@ -114,16 +114,21 @@ class ProviderBootstrapReport:
         }
 
 
+def _strip_mounted_line_endings(value: str) -> str:
+    """Remove only CR/LF bytes commonly appended by mounted secret files."""
+    return value.rstrip("\r\n")
+
+
 def collect_provider_credentials(
     environ: Mapping[str, str], *, require_all: bool = True
 ) -> dict[str, str]:
-    """Collect and normalize the fixed secret inventory from trusted bootstrap input."""
+    """Collect the fixed inventory without rewriting non-line-ending bytes."""
     values: dict[str, str] = {}
     missing: list[str] = []
     for name in PROVIDER_CREDENTIAL_NAMES:
         raw = environ.get(name, "")
-        value = raw.strip() if isinstance(raw, str) else ""
-        if value:
+        value = _strip_mounted_line_endings(raw) if isinstance(raw, str) else ""
+        if value and value.strip():
             values[name] = value
         else:
             missing.append(name)
@@ -146,14 +151,21 @@ def register_provider_credentials_atomically(
     unknown = sorted(set(credentials) - set(PROVIDER_CREDENTIAL_NAMES))
     if unknown:
         raise ProviderBootstrapError("provider bootstrap rejected unknown credential names")
+
+    normalized: dict[str, str] = {}
     for name, value in credentials.items():
-        if not isinstance(value, str) or not value.strip():
+        if not isinstance(value, str):
             raise ProviderBootstrapError(
                 f"provider bootstrap rejected an empty value for {name}"
             )
+        normalized_value = _strip_mounted_line_endings(value)
+        if not normalized_value or not normalized_value.strip():
+            raise ProviderBootstrapError(
+                f"provider bootstrap rejected an empty value for {name}"
+            )
+        normalized[name] = normalized_value
 
     backend = get_backend()
-    normalized = {name: value.strip() for name, value in credentials.items()}
     if isinstance(backend, InMemoryCredentialBackend):
         with backend._lock:  # noqa: SLF001 - package-internal atomic batch operation
             backend._store.update(normalized)  # noqa: SLF001
