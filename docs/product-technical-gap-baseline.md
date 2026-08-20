@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20 20:09, Asia/Seoul
+**As of:** 2026-08-20 20:31, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -83,15 +83,15 @@ required workflows, and a normal merge.
 | PR | Exact head | State / base | Evidence boundary and next action |
 |---:|---|---|---|
 | #783 | `6210b00` | ready, stacked on #776 | Review the total monotonic body deadline and exact-head framing regression; integrate after #776 with all protected evidence. |
-| #781 | `7e6dc15` | ready, stacked on #780 | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after #780. |
+| #781 | `fc0ebae` | ready, stacked on #780 | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after #780. |
 | #782 | `fdbd1db` | ready, based on main | Review owner-bound workflow/access/evaluation reads, split-token admin evidence visibility, migration fail-closed behavior, and exact-head protected Checks before merge. |
 | #780 | `193752f` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, backend-identifier non-disclosure, and fresh exact-head hosted Checks before normal merge. |
 | #779 | `beb15a7` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main. |
 | #778 | `49c6d93` | ready, stacked on #765 | Review source-image preservation, explicit `vision` eligibility/failover, Responses normalization, and the private LineageWeave OCR recovery boundary. |
 | #776 | `0ec1151` | ready, stacked on #765 | Review fixed-length framing plus the total-deadline regression; #783 supplies the root-cause implementation before retargeting onto protected main. |
 | #775 | `fb8fb62` | draft, based on main | Verify the exact CPython 3.12 Atheris marker, direct test contract, hash lock, hosted Fuzz job, and independent approval before promotion. |
-| #784 | `4a64e15` | ready, based on main | Review fail-closed release authorization, exact-head `gh api` collection, product-evidence separation, and fresh hosted Checks before protected merge. |
-| #773 | `9dfa9be` | ready, based on main | Review this dated baseline and ADR 0016; exact current head is self-referential and has no independent approval yet. |
+| #784 | `992e0f6` | ready, based on main | Review fail-closed release authorization, exact-head `gh api` collection, product-evidence separation, and fresh hosted Checks before protected merge. |
+| #773 | `2f9d039` | ready, based on main | Review this dated baseline and ADR 0016; exact current head is self-referential and has no independent approval yet. |
 | #772 | `1d81910` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions. |
 | #771 | `5bbec44` | ready, based on main | Local exact-head suite is `1531 passed`; the tool-failure PR is now limited to failure classification and safe fallback, while owner-bound evidence authorization is tracked separately in #782. Hosted Checks are queued; obtain independent approval before protected merge. |
 | #770 | `0777e14` | draft, based on stale main | Reconcile after #768. Preserve complete-price evidence, provider-family diversity, corrupt-row handling, and consume the shared ordinary-chat classifier rather than a local detector. |
