@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20 23:27, Asia/Seoul
+**As of:** 2026-08-20 23:32, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -82,6 +82,7 @@ required workflows, and a normal merge.
 
 | PR | Exact head at snapshot | State / base | Evidence boundary and next action |
 |---:|---|---|---|
+| [#791](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/791) | `4c31c3549537ba4813fe25e2bf4efc3e5b56aa3f` | ready, stacked on [#779](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/779) and [#789](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/789) | Integration proof is `1478 passed` at the predecessor head and `71 passed` after the exact-head ADR collision fix; re-run protected Checks and independent review before normal merge. |
 | [#790](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/790) | `04761e412083e02ef6ccc0a888ceec4c0be71553` | ready, based on main | Exact-head gateway/discovery/API proof is `25 passed` with Ruff/diff clean; review loopback-only authenticated CI bootstrap, five-provider KV registration, priced discovery fallback, and protected approval before normal merge. |
 | [#783](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/783) | `6210b00899bd6aae068570b0f030a224e9cc55a3` | ready, stacked on [#776](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/776) | Review the total monotonic body deadline and exact-head framing regression; integrate after [#776](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/776) with all protected evidence. |
 | [#781](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/781) | `caf1eb34d92f8d1e3d99a98f4278378f6bc4e85f` | ready, stacked on [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior at the current parent-integrated head before merging after [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780). |
