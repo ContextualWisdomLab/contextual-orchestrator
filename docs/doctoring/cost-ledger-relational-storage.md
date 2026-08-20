@@ -19,11 +19,17 @@ copies each fact and its relational dimensions, and drops the temporary table
 only after all rows are inserted. A failed or ambiguous migration raises
 without publishing a partial ledger.
 
+SQLite uses `PRAGMA table_info`; PostgreSQL uses `information_schema.columns`
+from the first metadata query. The driver branch is deliberate because a
+failed SQLite probe would abort a PostgreSQL transaction before fallback.
+
 ## Verification
 
-The cost-ledger and dependent HTTP/router suites passed 34 tests on the current
-change head. The normalized storage and legacy migration tests are included in
-`tests/test_cost_ledger.py`; Ruff, compileall, and `git diff --check` passed.
+The cost-ledger and dependent HTTP/router suites passed 34 tests, and the
+current PostgreSQL-style metadata regression plus the full repository suite
+passed 1448 tests. The normalized storage and legacy migration tests are
+included in `tests/test_cost_ledger.py`; Ruff, compileall, and `git diff
+--check` passed.
 
 ## References (APA 7)
 

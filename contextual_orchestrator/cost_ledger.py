@@ -702,16 +702,17 @@ class SqlLedgerStore:
     def _table_columns(self, table_name: str) -> set[str]:
         """Return table columns while keeping identifier interpolation constant."""
         cur = self._conn.cursor()
-        try:
+        if self._paramstyle == "qmark":
             cur.execute("PRAGMA table_info(llm_usage_records)")
             return {row[1] for row in cur.fetchall()}
-        except Exception:
-            cur.execute(
-                "SELECT column_name FROM information_schema.columns "
-                "WHERE table_schema = current_schema() AND table_name = %s",
-                (table_name,),
-            )
-            return {row[0] for row in cur.fetchall()}
+        # A PostgreSQL error aborts the current transaction, so never probe it
+        # with SQLite syntax and then attempt a fallback on the same connection.
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = %s",
+            (table_name,),
+        )
+        return {row[0] for row in cur.fetchall()}
 
     def _execute_schema(self) -> None:
         """Create the catalog, core ledger, and normalized attribution tables."""

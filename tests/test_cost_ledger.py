@@ -49,6 +49,11 @@ class _PyformatCursor:
         if statement.count("%s") != len(params):
             raise AssertionError("pyformat placeholders and values diverged")
         self._connection.executions.append((statement, tuple(params)))
+        if "information_schema.columns" in statement:
+            self._cursor.execute(
+                "SELECT name FROM pragma_table_info('llm_usage_records')"
+            )
+            return self
         self._cursor.execute(statement.replace("%s", "?"), tuple(params))
         return self
 
@@ -384,6 +389,8 @@ def test_sql_ledger_rejects_unknown_parameter_style() -> None:
 def test_sql_ledger_store_pyformat_binds_all_query_windows() -> None:
     connection = _PyformatConnection()
     store = SqlLedgerStore(connection, paramstyle="pyformat")
+    assert any("information_schema.columns" in call[0] for call in connection.executions)
+    assert not any("PRAGMA table_info" in call[0] for call in connection.executions)
     ledger = _priced_ledger(store=store)
     ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=1000,
                         completion_tokens=0, created_at=100)
