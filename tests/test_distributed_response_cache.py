@@ -79,6 +79,11 @@ def test_key_is_order_stable_but_model_and_mode_specific() -> None:
     assert build_response_cache_key(messages, "route", parameters={"temperature": 0.1}) != build_response_cache_key(
         messages, "route", parameters={"temperature": 0.9}
     )
+    assert build_response_cache_key(messages, "route", partition="principal-a") != build_response_cache_key(
+        messages, "route", partition="principal-b"
+    )
+    with pytest.raises(ValueError, match="partition"):
+        build_response_cache_key(messages, "route", partition=" ")
 
 
 def test_redis_compatible_provider_round_trips_json_with_ttl_and_namespace() -> None:
@@ -162,7 +167,11 @@ def test_orchestrator_uses_distributed_cache_and_honors_bypass() -> None:
     first = orchestrator.complete(messages)
     assert first["answer"]
     calls_after_first = client.calls
-    assert orchestrator.complete(messages) == first
+    second = orchestrator.complete(messages)
+    assert second["answer"] == first["answer"]
+    assert second["trace"] == first["trace"]
+    assert first["cache_status"] == "miss"
+    assert second["cache_status"] == "hit"
     assert client.calls == calls_after_first
     assert orchestrator.complete(messages, model_name="another-model") != first
     assert client.calls > calls_after_first
