@@ -65,7 +65,7 @@ class ToolExecutionError(RuntimeError):
         idempotent: bool = False,
         outcome_unknown: bool = False,
     ) -> None:
-        if not tool_name.strip():
+        if not isinstance(tool_name, str) or not tool_name.strip():
             raise ValueError("tool_name must be non-empty")
         if not isinstance(kind, ToolFailureKind):
             raise TypeError("kind must be a ToolFailureKind")
@@ -167,7 +167,12 @@ def _exception_chain(error: BaseException) -> tuple[BaseException, ...]:
     while current is not None and id(current) not in seen and len(chain) < 8:
         seen.add(id(current))
         chain.append(current)
-        current = current.__cause__ or current.__context__
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            break
+        else:
+            current = current.__context__
     return tuple(chain)
 
 

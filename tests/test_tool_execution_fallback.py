@@ -516,6 +516,19 @@ def test_exception_cause_cycle_is_bounded() -> None:
     assert decision.action is ToolFallbackAction.FAILOVER_AGENT
 
 
+def test_suppressed_exception_context_is_not_reclassified() -> None:
+    """Explicit ``raise from None`` boundaries must hide the old tool cause."""
+    hidden = RuntimeError("Tool execute_command not found in agent strix")
+    error = RuntimeError("provider failure")
+    error.__context__ = hidden
+    error.__suppress_context__ = True
+
+    decision = classify_tool_failure(error)
+
+    assert decision.kind is ToolFailureKind.UNKNOWN
+    assert decision.action is ToolFallbackAction.FAILOVER_AGENT
+
+
 def test_tool_marker_beyond_eight_exception_links_is_ignored() -> None:
     root = RuntimeError("outer provider failure")
     current = root
