@@ -123,7 +123,8 @@ def test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n() -> None:
             assert status == 400, (payload, body)
             assert code in json.dumps(body), (code, body)
         status, body = _post(port, _base(service_tier="flex"))
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -146,15 +147,15 @@ def test_http_tools_passthrough_rejects_invalid_user_and_stream_options() -> Non
         thread.join(timeout=5)
 
 
-def test_http_tools_passthrough_accepts_coerced_sampling() -> None:
+def test_http_tools_rejects_valid_tool_request_without_single_agent_fallback() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             _base(temperature="0.7", top_p="0.95", max_tokens="64"),
         )
-        assert status == 200, body
-        assert body.get("object") == "chat.completion" or "choices" in body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

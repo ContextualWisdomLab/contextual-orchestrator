@@ -24,8 +24,10 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
     _new_chat_completion_id,
+    _chat_to_responses_payload,
     chat_completion_chunks,
     chat_completion_response,
+    _responses_to_chat_payload,
     text_completion_response,
     redact_value,
     sse_stream_body,
@@ -50,8 +52,9 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     # Assistants-style tool_resources — named unsupported (not unknown_fields).
     "tool_resources",
 }
-# Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
-PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
+# Tool calls still require provider-native loop semantics; structured JSON is
+# orchestrated through the conduct+synthesis path below instead of passthrough.
+PASSTHROUGH_TRIGGER_KEYS = {"tools", "tool_choice", "functions", "function_call"}
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
     "include_orchestration_trace", "stream", "attribution", "routing",
@@ -1027,13 +1030,15 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     body["top_p"] = value
     return value
 
-def _validate_completions_model(body: dict[str, Any]) -> str:
+def _validate_completions_model(body: dict[str, Any], *, required: bool = True) -> str:
     """Legacy Completions ``model`` — required non-empty string (OpenAI parity).
 
     Incidental leading/trailing whitespace is stripped and written back so
     tools/response_format passthrough (``proxy_completion``) matches the same
     pool model id as the orchestration path. Form/JS SDKs often pad model names.
     """
+    if "model" not in body and not required:
+        return "contextual-orchestrator"
     if "model" not in body:
         raise RequestError(400, "invalid_model", "model is required")
     model = body.get("model")
@@ -1791,6 +1796,8 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
     """
+    if model_name == "contextual-orchestrator":
+        return
     agents = getattr(orchestrator, "agents", None) or []
     for agent in agents:
         if getattr(agent, "disabled", False):
@@ -1802,6 +1809,74 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
         "invalid_model",
         f"model {model_name!r} is not available in the agent pool",
     )
+
+
+def _validate_json_schema_value(value: Any, schema: dict[str, Any], path: str = "$") -> None:
+    """Validate the bounded JSON Schema subset used by structured chat output."""
+    if not isinstance(schema, dict):
+        raise RequestError(502, "invalid_structured_output", "json_schema.schema must be an object")
+    if "enum" in schema and value not in schema["enum"]:
+        raise RequestError(502, "invalid_structured_output", f"{path} is outside the schema enum")
+    if "const" in schema and value != schema["const"]:
+        raise RequestError(502, "invalid_structured_output", f"{path} does not match the schema const")
+    if "anyOf" in schema and not any(
+        _json_schema_matches(value, option) for option in schema["anyOf"] if isinstance(option, dict)
+    ):
+        raise RequestError(502, "invalid_structured_output", f"{path} matches no anyOf branch")
+    expected = schema.get("type")
+    if expected == "object":
+        if not isinstance(value, dict):
+            raise RequestError(502, "invalid_structured_output", f"{path} must be an object")
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        missing = [name for name in required if name not in value]
+        if missing:
+            raise RequestError(502, "invalid_structured_output", f"{path} is missing {missing[0]!r}")
+        for name, child in properties.items():
+            if name in value and isinstance(child, dict):
+                _validate_json_schema_value(value[name], child, f"{path}.{name}")
+        if schema.get("additionalProperties") is False:
+            unknown = set(value) - set(properties)
+            if unknown:
+                raise RequestError(502, "invalid_structured_output", f"{path} has unknown property {sorted(unknown)[0]!r}")
+    elif expected == "array":
+        if not isinstance(value, list):
+            raise RequestError(502, "invalid_structured_output", f"{path} must be an array")
+        items = schema.get("items")
+        if isinstance(items, dict):
+            for index, item in enumerate(value):
+                _validate_json_schema_value(item, items, f"{path}[{index}]")
+    elif expected == "string" and not isinstance(value, str):
+        raise RequestError(502, "invalid_structured_output", f"{path} must be a string")
+    elif expected == "boolean" and not isinstance(value, bool):
+        raise RequestError(502, "invalid_structured_output", f"{path} must be a boolean")
+    elif expected == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
+        raise RequestError(502, "invalid_structured_output", f"{path} must be an integer")
+    elif expected == "number" and (isinstance(value, bool) or not isinstance(value, (int, float))):
+        raise RequestError(502, "invalid_structured_output", f"{path} must be a number")
+
+
+def _json_schema_matches(value: Any, schema: dict[str, Any]) -> bool:
+    try:
+        _validate_json_schema_value(value, schema)
+    except RequestError:
+        return False
+    return True
+
+
+def _validate_structured_completion_answer(answer: Any, response_format: dict[str, Any]) -> None:
+    """Reject non-JSON synthesis instead of returning an unverified contract."""
+    if not isinstance(answer, str):
+        raise RequestError(502, "invalid_structured_output", "orchestrator returned no textual JSON")
+    try:
+        value = json.loads(answer)
+    except json.JSONDecodeError as exc:
+        raise RequestError(502, "invalid_structured_output", "orchestrator returned invalid JSON") from exc
+    if response_format.get("type") == "json_object" and not isinstance(value, dict):
+        raise RequestError(502, "invalid_structured_output", "json_object output must be an object")
+    if response_format.get("type") == "json_schema":
+        schema = ((response_format.get("json_schema") or {}).get("schema"))
+        _validate_json_schema_value(value, schema)
 
 
 
@@ -4038,7 +4113,7 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
 
 
 
-def _validate_responses_model(body: dict[str, Any]) -> str:
+def _validate_responses_model(body: dict[str, Any], *, required: bool = True) -> str:
     """Responses API ``model`` — required non-empty string ≤256 chars.
 
     OpenAI requires model on Responses. Missing/empty/non-string values fail
@@ -4047,6 +4122,8 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
     ``proxy_completion`` pool match sees the same id as form/JS padded names.
     """
     model = body.get("model")
+    if model is None and not required:
+        return "contextual-orchestrator"
     if model is None:
         raise RequestError(400, "invalid_model", "model is required on /v1/responses")
     if not isinstance(model, str) or not model.strip():
@@ -5046,7 +5123,7 @@ def build_server(
                             body["parallel_tool_calls"] = ptc
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
-                    _validate_completions_model(body)
+                    _validate_completions_model(body, required=False)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
                     stream = body.get("stream", False)
@@ -5072,29 +5149,30 @@ def build_server(
                     frequency_penalty = sampling["frequency_penalty"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
-                    if any(
+                    if tools_list or any(
                         key in body and body.get(key) is not None
                         for key in PASSTHROUGH_TRIGGER_KEYS
+                        if key != "tools"
                     ):
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
-                        started_at = time.perf_counter()
-                        proxied = self._run(
-                            lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
+                        raise RequestError(
+                            422,
+                            "multi_agent_tools_unsupported",
+                            "tool execution cannot be represented by the multi-agent synthesis contract yet; "
+                            "a single-agent passthrough is intentionally not used",
                         )
-                        orchestrator.record_analytics_event(
-                            "chat_completion_passthrough",
-                            {
-                                "endpoint_path": "/v1/chat/completions",
-                                "actor_scope": "inference",
-                                "status_code": 200,
-                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                            },
-                        )
-                        self._send(proxied)
-                        return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
+                    response_format = body.get("response_format")
+                    structured_response_format = (
+                        response_format
+                        if isinstance(response_format, dict)
+                        and response_format.get("type") in {"json_object", "json_schema"}
+                        else None
+                    )
+                    if structured_response_format is not None:
+                        # Structured output is a synthesis contract, not a
+                        # provider passthrough. Force the multi-agent workflow.
+                        mode = "conduct"
                     if "include_orchestration_trace" in body:
                         # Null/empty omit; bool, int 0/1, and "true"/"false"/"0"/"1"
                         # strings coerce (SDK form/query parity with stream/store).
@@ -5112,9 +5190,8 @@ def build_server(
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
-                    # Require model — silent default to contextual-orchestrator hid
-                    # which deployment the buyer selected on the chat Completions path.
-                    model_name = _validate_completions_model(body)
+                    # Omitted model means contextual-orchestrator owns selection.
+                    model_name = _validate_completions_model(body, required=False)
                     _require_pool_model(orchestrator, model_name)
                     attribution = dict(attribution or {})
                     # OpenAI chat ``user`` → account when unset.
@@ -5169,6 +5246,7 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            response_format=structured_response_format,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5176,6 +5254,8 @@ def build_server(
                         model_client.default_top_p = previous_top_p
                         model_client.default_presence_penalty = previous_presence
                         model_client.default_frequency_penalty = previous_frequency
+                    if structured_response_format is not None and result.get("channel") != "batch":
+                        _validate_structured_completion_answer(result.get("answer"), structured_response_format)
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(
@@ -5386,12 +5466,13 @@ def build_server(
                     self._send(_response_payload(retrieved, include_trace=True))
                     return
                 if path == "/v1/responses":
-                    # The Responses API has no chat-completions verifier equivalent,
-                    # so every request is proxied to one agent verbatim.
+                    # Normalize Responses input to the same multi-agent workflow
+                    # used by Chat Completions; never silently proxy one agent.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.
-                    _validate_responses_model(body)
+                    model_name = _validate_responses_model(body, required=False)
+                    _require_pool_model(orchestrator, model_name)
                     _validate_responses_conversation_controls(body)
                     if "store" in body:
                         _validate_responses_store(body)
@@ -5488,6 +5569,13 @@ def build_server(
                         _validate_chat_tool_choice(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
+                    if tools_list:
+                        raise RequestError(
+                            422,
+                            "multi_agent_tools_unsupported",
+                            "tool execution cannot be represented by the multi-agent synthesis contract yet; "
+                            "a single-agent passthrough is intentionally not used",
+                        )
                     if "modalities" in body:
                         _validate_responses_modalities(body)
                     if "prediction" in body:
@@ -5532,8 +5620,8 @@ def build_server(
                             "invalid_input",
                             "input must be a non-empty string or non-empty array on /v1/responses",
                         )
-                    # stream=false / omit → non-SSE JSON response (honest no-stream path).
-                    # stream=true is not implemented for Responses passthrough.
+                    # stream=false / omit -> non-SSE JSON response (honest no-stream path).
+                    # stream=true is not implemented for the conducted Responses path.
                     # String/0-1 forms coerce via shared bool helper (parity with chat).
                     if "stream" in body:
                         stream = _coerce_optional_bool(
@@ -5547,12 +5635,56 @@ def build_server(
                                 "invalid_stream",
                                 "stream is not supported on /v1/responses",
                             )
+                    response_contract: dict[str, Any] | None = None
+                    raw_response_format = body.get("response_format")
+                    if isinstance(raw_response_format, dict) and raw_response_format.get("type") in {
+                        "json_object",
+                        "json_schema",
+                    }:
+                        response_contract = raw_response_format
+                    text_config = body.get("text")
+                    text_format = text_config.get("format") if isinstance(text_config, dict) else None
+                    if isinstance(text_format, dict) and text_format.get("type") in {"json_object", "json_schema"}:
+                        if text_format["type"] == "json_object":
+                            response_contract = {"type": "json_object"}
+                        else:
+                            response_contract = {
+                                "type": "json_schema",
+                                "json_schema": {
+                                    key: text_format[key]
+                                    for key in ("name", "description", "schema", "strict")
+                                    if key in text_format
+                                },
+                            }
+                    chat_payload = _responses_to_chat_payload(body)
+                    model_client = orchestrator.client
+                    previous_max_tokens = model_client.max_output_tokens
+                    if isinstance(body.get("max_output_tokens"), int):
+                        model_client.max_output_tokens = body["max_output_tokens"]
                     started_at = time.perf_counter()
-                    proxied = self._run(
-                        lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                    try:
+                        result = self._run(lambda: coordinator.complete(
+                            chat_payload["messages"],
+                            mode="conduct",
+                            attribution=_validate_attribution(body.get("attribution")),
+                            hints=body.get("routing"),
+                            model_name=model_name,
+                            workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            response_format=response_contract,
+                        ))
+                    finally:
+                        model_client.max_output_tokens = previous_max_tokens
+                    if response_contract is not None:
+                        _validate_structured_completion_answer(result.get("answer"), response_contract)
+                    chat_response = chat_completion_response(
+                        result,
+                        model=model_name,
+                        include_trace=security.expose_trace_by_default,
+                        usage=result.get("usage"),
                     )
+                    orchestrated = _chat_to_responses_payload(chat_response, body)
                     orchestrator.record_analytics_event(
-                        "responses_passthrough",
+                        "responses_orchestrated",
                         {
                             "endpoint_path": "/v1/responses",
                             "actor_scope": "inference",
@@ -5560,10 +5692,7 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    if body.get("stream") is True:
-                        self._send_sse(responses_sse_body(proxied))
-                    else:
-                        self._send(proxied)
+                    self._send(orchestrated)
                     return
 
                 if path == "/admin/simulate":

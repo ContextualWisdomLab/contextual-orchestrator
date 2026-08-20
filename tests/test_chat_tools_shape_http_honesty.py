@@ -52,7 +52,7 @@ def _base_messages():
     return [{"role": "user", "content": "use a tool"}]
 
 
-def test_http_chat_accepts_valid_function_tools() -> None:
+def test_http_chat_rejects_valid_function_tools_without_single_agent_fallback() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -75,8 +75,8 @@ def test_http_chat_accepts_valid_function_tools() -> None:
                 ],
             },
         )
-        assert status == 200, body
-        assert "choices" in body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

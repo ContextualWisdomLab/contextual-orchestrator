@@ -138,7 +138,7 @@ def _serve() -> tuple[object, int, str]:
     return server, server.server_address[1], token
 
 
-def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:
+def test_http_chat_completions_orchestrates_json_object_instead_of_passthrough() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     try:
@@ -153,9 +153,27 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
         )
     finally:
         server.shutdown()
-    assert status == 200  # previously rejected 400 'unknown_fields'
+    assert status == 200
     assert body["object"] == "chat.completion"
-    assert body["echo"]["response_format"] == {"type": "json_object"}
+    assert json.loads(body["choices"][0]["message"]["content"]) == {}
+
+
+def test_http_chat_completions_omits_model_for_orchestrator_selection() -> None:
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "give me JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+    assert status == 200, body
+    assert body["model"] == "contextual-orchestrator"
+    assert json.loads(body["choices"][0]["message"]["content"]) == {}
 
 
 def test_http_responses_endpoint_passes_through() -> None:

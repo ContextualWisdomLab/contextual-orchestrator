@@ -52,7 +52,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_accepts_flat_function_tools() -> None:
+def test_http_responses_rejects_flat_function_tools_without_single_agent_fallback() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -72,13 +72,14 @@ def test_http_responses_accepts_flat_function_tools() -> None:
                 ],
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_flat_tools_with_tool_choice_name() -> None:
+def test_http_responses_rejects_flat_tools_with_tool_choice_name() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -100,13 +101,14 @@ def test_http_responses_accepts_flat_tools_with_tool_choice_name() -> None:
                 },
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_still_accepts_nested_function_tools() -> None:
+def test_http_chat_rejects_nested_function_tools_without_single_agent_fallback() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -126,14 +128,15 @@ def test_http_chat_still_accepts_nested_function_tools() -> None:
                 ],
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_flat_function_tools_too() -> None:
-    """Chat path accepts Responses-flat tools for SDK portability."""
+def test_http_chat_rejects_flat_function_tools_without_single_agent_fallback() -> None:
+    """Chat path does not silently downgrade tools to one agent."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -152,7 +155,8 @@ def test_http_chat_accepts_flat_function_tools_too() -> None:
                 ],
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

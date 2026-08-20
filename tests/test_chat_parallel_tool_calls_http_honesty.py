@@ -117,8 +117,8 @@ def test_http_chat_parallel_tool_calls_non_boolean_fail_closed() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_parallel_tool_calls_true_with_tools_passthrough() -> None:
-    """With tools, parallel_tool_calls triggers single-agent passthrough path."""
+def test_http_chat_parallel_tool_calls_true_rejects_single_agent_fallback() -> None:
+    """With tools, the gateway does not silently downgrade to one agent."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -130,9 +130,8 @@ def test_http_chat_parallel_tool_calls_true_with_tools_passthrough() -> None:
                 "parallel_tool_calls": True,
             },
         )
-        # Mock passthrough returns chat-shaped body
-        assert status == 200, body
-        assert "choices" in body or "id" in body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -1279,6 +1279,8 @@ class ModelClient:
         match = re.search(r"Role: ([a-z]+)", system)
         if match:
             role = match.group(1)
+        if "final answer must contain only one JSON value" in system:
+            return "{}"
         return f"[{agent.id}:{role}] {last[:220]}"
 
     # --- OpenAI Batch API (async, ~50% provider discount; NOT for latency-sensitive chat) ---
@@ -1813,23 +1815,36 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
+    def complete(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        output_contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
+        effective_mode = "conduct" if output_contract is not None else mode
         if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
+            return self._dispatch(messages, effective_mode, output_contract=output_contract)
+        key = self._cache_key(messages, effective_mode, output_contract=output_contract)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._dispatch(messages, mode)
+        result = self._dispatch(messages, effective_mode, output_contract=output_contract)
         self._cache.put(key, result)
         return result
 
-    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
+    def _dispatch(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        *,
+        output_contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
-        if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
+        if output_contract is None and (mode == "route" or (mode == "auto" and not self._needs_workflow(text))):
             return self.route_once(messages)
-        return self.conduct(messages)
+        return self.conduct(messages, output_contract=output_contract)
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
@@ -1875,17 +1890,34 @@ class TaskOrchestrator:
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+    def _cache_key(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        *,
+        output_contract: dict[str, Any] | None = None,
+    ) -> str:
+        payload = json.dumps(
+            {"mode": mode, "messages": messages, "output_contract": output_contract},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        *,
+        output_contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        result = self.complete(messages, mode=mode, output_contract=output_contract)
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -2327,7 +2359,12 @@ class TaskOrchestrator:
             "trace": [row],
         }
 
-    def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
+    def conduct(
+        self,
+        messages: list[ChatMessage],
+        *,
+        output_contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
         plan_source = "template"
@@ -2360,6 +2397,11 @@ class TaskOrchestrator:
                     "content": f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}",
                 },
             ]
+            if output_contract is not None and step.id == steps[-1].id:
+                step_messages[0]["content"] += (
+                    "\nThe final answer must contain only one JSON value. "
+                    f"Honor this output contract exactly: {json.dumps(output_contract, ensure_ascii=False, sort_keys=True)}"
+                )
             start = time.perf_counter()
             output, served_id, usage = self._invoke(agent, step_messages, text=task, role=step.role)
             elapsed = (time.perf_counter() - start) * 1000
@@ -2386,14 +2428,19 @@ class TaskOrchestrator:
             if self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[-1].id]
-            if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
+            if (
+                output_contract is None
+                and not verification["accepted"]
+                and self.policy.verifier_required
+                and last_output("worker")
+            ):
                 answer = last_output("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
             if self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
-            if not verification["accepted"] and self.policy.verifier_required:
+            if output_contract is None and not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
         return {
