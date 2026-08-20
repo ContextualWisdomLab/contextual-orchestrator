@@ -1969,7 +1969,8 @@ class TaskOrchestrator:
             if key not in self._ORCHESTRATION_ONLY_KEYS
         }
         upstream["model"] = agent.model
-        upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
+        if effort_profile is not None:
+            upstream = self.client.apply_effort_profile(agent, upstream, effort_profile)
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
