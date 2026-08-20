@@ -43,7 +43,7 @@ def test_hypothesis_is_test_only_and_absent_from_production_imports() -> None:
     assert '"hypothesis>=6.100"' in test_dependencies
 
     imported_roots: set[str] = set()
-    for source_path in sorted(PRODUCTION_PACKAGE.glob("*.py")):
+    for source_path in sorted(PRODUCTION_PACKAGE.rglob("*.py")):
         tree = ast.parse(source_path.read_text(encoding="utf-8"), source_path.as_posix())
         for node in ast.walk(tree):
             if isinstance(node, ast.Import):
