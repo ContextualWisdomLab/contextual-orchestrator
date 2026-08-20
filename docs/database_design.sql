@@ -69,6 +69,61 @@ create table audit_event (
   created_at timestamptz not null default now()
 );
 
+create table provider_credentials (
+  credential_name text primary key,
+  encrypted_value bytea not null,
+  updated_at timestamptz not null default now()
+);
+
+create table provider_account (
+  provider_account_id text primary key,
+  provider_name text not null,
+  credential_name text not null references provider_credentials(credential_name),
+  list_url text not null,
+  chat_base_url text not null,
+  auth_scheme text not null,
+  discovery_style text not null,
+  task_filter text not null,
+  enabled_flag boolean not null default true,
+  created_at timestamptz not null default now(),
+  updated_at timestamptz not null default now(),
+  unique (provider_name, credential_name)
+);
+
+create table provider_model (
+  provider_model_id text primary key,
+  provider_account_id text not null
+    references provider_account(provider_account_id) on delete cascade,
+  model_name text not null,
+  prompt_price_per_1k numeric(20, 8),
+  completion_price_per_1k numeric(20, 8),
+  currency_code text not null,
+  serving_eligible_flag boolean not null default false,
+  enabled_flag boolean not null default true,
+  first_seen_at timestamptz not null,
+  last_seen_at timestamptz not null,
+  unique (provider_account_id, model_name)
+);
+
+create table model_serving_tag (
+  provider_model_id text not null
+    references provider_model(provider_model_id) on delete cascade,
+  tag_name text not null,
+  primary key (provider_model_id, tag_name)
+);
+
+create table catalog_refresh_run (
+  catalog_refresh_run_id text primary key,
+  provider_account_id text not null
+    references provider_account(provider_account_id) on delete cascade,
+  refresh_status text not null,
+  observed_model_count integer not null default 0,
+  eligible_model_count integer not null default 0,
+  error_code text,
+  started_at timestamptz not null,
+  finished_at timestamptz not null
+);
+
 create index workflow_run_retention_idx
   on workflow_run (retention_expires_at)
   where deleted_at is null;
@@ -80,6 +135,12 @@ create index workflow_step_retention_idx
 create index audit_event_retention_idx
   on audit_event (retention_expires_at)
   where deleted_at is null;
+
+create index provider_model_account_idx
+  on provider_model (provider_account_id, enabled_flag, serving_eligible_flag);
+
+create index catalog_refresh_account_idx
+  on catalog_refresh_run (provider_account_id, finished_at desc);
 
 create view workflow_run_safe_view as
 select
