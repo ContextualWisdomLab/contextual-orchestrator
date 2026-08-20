@@ -78,7 +78,8 @@ def test_external_bearer_admin_reads_require_object_policy() -> None:
     def verify(token: str, scope: str) -> bool:
         return token == "keyverse-admin" and scope == "admin"
 
-    def deny(scope: str, resource_type: str, resource_id: str, client_address: str) -> bool:
+    def deny(token: str, scope: str, resource_type: str, resource_id: str, client_address: str) -> bool:
+        assert token == "keyverse-admin"
         seen.append((scope, resource_type, resource_id, client_address))
         return False
 
