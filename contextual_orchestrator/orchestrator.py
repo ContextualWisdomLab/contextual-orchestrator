@@ -1549,22 +1549,50 @@ class _StateStore:
     """
 
     _KEYED = {"workflow_run", "evaluation_run"}
+    _TABLE_NAME = "orchestration_records"
+    _LEGACY_TABLE_NAME = "records"
+    _LEGACY_INDEX_NAME = "records_kind_seq"
+    _INDEX_NAME = "orchestration_records_kind_seq"
     _CREATE_RECORDS_SQL = (
-        "CREATE TABLE IF NOT EXISTS records ("
+        "CREATE TABLE IF NOT EXISTS orchestration_records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
     )
-    _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = "CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)"
-    _DELETE_KEYED_SQL = "DELETE FROM records WHERE kind = ? AND key = ?"
-    _INSERT_SQL = "INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)"
-    _SELECT_ALL_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq"
-    _SELECT_LIMIT_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
+    _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = (
+        "CREATE INDEX IF NOT EXISTS orchestration_records_kind_seq "
+        "ON orchestration_records(kind, seq)"
+    )
+    _DELETE_KEYED_SQL = "DELETE FROM orchestration_records WHERE kind = ? AND key = ?"
+    _INSERT_SQL = "INSERT INTO orchestration_records (kind, key, payload) VALUES (?, ?, ?)"
+    _SELECT_ALL_SQL = "SELECT payload FROM orchestration_records WHERE kind = ? ORDER BY seq"
+    _SELECT_LIMIT_SQL = "SELECT payload FROM orchestration_records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
+        self._migrate_legacy_table()
         self._conn.execute(self._CREATE_RECORDS_SQL)
         self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
         self._conn.commit()
+
+    def _migrate_legacy_table(self) -> None:
+        """Rename the pre-policy table without discarding persisted state."""
+        tables = {
+            row[0]
+            for row in self._conn.execute(
+                "SELECT name FROM sqlite_master WHERE type = ?", ("table",)
+            ).fetchall()
+        }
+        has_legacy = self._LEGACY_TABLE_NAME in tables
+        has_current = self._TABLE_NAME in tables
+        if has_legacy and has_current:
+            raise RuntimeError(
+                "state database contains both legacy and current persistence tables"
+            )
+        if has_legacy:
+            self._conn.execute(
+                "ALTER TABLE records RENAME TO orchestration_records"
+            )
+            self._conn.execute(f"DROP INDEX IF EXISTS {self._LEGACY_INDEX_NAME}")
 
     def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
         blob = json.dumps(payload, ensure_ascii=False)
