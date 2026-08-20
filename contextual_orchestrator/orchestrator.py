@@ -1856,7 +1856,12 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
 
-    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+    def stream_route(
+        self,
+        messages: list[ChatMessage],
+        workflow_run_id: str | None = None,
+        owner_id: str | None = None,
+    ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
         True streaming for the route path. ponytail: no cross-agent failover here — bytes
@@ -1883,6 +1888,8 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
         }
+        if owner_id is not None:
+            record["owner_id"] = owner_id
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         self._append_audit_event(
@@ -1899,7 +1906,13 @@ class TaskOrchestrator:
         payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
@@ -1918,6 +1931,8 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
         }
+        if owner_id is not None:
+            record["owner_id"] = owner_id
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         if self._store is not None:
@@ -2026,14 +2041,18 @@ class TaskOrchestrator:
             records.append(record)
         return records
 
-    def run_evaluation(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
+    def run_evaluation(
+        self, prompts: list[str], mode: str = "auto", owner_id: str | None = None
+    ) -> dict[str, Any]:
         """Replay prompts through the runtime and persist an evaluation record."""
         if not prompts:  # pragma: no cover
             raise ValueError("evaluation requires at least one prompt")
         workflow_run_ids: list[str] = []
         results: list[dict[str, Any]] = []
         for prompt in prompts:
-            record = self.run([{"role": "user", "content": prompt}], mode=mode)
+            record = self.run(
+                [{"role": "user", "content": prompt}], mode=mode, owner_id=owner_id
+            )
             workflow_run_ids.append(record["workflow_run_id"])
             results.append({
                 "workflow_run_id": record["workflow_run_id"],
@@ -2050,6 +2069,8 @@ class TaskOrchestrator:
             "results": results,
             "success_count": len([r for r in results if r["answer"]]),
         }
+        if owner_id is not None:
+            evaluation["owner_id"] = owner_id
         self._evaluation_runs[evaluation_run_id] = evaluation
         if self._store is not None:
             self._store.save("evaluation_run", evaluation_run_id, evaluation)
@@ -2143,15 +2164,22 @@ class TaskOrchestrator:
             ),
         }
 
-    def get_workflow_run(self, workflow_run_id: str) -> dict[str, Any]:
+    def get_workflow_run(
+        self, workflow_run_id: str, owner_id: str | None = None
+    ) -> dict[str, Any]:
         """Return a persisted workflow run by identifier."""
         if workflow_run_id not in self._workflow_runs:  # pragma: no cover
             raise KeyError(workflow_run_id)
-        return self._workflow_runs[workflow_run_id]
+        record = self._workflow_runs[workflow_run_id]
+        if owner_id is not None and record.get("owner_id") != owner_id:
+            raise KeyError(workflow_run_id)
+        return record
 
-    def get_access_report(self, workflow_run_id: str) -> dict[str, Any]:
+    def get_access_report(
+        self, workflow_run_id: str, owner_id: str | None = None
+    ) -> dict[str, Any]:
         """Return per-step visibility and accessed output evidence for a run."""
-        run = self.get_workflow_run(workflow_run_id)
+        run = self.get_workflow_run(workflow_run_id, owner_id=owner_id)
         access_report = []
         for step in run["trace"]:
             access_report.append({
@@ -2797,14 +2825,30 @@ class TaskOrchestrator:
                 return item
         raise KeyError(model_id)
 
-    def list_recent_runs(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
+    def list_recent_runs(
+        self,
+        page_number: int = 1,
+        page_size: int = 10,
+        owner_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Return a paginated list of recent workflow run records."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        run_ids = list(self._run_order)[start:end]
+        run_ids = [
+            run_id
+            for run_id in self._run_order
+            if owner_id is None or self._workflow_runs[run_id].get("owner_id") == owner_id
+        ][start:end]
         return [self._workflow_runs[run_id] for run_id in run_ids]
+
+    def count_workflow_runs(self, owner_id: str | None = None) -> int:
+        """Count only workflow runs visible to the requested owner."""
+        return sum(
+            owner_id is None or record.get("owner_id") == owner_id
+            for record in self._workflow_runs.values()
+        )
 
     def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
         """Return recent audit events in newest-first order."""
@@ -9052,7 +9096,7 @@ class TaskOrchestrator:
             },
         }
 
-    def admin_state(self) -> dict[str, Any]:
+    def admin_state(self, owner_id: str | None = None) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.candidates))
         return {
@@ -9062,7 +9106,12 @@ class TaskOrchestrator:
                 "roles": list(self.ROLE_TAGS),
                 "complex_hints": list(self.COMPLEX_HINTS),
             },
-            "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
+            "recent_workflow_runs": [
+                self._shorten_run(run)
+                for run in self.list_recent_runs(
+                    page_size=max(1, len(self._run_order)), owner_id=owner_id
+                )
+            ],
             "recent_audit_events": self.list_recent_audit_events(),
             "spend": self.spend_analytics(),
         }
