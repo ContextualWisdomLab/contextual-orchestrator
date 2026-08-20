@@ -15,6 +15,8 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
 
 _TEST_AUTH_TOKEN = "chat_include_orchestration_trace_http_honesty_token"  # noqa: S105
+_TEST_INFERENCE_TOKEN = "trace_inference_only"  # noqa: S105
+_TEST_TRACE_TOKEN = "trace_reader"  # noqa: S105
 
 
 def build() -> TaskOrchestrator:
@@ -67,7 +69,7 @@ def _server_with_verifier(verifier):
 
 def test_trace_requires_a_verified_trace_purpose() -> None:
     server, thread, port, _orchestrator = _server_with_verifier(
-        lambda token, scope: token == "inference_only" and scope == "inference"
+        lambda token, scope: token == _TEST_INFERENCE_TOKEN and scope == "inference"
     )
     try:
         status, body = _post(
@@ -77,7 +79,7 @@ def test_trace_requires_a_verified_trace_purpose() -> None:
                 "messages": [{"role": "user", "content": "trace denied"}],
                 "include_orchestration_trace": True,
             },
-            token="inference_only",
+            token=_TEST_INFERENCE_TOKEN,
         )
     finally:
         server.shutdown()
@@ -88,7 +90,7 @@ def test_trace_requires_a_verified_trace_purpose() -> None:
 
 def test_trace_access_is_audited_before_response_release() -> None:
     server, thread, port, orchestrator = _server_with_verifier(
-        lambda token, scope: token == "trace_reader" and scope in {"inference", "trace"}
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
     )
     try:
         status, body = _post(
@@ -98,7 +100,7 @@ def test_trace_access_is_audited_before_response_release() -> None:
                 "messages": [{"role": "user", "content": "trace allowed"}],
                 "include_orchestration_trace": True,
             },
-            token="trace_reader",
+            token=_TEST_TRACE_TOKEN,
         )
     finally:
         server.shutdown()
@@ -119,7 +121,7 @@ def test_trace_access_is_audited_before_response_release() -> None:
 
 def test_trace_is_not_released_when_audit_persistence_fails() -> None:
     server, thread, port, orchestrator = _server_with_verifier(
-        lambda token, scope: token == "trace_reader" and scope in {"inference", "trace"}
+        lambda token, scope: token == _TEST_TRACE_TOKEN and scope in {"inference", "trace"}
     )
 
     def fail_audit(_event_type: str, _detail: dict) -> None:
@@ -134,7 +136,7 @@ def test_trace_is_not_released_when_audit_persistence_fails() -> None:
                 "messages": [{"role": "user", "content": "trace fail closed"}],
                 "include_orchestration_trace": True,
             },
-            token="trace_reader",
+            token=_TEST_TRACE_TOKEN,
         )
     finally:
         server.shutdown()
@@ -238,6 +240,9 @@ def test_http_chat_accepts_include_orchestration_trace_omitted() -> None:
 
 
 if __name__ == "__main__":
+    test_trace_requires_a_verified_trace_purpose()
+    test_trace_access_is_audited_before_response_release()
+    test_trace_is_not_released_when_audit_persistence_fails()
     test_http_chat_rejects_include_orchestration_trace_non_boolean()
     test_http_chat_rejects_include_orchestration_trace_null()
     test_http_chat_accepts_include_orchestration_trace_true()
