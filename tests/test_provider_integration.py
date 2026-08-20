@@ -34,12 +34,14 @@ class _FakeProvider:
 
     def __init__(self, responses: list[tuple[int, dict]]) -> None:
         self.request_count = 0
+        self.requests: list[dict] = []
         outer = self
 
         class Handler(BaseHTTPRequestHandler):
             def do_POST(self) -> None:  # noqa: N802
                 length = int(self.headers.get("content-length", 0))
-                self.rfile.read(length)
+                raw_request = self.rfile.read(length)
+                outer.requests.append(json.loads(raw_request.decode("utf-8")))
                 index = min(outer.request_count, len(responses) - 1)
                 outer.request_count += 1
                 status, body = responses[index]
@@ -112,8 +114,54 @@ def test_permanent_4xx_is_not_retried_over_http() -> None:
             client._send_with_retry(_agent(provider.base_url), {"model": "gpt-x"})
         except RuntimeError:
             raised = True
-        assert raised
-        assert provider.request_count == 1  # 400 is a real HTTPError classified permanent: one attempt
+    assert raised
+    assert provider.request_count == 1  # 400 is a real HTTPError classified permanent: one attempt
+
+
+def test_unsupported_temperature_is_negotiated_on_the_same_chat_endpoint() -> None:
+    with _FakeProvider([
+        (422, {"error": {"message": "temperature is not supported for this deployment"}}),
+        (200, _completion("negotiated")),
+    ]) as provider:
+        client = ModelClient(max_retries=0)
+        result = client._send_with_retry(
+            _agent(provider.base_url), {"model": "gpt-x", "temperature": 0.2}
+        )
+    assert result == "negotiated"
+    assert provider.request_count == 2
+    assert provider.requests[0]["temperature"] == 0.2
+    assert "temperature" not in provider.requests[1]
+
+
+def test_invalid_temperature_is_not_treated_as_capability_negotiation() -> None:
+    with _FakeProvider([(400, {"error": {"message": "invalid temperature value"}})]) as provider:
+        client = ModelClient(max_retries=3, retry_backoff=0.0)
+        raised = False
+        try:
+            client._send_with_retry(
+                _agent(provider.base_url), {"model": "gpt-x", "temperature": 2.5}
+            )
+        except RuntimeError:
+            raised = True
+    assert raised
+    assert provider.request_count == 1
+
+
+def test_unsupported_temperature_is_negotiated_for_raw_responses_transport() -> None:
+    response = {"id": "response-1", "output": [{"type": "message"}]}
+    with _FakeProvider([
+        (400, {"error": {"message": "unknown parameter: temperature"}}),
+        (200, response),
+    ]) as provider:
+        client = ModelClient(max_retries=0)
+        result = client._send_raw_with_retry(
+            _agent(provider.base_url),
+            "responses",
+            {"model": "gpt-x", "input": "hello", "temperature": 0.2},
+        )
+    assert result == response
+    assert provider.request_count == 2
+    assert "temperature" not in provider.requests[1]
 
 
 def test_connection_error_is_transient_and_exhausts() -> None:
