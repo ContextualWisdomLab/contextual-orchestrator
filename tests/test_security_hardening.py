@@ -112,6 +112,13 @@ def test_admin_session_is_opaque_scoped_and_revocable() -> None:
         )
         assert status == 403 and body["error"]["code"] == "csrf_origin_rejected"
 
+        status, body, _ = request_json(
+            f"{base}/admin/session",
+            "DELETE",
+            headers={"cookie": cookie_pair, "origin": "https://evil.example"},
+        )
+        assert status == 403 and body["error"]["code"] == "csrf_origin_rejected"
+
         status, body, clear_headers = request_json(
             f"{base}/admin/session",
             "DELETE",
