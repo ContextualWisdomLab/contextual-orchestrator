@@ -1,5 +1,5 @@
 ---
-id: "0012"
+id: "0015"
 title: "Orchestrator-owned automatic embedding model selection"
 status: proposed
 proposed_date: "2026-08-20"
@@ -26,7 +26,7 @@ related:
     relation: follows
 ---
 
-# Orchestrator-owned automatic embedding model selection
+# ADR 0015: Orchestrator-owned automatic embedding model selection
 
 ## Context
 
