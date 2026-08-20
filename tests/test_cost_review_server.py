@@ -18,7 +18,7 @@ from contextual_orchestrator import (  # noqa: E402
     PriceEntry,
     TaskOrchestrator,
 )
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import SecurityConfig, _readiness_payload, build_server  # noqa: E402
 
 
 def _serve():
@@ -56,9 +56,38 @@ def test_healthz_is_unauthenticated_and_ok() -> None:
     finally:
         server.shutdown()
     assert status == 200
-    assert body["status"] == "ok"
-    assert body["service"] == "contextual-orchestrator"
-    assert "batch_backend" in body
+    assert body == {"status": "ok", "service": "contextual-orchestrator"}
+
+
+def test_readyz_requires_admin_and_reports_secret_free_runtime_checks() -> None:
+    server, port, token = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, body = _request("GET", f"{base}/readyz")
+        assert status == 401
+        assert body["error"]["code"] == "unauthorized"
+
+        status, body = _request("GET", f"{base}/readyz", token)
+    finally:
+        server.shutdown()
+    assert status == 200
+    assert body["status"] == "ready"
+    assert set(body["checks"]) == {"orchestration", "sync_routing", "batch_routing", "embedding_batch"}
+    assert body["checks"]["batch_routing"]["backend"] == "local"
+    assert "usage_record_count" not in json.dumps(body)
+
+
+def test_readiness_keeps_interactive_service_ready_when_optional_batch_degrades() -> None:
+    agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    orchestrator = TaskOrchestrator(agents)
+    coordinator = CostRoutingCoordinator(orchestrator)
+    coordinator.batch_backend = object()
+
+    body, status = _readiness_payload(orchestrator, coordinator)
+
+    assert status == 200
+    assert body["status"] == "ready_with_degraded_optional_dependencies"
+    assert body["checks"]["batch_routing"] == {"status": "degraded"}
 
 
 def test_chat_completion_reports_real_usage_and_records_cost() -> None:
