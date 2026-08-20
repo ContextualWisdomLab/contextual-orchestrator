@@ -143,6 +143,51 @@ class RequestError(Exception):
         self.detail = detail or {}
 
 
+def _request_body_size(headers: Any, max_body_bytes: int) -> int:
+    """Return a safe JSON body length or reject ambiguous HTTP framing.
+
+    The stdlib handler does not decode transfer codings for this API. A single
+    ASCII decimal ``Content-Length`` is therefore the only accepted framing
+    signal; duplicate, comma-joined, negative, malformed, oversized, or
+    transfer-coded requests fail closed before any body read.
+    """
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        transfer_values = get_all("transfer-encoding")
+        length_values = get_all("content-length")
+    else:  # pragma: no cover - production uses email.message.Message headers
+        transfer_value = headers.get("transfer-encoding")
+        length_value = headers.get("content-length")
+        transfer_values = None if transfer_value is None else [transfer_value]
+        length_values = None if length_value is None else [length_value]
+
+    if transfer_values is not None:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "transfer-encoding request framing is not supported",
+        )
+    if length_values is None:
+        return 0
+    if len(length_values) != 1 or "," in length_values[0]:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must appear exactly once",
+        )
+    value = length_values[0].strip()
+    if not value or not value.isascii() or not value.isdecimal():
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "content-length must be a non-negative decimal value",
+        )
+    body_size = int(value)
+    if body_size > max_body_bytes:
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    return body_size
+
+
 @dataclass
 class SecurityConfig:
     """Runtime safety controls for the stdlib HTTP server."""
@@ -5648,10 +5693,20 @@ def build_server(
         def _read_json(self) -> dict[str, Any]:
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
-            body_size = int(self.headers.get("content-length", "0"))
-            if body_size > security.max_body_bytes:
-                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+            try:
+                body_size = _request_body_size(self.headers, security.max_body_bytes)
+            except RequestError:
+                # Do not let a peer reuse a connection after an ambiguous frame.
+                self.close_connection = True
+                raise
             raw = self.rfile.read(body_size)
+            if len(raw) != body_size:
+                self.close_connection = True
+                raise RequestError(
+                    400,
+                    "invalid_request_framing",
+                    "request body ended before content-length",
+                )
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
