@@ -1794,7 +1794,8 @@ class _StateStore:
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
     )
     _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = (
-        f"CREATE INDEX IF NOT EXISTS {_INDEX_NAME} ON {_TABLE_NAME}(kind, seq)"
+        "CREATE INDEX IF NOT EXISTS orchestration_records_kind_seq "
+        "ON orchestration_records(kind, seq)"
     )
     _DELETE_KEYED_SQL = "DELETE FROM orchestration_records WHERE kind = ? AND key = ?"
     _INSERT_SQL = "INSERT INTO orchestration_records (kind, key, payload) VALUES (?, ?, ?)"
@@ -1830,10 +1831,8 @@ class _StateStore:
                 "state database contains both legacy and current persistence tables"
             )
         if has_legacy:
-            self._conn.execute(
-                f"ALTER TABLE {self._LEGACY_TABLE_NAME} RENAME TO {self._TABLE_NAME}"
-            )
-            self._conn.execute(f"DROP INDEX IF EXISTS {self._LEGACY_INDEX_NAME}")
+            self._conn.execute("ALTER TABLE records RENAME TO orchestration_records")
+            self._conn.execute("DROP INDEX IF EXISTS records_kind_seq")
 
     def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
         blob = json.dumps(payload, ensure_ascii=False)
