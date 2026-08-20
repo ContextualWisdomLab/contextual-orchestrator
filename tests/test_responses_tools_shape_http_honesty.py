@@ -104,6 +104,43 @@ def test_http_responses_preserves_tools_with_explicit_loop_header() -> None:
         thread.join(timeout=5)
 
 
+def test_http_responses_tool_loop_rejects_stream_true() -> None:
+    """Client-owned Responses tool loops must reject unsupported streaming."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "stream tools",
+                "tools": _valid_tools(),
+                "stream": True,
+            },
+            tool_loop=True,
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_stream"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_tool_loop_requires_input() -> None:
+    """Client-owned Responses tool loops still require a non-empty input."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {"model": "mock-planner", "tools": _valid_tools()},
+            tool_loop=True,
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_input"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_responses_accepts_empty_tools_array_as_noop() -> None:
     """SDKs often send tools: [] when no tools are configured — honest no-op."""
     server, thread, port = _server()
