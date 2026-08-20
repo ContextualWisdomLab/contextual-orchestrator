@@ -56,6 +56,17 @@ def _wrapped(error: BaseException) -> RuntimeError:
         return wrapper
 
 
+def _suppressed_wrapper(error: BaseException) -> RuntimeError:
+    """Return a terminal wrapper whose incidental context is explicitly hidden."""
+    try:
+        raise error
+    except BaseException:
+        try:
+            raise RuntimeError("terminal provider wrapper") from None
+        except RuntimeError as wrapper:
+            return wrapper
+
+
 def _build(client: SequencedProxyClient) -> TaskOrchestrator:
     """Build a deterministic two-provider pool for passthrough tests."""
     return TaskOrchestrator(
@@ -177,6 +188,35 @@ def test_virtual_request_unwraps_provider_failure_causes(
 
     assert result["model"] == "fallback-model"
     assert [call[0] for call in client.calls] == ["primary_agent", "fallback_agent"]
+
+
+def test_suppressed_provider_context_does_not_authorize_failover() -> None:
+    """An explicitly suppressed prior 429 must not override a terminal wrapper."""
+    terminal = _suppressed_wrapper(_rate_limit())
+    client = SequencedProxyClient(
+        {
+            "primary_agent": terminal,
+            "fallback_agent": {
+                "object": "chat.completion",
+                "model": "fallback-model",
+                "choices": [],
+            },
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(RuntimeError, match="terminal provider wrapper") as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": "contextual-orchestrator",
+                "messages": [{"role": "user", "content": "review code"}],
+                "tools": [],
+            }
+        )
+
+    assert caught.value is terminal
+    assert terminal.__suppress_context__ is True
+    assert [call[0] for call in client.calls] == ["primary_agent"]
 
 
 @pytest.mark.parametrize("status", [404, 410])
