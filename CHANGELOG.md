@@ -21,3 +21,4 @@ All notable changes to this project are documented in this file.
 
 - Ambiguous non-idempotent outcomes, invalid arguments, permission denial, and policy denial fail closed.
 - Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials.
+- External-bearer admin reads of workflow, access-report, and evaluation resources require an injected object policy; process-scoped admin tokens retain their explicit operator semantics.
