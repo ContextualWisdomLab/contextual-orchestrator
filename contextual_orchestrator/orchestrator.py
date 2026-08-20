@@ -1360,8 +1360,6 @@ class ModelClient:
         if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault("max_tokens", self.max_output_tokens)
-            if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-                chat_payload["chat_template_kwargs"] = self.chat_template_args
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                 chat_response = self._send_raw(agent, "chat/completions", chat_payload, destination)
             return _chat_to_responses_payload(chat_response, payload)
