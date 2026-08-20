@@ -81,6 +81,32 @@ def test_bootstrap_selector_prefers_provider_diversity_before_duplicates() -> No
     assert selected == [router_cheapest, nim_model, openai_model]
 
 
+def test_bootstrap_selector_treats_nim_primary_and_sub_as_one_outage_domain() -> None:
+    """Two NIM keys must not displace an independently hosted provider."""
+    selector = getattr(
+        model_discovery,
+        "select_bootstrap_discovered_agents",
+        None,
+    )
+    assert callable(selector), "missing provider-diverse bootstrap selector"
+
+    price_book = PriceBook(InMemoryConfigStore())
+    nim_primary = _model("nvidia_nim", "primary-model")
+    nim_sub = _model("nvidia_nim_sub", "sub-model")
+    openrouter = _model("openrouter", "router-model")
+    _set_price(price_book, nim_primary, 0.01)
+    _set_price(price_book, nim_sub, 0.02)
+    _set_price(price_book, openrouter, 0.5)
+
+    selected = selector(
+        [nim_sub, openrouter, nim_primary],
+        price_book,
+        2,
+    )
+
+    assert selected == [nim_primary, openrouter]
+
+
 def test_bootstrap_selector_is_deterministic_when_every_model_is_unpriced() -> None:
     """All-unpriced discovery remains usable but never order-dependent."""
     selector = getattr(
