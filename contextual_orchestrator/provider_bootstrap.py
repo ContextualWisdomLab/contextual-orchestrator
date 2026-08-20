@@ -53,7 +53,9 @@ class ProviderBootstrapReport:
 
     registered_credentials: tuple[str, ...]
     discovered_model_count: int
+    selected_agent_ids: tuple[str, ...]
     enabled_agent_ids: tuple[str, ...]
+    durable_agent_pool: bool
     providers_with_errors: tuple[str, ...]
     priced_model_count: int
 
@@ -62,7 +64,9 @@ class ProviderBootstrapReport:
         return {
             "registered_credentials": list(self.registered_credentials),
             "discovered_model_count": self.discovered_model_count,
+            "selected_agent_ids": list(self.selected_agent_ids),
             "enabled_agent_ids": list(self.enabled_agent_ids),
+            "durable_agent_pool": self.durable_agent_pool,
             "providers_with_errors": list(self.providers_with_errors),
             "priced_model_count": self.priced_model_count,
         }
@@ -184,6 +188,38 @@ def select_provider_diverse_models(
     return selected
 
 
+def _synchronize_durable_agent_pool(
+    agents_db: str,
+    selected: Sequence[DiscoveredModel],
+) -> tuple[str, ...]:
+    """Activate exactly the selected discovered models in one durable agent pool."""
+    bootstrap = TaskOrchestrator(
+        [ModelAgent("bootstrap_agent", "bootstrap-model")],
+        agents_db=agents_db,
+    )
+    agents = [replace(agent_from_discovered(model), disabled=False) for model in selected]
+    selected_ids = {agent.id for agent in agents}
+    bootstrap.sync_discovered_agents(agents)
+
+    # Retire the synthetic constructor seed and any previously discovered model
+    # that is absent from the current bounded selection. Manual operator-managed
+    # agents are preserved.
+    for candidate in list(bootstrap.candidates):
+        if candidate.id in selected_ids:
+            continue
+        if candidate.id == "bootstrap_agent" or "discovered" in candidate.tags:
+            if not candidate.disabled:
+                bootstrap.remove_agent("default", candidate.id)
+
+    for agent in agents:
+        bootstrap.patch_agent("default", agent.id, {"status": "active"})
+
+    enabled = tuple(sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids))
+    if set(enabled) != selected_ids:
+        raise ProviderBootstrapError("provider bootstrap could not activate the selected agent pool")
+    return enabled
+
+
 def bootstrap_provider_runtime(
     *,
     environ: Mapping[str, str],
@@ -201,27 +237,19 @@ def bootstrap_provider_runtime(
     price_book = PriceBook(InMemoryConfigStore())
     priced_count = refresh_price_book(discovered, price_book)
     selected = select_provider_diverse_models(discovered, limit=model_limit)
-    enabled_ids: list[str] = []
-
-    if agents_db:
-        bootstrap = TaskOrchestrator(
-            [ModelAgent("bootstrap_agent", "bootstrap-model")], agents_db=agents_db
-        )
-        agents = [replace(agent_from_discovered(model), disabled=False) for model in selected]
-        bootstrap.sync_discovered_agents(agents)
-        for agent in agents:
-            # sync_discovered_agents may preserve a pre-existing disabled row. Make
-            # the selected bounded pool explicitly active and leave all other rows
-            # withdrawn by the sync operation.
-            bootstrap.patch_agent("default", agent.id, {"status": "active"})
-            enabled_ids.append(agent.id)
-    else:
-        enabled_ids.extend(agent_id_for(model) for model in selected)
+    selected_ids = tuple(agent_id_for(model) for model in selected)
+    enabled_ids = (
+        _synchronize_durable_agent_pool(agents_db, selected)
+        if agents_db
+        else ()
+    )
 
     return ProviderBootstrapReport(
         registered_credentials=registered,
         discovered_model_count=len(discovered),
-        enabled_agent_ids=tuple(enabled_ids),
+        selected_agent_ids=selected_ids,
+        enabled_agent_ids=enabled_ids,
+        durable_agent_pool=bool(agents_db),
         providers_with_errors=tuple(sorted({error.provider_name for error in errors})),
         priced_model_count=priced_count,
     )
@@ -229,8 +257,13 @@ def bootstrap_provider_runtime(
 
 def main(argv: Sequence[str] | None = None) -> None:
     """Run the one-shot provider bootstrap command used by trusted deployment jobs."""
-    parser = argparse.ArgumentParser(description="Register provider secrets and refresh the runtime model pool.")
-    parser.add_argument("--agents-db", default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None)
+    parser = argparse.ArgumentParser(
+        description="Register provider secrets and refresh the runtime model pool."
+    )
+    parser.add_argument(
+        "--agents-db",
+        default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_AGENTS_DB") or None,
+    )
     parser.add_argument("--model-limit", type=int, default=16)
     parser.add_argument(
         "--allow-partial-credentials",

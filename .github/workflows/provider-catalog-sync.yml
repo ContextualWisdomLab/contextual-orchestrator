@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   sync:
-    name: Bootstrap provider KV and discover models
+    name: Bootstrap provider KV and verify model candidates
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
@@ -49,7 +49,7 @@ jobs:
       - name: Install hash-pinned runtime dependencies
         run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r requirements.lock
 
-      - name: Register complete provider inventory and refresh discovery
+      - name: Register complete provider inventory and verify discovery
         id: bootstrap
         shell: bash
         run: |
@@ -59,7 +59,9 @@ jobs:
           import json
           from pathlib import Path
 
-          report = json.loads(Path('provider-bootstrap-report.json').read_text(encoding='utf-8'))
+          report = json.loads(
+              Path('provider-bootstrap-report.json').read_text(encoding='utf-8')
+          )
           expected = {
               'NVIDIA_NIM_API_KEY',
               'NVIDIA_NIM_API_KEY_SUB',
@@ -69,15 +71,22 @@ jobs:
           }
           registered = set(report['registered_credentials'])
           if registered != expected:
-              raise SystemExit(f'credential inventory mismatch: {sorted(expected - registered)}')
+              raise SystemExit(
+                  f'credential inventory mismatch: {sorted(expected - registered)}'
+              )
           if report['discovered_model_count'] < 1:
               raise SystemExit('provider bootstrap discovered no models')
-          if not report['enabled_agent_ids']:
+          if not report['selected_agent_ids']:
               raise SystemExit('provider bootstrap produced no serving candidates')
+          if report['enabled_agent_ids'] or report['durable_agent_pool']:
+              raise SystemExit(
+                  'ephemeral Actions sync must not claim durable agent activation'
+              )
           print(json.dumps({
               'registered_credentials': sorted(registered),
               'discovered_model_count': report['discovered_model_count'],
-              'enabled_agent_count': len(report['enabled_agent_ids']),
+              'selected_agent_count': len(report['selected_agent_ids']),
+              'activated_agent_count': len(report['enabled_agent_ids']),
               'providers_with_errors': report['providers_with_errors'],
           }, sort_keys=True))
           PY
@@ -90,7 +99,9 @@ jobs:
           import os
           from pathlib import Path
 
-          report = Path('provider-bootstrap-report.json').read_text(encoding='utf-8')
+          report = Path(
+              'provider-bootstrap-report.json'
+          ).read_text(encoding='utf-8')
           names = (
               'NVIDIA_NIM_API_KEY',
               'NVIDIA_NIM_API_KEY_SUB',
@@ -98,7 +109,13 @@ jobs:
               'OPENROUTER_API_KEY',
               'OPENAI_API_KEY',
           )
-          leaked = [name for name in names if os.environ[name] and os.environ[name] in report]
+          leaked = [
+              name
+              for name in names
+              if os.environ[name] and os.environ[name] in report
+          ]
           if leaked:
-              raise SystemExit(f'provider bootstrap report leaked secret values for: {leaked}')
+              raise SystemExit(
+                  f'provider bootstrap report leaked secret values for: {leaked}'
+              )
           PY
