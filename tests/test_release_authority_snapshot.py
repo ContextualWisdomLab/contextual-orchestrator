@@ -78,6 +78,12 @@ def test_invalid_findings_and_gh_output_are_safe(monkeypatch: pytest.MonkeyPatch
     invalid_findings.write_text("[]", encoding="utf-8")
     with pytest.raises(RuntimeError, match="findings_inventory_invalid"):
         collector._read_findings(str(invalid_findings))
+    invalid_findings.write_text(
+        '{"complete": true, "sources": [{"name": "human"}], "unresolved_findings": []}',
+        encoding="utf-8",
+    )
+    with pytest.raises(RuntimeError, match="findings_inventory_invalid"):
+        collector._read_findings(str(invalid_findings))
 
 
 def test_gh_api_uses_full_endpoint_and_expands_ruleset_summaries(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -157,6 +163,31 @@ def test_collect_authority_binds_current_pull_head(monkeypatch: pytest.MonkeyPat
     assert collector._review_rows(["bad"], head_sha=head, author_login="author") == []
     assert collector._review_rows([{"user": None, "state": "DISMISSED"}], head_sha=head, author_login="author")[0]["dismissed"] is True
     assert collector._review_rows([{"user": {"login": "reviewer"}, "state": "APPROVED"}], head_sha=head, author_login="author")[0]["head_sha"] is None
+
+
+def test_collect_authority_rejects_head_change_during_collection(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A push during collection invalidates the entire evidence snapshot."""
+    initial_head = "a" * 40
+    final_head = "b" * 40
+    pull_calls = 0
+
+    def fake_api(repository: str, endpoint: str):
+        nonlocal pull_calls
+        if endpoint.endswith("/reviews"):
+            return []
+        if "check-runs" in endpoint:
+            return {"check_runs": []}
+        if "rulesets" in endpoint:
+            return []
+        if "pulls/7" in endpoint:
+            pull_calls += 1
+            head = initial_head if pull_calls == 1 else final_head
+            return {"head": {"sha": head}, "base": {"ref": "main"}, "user": {"login": "author"}}
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(collector, "_gh_json", fake_api)
+    with pytest.raises(RuntimeError, match="pull_request_changed_during_collection"):
+        collector.collect_authority("owner/repo", 7, [], {}, expected_head_sha=initial_head)
 
 
 def test_pagination_and_ruleset_helpers_flatten_and_fail_closed() -> None:

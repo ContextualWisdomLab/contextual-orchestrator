@@ -255,12 +255,19 @@ def collect_authority(
         required_check_names = _required_check_names(rulesets)
     reviews = _gh_json(repository, f"repos/{repository}/pulls/{pull_request_number}/reviews?per_page=100")
     review_rows = _page_items(reviews)
+    final_pull = _gh_json(repository, f"repos/{repository}/pulls/{pull_request_number}")
+    final_head = final_pull.get("head") if isinstance(final_pull, dict) else None
+    final_head_sha = final_head.get("sha") if isinstance(final_head, dict) else None
+    if not isinstance(final_head_sha, str):
+        raise RuntimeError("pull_request_response_invalid")  # noqa: TRY004
+    if final_head_sha != head_sha:
+        raise RuntimeError("pull_request_changed_during_collection")
     return {
         "authority_source": "github_api",
         "repository": repository,
         "base_branch": base_branch,
         "ruleset_verified": ruleset_verified,
-        "head_is_current": expected_head_sha is None or expected_head_sha == head_sha,
+        "head_is_current": expected_head_sha == head_sha == final_head_sha,
         "synthetic_merge": False,
         "protected_head_sha": head_sha,
         "contributor_head_sha": head_sha,

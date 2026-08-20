@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-
 OPENAPI_SPEC = {
     "openapi": "3.1.0",
     "info": {
@@ -55,6 +54,41 @@ OPENAPI_SPEC = {
                     "contract_status": {"type": "string"},
                     "release_authorization": {"$ref": "#/components/schemas/ReleaseAuthorization"},
                     "contract_summary": {"type": "object"},
+                },
+            },
+            "CommercialGapRegister": {
+                "type": "object",
+                "required": [
+                    "gap_register_status",
+                    "measurement_status",
+                    "gap_summary",
+                    "gap_items",
+                    "release_authorization",
+                    "concrete_blockers",
+                ],
+                "properties": {
+                    "gap_register_status": {
+                        "type": "string",
+                        "enum": [
+                            "commercial_gap_register_clear",
+                            "commercial_gap_register_open",
+                            "commercial_gap_register_blocked",
+                        ],
+                    },
+                    "target_contract_value_krw": {"type": "integer"},
+                    "target_contract_value_display": {"type": "string"},
+                    "measurement_status": {"type": "string"},
+                    "source_note": {"type": "string"},
+                    "gap_summary": {"type": "object"},
+                    "gap_items": {"type": "array", "items": {"type": "object"}},
+                    "concrete_blockers": {"type": "array", "items": {"type": "string"}},
+                    "release_authorization": {"$ref": "#/components/schemas/ReleaseAuthorization"},
+                    "gap_status_rules": {"type": "array", "items": {"type": "object"}},
+                    "review_process_policy": {"type": "object"},
+                    "related_runtime_reports": {"type": "object"},
+                    "library_split_decision": {"type": "object"},
+                    "plugin_traceability": {"type": "object"},
+                    "gap_register_links": {"type": "object"},
                 },
             },
         },
@@ -359,7 +393,12 @@ OPENAPI_SPEC = {
                 "operationId": "get_latest_commercial_gap_register",
                 "summary": "Get commercial gap register for buyer due diligence",
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Commercial gap register"}},
+                "responses": {
+                    "200": {
+                        "description": "Commercial gap register with release authority",
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommercialGapRegister"}}},
+                    }
+                },
             }
         },
         "/api/v1/commercial_procurement_readiness/latest": {

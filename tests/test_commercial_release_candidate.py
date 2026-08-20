@@ -16,6 +16,51 @@ from contextual_orchestrator.server import SecurityConfig, build_server  # noqa:
 
 
 TARGET_CONTRACT_VALUE_KRW = 2_000_000_000
+AUTHORITY_HEAD = "a" * 40
+
+
+def valid_release_authority() -> dict[str, object]:
+    """Return a complete exact-head authority snapshot for the positive path."""
+    return {
+        "authority_source": "github_api",
+        "repository": "ContextualWisdomLab/contextual-orchestrator",
+        "base_branch": "main",
+        "ruleset_verified": True,
+        "head_is_current": True,
+        "synthetic_merge": False,
+        "protected_head_sha": AUTHORITY_HEAD,
+        "contributor_head_sha": AUTHORITY_HEAD,
+        "required_check_names": ["Tests"],
+        "checks": [
+            {
+                "name": "Tests",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": AUTHORITY_HEAD,
+                "synthetic_merge": False,
+            }
+        ],
+        "review_policy": {
+            "required_independent_approval_count": 1,
+            "author_login": "author",
+            "head_sha": AUTHORITY_HEAD,
+        },
+        "reviewers": [
+            {
+                "login": "reviewer",
+                "association": "MEMBER",
+                "state": "approved",
+                "head_sha": AUTHORITY_HEAD,
+                "dismissed": False,
+                "is_author": False,
+            }
+        ],
+        "findings_inventory": {
+            "complete": True,
+            "sources": ["human", "coderabbit", "github_advanced_security", "dependabot", "opencode", "noema", "strix"],
+            "unresolved_findings": [],
+        },
+    }
 
 
 def build() -> TaskOrchestrator:
@@ -108,6 +153,21 @@ def test_commercial_release_candidate_report_packages_ship_candidate() -> None:
     assert report["related_runtime_reports"]["commercial_acceptance_status"] == "commercial_acceptance_ready_with_warnings"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["release_links"]["runtime_endpoint"] == "/api/v1/commercial_release_candidates/latest"
+
+    authorized_report = orchestrator.commercial_release_candidate_report(
+        target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW,
+        locale_bundles=ADMIN_TRANSLATIONS,
+        security_profile={
+            "auth_mode": "split_token",
+            "allow_public_bind": False,
+            "expose_trace_by_default": False,
+            "rate_limit_requests": 60,
+            "max_concurrent_runs": 8,
+        },
+        release_authority=valid_release_authority(),
+    )
+    assert authorized_report["release_summary"]["release_authority_blocker_count"] == 0
+    assert authorized_report["release_summary"]["blocked_count"] == 0
 
 
 def test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract() -> None:

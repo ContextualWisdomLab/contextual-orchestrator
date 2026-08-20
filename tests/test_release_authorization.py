@@ -159,6 +159,24 @@ def test_invalid_and_duplicate_evidence_is_not_coerced() -> None:
     }.issubset(result["blockers"])
 
 
+def test_absent_approval_requirement_and_unhashable_sources_block() -> None:
+    """Missing policy keys and malformed source entries fail closed."""
+    evidence = authority()
+    evidence["review_policy"] = {"author_login": "author", "head_sha": HEAD}
+    evidence["reviewers"] = []
+    result = evaluate_release_authorization(evidence)
+    assert "review_policy_invalid" in result["blockers"]
+
+    evidence = authority()
+    evidence["findings_inventory"] = {
+        "complete": True,
+        "sources": [{"name": "human"}],
+        "unresolved_findings": [],
+    }
+    result = evaluate_release_authorization(evidence)
+    assert "findings_source_coverage_incomplete" in result["blockers"]
+
+
 def test_missing_policy_components_and_exact_head_mismatch_block() -> None:
     """Report every missing authority component instead of inferring defaults."""
     evidence = authority()

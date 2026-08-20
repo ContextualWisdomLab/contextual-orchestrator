@@ -101,6 +101,16 @@ def test_commercial_gap_register_endpoint_openapi_admin_and_docs_contract() -> N
     assert OPENAPI_SPEC["paths"]["/api/v1/commercial_gap_registers/latest"]["get"]["operationId"] == (
         "get_latest_commercial_gap_register"
     )
+    gap_schema = OPENAPI_SPEC["components"]["schemas"]["CommercialGapRegister"]
+    assert OPENAPI_SPEC["paths"]["/api/v1/commercial_gap_registers/latest"]["get"]["responses"]["200"]["content"]["application/json"]["schema"] == {
+        "$ref": "#/components/schemas/CommercialGapRegister"
+    }
+    assert gap_schema["properties"]["release_authorization"] == {
+        "$ref": "#/components/schemas/ReleaseAuthorization"
+    }
+    assert {"gap_register_status", "gap_summary", "gap_items", "release_authorization"}.issubset(
+        gap_schema["required"]
+    )
     assert "/api/v1/commercial_gap_registers/latest" in ADMIN_HTML
     assert "commercial_gap_register_title" in ADMIN_TRANSLATIONS["en"]
     assert "commercial_gap_register_title" in ADMIN_TRANSLATIONS["ko"]
