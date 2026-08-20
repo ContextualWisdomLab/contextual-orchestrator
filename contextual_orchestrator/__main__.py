@@ -345,6 +345,12 @@ def main() -> None:
     )
     parser.add_argument("--max-output-tokens", type=int, default=2048,
                         help="Default provider output token cap (default: 2048).")
+    parser.add_argument(
+        "--max-body-bytes",
+        type=_positive_int,
+        default=64 * 1024,
+        help="Maximum JSON request body size in bytes (default: 65536).",
+    )
     parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
                         help=f"Concurrent requests for local gateway batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
@@ -444,6 +450,7 @@ def main() -> None:
                 max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
+                max_body_bytes=args.max_body_bytes,
             ),
             clearfolio_url=args.clearfolio_url,
         )
