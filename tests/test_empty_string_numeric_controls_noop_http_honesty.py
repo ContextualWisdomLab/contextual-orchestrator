@@ -71,7 +71,6 @@ def test_http_chat_accepts_empty_string_sampling_controls() -> None:
                 "seed": "",
                 "logprobs": "",
                 "parallel_tool_calls": "",
-                "include_orchestration_trace": "",
             },
         )
         assert status == 200, body
