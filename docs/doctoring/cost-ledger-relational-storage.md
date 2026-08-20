@@ -24,9 +24,14 @@ connections inspect `information_schema` directly instead of issuing a
 SQLite-only `PRAGMA` inside an aborted transaction. Migration seeds the
 dimension parent catalog before inserting child links, and nullable legacy
 labels become the explicit `unattributed` value.
-The dimension catalog is seeded inside the migration transaction before child
-rows are inserted, and deleting a usage fact cascades its attribution links
-without weakening migration integrity.
+Legacy nullable or empty attribution values are normalized to the stable
+`unattributed` dimension before insertion into the new `NOT NULL` tables, so
+older ledgers remain openable without inventing customer ownership.
+
+SQLite connections enable foreign-key enforcement before schema work begins,
+and the dimension catalog is seeded inside the migration transaction before
+child rows are inserted. Deleting a usage fact therefore cascades its
+attribution links without weakening migration integrity.
 
 SQLite uses `PRAGMA table_info`; PostgreSQL uses `information_schema.columns`
 from the first metadata query. The driver branch is deliberate because a

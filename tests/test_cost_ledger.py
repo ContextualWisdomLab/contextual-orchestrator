@@ -371,9 +371,9 @@ def test_sql_ledger_migrates_flattened_usage_rows() -> None:
             "openai",
             "gpt-x",
             "acct-1",
-            "search",
+            None,
             "openai",
-            "alpha",
+            None,
             "platform",
             "acme",
             1,
@@ -395,6 +395,8 @@ def test_sql_ledger_migrates_flattened_usage_rows() -> None:
     ).fetchone() is None
     assert row["usage_record_id"] == "usage_legacy"
     assert row["account_name"] == "acct-1"
+    assert row["service_name"] == "unattributed"
+    assert row["team_name"] == "unattributed"
     assert row["company_name"] == "acme"
 
 
