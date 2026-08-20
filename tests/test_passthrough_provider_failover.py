@@ -48,6 +48,14 @@ def _rate_limit() -> urllib.error.HTTPError:
     return _http_error(429, "rate limited")
 
 
+def _wrapped(error: BaseException) -> RuntimeError:
+    """Return a provider-style wrapper with the original failure as its cause."""
+    try:
+        raise RuntimeError("provider wrapper") from error
+    except RuntimeError as wrapper:
+        return wrapper
+
+
 def _build(client: SequencedProxyClient) -> TaskOrchestrator:
     """Build a deterministic two-provider pool for passthrough tests."""
     return TaskOrchestrator(
@@ -142,6 +150,35 @@ def test_virtual_request_advances_when_discovered_candidate_disappears(
     assert [call[0] for call in client.calls] == ["primary_agent", "fallback_agent"]
 
 
+@pytest.mark.parametrize("provider_error", [_rate_limit(), _http_error(410, "gone")])
+def test_virtual_request_unwraps_provider_failure_causes(
+    provider_error: BaseException,
+) -> None:
+    """Provider SDK wrappers must not hide a bounded fallback signal."""
+    client = SequencedProxyClient(
+        {
+            "primary_agent": _wrapped(provider_error),
+            "fallback_agent": {
+                "object": "chat.completion",
+                "model": "fallback-model",
+                "choices": [],
+            },
+        }
+    )
+    orchestrator = _build(client)
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": "contextual-orchestrator",
+            "messages": [{"role": "user", "content": "review code"}],
+            "tools": [],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [call[0] for call in client.calls] == ["primary_agent", "fallback_agent"]
+
+
 @pytest.mark.parametrize("status", [404, 410])
 def test_explicit_concrete_model_remains_sticky_when_unavailable(status: int) -> None:
     """An explicit concrete model must never be silently replaced."""
@@ -168,6 +205,34 @@ def test_explicit_concrete_model_remains_sticky_when_unavailable(status: int) ->
         )
 
     assert caught.value is unavailable
+    assert [call[0] for call in client.calls] == ["primary_agent"]
+
+
+def test_explicit_concrete_model_preserves_rate_limit_error() -> None:
+    """A concrete-model 429 must remain the provider's original error."""
+    rate_limit = _rate_limit()
+    client = SequencedProxyClient(
+        {
+            "primary_agent": rate_limit,
+            "fallback_agent": {
+                "object": "chat.completion",
+                "model": "fallback-model",
+                "choices": [],
+            },
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": "primary-model",
+                "messages": [{"role": "user", "content": "review code"}],
+                "tools": [],
+            }
+        )
+
+    assert caught.value is rate_limit
     assert [call[0] for call in client.calls] == ["primary_agent"]
 
 
