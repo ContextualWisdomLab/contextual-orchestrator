@@ -255,6 +255,18 @@ def _error_payload(error_code: str, error_message: str, error_detail: dict[str, 
     }
 
 
+def _cache_bypass_header(value: str | None) -> bool:
+    """Parse the opt-in cache bypass header without accepting ambiguous values."""
+    if value is None or not value.strip():
+        return False
+    normalized = value.strip().lower()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    raise RequestError(400, "invalid_cache_bypass", "X-Cache-Bypass must be true, false, 1, or 0")
+
+
 MAX_JSON_NESTING_DEPTH = 32
 
 
@@ -4839,6 +4851,7 @@ def build_server(
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
                 self._authorize(scope)
                 body = self._read_json()
+                cache_bypass = _cache_bypass_header(self.headers.get("x-cache-bypass"))
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
@@ -4933,6 +4946,7 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            cache_bypass=cache_bypass,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5191,6 +5205,7 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            cache_bypass=cache_bypass,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens

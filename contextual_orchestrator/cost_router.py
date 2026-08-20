@@ -122,6 +122,7 @@ class CostRoutingCoordinator:
         hints: Optional[Dict[str, Any]] = None,
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
+        cache_bypass: bool = False,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -130,6 +131,8 @@ class CostRoutingCoordinator:
         ``usage_record_id``. Batch requests are dispatched to the batch backend
         and return a job envelope; their cost is recorded on retrieval.
         """
+        if not isinstance(cache_bypass, bool):
+            raise TypeError("cache_bypass must be a boolean")
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
@@ -151,7 +154,12 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        result = self.orchestrator.run(messages, mode=mode, workflow_run_id=workflow_run_id)
+        run_kwargs = {"mode": mode, "workflow_run_id": workflow_run_id}
+        if model_name != "contextual-orchestrator":
+            run_kwargs["model_name"] = model_name
+        if cache_bypass:
+            run_kwargs["bypass_cache"] = True
+        result = self.orchestrator.run(messages, **run_kwargs)
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),
