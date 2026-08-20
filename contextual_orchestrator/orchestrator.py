@@ -61,6 +61,33 @@ def _safe_provider_probe_error_type(exc: Exception) -> str:
     return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
 
 
+def _temperature_capability_rejection(exc: Exception) -> bool:
+    """Recognize only explicit provider rejection of the optional temperature field."""
+    if not isinstance(exc, urllib.error.HTTPError) or exc.code not in {400, 422}:
+        return False
+    try:
+        body = exc.read()
+    except (OSError, ValueError):
+        body = b""
+    if isinstance(body, bytes):
+        detail = body.decode("utf-8", errors="replace")
+    else:
+        detail = str(body)
+    detail = f"{exc} {detail}".lower()
+    return "temperature" in detail and any(
+        marker in detail
+        for marker in (
+            "unsupported",
+            "not supported",
+            "does not support",
+            "unknown parameter",
+            "unknown field",
+            "unrecognized",
+            "not allowed",
+        )
+    )
+
+
 def _validate_provider_probe_timeout(timeout: float) -> float:
     """Validate the finite, bounded timeout used by explicit readiness probes."""
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
@@ -1030,13 +1057,20 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        opened = (
-            self._open_provider(request, destination)
-            if timeout is None
-            else self._open_provider(request, destination, timeout=timeout)
-        )
-        with opened as response:
-            data = json.loads(response.read().decode("utf-8"))
+        try:
+            opened = (
+                self._open_provider(request, destination)
+                if timeout is None
+                else self._open_provider(request, destination, timeout=timeout)
+            )
+            with opened as response:
+                data = json.loads(response.read().decode("utf-8"))
+        except urllib.error.HTTPError as exc:
+            if "temperature" not in payload or not _temperature_capability_rejection(exc):
+                raise
+            retry_payload = dict(payload)
+            retry_payload.pop("temperature", None)
+            return self._send(agent, retry_payload, destination, timeout=timeout)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -1287,6 +1321,22 @@ class ModelClient:
         for attempt in range(retry_limit + 1):
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
+            except urllib.error.HTTPError as exc:
+                if "temperature" in payload and _temperature_capability_rejection(exc):
+                    retry_payload = dict(payload)
+                    retry_payload.pop("temperature", None)
+                    try:
+                        return self._send_raw(agent, endpoint, retry_payload, destination)
+                    except Exception as retry_error:  # noqa: BLE001 - classify negotiated retry
+                        last_error = retry_error
+                        if attempt >= retry_limit or not is_transient_error(retry_error):
+                            break
+                        self._sleep(self._backoff_delay(attempt))
+                        continue
+                last_error = exc
+                if attempt >= retry_limit or not is_transient_error(exc):
+                    break
+                self._sleep(self._backoff_delay(attempt))
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
