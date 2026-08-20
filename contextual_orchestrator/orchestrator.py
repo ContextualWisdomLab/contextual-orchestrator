@@ -652,6 +652,8 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
     }
     if isinstance(request.get("metadata"), dict):
         response["metadata"] = request["metadata"]
+    if isinstance(data.get("orchestration"), dict):
+        response["orchestration"] = data["orchestration"]
     echo: dict[str, Any] = {}
     if isinstance(request.get("response_format"), dict):
         echo["response_format"] = request["response_format"]
