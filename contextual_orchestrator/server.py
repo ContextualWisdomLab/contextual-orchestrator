@@ -853,9 +853,9 @@ def _reject_responses_orchestration_controls(body: dict[str, Any]) -> None:
             continue
         if isinstance(value, (list, dict)) and not value:
             continue
-        if field == "logprobs" and value is False:
+        if field_name == "logprobs" and value in (False, 0):
             continue
-        if field == "top_logprobs" and value == 0:
+        if field_name == "top_logprobs" and value == 0:
             continue
         unsupported.append(field_name)
     if unsupported:
