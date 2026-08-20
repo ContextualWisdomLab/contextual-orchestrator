@@ -55,7 +55,6 @@ def install_sampling_contract(model_client_class: type[Any]) -> None:
     original_stream_send = model_client_class._stream_send
     original_batch_upload = model_client_class._batch_upload
 
-    @functools.wraps(original_init)
     def initialize(
         self: Any,
         timeout: int = 90,
@@ -70,6 +69,7 @@ def install_sampling_contract(model_client_class: type[Any]) -> None:
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
     ) -> None:
+        """Initialize the original client without inventing a temperature."""
         original_init(
             self,
             timeout=timeout,
