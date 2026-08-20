@@ -11,9 +11,12 @@ decision-makers:
 
 Treat workflow runs, access reports, and evaluation runs as owner-scoped
 objects. At the authenticated HTTP boundary, derive a non-secret SHA-256 key
-from the bearer credential, attach it to newly persisted records, and require
-the same key for list and detail reads. An owner mismatch is intentionally
-reported as not found so identifiers cannot be confirmed across owners.
+from the authenticated deployment principal, attach it to newly persisted
+records, and require the same key for list and detail reads. Static split
+admin/inference credentials are normalized to one deployment principal so the
+admin evidence plane can read runs created by the inference plane. An owner
+mismatch is intentionally reported as not found so identifiers cannot be
+confirmed across owners.
 
 The library API continues to support local single-process callers that omit an
 owner key. HTTP callers do not omit it. Deployments with an external bearer
@@ -27,8 +30,10 @@ policy.
   trace or access report.
 - The stored digest is an authorization lookup key, not a user identity and is
   never rendered in public payloads.
-- Shared static tokens represent one deployment principal; multi-principal
-  deployments must issue distinct verified bearers.
+- Shared static credentials represent one deployment principal; multi-principal
+  deployments must issue distinct verified bearers. External bearer deployments
+  currently use the bearer credential digest as that principal key, so token
+  rotation can revoke access to older evidence.
 - Old records without an owner key are not visible through the owner-bound HTTP
   resource routes, which is fail-closed during migration.
 

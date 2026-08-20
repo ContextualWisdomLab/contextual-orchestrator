@@ -206,12 +206,19 @@ class SecurityConfig:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
 
     def principal_id(self, headers: Any) -> str:
-        """Return a stable non-secret owner key for an authenticated bearer."""
+        """Return a stable non-secret owner key for the authenticated deployment principal."""
         raw = headers.get("authorization", "")
         token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
         if not token:
             raise RequestError(401, "unauthorized", "bearer token is required")
-        return hashlib.sha256(token.encode("utf-8")).hexdigest()
+        if self.bearer_verifier is None:
+            if self.admin_token and self.inference_token:
+                principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
+            else:
+                principal_material = f"single:{self.auth_token}"
+        else:
+            principal_material = f"bearer:{token}"
+        return hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
