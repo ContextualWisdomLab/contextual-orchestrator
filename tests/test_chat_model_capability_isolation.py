@@ -12,9 +12,6 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.chat_capability import (  # noqa: E402
-    install_runtime_chat_capability_guards,
-)
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     register_credential,
@@ -144,15 +141,6 @@ def test_chat_compatibility_normalizes_identifiers(
 ) -> None:
     """Normalize provider prefixes and separators without guessing chat features."""
     assert is_chat_compatible_model_id(model_id) is expected  # type: ignore[arg-type]
-
-
-def test_runtime_guard_installation_is_idempotent() -> None:
-    """Re-importing package initialization must not stack method wrappers."""
-    before = ModelClient.chat
-
-    install_runtime_chat_capability_guards(ModelClient, TaskOrchestrator)
-
-    assert ModelClient.chat is before
 
 
 def test_bytez_chat_catalog_still_rejects_non_chat_identifiers() -> None:

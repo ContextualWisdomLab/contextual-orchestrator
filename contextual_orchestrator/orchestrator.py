@@ -31,6 +31,7 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+from .chat_capability import is_chat_compatible_model_id
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 
@@ -776,6 +777,8 @@ class ModelClient:
         ``default_top_p`` are used so request-scoped Completions sampling can be
         applied without threading kwargs through every orchestrator hop.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError("model is not chat-compatible and cannot serve a chat request")
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         effective_temperature = self.default_temperature if temperature is None else temperature
@@ -2459,7 +2462,7 @@ class TaskOrchestrator:
         raw_steps = data.get("steps")
         if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
             raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
-        known_agents = {agent.id for agent in self.agents}
+        known_agents = {agent.id: agent for agent in self.agents}
         steps: list[WorkflowStep] = []
         for index, item in enumerate(raw_steps):
             if int(item.get("id", -1)) != index:
@@ -2474,8 +2477,9 @@ class TaskOrchestrator:
             if any(value < 0 or value >= index for value in access):
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
-            if agent_id not in known_agents:
-                # The planner named an unknown agent: reselect honestly instead of failing the plan.
+            assigned = known_agents.get(agent_id)
+            if assigned is None or not is_chat_compatible_model_id(assigned.model):
+                # Unknown or stale non-chat assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
             steps.append(WorkflowStep(index, role, agent_id, subtask, access))
         if steps[-1].role not in {"synthesizer", "worker"}:
@@ -2509,10 +2513,21 @@ class TaskOrchestrator:
     def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
         """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
         lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        return [
+            agent
+            for agent in sorted(
+                self.agents,
+                key=lambda agent: self._score_agent(agent, role, lowered),
+                reverse=True,
+            )
+            if is_chat_compatible_model_id(agent.model)
+        ]
 
     def _select_agent(self, text: str, role: str) -> ModelAgent:
-        selected = self._ranked_agents(text, role)[0]
+        ranked = self._ranked_agents(text, role)
+        if not ranked:
+            raise RuntimeError(f"no chat-compatible agent available for role={role}")
+        selected = ranked[0]
         if selected.disabled:  # pragma: no cover
             raise RuntimeError(f"no enabled agent available for role={role}")
         if role in selected.provider_exclusions:  # pragma: no cover
@@ -2545,11 +2560,15 @@ class TaskOrchestrator:
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)
-        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
+        ordered = [
+            agent
+            for agent in [primary] + [agent for agent in ranked if agent.id != primary.id]
+            if is_chat_compatible_model_id(agent.model)
+        ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible or [primary]
+        return healthy or eligible
 
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:
