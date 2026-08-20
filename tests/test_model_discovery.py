@@ -210,6 +210,23 @@ def test_refresh_price_book_writes_known_pricing_and_skips_unpriced() -> None:
     assert price_book.get_price("bytez", "some/model") is None
 
 
+def test_refresh_price_book_skips_partial_pricing() -> None:
+    """A missing prompt or completion price remains an unknown-price fallback."""
+    price_book = PriceBook(InMemoryConfigStore())
+    partial = DiscoveredModel(
+        provider_name="openai",
+        model_id="partial-price-model",
+        credential_name="OPENAI_API_KEY",
+        chat_base_url="https://api.openai.com/v1",
+        auth_scheme="Bearer",
+        prompt_price_per_1k=0.01,
+        completion_price_per_1k=None,
+    )
+
+    assert refresh_price_book([partial], price_book) == 0
+    assert price_book.get_price("openai", "partial-price-model") is None
+
+
 def test_select_cheapest_discovered_agent_picks_the_lower_priced_candidate() -> None:
     from contextual_orchestrator.cost_ledger import PriceEntry
 

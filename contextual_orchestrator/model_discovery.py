@@ -247,23 +247,24 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
 def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook") -> int:
     """Write every discovered model's known pricing into the price book.
 
-    Returns the number of price rows written. A model without provider-reported
-    pricing is skipped rather than defaulted to 0 -- an unpriced model already
-    costs 0 under ``PriceBook.compute_cost``'s "explicit, not silently expensive"
-    contract, so writing a fabricated 0 row here would just hide that signal.
+    Returns the number of price rows written. A model without complete
+    provider-reported pricing is skipped rather than defaulted to 0. An
+    unpriced model already costs 0 under ``PriceBook.compute_cost``'s
+    "explicit, not silently expensive" contract, so writing a fabricated
+    partial row would just hide that signal.
     """
     from .cost_ledger import PriceEntry
 
     written = 0
     for model in discovered:
-        if model.prompt_price_per_1k is None and model.completion_price_per_1k is None:
+        if model.prompt_price_per_1k is None or model.completion_price_per_1k is None:
             continue
         price_book.set_price(
             PriceEntry(
                 provider_name=model.provider_name,
                 model_name=model.model_id,
-                prompt_price_per_1k=model.prompt_price_per_1k or 0.0,
-                completion_price_per_1k=model.completion_price_per_1k or 0.0,
+                prompt_price_per_1k=model.prompt_price_per_1k,
+                completion_price_per_1k=model.completion_price_per_1k,
                 currency_code=model.currency_code,
             )
         )
