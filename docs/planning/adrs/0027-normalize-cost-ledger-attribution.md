@@ -32,13 +32,18 @@ migrated transactionally; ambiguous or incompatible schemas fail closed.
 - A first open of an existing ledger performs a one-time migration.
 - Pricing remains in the existing KV-backed price book; this ADR does not
   redesign provider price governance.
+- SQLite enables foreign-key enforcement for the external connection, while
+  PostgreSQL metadata discovery uses `information_schema` without poisoning the
+  active transaction with SQLite syntax.
+- Nullable legacy labels migrate to the explicit `unattributed` value so the
+  normalized child table remains non-nullable.
 
 ## Evidence and next action
 
 Run `pytest tests/test_cost_ledger.py tests/test_cost_router.py` before
 deploying a SQL ledger. The tests prove normalized inserts, legacy migration,
-all query windows, Python DB-API parameter styles, cost rollups, and the
-unchanged flattened query contract.
+all query windows, Python DB-API parameter styles, cost rollups, foreign-key
+behavior, and the unchanged flattened query contract.
 
 ## Research basis (APA 7)
 

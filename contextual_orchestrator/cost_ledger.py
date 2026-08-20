@@ -728,7 +728,7 @@ class SqlLedgerStore:
     def _insert_normalized_attribution(self, cur: Any, row: Dict[str, Any]) -> None:
         """Insert the five descriptive dimensions referenced by one usage row."""
         for dimension_name, column_name in _RELATIONAL_ATTRIBUTION_COLUMNS.items():
-            dimension_value = row[column_name]
+            dimension_value = row[column_name] or UNATTRIBUTED
             cur.execute(
                 _ATTRIBUTION_VALUE_INSERT_SQL[self._paramstyle],
                 (dimension_name, dimension_value),
@@ -793,12 +793,11 @@ class SqlLedgerStore:
         self._conn.commit()
 
     def _seed_dimension_catalog(self) -> None:
-        cur = self._conn.cursor()
-        self._seed_dimension_catalog_in_transaction(cur)
+        self._seed_dimension_catalog_in_transaction(self._conn.cursor())
         self._conn.commit()
 
     def _seed_dimension_catalog_in_transaction(self, cur: Any) -> None:
-        """Seed dimension parents without committing an outer schema transaction."""
+        """Seed dimension parents before child rows without committing an outer transaction."""
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
             cur.execute(
                 _DIMENSION_SELECT_SQL[self._paramstyle],

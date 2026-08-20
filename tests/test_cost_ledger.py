@@ -44,23 +44,30 @@ class _PyformatCursor:
     def __init__(self, connection) -> None:
         self._connection = connection
         self._cursor = connection._sqlite.cursor()
+        self._information_schema_rows = None
 
     def execute(self, statement, params=()):
         if statement.count("%s") != len(params):
             raise AssertionError("pyformat placeholders and values diverged")
         self._connection.executions.append((statement, tuple(params)))
+        self._information_schema_rows = None
         if "information_schema.columns" in statement:
-            self._cursor.execute(
-                "SELECT name FROM pragma_table_info('llm_usage_records')"
-            )
+            self._cursor.execute("PRAGMA table_info(llm_usage_records)")
+            self._information_schema_rows = [(row[1],) for row in self._cursor.fetchall()]
             return self
         self._cursor.execute(statement.replace("%s", "?"), tuple(params))
         return self
 
     def fetchone(self):
+        if self._information_schema_rows is not None:
+            return self._information_schema_rows.pop(0) if self._information_schema_rows else None
         return self._cursor.fetchone()
 
     def fetchall(self):
+        if self._information_schema_rows is not None:
+            rows = self._information_schema_rows
+            self._information_schema_rows = None
+            return rows
         return self._cursor.fetchall()
 
 
@@ -306,6 +313,19 @@ def test_sql_ledger_stores_descriptive_attribution_in_normalized_tables() -> Non
     assert connection.execute("SELECT COUNT(*) FROM cost_attribution_values").fetchone() == (5,)
     assert store.query()[0]["account_name"] == "acct-1"
     assert store.query()[0]["upstream_api"] == "openai"
+    assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
+    with pytest.raises(sqlite3.IntegrityError):
+        connection.execute(
+            "INSERT INTO usage_record_attributions "
+            "(usage_record_id, dimension_name, dimension_value) VALUES (?, ?, ?)",
+            ("missing_usage", "team", "alpha"),
+        )
+    usage_record_id = store.query()[0]["usage_record_id"]
+    connection.execute("DELETE FROM llm_usage_records WHERE usage_record_id = ?", (usage_record_id,))
+    assert connection.execute(
+        "SELECT COUNT(*) FROM usage_record_attributions WHERE usage_record_id = ?",
+        (usage_record_id,),
+    ).fetchone() == (0,)
 
 
 def test_sql_ledger_enables_foreign_keys_and_cascades_attribution_rows() -> None:
@@ -378,6 +398,53 @@ def test_sql_ledger_migrates_flattened_usage_rows() -> None:
     assert row["company_name"] == "acme"
 
 
+def test_sql_ledger_maps_null_legacy_attribution_to_unattributed() -> None:
+    """Migrate nullable legacy labels without violating normalized constraints."""
+    connection = sqlite3.connect(":memory:")
+    connection.execute(
+        """
+        CREATE TABLE llm_usage_records (
+            usage_record_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL,
+            workflow_run_id TEXT, request_channel TEXT NOT NULL, route_mode TEXT,
+            provider_name TEXT, model_name TEXT, account_name TEXT,
+            service_name TEXT, upstream_api TEXT, team_name TEXT,
+            group_name TEXT, company_name TEXT, prompt_tokens INTEGER NOT NULL,
+            completion_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+            cost_amount REAL NOT NULL, currency_code TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        "INSERT INTO llm_usage_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        (
+            "usage_nullable",
+            123,
+            None,
+            "sync",
+            None,
+            "openai",
+            "gpt-x",
+            None,
+            None,
+            None,
+            None,
+            None,
+            None,
+            1,
+            2,
+            3,
+            4.5,
+            "USD",
+        ),
+    )
+    connection.commit()
+
+    row = SqlLedgerStore(connection, paramstyle="qmark").query()[0]
+    assert row["account_name"] == "unattributed"
+    assert row["service_name"] == "unattributed"
+    assert row["team_name"] == "unattributed"
+
+
 def test_sql_ledger_rejects_ambiguous_legacy_migration_without_renaming_source() -> None:
     """Keep both legacy tables recoverable when migration targets collide."""
     connection = sqlite3.connect(":memory:")
@@ -426,7 +493,13 @@ def test_sql_ledger_store_pyformat_binds_all_query_windows() -> None:
 
 
 def test_ledger_table_names_follow_two_word_snake_case() -> None:
-    for name in ("llm_usage_records", "cost_attribution_dimensions", "llm_price_entries"):
+    for name in (
+        "llm_usage_records",
+        "cost_attribution_dimensions",
+        "llm_price_entries",
+        "cost_attribution_values",
+        "usage_record_attributions",
+    ):
         assert is_two_word_snake_case(name)
 
 
