@@ -2,6 +2,10 @@
 
 ## Decision
 
+The durable catalog decision is recorded in
+[`ADR 0015`](../planning/adrs/0015-durable-provider-catalog.md), including the
+third-normal-form dependency boundary and the last-known-good refresh contract.
+
 Contextual Orchestrator treats the five organization provider credentials as one
 trusted bootstrap inventory:
 
