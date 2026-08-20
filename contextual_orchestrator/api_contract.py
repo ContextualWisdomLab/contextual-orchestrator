@@ -17,6 +17,155 @@ OPENAPI_SPEC = {
         }
     },
     "paths": {
+        "/openapi.json": {
+            "get": {
+                "operationId": "get_openapi_document",
+                "summary": "Get this OpenAPI contract",
+                "responses": {"200": {"description": "OpenAPI document"}},
+            }
+        },
+        "/healthz": {
+            "get": {
+                "operationId": "get_health_status",
+                "summary": "Get unauthenticated service liveness",
+                "responses": {"200": {"description": "Service health"}},
+            }
+        },
+        "/v1/models": {
+            "get": {
+                "operationId": "list_models",
+                "summary": "List models available for inference",
+                "security": [{"inference_bearer_auth": []}],
+                "responses": {"200": {"description": "Model collection"}},
+            }
+        },
+        "/v1/models/{model_id}": {
+            "get": {
+                "operationId": "get_model",
+                "summary": "Get one inference model",
+                "security": [{"inference_bearer_auth": []}],
+                "parameters": [
+                    {"name": "model_id", "in": "path", "required": True, "schema": {"type": "string"}}
+                ],
+                "responses": {
+                    "200": {"description": "Model"},
+                    "404": {"description": "Model not found"},
+                },
+            }
+        },
+        "/v1/chat/completions": {
+            "post": {
+                "operationId": "create_chat_completion",
+                "summary": "Create a chat completion",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["model", "messages"],
+                                "properties": {
+                                    "model": {"type": "string"},
+                                    "messages": {"type": "array", "items": {"type": "object"}},
+                                    "stream": {"type": "boolean"},
+                                    "response_format": {"type": "object"},
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {"description": "Chat completion or SSE response"},
+                    "400": {"description": "Invalid request"},
+                },
+            }
+        },
+        "/v1/completions": {
+            "post": {
+                "operationId": "create_completion",
+                "summary": "Create a legacy text completion",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["model", "prompt"],
+                                "properties": {
+                                    "model": {"type": "string"},
+                                    "prompt": {"oneOf": [{"type": "string"}, {"type": "array"}]},
+                                    "stream": {"type": "boolean"},
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {"description": "Text completion"},
+                    "400": {"description": "Invalid request"},
+                },
+            }
+        },
+        "/v1/embeddings": {
+            "post": {
+                "operationId": "create_embedding",
+                "summary": "Create embeddings for semantic input",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["model", "input"],
+                                "properties": {
+                                    "model": {"type": "string"},
+                                    "input": {
+                                        "oneOf": [
+                                            {"type": "string"},
+                                            {"type": "array", "items": {"type": "string"}},
+                                        ]
+                                    },
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {"description": "Embedding response"},
+                    "400": {"description": "Invalid request"},
+                },
+            }
+        },
+        "/v1/responses": {
+            "post": {
+                "operationId": "create_response",
+                "summary": "Create a Responses API completion",
+                "security": [{"inference_bearer_auth": []}],
+                "requestBody": {
+                    "required": True,
+                    "content": {
+                        "application/json": {
+                            "schema": {
+                                "type": "object",
+                                "required": ["model", "input"],
+                                "properties": {
+                                    "model": {"type": "string"},
+                                    "input": {"oneOf": [{"type": "string"}, {"type": "array"}]},
+                                    "stream": {"type": "boolean"},
+                                },
+                            }
+                        }
+                    },
+                },
+                "responses": {
+                    "200": {"description": "Responses API result"},
+                    "400": {"description": "Invalid request"},
+                },
+            }
+        },
         "/api/v1/agent_pools": {
             "get": {
                 "operationId": "list_agent_pools",
