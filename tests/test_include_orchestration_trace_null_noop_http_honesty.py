@@ -1,4 +1,4 @@
-"""include_orchestration_trace null as omit no-op over HTTP."""
+"""include_orchestration_trace null is rejected over HTTP."""
 
 from __future__ import annotations
 
@@ -48,7 +48,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_chat_accepts_include_orchestration_trace_null() -> None:
+def test_http_chat_rejects_include_orchestration_trace_null() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -60,7 +60,8 @@ def test_http_chat_accepts_include_orchestration_trace_null() -> None:
                 "include_orchestration_trace": None,
             },
         )
-        assert status == 200, body
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_include_orchestration_trace"
     finally:
         server.shutdown()
         thread.join(timeout=5)

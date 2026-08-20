@@ -164,8 +164,8 @@ def test_http_chat_rejects_include_orchestration_trace_non_boolean() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_include_orchestration_trace_null_as_omit() -> None:
-    """Explicit JSON null is an SDK optional default — omit-equivalent no-op."""
+def test_http_chat_rejects_include_orchestration_trace_null() -> None:
+    """Trace disclosure is a strict authorization-sensitive JSON boolean."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -176,7 +176,8 @@ def test_http_chat_accepts_include_orchestration_trace_null_as_omit() -> None:
                 "include_orchestration_trace": None,
             },
         )
-        assert status == 200, body
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_include_orchestration_trace"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -238,7 +239,7 @@ def test_http_chat_accepts_include_orchestration_trace_omitted() -> None:
 
 if __name__ == "__main__":
     test_http_chat_rejects_include_orchestration_trace_non_boolean()
-    test_http_chat_accepts_include_orchestration_trace_null_as_omit()
+    test_http_chat_rejects_include_orchestration_trace_null()
     test_http_chat_accepts_include_orchestration_trace_true()
     test_http_chat_accepts_include_orchestration_trace_false()
     test_http_chat_accepts_include_orchestration_trace_omitted()

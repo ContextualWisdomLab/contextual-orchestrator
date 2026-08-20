@@ -1,9 +1,15 @@
 # Trace-purpose authorization
 
-`include_orchestration_trace: true` is a privileged data-access request. The
-chat endpoint first authenticates the inference caller, then requires a
-separate verified `trace` purpose scope before returning the trace. A denied
-purpose returns `401` and no trace body.
+Trace-bearing responses are privileged data-access requests. Chat, admin
+simulation, workflow/evaluation creation, and batch-result retrieval first
+authenticate the caller, then require a separate verified `trace` purpose
+scope before returning a trace. Owner-facing workflow/evaluation reads apply
+the same gate when trace exposure is enabled. A denied purpose returns `401`
+and no trace body.
+
+`include_orchestration_trace` is a strict JSON boolean when present. Strings,
+numbers, arrays, objects, and `null` are rejected; omission uses the explicit
+server default.
 
 The release gate records `orchestration_trace_access_granted` before the
 response is released. The audit detail contains only route and purpose

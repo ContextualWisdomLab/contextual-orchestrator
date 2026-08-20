@@ -1,6 +1,6 @@
 ---
 id: "0013"
-title: "Require a separate trace purpose for trace-bearing chat responses"
+title: "Require a separate trace purpose for trace-bearing responses"
 status: accepted
 proposed_date: "2026-08-20"
 accepted_date: "2026-08-20"
@@ -11,15 +11,19 @@ affected_components:
   - "tests/test_chat_include_orchestration_trace_http_honesty.py"
 ---
 
-# Require a separate trace purpose for trace-bearing chat responses
+# Require a separate trace purpose for trace-bearing responses
 
 ## Decision
 
-Inference authentication alone does not authorize a trace-bearing response.
-When a chat caller requests `include_orchestration_trace`, the server requires
-the verified `trace` purpose scope and records a metadata-only audit event
-before releasing the response. The server never trusts a caller-supplied
-purpose header.
+Inference or admin authentication alone does not authorize a trace-bearing
+response. Chat, admin simulation, workflow/evaluation creation, batch-result
+retrieval, and trace-enabled workflow/evaluation reads require the verified
+`trace` purpose scope. The server records a metadata-only audit event before
+releasing the response and never trusts a caller-supplied purpose header.
+
+When `include_orchestration_trace` is present it must be a JSON boolean;
+`null`, strings, numbers, arrays, and objects are rejected. Omission follows
+the explicit server default.
 
 The injected `bearer_verifier(token, scope)` is the production boundary for
 OIDC/Keyverse claims. Static single-token mode permits the local development
@@ -28,8 +32,11 @@ purpose because it has no verified trace claim.
 
 ## Acceptance evidence
 
-- an inference-only principal receives `401` for a trace request;
-- a principal verified for both `inference` and `trace` receives the trace;
+- an inference-only principal receives `401` for a trace request on each
+  trace-bearing surface;
+- a principal verified for both `inference` and `trace` receives the permitted trace;
+- batch results and admin/workflow/evaluation trace paths use the same gate;
+- malformed trace flags fail with `400` before orchestration;
 - the audit event is written before the trace response path proceeds and
   contains no prompt, output, credential, or PII value;
 - audit failure returns a generic `503` instead of releasing the trace.
