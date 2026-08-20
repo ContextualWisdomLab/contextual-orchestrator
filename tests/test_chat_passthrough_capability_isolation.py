@@ -32,7 +32,17 @@ def _chat_agent() -> ModelAgent:
     )
 
 
-@pytest.mark.parametrize("endpoint", ["chat/completions", "/v1/chat/completions", "responses", "/v1/responses"])
+@pytest.mark.parametrize(
+    "endpoint",
+    [
+        "chat/completions",
+        "/v1/chat/completions",
+        "completions",
+        "/v1/completions",
+        "responses",
+        "/v1/responses",
+    ],
+)
 def test_proxy_send_rejects_embedding_before_mock_or_network_transport(endpoint: str) -> None:
     """Keep raw OpenAI passthrough from bypassing the chat transport invariant."""
     client = ModelClient()
@@ -111,3 +121,7 @@ def test_chat_served_specialized_models_remain_valid_passthrough_transports(mode
 
     assert response["object"] == "chat.completion"
     assert response["model"] == model_id
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))
