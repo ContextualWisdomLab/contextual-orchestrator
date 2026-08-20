@@ -221,16 +221,3 @@ def test_http_responses_rejects_unapplied_top_logprobs_whole_float_string() -> N
     finally:
         server.shutdown()
         thread.join(timeout=5)
-
-
-if __name__ == "__main__":
-    test_http_chat_accepts_n_whole_float_string()
-    test_http_responses_rejects_unapplied_seed_whole_float_string()
-    test_http_chat_rejects_fractional_float_string_n()
-    test_http_chat_accepts_top_logprobs_zero_float_strings()
-    test_http_chat_still_rejects_nonzero_top_logprobs_float_string()
-    test_http_completions_accepts_top_logprobs_zero_float_string()
-    test_http_completions_accepts_best_of_whole_float_string()
-    test_http_chat_accepts_max_tool_calls_zero_float_string()
-    test_http_responses_rejects_unapplied_top_logprobs_whole_float_string()
-    print("ok")

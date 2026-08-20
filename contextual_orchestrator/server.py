@@ -5741,25 +5741,7 @@ def build_server(
                     tool_loop_header = self.headers.get(
                         "x-contextual-orchestrator-tool-loop", ""
                     ).strip().lower()
-                    if tools_list and tool_loop_header == "v1":
-                        # The Responses client owns execution of the returned
-                        # function calls; the gateway preserves the full shape.
-                        started_at = time.perf_counter()
-                        raw_response = self._run(
-                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
-                        )
-                        orchestrator.record_analytics_event(
-                            "responses_tool_passthrough",
-                            {
-                                "endpoint_path": "/v1/responses",
-                                "actor_scope": "inference",
-                                "status_code": 200,
-                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                            },
-                        )
-                        self._send(raw_response)
-                        return
-                    if tools_list:
+                    if tools_list and tool_loop_header != "v1":
                         raise RequestError(
                             422,
                             "multi_agent_tools_unsupported",
@@ -5824,6 +5806,25 @@ def build_server(
                                 "invalid_stream",
                                 "stream is not supported on /v1/responses",
                             )
+                    if tools_list and tool_loop_header == "v1":
+                        # Validate input and stream before passthrough so the
+                        # client-owned contract cannot silently downgrade a
+                        # requested stream or accept a missing input.
+                        started_at = time.perf_counter()
+                        raw_response = self._run(
+                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                        )
+                        orchestrator.record_analytics_event(
+                            "responses_tool_passthrough",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(raw_response)
+                        return
                     response_contract: dict[str, Any] | None = None
                     raw_response_format = body.get("response_format")
                     if isinstance(raw_response_format, dict) and raw_response_format.get("type") in {
@@ -5995,7 +5996,7 @@ def build_server(
                         self.close_connection = True
                         raise RequestError(400, "invalid_request_framing", "request body ended before content-length")
                     chunks.extend(chunk)
-                    if time.monotonic() >= read_deadline:
+                    if len(chunks) < body_size and time.monotonic() >= read_deadline:
                         self.close_connection = True
                         raise RequestError(408, "request_read_timeout", "request body read timed out")
             except (TimeoutError, socket.timeout):

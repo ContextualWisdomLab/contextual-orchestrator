@@ -93,5 +93,36 @@ def test_slow_progress_cannot_extend_request_past_total_deadline(monkeypatch) ->
         server.server_close()
 
 
+def test_complete_body_at_total_deadline_is_accepted(monkeypatch) -> None:
+    """Accept the final byte when it completes the body at the deadline."""
+    payload = b"{}"
+    clock = _Clock()
+    server = build_server(
+        TaskOrchestrator([ModelAgent("general_agent", "mock-generalist")]),
+        port=0,
+        security=SecurityConfig(
+            auth_token="test_token",
+            request_read_timeout_seconds=0.1,
+        ),
+    )
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler.headers = _headers(len(payload))
+    handler.rfile = _SlowProgressReader(payload, clock, step_seconds=0.05)
+    handler.connection = _FakeConnection()
+    handler.close_connection = False
+    monkeypatch.setattr(
+        server_module,
+        "time",
+        SimpleNamespace(monotonic=clock.monotonic),
+    )
+
+    try:
+        assert handler._read_json() == {}
+        assert handler.close_connection is False
+        assert handler.connection.timeout is None
+    finally:
+        server.server_close()
+
+
 if __name__ == "__main__":  # pragma: no cover
     raise SystemExit(pytest.main([__file__]))
