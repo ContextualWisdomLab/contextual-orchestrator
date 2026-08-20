@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20 23:07, Asia/Seoul
+**As of:** 2026-08-20 23:12, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -82,6 +82,7 @@ required workflows, and a normal merge.
 
 | PR | Exact head at snapshot | State / base | Evidence boundary and next action |
 |---:|---|---|---|
+| [#790](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/790) | `5d989c6177514d30dace2afa2cf61c64a7d41f67` | ready, based on main | Review the loopback-only authenticated CI review gateway, five-provider KV bootstrap, discovery fail-closed behavior, and exact-head protected Checks before normal merge. |
 | [#783](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/783) | `6210b00899bd6aae068570b0f030a224e9cc55a3` | ready, stacked on [#776](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/776) | Review the total monotonic body deadline and exact-head framing regression; integrate after [#776](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/776) with all protected evidence. |
 | [#781](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/781) | `caf1eb34d92f8d1e3d99a98f4278378f6bc4e85f` | ready, stacked on [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior at the current parent-integrated head before merging after [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780). |
 | [#787](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/787) | `36e3be0bca5f64b7c5150351b2d505ea536a46a4` | ready, stacked on [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) | Review explicit client-owned tool-loop opt-in, preserved 422 default, streaming rejection, and repaired standalone test entrypoints at the current exact head after the [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) prerequisite integrates. |
