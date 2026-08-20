@@ -121,6 +121,72 @@ def test_auto_protocol_retries_without_temperature_after_provider_capability_rej
     assert "temperature" not in calls[1]
 
 
+def test_chat_protocol_retries_without_temperature_after_422_capability_rejection() -> None:
+    client = ModelClient()
+    agent = ModelAgent("chat_agent", "gpt-reasoning", "https://provider.example/v1", provider_protocol="chat_completions")
+    calls: list[dict] = []
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/chat/completions", 422, "temperature unsupported", {}, io.BytesIO(b"{}")
+    )
+
+    def send(_agent, endpoint, payload, _destination=None, _timeout=None):
+        assert endpoint == "chat/completions"
+        calls.append(payload)
+        if "temperature" in payload:
+            raise error
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    client._send_provider_json = send  # type: ignore[method-assign]
+    assert client._send(agent, {"messages": [{"role": "user", "content": "question"}], "temperature": 0.2}) == "ok"
+    assert calls[0]["temperature"] == 0.2
+    assert "temperature" not in calls[1]
+
+
+def test_responses_protocol_retries_without_temperature_after_422_capability_rejection() -> None:
+    client = ModelClient()
+    agent = ModelAgent("responses_agent", "gpt-reasoning", "https://provider.example/v1", provider_protocol="responses")
+    calls: list[dict] = []
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/responses", 422, "temperature unsupported", {}, io.BytesIO(b"{}")
+    )
+
+    def send(_agent, endpoint, payload, _destination=None, _timeout=None):
+        assert endpoint == "responses"
+        calls.append(payload)
+        if "temperature" in payload:
+            raise error
+        return {"output_text": "ok"}
+
+    client._send_provider_json = send  # type: ignore[method-assign]
+    assert client._send(agent, {"messages": [{"role": "user", "content": "question"}], "temperature": 0.2}) == "ok"
+    assert calls[0]["temperature"] == 0.2
+    assert "temperature" not in calls[1]
+
+
+def test_raw_provider_request_retries_without_temperature_after_422_capability_rejection() -> None:
+    client = ModelClient()
+    agent = ModelAgent("raw_agent", "gpt-reasoning", "https://provider.example/v1", provider_protocol="chat_completions")
+    calls: list[dict] = []
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/chat/completions", 422, "temperature unsupported", {}, io.BytesIO(b"{}")
+    )
+
+    def send(_agent, endpoint, payload, _destination=None):
+        assert endpoint == "chat/completions"
+        calls.append(payload)
+        if "temperature" in payload:
+            raise error
+        return {"choices": [{"message": {"content": "ok"}}]}
+
+    client._send_raw = send  # type: ignore[method-assign]
+    result = client._send_raw_with_retry(agent, "chat/completions", {"model": "gpt-reasoning", "temperature": 0.2})
+    assert result["choices"][0]["message"]["content"] == "ok"
+    assert calls == [
+        {"model": "gpt-reasoning", "temperature": 0.2},
+        {"model": "gpt-reasoning"},
+    ]
+
+
 def test_proxy_send_auto_falls_back_from_chat_to_responses_for_multimodal_capability() -> None:
     client = ModelClient()
     register_credential("OPENAI_API_KEY", "test-provider-key")

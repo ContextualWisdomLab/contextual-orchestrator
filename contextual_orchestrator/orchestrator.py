@@ -971,7 +971,7 @@ class ModelClient:
         try:
             data = self._send_provider_json(agent, "chat/completions", normalized, destination, timeout)
         except urllib.error.HTTPError as exc:
-            if agent.provider_protocol == "auto" and exc.code == 400 and "temperature" in normalized:
+            if "temperature" in normalized and is_provider_capability_error(exc):
                 retry_payload = dict(normalized)
                 retry_payload.pop("temperature", None)
                 data = self._send_provider_json(agent, "chat/completions", retry_payload, destination, timeout)
@@ -993,13 +993,21 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Send Chat-shaped internal messages to a Responses-only provider."""
-        data = self._send_provider_json(
-            agent,
-            "responses",
-            chat_to_responses_payload(payload, self.max_output_tokens),
-            destination,
-            timeout,
-        )
+        response_payload = chat_to_responses_payload(payload, self.max_output_tokens)
+        try:
+            data = self._send_provider_json(
+                agent,
+                "responses",
+                response_payload,
+                destination,
+                timeout,
+            )
+        except urllib.error.HTTPError as exc:
+            if "temperature" not in response_payload or not is_provider_capability_error(exc):
+                raise
+            retry_payload = dict(response_payload)
+            retry_payload.pop("temperature", None)
+            data = self._send_provider_json(agent, "responses", retry_payload, destination, timeout)
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = {
@@ -1329,7 +1337,7 @@ class ModelClient:
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
             except urllib.error.HTTPError as exc:
-                if agent.provider_protocol == "auto" and exc.code == 400 and "temperature" in payload:
+                if "temperature" in payload and is_provider_capability_error(exc):
                     retry_payload = dict(payload)
                     retry_payload.pop("temperature", None)
                     try:
