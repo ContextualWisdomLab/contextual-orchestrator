@@ -207,6 +207,6 @@ if __name__ == "__main__":
     test_http_tools_passthrough_rejects_invalid_temperature()
     test_http_tools_passthrough_rejects_unsupported_seed_store_stop_n()
     test_http_tools_passthrough_rejects_invalid_user_and_stream_options()
-    test_http_tools_passthrough_accepts_coerced_sampling()
+    test_unit_sampling_writeback_coerced_numbers()
     test_http_response_format_passthrough_rejects_seed()
     print("ok")
