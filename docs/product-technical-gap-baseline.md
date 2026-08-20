@@ -1,12 +1,16 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20, Asia/Seoul
+**As of:** 2026-08-20 19:10, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
 deployables.
 **Customer next action:** use this document to select the next mergeable PR and
 to verify its exact-head evidence before approving or releasing it.
+
+> This is a dated planning snapshot, not a live merge dashboard. PR heads,
+> checks, reviews, and base relationships can change after publication. Always
+> refetch the remote exact head and protected rules before acting on a row.
 
 ## 1. Product requirements (PRD)
 
@@ -36,7 +40,7 @@ operability are still being closed.
 | Orchestration | Allocate shallow or deep work by task need; retain Thinker/Worker/Verifier/Synthesizer evidence, bounded recursion, and Conductor-style access lists. | Replayable workflow trace and equal-budget ablation evidence for #568. |
 | Provider plane | Discover model capabilities and price honestly, bootstrap credentials from KV, and use secure provider transport with fail-closed malformed responses. | Catalog/bootstrap, provider-contract, and security checks for #764/#765/#768/#769/#770. |
 | Failure plane | Classify tool failures, fail safely, preserve upstream truth, and retry only within a bounded policy. | #771 focused/full tests and hosted security checks. |
-| Cache plane | Optional injected Redis/Dragonfly-compatible semantic cache; deterministic keys, strict bypass, local fallback, fail-open backend behavior, and no cross-model reuse. | #772 focused/full tests and RFC 9111 review. |
+| Cache plane | Optional injected Redis/Dragonfly-compatible response cache; deterministic keys, strict bypass, local fallback, fail-open backend behavior, and no cross-model reuse. | #772 focused/full tests and RFC 9111 review. |
 | Privacy | Do not blanket-mask operational PII. Enforce purpose-limited authorization, field-level encryption at rest, credential redaction, and auditable access. | ADR 0010 follow-up #762 plus implementation tests. |
 | Persistence | Keep database objects at least two words in `snake_case` and keep schemas in third normal form. | Schema convention review and migration tests. |
 | Packaging | Keep one deployable product until a second consumer, independent cadence, or security-provenance boundary requires extraction; every extracted component must work standalone and as a submodule. | Packaging ADR and consumer integration proof. |
@@ -76,26 +80,27 @@ failures, but they also are not merge evidence. Protected main requires one
 independent approving review, last-push approval, resolved threads, all
 required workflows, and a normal merge.
 
-| PR | Exact head | State / review | Checks snapshot | Dependency and next action |
-|---:|---|---|---|---|
-| #776 | `3830f38` | stacked / review not recorded, clean | no protected required Checks until parent #765 is integrated | Review fixed-length framing, exact read, deadline, close-on-error, and RFC 9112 evidence; retarget/rebase onto protected main after #765. |
-| #778 | `6e0daf8` | stacked on #765 / review not recorded, clean | no protected required Checks until parent #765 is integrated | Review source-image preservation, VISION-tag failover, Responses normalization, and the explicit LineageWeave OCR backfill boundary. |
-| #775 | `fb8fb62` | draft / `REVIEW_REQUIRED`, blocked | hosted Checks pending on the repaired head | Verify the exact CPython 3.12 Atheris marker keeps unsupported interpreters out while preserving the CPython 3.12 fuzz installation; obtain independent approval. |
-| #774 | `8977384` | stacked on non-default base `feat/paper-grounded-auto-orchestration-20260820`, review not recorded, clean | no required Checks reported for its non-default base branch | Rebase onto the current #765/main line; preserve same-provider temperature negotiation and do not merge a stale 72-file comparison. |
-| #773 | `2e24c53` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review the current product/technical baseline and ADR 0016, then obtain independent approval. |
-| #772 | `8452623` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review cache key, bypass, fail-open, and cost/routing interactions; wait for same-head Checks and independent approval. |
-| #771 | `2351cab` | ready / `REVIEW_REQUIRED`, blocked | most security checks passed; full suite, Hypothesis, Atheris, queue scan, Strix queued/in progress | Recheck exact-head failure-chain behavior and hosted Checks; obtain independent approval. |
-| #770 | `c01733b` | draft / `REVIEW_REQUIRED`, behind | most checks passed; coverage queued, Strix in progress | Rebase/integrate after catalog and transport dependencies; preserve honest fail-closed price evidence. |
-| #769 | `9654c28` | ready / `REVIEW_REQUIRED`, blocked | required checks passed except coverage evidence queued | Resolve coverage evidence and obtain last-push independent approval; do not self-approve. |
-| #768 | `88fee97` | ready / `REVIEW_REQUIRED`, blocked | required workflows queued | Review the current remote head for embedding/chat capability separation; predecessor f13ee66 evidence is stale, so wait for full Checks and approval on 88fee97. |
-| #765 | `d3f9a9b` | draft / `REVIEW_REQUIRED`, blocked | most checks passed; coverage queued | Review secure provider JSON and role reasoning contract after #768/#769 integration. |
-| #764 | `854d7a2` | draft / `REVIEW_REQUIRED`, behind | required workflows queued | Stack after credential/catalog contract is settled; verify 3NF persistence and KV bootstrap. |
-| #763 | `385a5b4` | draft / `REVIEW_REQUIRED`, blocked | most checks passed; coverage queued, Strix in progress | Integrate with current provider transport and catalog; retain failover evidence. |
-| #762 | `be6b6c7` | ready / `REVIEW_REQUIRED`, blocked | required checks passed except coverage evidence queued | Implement purpose-limited authorization and field-level encryption follow-up; documentation alone is not completion. |
+| PR | Exact head | State / base | Evidence boundary and next action |
+|---:|---|---|---|
+| #779 | `4a5cc7a` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main. |
+| #778 | `6e0daf8` | ready, stacked on #765 | Review source-image preservation, explicit `vision` eligibility/failover, Responses normalization, and the private LineageWeave OCR recovery boundary. |
+| #776 | `3830f38` | ready, stacked on #765 | Review fixed-length framing, exact reads, deadlines, close-on-error, and RFC 9112 evidence; rebase onto protected main after #765. |
+| #775 | `fb8fb62` | draft, based on main | Verify the exact CPython 3.12 Atheris marker, direct test contract, hash lock, hosted Fuzz job, and independent approval before promotion. |
+| #773 | `2aeac55` | ready, based on main | Review this dated baseline and ADR 0016; refresh the remote head before approval because this row is self-referential. |
+| #772 | `8452623` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions. |
+| #771 | `2351cab` | ready, based on main | Recheck bounded cause-chain classification, idempotent-only retries, ambiguous-outcome fail-closed behavior, public error hygiene, and exact-head hosted checks. |
+| #770 | `0777e14` | draft, based on stale main | Reconcile after #768. Preserve complete-price evidence, provider-family diversity, corrupt-row handling, and consume the shared ordinary-chat classifier rather than a local detector. |
+| #769 | `9654c28` | ready, based on main | Core repository workflows succeeded on this head; obtain exact-head independent approval and remaining protected contexts. |
+| #768 | `88fee97` | ready, based on main | Review the current capability boundary, including ShieldGemma, legacy Completions, direct-run regressions, and exact-head hosted checks. |
+| #765 | `d3f9a9b` | draft, based on main | Reconcile after #768/#769; preserve DNS-pinned discovery, structured-output honesty, gateway-owned reasoning policy, and omitted sampling controls. |
+| #764 | `854d7a2` | draft, based on stale main | Verify 3NF catalog persistence, credential promotion/rollback, last-known-good semantics, exact-set stale withdrawal, and shared capability-classifier adoption after rebase. |
+| #763 | `385a5b4` | draft, based on main | Reconcile with #765/#768; preserve one-shot local Responses translation, local concurrency coordination, concrete-model stickiness, and adaptive provider failover. |
+| #762 | `be6b6c7` | ready, based on main | Core workflows succeeded; merge the design only after current-head independent approval, then implement its authorization/encryption acceptance criteria separately. |
 
-Issue #745 is represented by #772 and issue #567 by #771. The remaining open
-issues are recorded below; they are not silently treated as completed because
-an issue exists or a draft PR exists.
+PR #774 was closed unmerged as the stale-base predecessor of #779. Its local
+or predecessor-head evidence does not transfer. Issue #745 is represented by
+#772 and issue #567 by #771. A draft or implementation PR is not treated as
+completed until the protected-main contract is satisfied.
 
 ## 5. Open issue and product-gap queue
 
@@ -118,9 +123,9 @@ an issue exists or a draft PR exists.
 | Priority | Gap | Current evidence | Definition of done |
 |---:|---|---|---|
 | P0 | Protected delivery cannot merge green PRs without independent approval. | Ruleset `18156473` requires one approval and last-push approval; several PRs are green but blocked. | A human/independent reviewer approves the exact current SHA, all threads resolve, hosted required workflows pass, and normal squash/merge succeeds. |
-| P0 | Provider boundary is still being assembled across stacked PRs. | #768, #765, #764, #770, and #763 are draft/behind or pending integration. | One current-main stack has capability isolation, secure JSON, KV bootstrap, honest catalog, and failover with no duplicate logic. |
-| P0 | Operational failure paths are not yet one buyer-verifiable contract. | #771 and #772 are open; hosted checks are still queued. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
-| P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | ADR 0010 explicitly marks both follow-ups not started; #762 is documentation. | Purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests prove raw PII is only returned to authorized purpose. |
+| P0 | Provider boundary is still being assembled across stacked PRs. | #768, #765, #764, #770, #763, #776, #778, and #779 are pending integration. | One current-main stack has capability isolation, secure JSON, bounded framing, multimodal evidence, KV bootstrap, honest catalog, optional-control negotiation, and failover with no duplicate logic. |
+| P0 | Operational failure paths are not yet one buyer-verifiable contract. | #771 and #772 are open. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
+| P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | ADR 0010 explicitly marks both follow-ups not started; #762 is documentation. | Purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests prove raw PII is only returned to an authorized purpose. |
 | P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | Product plan cites Fugu/TRINITY/Conductor; issue #568 remains open. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
 | P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue #86 remains open; local catalog is not production telemetry. | KV-backed NIM discovery benchmark records model capability, price provenance, failure class, and quality result without secret leakage. |
 | P1 | Release gate and hourly loop need exact operational proof. | Rules require central scheduler workflows; issue #103 remains open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
@@ -153,9 +158,8 @@ https://platform.openai.com/docs/api-reference/chat/create
 OpenAI. (n.d.-b). *Create a model response*. OpenAI Platform.
 https://platform.openai.com/docs/api-reference/responses/create
 
-OpenAPI Initiative. (n.d.). *OpenAPI specification*. Retrieved August 20,
-2026, from https://spec.openapis.org/oas/ (the official page currently lists
-OpenAPI 3.2.0 as the newest listed minor line).
+OpenAPI Initiative. (2025, September 19). *OpenAPI specification version 3.2.0*.
+https://spec.openapis.org/oas/v3.2.0.html
 
 Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*.
 https://sakana.ai/fugu-release/
