@@ -174,6 +174,21 @@ version is accepted only by a separately authorized `reencrypt`/migration
 operation that records its migration id, source version, target version,
 and operator authorization.
 
+The associated-data bytes use one normative `EncryptionContext` serializer
+shared by every encrypt and decrypt adapter. Serialization version 1 is the
+UTF-8 byte sequence `cw-encryption-context-v1` followed by a NUL byte and the
+four fields in this fixed order: `tenant_id`, `record_kind`, `field_path`,
+`schema_version`. Each field is normalized to Unicode NFC, encoded as UTF-8,
+and preceded by its unsigned 32-bit big-endian byte length; NUL bytes and
+Unicode noncharacters are rejected. Length-prefixing is the escaping rule,
+so no JSON or delimiter escaping is applied. `field_path` must match
+`[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*`; empty paths, empty
+segments, bracket notation, and unvalidated caller-supplied paths are
+rejected. Encrypt and decrypt must call this same serializer, and adapters
+must produce byte-for-byte identical output for the same normalized
+context. Any serializer-version change requires a new envelope version and
+an explicit migration.
+
 The implementation must use an approved AEAD/KMS adapter and a unique nonce
 per encryption. The application may carry ciphertext and envelope metadata,
 but key material is resolved from the approved credential/KMS registry, never
@@ -181,13 +196,14 @@ from raw environment variables, persisted configuration, or logs.
 
 The persisted envelope contains only:
 
-    algorithm, key_id_or_version, nonce, ciphertext, authentication_tag, schema_version
+    type, version, algorithm, key_version, nonce_b64, ciphertext_b64, tag_b64,
+    classification, field_path, schema_version
 
-For an AEAD with an appended tag, the storage adapter may keep the tag in the
-ciphertext blob; the wire/storage representation must still make the
-authenticated boundary explicit. Associated data binds the immutable
-encryption context so ciphertext cannot be moved between tenants, record
-kinds, field paths, or schema versions unnoticed. Decryption rejects a
+For envelope version 1, the AES-256-GCM profile always uses a detached
+16-byte `tag_b64`; the tag is never appended to `ciphertext_b64`, and
+`key_version` is the only key-reference field. Associated data binds the
+immutable encryption context so ciphertext cannot be moved between tenants,
+record kinds, field paths, or schema versions unnoticed. Decryption rejects a
 context mismatch even when the envelope and key are otherwise valid.
 
 StateStore serializes classified leaves into one canonical envelope before
@@ -206,20 +222,26 @@ PostgreSQL:
       "key_version": "active-key-version",
       "nonce_b64": "...",
       "ciphertext_b64": "...",
+      "tag_b64": "...",
       "classification": "pii.content",
       "field_path": "payload.body",
       "schema_version": "2026-08-19"
     }
 
 `type` is the discriminator, `version` is the envelope format version, and
-every binary value is standard base64 text. The authentication tag is
-included in `ciphertext_b64` for AES-GCM; an adapter using a detached tag
-must use the separately approved `tag_b64` field instead. No unregistered
-extra fields are permitted. Unknown envelope versions, algorithms,
-discriminators, missing required fields, invalid base64, duplicate keys, or
-classification/path mismatches are rejected on both write and read. The
-canonical serializer and parser are shared by SQLite and PostgreSQL so a
-database export cannot change the authenticated meaning of a field.
+every binary value is standard base64 text. For AES-256-GCM version 1 the
+exact allowed field set is the set shown above; `key_id_or_version`,
+`authentication_tag`, an appended GCM tag, and any other extra or missing
+field are invalid. Future algorithms must define their own exact required
+and optional field set under a new approved profile; they may not silently
+reuse the AES-GCM profile. Legacy envelopes are accepted only by an
+explicit migration reader and must be rewritten to this version-1 shape
+before ordinary reads; mixed legacy/current combinations are rejected.
+Unknown envelope versions, algorithms, discriminators, missing required
+fields, invalid base64, duplicate keys, or classification/path mismatches
+are rejected on both write and read. The canonical serializer and parser are
+shared by SQLite and PostgreSQL so a database export cannot change the
+authenticated meaning of a field.
 
 No plaintext search over encrypted fields is part of this design. If an
 approved product requirement needs lookup, add a separate keyed digest with
@@ -307,7 +329,11 @@ Implement in separate changes so the policy can be reviewed independently:
    SQLite persistence without plaintext, successful authorized reads, denied
    reads, producer-schema rejection, tamper detection, malformed/unknown
    envelopes, unknown algorithms, and associated-data replay across tenant,
-   record kind, field path, and schema-version changes.
+   record kind, field path, and schema-version changes. Verify that every
+   adapter uses the version-1 canonical context serializer, that equivalent
+   contexts produce identical bytes, and that each context-field mutation
+   fails authentication. Verify exact AES-GCM envelope field sets, detached
+   tag length, and rejection of mixed legacy key/tag names.
 3. Add the approved KV/KMS adapter and Postgres parity tests. Do not make a
    local fake key provider the production default.
 4. Add rotation, revocation, retention, rollback, and export verification.
