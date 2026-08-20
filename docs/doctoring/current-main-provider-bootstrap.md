@@ -29,6 +29,20 @@ The bootstrap pool is provider-diverse before it is cost-ordered. Missing price 
 `unknown`, not zero. This avoids treating a provider such as Bytez, whose public
 catalog may use a non-token billing unit, as a fabricated free route.
 
+Candidate selection and durable serving activation are separate claims:
+
+- `selected_agent_ids` records the bounded candidates produced by the discovery
+  and selection run;
+- `enabled_agent_ids` is populated only when an explicit durable `--agents-db`
+  is supplied and the selected agents are confirmed active in that pool; and
+- `durable_agent_pool` states whether the activation claim is backed by a
+  persistent agent-pool database.
+
+When a durable pool is refreshed, the bootstrap tombstones its synthetic seed and
+previously discovered agents that are absent from the current bounded selection.
+Operator-managed agents are preserved. This prevents retired or withdrawn provider
+models from continuing to receive traffic after a later discovery run.
+
 ## Operational workflow
 
 `.github/workflows/provider-catalog-sync.yml` runs hourly on protected `main` and may
@@ -38,6 +52,12 @@ execution. The production environment must provide:
 - the five provider secrets above;
 - `CONTEXTUAL_ORCHESTRATOR_KV_DSN`; and
 - `CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE`.
+
+The GitHub-hosted workflow has an ephemeral filesystem. It therefore registers the
+five credentials in the durable PostgreSQL KV and verifies discovery plus
+`selected_agent_ids`; it does not claim durable agent-pool activation. A long-running
+service may either use the ordinary KV-backed startup discovery path or invoke this
+bootstrap with a persistent `--agents-db` under its own deployment boundary.
 
 The workflow verifies that all five credential names were registered, at least one
 model was discovered, a bounded serving candidate set was produced, and no exact
