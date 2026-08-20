@@ -1,0 +1,221 @@
+name: Verify final chat capability source guards
+
+on:
+  push:
+    branches:
+      - fix/chat-capability-isolation-embedding-models
+    paths:
+      - .github/workflows/repair-chat-capability-final.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-chat-capability-final
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Patch and test with read-only token
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      base_sha: ${{ steps.patch.outputs.base_sha }}
+      patch_b64: ${{ steps.patch.outputs.patch_b64 }}
+    steps:
+      - name: Checkout exact triggering commit without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Apply final explicit guards and regression tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          orchestrator_path = Path("contextual_orchestrator/orchestrator.py")
+          orchestrator = orchestrator_path.read_text(encoding="utf-8")
+          orchestrator = replace_once(
+              orchestrator,
+              '''        answer in fixed chunks so behavior shape stays testable and unchanged.
+              """
+              if agent.base_url.startswith("mock://"):
+          ''',
+              '''        answer in fixed chunks so behavior shape stays testable and unchanged.
+              """
+              if not is_chat_compatible_model_id(agent.model):
+                  raise ValueError(
+                      f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+                  )
+              if agent.base_url.startswith("mock://"):
+          ''',
+              "streaming chat guard",
+          )
+          orchestrator = replace_once(
+              orchestrator,
+              '''        pool = "\\n".join(
+                  f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
+                  for agent in self.agents
+              )
+          ''',
+              '''        pool = "\\n".join(
+                  f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
+                  for agent in self.agents
+                  if is_chat_compatible_model_id(agent.model)
+              )
+          ''',
+              "generated planner inventory guard",
+          )
+          orchestrator_path.write_text(orchestrator, encoding="utf-8")
+
+          tests_path = Path("tests/test_chat_model_capability_isolation.py")
+          tests = tests_path.read_text(encoding="utf-8")
+          tests += '''
+
+
+def test_non_chat_primary_fails_over_only_to_chat_agents() -> None:
+    """Drop an incompatible primary while retaining a compatible fallback."""
+    embedding_agent = _agent("embedding_agent", "azure/text-embedding-3-large")
+    chat_agent = _agent("chat_agent", "gpt-5.2")
+    orchestrator = TaskOrchestrator([embedding_agent, chat_agent])
+
+    candidates = orchestrator._failover_candidates(
+        embedding_agent,
+        "Produce the final answer.",
+        "synthesizer",
+    )
+
+    assert candidates == [chat_agent]
+
+
+def test_streaming_client_rejects_non_chat_model_before_transport() -> None:
+    """Apply the same endpoint boundary to streaming chat requests."""
+    client = ModelClient()
+    embedding_agent = _agent("embedding_agent", "azure/text-embedding-3-large")
+
+    with pytest.raises(ValueError, match="chat-compatible"):
+        next(
+            client.stream_chat(
+                embedding_agent,
+                [{"role": "user", "content": "Produce the final answer."}],
+            )
+        )
+
+
+def test_generated_planner_inventory_excludes_non_chat_agents() -> None:
+    """Do not advertise stale endpoint-incompatible agents to the planner."""
+    embedding_agent = _agent("embedding_agent", "azure/text-embedding-3-large")
+    chat_agent = _agent("chat_agent", "gpt-5.2", tags=("reasoning", "writing"))
+
+    class PlannerClient:
+        def __init__(self) -> None:
+            self.system_prompt = ""
+
+        def chat(self, _agent, messages, **_kwargs):
+            self.system_prompt = messages[0]["content"]
+            return json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": 0,
+                            "role": "worker",
+                            "agent_id": "chat_agent",
+                            "subtask": "Execute the task.",
+                            "access": [],
+                        },
+                        {
+                            "id": 1,
+                            "role": "synthesizer",
+                            "agent_id": "chat_agent",
+                            "subtask": "Produce the answer.",
+                            "access": [0],
+                        },
+                    ]
+                }
+            )
+
+    client = PlannerClient()
+    orchestrator = TaskOrchestrator(
+        [embedding_agent, chat_agent],
+        client=client,
+    )
+
+    steps = orchestrator._plan_generated("Produce the final answer.")
+
+    assert steps[-1].agent_id == "chat_agent"
+    assert "embedding_agent" not in client.system_prompt
+    assert "azure/text-embedding-3-large" not in client.system_prompt
+    assert "chat_agent" in client.system_prompt
+          '''
+          tests_path.write_text(tests, encoding="utf-8")
+          PY
+          rm .github/workflows/repair-chat-capability-final.yml
+
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Run focused and full verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q contextual_orchestrator
+          python -m pytest -q tests/test_chat_model_capability_isolation.py
+          python -m pytest -q
+          git diff --check
+
+      - name: Export verified patch
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary > /tmp/chat-capability-final.patch
+          test -s /tmp/chat-capability-final.patch
+          echo "base_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "patch_b64=$(base64 -w0 /tmp/chat-capability-final.patch)" >> "$GITHUB_OUTPUT"
+
+  commit:
+    name: Commit verified patch without executing repository code
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout branch without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: fix/chat-capability-isolation-embedding-models
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact base, apply tested patch, and push
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.prepare.outputs.base_sha }}
+          PATCH_B64: ${{ needs.prepare.outputs.patch_b64 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          printf '%s' "${PATCH_B64}" | base64 -d > /tmp/chat-capability-final.patch
+          git apply --index /tmp/chat-capability-final.patch
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: complete explicit chat capability guards"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:fix/chat-capability-isolation-embedding-models
