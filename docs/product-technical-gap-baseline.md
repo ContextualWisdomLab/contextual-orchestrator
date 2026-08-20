@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20 21:27, Asia/Seoul
+**As of:** 2026-08-20 22:11, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -84,18 +84,18 @@ required workflows, and a normal merge.
 |---:|---|---|---|
 | #783 | `6210b00` | ready, stacked on #776 | Review the total monotonic body deadline and exact-head framing regression; integrate after #776 with all protected evidence. |
 | #781 | `f3aaac3` | ready, stacked on #780 | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after #780; the parent stack advanced, so predecessor evidence is stale. |
-| #782 | `fdbd1db` | ready, based on main | Review owner-bound workflow/access/evaluation reads, split-token admin evidence visibility, migration fail-closed behavior, and exact-head protected Checks before merge. |
-| #780 | `193752f` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, backend-identifier non-disclosure, and fresh exact-head hosted Checks before normal merge. |
+| #782 | `1e7ddb9` | ready, based on main | Review owner-bound workflow/access/evaluation reads, split-token admin evidence visibility, migration fail-closed behavior, and exact-head protected Checks before merge. |
+| #780 | `7c99b87` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, backend-identifier non-disclosure, and fresh exact-head hosted Checks before normal merge. |
 | #779 | `cf4a450` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main; predecessor evidence is stale. |
 | #778 | `9aa9973` | ready, stacked on #765 | Review source-image preservation, explicit `vision` eligibility/failover, Responses normalization, and the private LineageWeave OCR recovery boundary; focused exact-head suite is `94 passed`. |
 | #776 | `0ec1151` | ready, stacked on #765 | Review fixed-length framing plus the total-deadline regression; #783 supplies the root-cause implementation before retargeting onto protected main. |
 | #775 | `fb8fb62` | draft, based on main | Verify the exact CPython 3.12 Atheris marker, direct test contract, hash lock, hosted Fuzz job, and independent approval before promotion. |
 | #784 | `f29ae25` | ready, based on main | Review fail-closed release authorization, exact-head `gh api` collection, product-evidence separation, and fresh hosted Checks before protected merge; auto-merge was re-armed after the remote push. |
-| #785 | `a5f4e6c` | ready, based on main | Issue #568 implementation: exact local full suite `1455 passed`, profile/fuzz `34 passed`, new module statement/branch coverage `100%`; hosted Checks are queued and independent approval is required. |
-| #773 | `238e359` | ready, based on main | Review this dated baseline and ADR 0016; this snapshot will receive a new self-referential head when it is refreshed again, and it has no independent approval yet. |
+| #785 | `ebd9650` | ready, based on main | Issue #568 implementation: exact local full suite `1460 passed`, focused profile/fuzz suite `35 passed`; hosted Checks are queued and independent approval is required. |
+| #773 | `0512b81` | ready, based on main | Review this dated baseline and ADR 0016 against the exact heads in this table; it has no independent approval yet. |
 | #772 | `f72ddc8` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions; focused exact-head cache/cost/ledger suite is `45 passed`. |
 | #771 | `e1d4170` | ready, based on main | The tool-failure PR is limited to failure classification and safe fallback; exact-head fallback/security/HTTP contract suite is `134 passed` and Ruff/diff checks pass. Owner-bound evidence authorization is tracked separately in #782. Hosted Checks are queued; obtain independent approval before protected merge. |
-| #770 | `0777e14` | draft, based on stale main | Reconcile after #768. Preserve complete-price evidence, provider-family diversity, corrupt-row handling, and consume the shared ordinary-chat classifier rather than a local detector. |
+| #770 | `386c9a0` | draft, based on stale main | Reconcile after #768. Preserve complete-price evidence, provider-family diversity, corrupt-row handling, and consume the shared ordinary-chat classifier rather than a local detector. |
 | #769 | `9654c28` | ready, based on main | Core repository workflows succeeded on this head; obtain exact-head independent approval and remaining protected contexts. |
 | #768 | `88fee97` | ready, based on main | Review the current capability boundary, including ShieldGemma, legacy Completions, direct-run regressions, and exact-head hosted checks. |
 | #765 | `d3f9a9b` | draft, based on main | Reconcile after #768/#769; preserve DNS-pinned discovery, structured-output honesty, gateway-owned reasoning policy, and omitted sampling controls. |
