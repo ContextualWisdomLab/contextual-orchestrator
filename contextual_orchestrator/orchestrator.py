@@ -4669,7 +4669,7 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in procurement_items)
         production_gap_count = 1 if production_gap else 0
         buyer_specific_gap_count = 1 if buyer_gap else 0
-        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers) + len(release_authority_blockers)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
         if blocked_count:
             procurement_status = "commercial_procurement_blocked"
@@ -4877,7 +4877,7 @@ class TaskOrchestrator:
             },
         ]
         state_counts = Counter(item["completion_state"] for item in contract_items)
-        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers) + len(release_authority_blockers)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
         warning_count = state_counts.get("warning", 0)
         if blocked_count:
             contract_status = "commercial_contract_blocked"

@@ -79,11 +79,11 @@ def test_commercial_procurement_readiness_report_tracks_ready_packet_and_warning
     )
     items = item_by_name(report)
 
-    assert report["procurement_status"] == "commercial_procurement_blocked"
+    assert report["procurement_status"] == "commercial_procurement_ready_with_warnings"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_procurement_readiness"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["procurement_summary"]["blocked_count"] == 1
+    assert report["procurement_summary"]["blocked_count"] == 0
     assert report["procurement_summary"]["warning_count"] == 2
     assert report["procurement_summary"]["production_gap_count"] == 1
     assert report["procurement_summary"]["buyer_specific_gap_count"] == 1

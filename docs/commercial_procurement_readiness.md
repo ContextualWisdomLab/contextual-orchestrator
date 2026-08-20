@@ -20,7 +20,7 @@ artifact creation.
 The release-authority result is a separate blocker. Reviewer delay, review bot
 delay, queued model review, and pending checks remain non-blocking for product
 evidence, but a missing or blocked exact-head authority snapshot keeps
-procurement status blocked.
+release authorization blocked while the procurement packet remains inspectable.
 Review process is not a blocker for product evidence.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
@@ -46,7 +46,8 @@ necessary.
 - `procurement_status`: `commercial_procurement_ready`,
   `commercial_procurement_ready_with_warnings`, or
   `commercial_procurement_blocked`;
-- `release_authorization`: the upstream fail-closed protected-head result;
+- `release_authorization`: the upstream fail-closed protected-head result,
+  separate from local procurement packet status;
 - `measurement_status`: `local_commercial_procurement_readiness`;
 - `procurement_summary`: ready, warning, blocked, production-gap,
   buyer-specific-gap, and review-process counts;
