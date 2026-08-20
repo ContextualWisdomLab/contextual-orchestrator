@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 01:34, Asia/Seoul
+**As of:** 2026-08-21 01:42, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -49,7 +49,7 @@ operability are still being closed.
 | Privacy | Do not blanket-mask operational PII. Enforce purpose-limited authorization, field-level encryption at rest, credential redaction, and auditable access. | [ADR 0010](planning/adrs/0010-pii-audit-not-mask.md) follow-up [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762) plus implementation tests. |
 | Persistence | Keep database objects at least two words in `snake_case` and keep schemas in third normal form. | Schema convention review and migration tests. |
 | Packaging | Keep one deployable product until a second consumer, independent cadence, or security-provenance boundary requires extraction; every extracted component must work standalone and as a submodule. | Packaging ADR and consumer integration proof. |
-| Operability | Maintain one hourly owner for product development; do not add a duplicate scheduler. OpenCode/Noema/Strix must use the gateway path without `COPILOT_GITHUB_TOKEN`. | Central `.github` `organization-commercial-readiness-loop.yml` (`7 * * * *`) owns the hourly product loop; `pr-review-merge-scheduler.yml` owns the more frequent protected PR sweep. |
+| Operability | Maintain one scheduler owner for product development; do not add a duplicate scheduler. OpenCode/Noema/Strix must use the gateway path without `COPILOT_GITHUB_TOKEN`. | Live central `.github` evidence is `pr-review-merge-scheduler.yml` (`*/30` PR sweep plus `*/15` organization sweep) and `pr-review-fix-scheduler.yml` (`23 */2`); the 30-minute/15-minute cadence is more frequent than the requested hourly loop. Central PR [#1170](https://github.com/ContextualWisdomLab/.github/pull/1170) routes OpenCode model execution through the gateway, pending protected integration. |
 | Release | Release only from exact-head green evidence; update version and `CHANGELOG.md`. | Protected normal merge followed by release checks. |
 
 ## 3. Current architecture and UML-level flow
@@ -130,8 +130,14 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 01:34 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 01:42 Asia/Seoul; they are evidence pointers, not
 standing approval.
+
+### External central workflow prerequisite
+
+At the refreshed snapshot, ContextualWisdomLab/.github PR [#1170](https://github.com/ContextualWisdomLab/.github/pull/1170) is open at exact head `8cb6a1a34e9f5c3d4634b94599f492049185bc0d`. It pins the current reviewed contextual-orchestrator gateway head `0071751782ae535721e71785c3037989d2d27b77`, keeps the existing `PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN` publication boundary, and routes the five provider bootstrap keys only to the loopback inference sidecar. Its full local suite is `1236 passed` with 16 subtests; hosted Checks are pending and the required independent approval is absent.
+
+The scheduler's exact dry-run decision for contextual-orchestrator PR #787 is `review_dispatch` for its non-main base, but the target repository currently exposes no `opencode-review.yml` workflow of its own and the central repository-dispatch queue remains asynchronous. Until #1170 reaches protected main, stacked PR review may remain absent or use the prior central model path; this is an external integration dependency, not evidence that the stacked code is merge-ready.
 
 ## 5. Open issue and product-gap queue
 
@@ -157,7 +163,7 @@ live work item.
 | Priority | Gap | Current evidence | Definition of done |
 |---:|---|---|---|
 | P0 | Protected delivery cannot merge green PRs without independent approval. | Ruleset `18156473` requires one approval and last-push approval; several PRs are green but blocked. | A human/independent reviewer approves the exact current SHA, all threads resolve, hosted required workflows pass, and normal squash/merge succeeds. |
-| P0 | Provider boundary is still being assembled across stacked PRs. | [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768), [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765), [#764](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/764), [#770](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/770), [#763](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/763), [#776](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/776), [#778](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/778), and [#779](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/779) are pending integration. | One current-main stack has capability isolation, secure JSON, bounded framing, multimodal evidence, KV bootstrap, honest catalog, optional-control negotiation, and failover with no duplicate logic. |
+| P0 | Provider boundary is still being assembled across stacked PRs. | [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768), [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765), [#764](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/764), [#770](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/770), [#763](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/763), [#776](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/776), [#778](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/778), and [#779](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/779) are pending integration; central OpenCode gateway routing is tracked by [.github#1170](https://github.com/ContextualWisdomLab/.github/pull/1170). | One current-main stack has capability isolation, secure JSON, bounded framing, multimodal evidence, KV bootstrap, honest catalog, optional-control negotiation, and failover with no duplicate logic; central review execution must use the same current gateway pin after protected integration. |
 | P0 | Operational failure paths are not yet one buyer-verifiable contract. | [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771) and [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) are open. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
 | P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | [ADR 0010](planning/adrs/0010-pii-audit-not-mask.md) explicitly marks both follow-ups not started; [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762) is documentation. | Purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests prove raw PII is only returned to an authorized purpose. |
 | P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | PR [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) supplies opt-in profiles, snapshot replay, and synthetic/estimated RMSE; the production gate remains closed pending buyer-held-out measurement. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
