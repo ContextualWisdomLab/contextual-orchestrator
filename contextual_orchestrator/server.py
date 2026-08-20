@@ -1892,7 +1892,7 @@ def _require_pool_model(
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
     """
-    if model_name == "contextual-orchestrator":
+    if model_name == "contextual-orchestrator" and required_capability is None:
         return
     agents = getattr(orchestrator, "agents", None) or []
     for agent in agents:

@@ -160,6 +160,22 @@ def test_http_embeddings_auto_selection_fails_when_capability_is_missing() -> No
         thread.join(timeout=5)
 
 
+def test_http_embeddings_reject_virtual_orchestrator_model() -> None:
+    """An explicit virtual chat model cannot bypass the embedding pool gate."""
+    server, thread, port = _server()
+    try:
+        for path, payload in (
+            ("/v1/embeddings", {"model": "contextual-orchestrator", "input": "invoice search chunk"}),
+            ("/v1/batch/embeddings", {"model": "contextual-orchestrator", "inputs": ["alpha", "beta"]}),
+        ):
+            status, body = _post(port, path, payload)
+            assert status == 400, (path, body)
+            assert "invalid_model" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_batch_embeddings_rejects_model_outside_agent_pool() -> None:
     server, thread, port = _server()
     try:
@@ -208,6 +224,7 @@ if __name__ == "__main__":
     test_http_embeddings_rejects_model_outside_agent_pool()
     test_http_embeddings_accepts_model_in_agent_pool()
     test_http_embeddings_auto_selects_enabled_embedding_agent()
+    test_http_embeddings_reject_virtual_orchestrator_model()
     test_http_batch_embeddings_rejects_model_outside_agent_pool()
     test_http_batch_embeddings_accepts_model_in_agent_pool()
     test_http_batch_embeddings_auto_selects_enabled_embedding_agent()
