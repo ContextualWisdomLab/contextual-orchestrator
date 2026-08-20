@@ -2,7 +2,7 @@
 
 The orchestration layer must not invent a sampling value for a provider request.
 Some capability-constrained deployments accept only their provider default and
-reject an otherwise harmless explicit value.  This module installs a narrow
+reject an otherwise harmless explicit value. This module installs a narrow
 transport policy on :class:`ModelClient`: an omitted client-level temperature
 stays omitted, while an explicitly configured or request-scoped value is
 preserved exactly.
@@ -11,9 +11,8 @@ preserved exactly.
 from __future__ import annotations
 
 import functools
-import inspect
 import json
-from typing import Any
+from typing import Any, Iterable
 
 _MISSING = object()
 _INSTALLATION_MARKER = "_sampling_contract_installed"
@@ -45,30 +44,48 @@ def install_sampling_contract(model_client_class: type[Any]) -> None:
     """Install omit-by-default temperature handling on one ModelClient class.
 
     Installation is idempotent so package reloads and test doubles cannot stack
-    wrappers.  The original public methods remain responsible for retries,
+    wrappers. The original public methods remain responsible for retries,
     provider validation, streaming, and batch lifecycle behavior.
     """
     if getattr(model_client_class, _INSTALLATION_MARKER, False):
         return
 
     original_init = model_client_class.__init__
-    original_init_signature = inspect.signature(original_init)
     original_send_with_retry = model_client_class._send_with_retry
     original_stream_send = model_client_class._stream_send
     original_batch_upload = model_client_class._batch_upload
 
     @functools.wraps(original_init)
-    def initialize(self: Any, *args: Any, **kwargs: Any) -> None:
-        bound = original_init_signature.bind_partial(self, *args, **kwargs)
-        temperature_was_explicit = "temperature" in bound.arguments
-        original_init(self, *args, **kwargs)
-        if not temperature_was_explicit:
-            self.default_temperature = None
-            self.temperature = None
-            return
-        configured_temperature = bound.arguments["temperature"]
-        self.default_temperature = configured_temperature
-        self.temperature = configured_temperature
+    def initialize(
+        self: Any,
+        timeout: int = 90,
+        max_output_tokens: int = 2048,
+        max_retries: int = 2,
+        local_max_retries: int = 0,
+        retry_backoff: float = 0.5,
+        retry_backoff_cap: float = 8.0,
+        temperature: float | None = None,
+        local_concurrency: int = 1,
+        ca_bundle: str | None = None,
+        verify_tls: bool = True,
+        allowed_provider_hosts: Iterable[str] | None = None,
+    ) -> None:
+        original_init(
+            self,
+            timeout=timeout,
+            max_output_tokens=max_output_tokens,
+            max_retries=max_retries,
+            local_max_retries=local_max_retries,
+            retry_backoff=retry_backoff,
+            retry_backoff_cap=retry_backoff_cap,
+            temperature=temperature,
+            local_concurrency=local_concurrency,
+            ca_bundle=ca_bundle,
+            verify_tls=verify_tls,
+            allowed_provider_hosts=allowed_provider_hosts,
+        )
+        self.default_temperature = temperature
+        self.temperature = temperature
 
     @functools.wraps(original_send_with_retry)
     def send_with_retry(
