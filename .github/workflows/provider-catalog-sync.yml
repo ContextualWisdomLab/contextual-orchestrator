@@ -46,8 +46,8 @@ jobs:
           test -n "${CONTEXTUAL_ORCHESTRATOR_KV_DSN}"
           test -n "${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE}"
 
-      - name: Install package and PostgreSQL adapter
-        run: python -m pip install --disable-pip-version-check --no-input '.[db]'
+      - name: Install hash-pinned runtime dependencies
+        run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r requirements.lock
 
       - name: Register complete provider inventory and refresh discovery
         id: bootstrap
