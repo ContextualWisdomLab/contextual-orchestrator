@@ -18,10 +18,8 @@ from .cost_ledger import PriceBook
 from .credentials import (
     InMemoryCredentialBackend,
     PostgresCredentialBackend,
-    delete_credential,
     get_backend,
     get_credential,
-    register_credential,
 )
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
@@ -106,6 +104,48 @@ def build_provider_catalog_store() -> ProviderCatalogStore:
         return InMemoryProviderCatalogStore()
     raise ProviderBootstrapError(
         "provider catalog requires a built-in atomic credential backend"
+    )
+
+
+def _restore_provider_credentials_atomically(
+    previous_credentials: Mapping[str, str | None],
+) -> tuple[str, ...]:
+    """Restore one credential snapshot in a single built-in backend transaction."""
+    backend = get_backend()
+    ordered = tuple(sorted(previous_credentials))
+    if isinstance(backend, InMemoryCredentialBackend):
+        with backend._lock:  # noqa: SLF001 - package-internal rollback transaction
+            for name in ordered:
+                previous = previous_credentials[name]
+                if previous is None:
+                    backend._store.pop(name, None)  # noqa: SLF001
+                else:
+                    backend._store[name] = previous  # noqa: SLF001
+        return ordered
+    if isinstance(backend, PostgresCredentialBackend):
+        with backend._connect() as connection:  # noqa: SLF001 - package transaction
+            backend._ensure_schema(connection)  # noqa: SLF001
+            with connection.cursor() as cursor:
+                for name in ordered:
+                    previous = previous_credentials[name]
+                    if previous is None:
+                        cursor.execute(
+                            "DELETE FROM provider_credentials WHERE credential_name = %s",
+                            (name,),
+                        )
+                    else:
+                        cursor.execute(
+                            "INSERT INTO provider_credentials "
+                            "(credential_name, encrypted_value, updated_at) "
+                            "VALUES (%s, pgp_sym_encrypt(%s, %s), now()) "
+                            "ON CONFLICT (credential_name) DO UPDATE SET "
+                            "encrypted_value = EXCLUDED.encrypted_value, updated_at = now()",
+                            (name, previous, backend._passphrase),  # noqa: SLF001
+                        )
+            connection.commit()
+        return ordered
+    raise ProviderBootstrapError(
+        "provider credential rollback requires an atomic built-in backend"
     )
 
 
@@ -212,83 +252,90 @@ def bootstrap_provider_catalog_runtime(
         name: get_credential(name) for name in credentials
     }
     registered = register_provider_credentials_atomically(credentials)
-    store = catalog_store or build_provider_catalog_store()
-    source_tuple = tuple(sources)
-    discover = discovery or (
-        lambda requested_sources: discover_all_models(requested_sources)
-    )
-    live_models, errors = discover(source_tuple)
-    snapshot = refresh_persisted_provider_catalog(
-        store,
-        sources=source_tuple,
-        registered_credentials=registered,
-        discovered=live_models,
-        errors=errors,
-    )
-    failed_provider_names = {error.provider_name for error in errors}
-    failed_credentials = {
-        source.credential_name
-        for source in source_tuple
-        if source.credential_name in registered
-        and (
-            source.provider_name in failed_provider_names
-            or not any(
-                _model_key(model) == _source_key(source)
-                for model in live_models
+    try:
+        store = catalog_store or build_provider_catalog_store()
+        source_tuple = tuple(sources)
+        discover = discovery or (
+            lambda requested_sources: discover_all_models(requested_sources)
+        )
+        live_models, errors = discover(source_tuple)
+        snapshot = refresh_persisted_provider_catalog(
+            store,
+            sources=source_tuple,
+            registered_credentials=registered,
+            discovered=live_models,
+            errors=errors,
+        )
+        failed_provider_names = {error.provider_name for error in errors}
+        failed_credentials = {
+            source.credential_name
+            for source in source_tuple
+            if source.credential_name in registered
+            and (
+                source.provider_name in failed_provider_names
+                or not any(
+                    _model_key(model) == _source_key(source)
+                    for model in live_models
+                )
             )
-        )
-    }
-    restored_credentials: list[str] = []
-    for name in sorted(failed_credentials):
-        previous = previous_credentials.get(name)
-        if previous is None:
-            delete_credential(name)
-        else:
-            register_credential(name, previous)
-        restored_credentials.append(name)
+        }
+        restored_credentials = _restore_provider_credentials_atomically(
+            {
+                name: previous_credentials.get(name)
+                for name in failed_credentials
+            }
+        ) if failed_credentials else ()
 
-    usable_models = tuple(
-        model
-        for model in snapshot.models
-        if get_credential(model.credential_name)
-    )
-    if not usable_models:
-        raise ProviderBootstrapError(
-            "provider bootstrap has no persisted chat-compatible model with a usable credential"
+        usable_models = tuple(
+            model
+            for model in snapshot.models
+            if get_credential(model.credential_name)
+        )
+        if not usable_models:
+            raise ProviderBootstrapError(
+                "provider bootstrap has no persisted chat-compatible model with a usable credential"
+            )
+
+        price_book = PriceBook(InMemoryConfigStore())
+        priced_count = refresh_price_book(list(usable_models), price_book)
+        selected = select_provider_diverse_models(
+            usable_models,
+            limit=model_limit,
+        )
+        if not selected:
+            raise ProviderBootstrapError(
+                "provider bootstrap selected no persisted chat-compatible model"
+            )
+        selected_ids = tuple(agent_id_for(model) for model in selected)
+        enabled_ids = (
+            _synchronize_durable_agent_pool(agents_db, selected)
+            if agents_db
+            else ()
         )
 
-    price_book = PriceBook(InMemoryConfigStore())
-    priced_count = refresh_price_book(list(usable_models), price_book)
-    selected = select_provider_diverse_models(
-        usable_models,
-        limit=model_limit,
-    )
-    if not selected:
-        raise ProviderBootstrapError(
-            "provider bootstrap selected no persisted chat-compatible model"
+        return ProviderCatalogBootstrapReport(
+            registered_credentials=registered,
+            restored_credentials=tuple(restored_credentials),
+            live_discovered_model_count=snapshot.live_model_count,
+            catalog_model_count=len(snapshot.models),
+            eligible_model_count=len(snapshot.models),
+            last_known_good_model_count=snapshot.last_known_good_model_count,
+            selected_agent_ids=selected_ids,
+            enabled_agent_ids=enabled_ids,
+            durable_agent_pool=bool(agents_db),
+            catalog_backend=store.backend_name,
+            catalog_refresh_failure_count=snapshot.refresh_failure_count,
+            providers_with_errors=snapshot.providers_with_errors,
+            priced_model_count=priced_count,
         )
-    selected_ids = tuple(agent_id_for(model) for model in selected)
-    enabled_ids = (
-        _synchronize_durable_agent_pool(agents_db, selected)
-        if agents_db
-        else ()
-    )
-
-    return ProviderCatalogBootstrapReport(
-        registered_credentials=registered,
-        restored_credentials=tuple(restored_credentials),
-        live_discovered_model_count=snapshot.live_model_count,
-        catalog_model_count=len(snapshot.models),
-        eligible_model_count=len(snapshot.models),
-        last_known_good_model_count=snapshot.last_known_good_model_count,
-        selected_agent_ids=selected_ids,
-        enabled_agent_ids=enabled_ids,
-        durable_agent_pool=bool(agents_db),
-        catalog_backend=store.backend_name,
-        catalog_refresh_failure_count=snapshot.refresh_failure_count,
-        providers_with_errors=snapshot.providers_with_errors,
-        priced_model_count=priced_count,
-    )
+    except Exception:
+        try:
+            _restore_provider_credentials_atomically(previous_credentials)
+        except Exception as rollback_error:
+            raise ProviderBootstrapError(
+                "provider bootstrap failed and credential rollback could not complete"
+            ) from rollback_error
+        raise
 
 
 def main(argv: Sequence[str] | None = None) -> None:
