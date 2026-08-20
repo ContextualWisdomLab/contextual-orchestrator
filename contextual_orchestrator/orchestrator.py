@@ -69,10 +69,11 @@ def _temperature_capability_rejection(exc: Exception) -> bool:
         body = exc.read()
     except (OSError, ValueError):
         body = b""
-    if isinstance(body, bytes):
-        detail = body.decode("utf-8", errors="replace")
-    else:
-        detail = str(body)
+    body_bytes = body if isinstance(body, bytes) else str(body).encode("utf-8")
+    replay = io.BytesIO(body_bytes)
+    exc.fp = exc.file = replay
+    exc.read = replay.read
+    detail = body_bytes.decode("utf-8", errors="replace")
     detail = f"{exc} {detail}".lower()
     return "temperature" in detail and any(
         marker in detail
@@ -83,7 +84,6 @@ def _temperature_capability_rejection(exc: Exception) -> bool:
             "unknown parameter",
             "unknown field",
             "unrecognized",
-            "not allowed",
         )
     )
 
@@ -994,18 +994,34 @@ class ModelClient:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
+        active_payload = payload
+        temperature_negotiated = False
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
-            try:
-                return (
-                    self._send(agent, payload, destination)
-                    if timeout is None
-                    else self._send(agent, payload, destination, timeout=timeout)
-                )
-            except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
-                if attempt >= retry_limit or not is_transient_error(exc):
+            while True:
+                try:
+                    return (
+                        self._send(agent, active_payload, destination)
+                        if timeout is None
+                        else self._send(agent, active_payload, destination, timeout=timeout)
+                    )
+                except urllib.error.HTTPError as exc:
+                    if (
+                        not temperature_negotiated
+                        and "temperature" in active_payload
+                        and _temperature_capability_rejection(exc)
+                    ):
+                        active_payload = dict(active_payload)
+                        active_payload.pop("temperature", None)
+                        temperature_negotiated = True
+                        continue
+                    last_error = exc
                     break
-                self._sleep(self._backoff_delay(attempt))
+                except Exception as exc:  # noqa: BLE001 - classify then decide
+                    last_error = exc
+                    break
+            if attempt >= retry_limit or not is_transient_error(last_error):
+                break
+            self._sleep(self._backoff_delay(attempt))
         detail = f": {last_error}" if last_error else ""
         raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
 
@@ -1057,20 +1073,13 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        try:
-            opened = (
-                self._open_provider(request, destination)
-                if timeout is None
-                else self._open_provider(request, destination, timeout=timeout)
-            )
-            with opened as response:
-                data = json.loads(response.read().decode("utf-8"))
-        except urllib.error.HTTPError as exc:
-            if "temperature" not in payload or not _temperature_capability_rejection(exc):
-                raise
-            retry_payload = dict(payload)
-            retry_payload.pop("temperature", None)
-            return self._send(agent, retry_payload, destination, timeout=timeout)
+        opened = (
+            self._open_provider(request, destination)
+            if timeout is None
+            else self._open_provider(request, destination, timeout=timeout)
+        )
+        with opened as response:
+            data = json.loads(response.read().decode("utf-8"))
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -1318,30 +1327,30 @@ class ModelClient:
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
+        active_payload = payload
+        temperature_negotiated = False
         for attempt in range(retry_limit + 1):
-            try:
-                return self._send_raw(agent, endpoint, payload, destination)
-            except urllib.error.HTTPError as exc:
-                if "temperature" in payload and _temperature_capability_rejection(exc):
-                    retry_payload = dict(payload)
-                    retry_payload.pop("temperature", None)
-                    try:
-                        return self._send_raw(agent, endpoint, retry_payload, destination)
-                    except Exception as retry_error:  # noqa: BLE001 - classify negotiated retry
-                        last_error = retry_error
-                        if attempt >= retry_limit or not is_transient_error(retry_error):
-                            break
-                        self._sleep(self._backoff_delay(attempt))
+            while True:
+                try:
+                    return self._send_raw(agent, endpoint, active_payload, destination)
+                except urllib.error.HTTPError as exc:
+                    if (
+                        not temperature_negotiated
+                        and "temperature" in active_payload
+                        and _temperature_capability_rejection(exc)
+                    ):
+                        active_payload = dict(active_payload)
+                        active_payload.pop("temperature", None)
+                        temperature_negotiated = True
                         continue
-                last_error = exc
-                if attempt >= retry_limit or not is_transient_error(exc):
+                    last_error = exc
                     break
-                self._sleep(self._backoff_delay(attempt))
-            except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
-                if attempt >= retry_limit or not is_transient_error(exc):
+                except Exception as exc:  # noqa: BLE001 - classify then decide
+                    last_error = exc
                     break
-                self._sleep(self._backoff_delay(attempt))
+            if attempt >= retry_limit or not is_transient_error(last_error):
+                break
+            self._sleep(self._backoff_delay(attempt))
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
 
     def _send_raw(
