@@ -1,109 +1,85 @@
-"""Unit tests for provider sampling-parameter omission and passthrough."""
+"""Tests for provider-neutral optional sampling request fields."""
 
 from __future__ import annotations
 
 import json
 
-from contextual_orchestrator.sampling_contract import install_sampling_contract
+from contextual_orchestrator.orchestrator import ModelAgent, ModelClient
 
 
-class _FakeModelClient:
-    def __init__(
-        self,
-        timeout=90,
-        max_output_tokens=2048,
-        max_retries=2,
-        local_max_retries=0,
-        retry_backoff=0.5,
-        retry_backoff_cap=8.0,
-        temperature=0.2,
-        local_concurrency=1,
-        ca_bundle=None,
-        verify_tls=True,
-        allowed_provider_hosts=None,
-    ) -> None:
-        self.default_temperature = 0.2
-        self.temperature = temperature
-        self.batch_payload = b""
-        self.configuration = {
-            "timeout": timeout,
-            "max_output_tokens": max_output_tokens,
-            "max_retries": max_retries,
-            "local_max_retries": local_max_retries,
-            "retry_backoff": retry_backoff,
-            "retry_backoff_cap": retry_backoff_cap,
-            "local_concurrency": local_concurrency,
-            "ca_bundle": ca_bundle,
-            "verify_tls": verify_tls,
-            "allowed_provider_hosts": allowed_provider_hosts,
-        }
+def _agent() -> ModelAgent:
+    return ModelAgent(
+        id="sampling_worker",
+        model="provider/model",
+        base_url="https://gateway.example.com",
+        credential_key="",
+    )
 
-    def _send_with_retry(self, _agent, payload, _destination=None, *, timeout=None):
-        return {"payload": payload, "timeout": timeout}
 
-    def _stream_send(self, _agent, payload, _destination=None):
-        return iter([payload])
+def test_model_client_owns_default_sampling_without_import_side_effects() -> None:
+    client = ModelClient()
 
-    def _batch_upload(self, _agent, payload, _destination=None):
-        self.batch_payload = payload
+    assert client.default_temperature is None
+    assert client.temperature is None
+
+
+def test_stream_omits_unrequested_temperature_and_preserves_explicit_value(monkeypatch) -> None:
+    client = ModelClient()
+    captured: list[dict[str, object]] = []
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: object())
+
+    def stream_send(_agent, payload, _destination=None):
+        captured.append(payload)
+        return iter(["OK"])
+
+    monkeypatch.setattr(client, "_stream_send", stream_send)
+
+    assert list(client.stream_chat(_agent(), [{"role": "user", "content": "Sample."}])) == ["OK"]
+    assert "temperature" not in captured[0]
+    assert list(client.stream_chat(_agent(), [{"role": "user", "content": "Sample."}], temperature=0.2)) == ["OK"]
+    assert captured[1]["temperature"] == 0.2
+
+
+def test_batch_omits_unrequested_temperature_and_preserves_explicit_value(monkeypatch) -> None:
+    client = ModelClient()
+    uploaded: list[list[dict[str, object]]] = []
+
+    def batch_upload(_agent, payload, _destination=None):
+        uploaded.append([json.loads(line) for line in payload.decode("utf-8").splitlines()])
         return "file_001"
 
+    monkeypatch.setattr(client, "_batch_upload", batch_upload)
 
-def test_installation_omits_unrequested_temperature_across_transports() -> None:
-    install_sampling_contract(_FakeModelClient)
-    install_sampling_contract(_FakeModelClient)
-    client = _FakeModelClient(timeout=17, allowed_provider_hosts=["gateway.example.com"])
+    def batch_json(_agent, method, path, body=None, destination=None):
+        del path, body, destination
+        if method == "POST":
+            return {"id": "batch_001"}
+        return {"status": "completed", "output_file_id": "file_002"}
 
-    assert client.default_temperature is None
-    assert client.temperature is None
-    assert client.configuration["timeout"] == 17
-    assert client.configuration["allowed_provider_hosts"] == ["gateway.example.com"]
-    assert client._send_with_retry(
+    monkeypatch.setattr(client, "_batch_json", batch_json)
+    monkeypatch.setattr(
+        client,
+        "_batch_raw",
+        lambda *_args, **_kwargs: (
+            b'{"custom_id":"request_1","response":{"body":{"choices":[{"message":'
+            b'{"content":"OK"}}]}}}'
+        ),
+    )
+
+    client._batch_run(
+        _agent(),
+        {"request_1": [{"role": "user", "content": "Sample."}]},
         None,
-        {"model": "provider/model", "temperature": None},
-        timeout=3.0,
-    ) == {"payload": {"model": "provider/model"}, "timeout": 3.0}
-    assert list(
-        client._stream_send(
-            None,
-            {"model": "provider/model", "temperature": None},
-        )
-    ) == [{"model": "provider/model"}]
+        0.0,
+        1.0,
+    )
+    assert "temperature" not in uploaded[0][0]["body"]
 
-    lines = [
-        {
-            "custom_id": "omitted",
-            "body": {"model": "provider/model", "temperature": None},
-        },
-        {
-            "custom_id": "explicit",
-            "body": {"model": "provider/model", "temperature": 0.2},
-        },
-        {"custom_id": "opaque", "body": "unchanged"},
-    ]
-    payload = "\n".join(json.dumps(line) for line in lines).encode("utf-8")
-    assert client._batch_upload(None, payload) == "file_001"
-    uploaded = [json.loads(line) for line in client.batch_payload.decode("utf-8").splitlines()]
-    assert "temperature" not in uploaded[0]["body"]
-    assert uploaded[1]["body"]["temperature"] == 0.2
-    assert uploaded[2]["body"] == "unchanged"
-
-
-def test_installation_preserves_explicit_client_temperature() -> None:
-    install_sampling_contract(_FakeModelClient)
-    client = _FakeModelClient(temperature=0.2)
-
-    assert client.default_temperature == 0.2
-    assert client.temperature == 0.2
-    assert client._send_with_retry(
-        None,
-        {"model": "provider/model", "temperature": 0.2},
-    )["payload"]["temperature"] == 0.2
-
-
-def test_explicit_null_client_temperature_remains_omit_equivalent() -> None:
-    install_sampling_contract(_FakeModelClient)
-    client = _FakeModelClient(temperature=None)
-
-    assert client.default_temperature is None
-    assert client.temperature is None
+    client._batch_run(
+        _agent(),
+        {"request_2": [{"role": "user", "content": "Sample."}]},
+        0.2,
+        0.0,
+        1.0,
+    )
+    assert uploaded[1][0]["body"]["temperature"] == 0.2
