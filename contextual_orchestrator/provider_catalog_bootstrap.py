@@ -18,7 +18,10 @@ from .cost_ledger import PriceBook
 from .credentials import (
     InMemoryCredentialBackend,
     PostgresCredentialBackend,
+    delete_credential,
     get_backend,
+    get_credential,
+    register_credential,
 )
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
@@ -62,6 +65,7 @@ class ProviderCatalogBootstrapReport:
     """Secret-free evidence for one durable provider-catalog bootstrap."""
 
     registered_credentials: tuple[str, ...]
+    restored_credentials: tuple[str, ...]
     live_discovered_model_count: int
     catalog_model_count: int
     eligible_model_count: int
@@ -78,6 +82,7 @@ class ProviderCatalogBootstrapReport:
         """Return the stable JSON evidence contract without secret values."""
         return {
             "registered_credentials": list(self.registered_credentials),
+            "restored_credentials": list(self.restored_credentials),
             "live_discovered_model_count": self.live_discovered_model_count,
             "catalog_model_count": self.catalog_model_count,
             "eligible_model_count": self.eligible_model_count,
@@ -203,6 +208,9 @@ def bootstrap_provider_catalog_runtime(
         environ,
         require_all=require_all_credentials,
     )
+    previous_credentials = {
+        name: get_credential(name) for name in credentials
+    }
     registered = register_provider_credentials_atomically(credentials)
     store = catalog_store or build_provider_catalog_store()
     source_tuple = tuple(sources)
@@ -217,15 +225,42 @@ def bootstrap_provider_catalog_runtime(
         discovered=live_models,
         errors=errors,
     )
-    if not snapshot.models:
+    failed_provider_names = {error.provider_name for error in errors}
+    failed_credentials = {
+        source.credential_name
+        for source in source_tuple
+        if source.credential_name in registered
+        and (
+            source.provider_name in failed_provider_names
+            or not any(
+                _model_key(model) == _source_key(source)
+                for model in live_models
+            )
+        )
+    }
+    restored_credentials: list[str] = []
+    for name in sorted(failed_credentials):
+        previous = previous_credentials.get(name)
+        if previous is None:
+            delete_credential(name)
+        else:
+            register_credential(name, previous)
+        restored_credentials.append(name)
+
+    usable_models = tuple(
+        model
+        for model in snapshot.models
+        if get_credential(model.credential_name)
+    )
+    if not usable_models:
         raise ProviderBootstrapError(
-            "provider bootstrap has no persisted chat-compatible model"
+            "provider bootstrap has no persisted chat-compatible model with a usable credential"
         )
 
     price_book = PriceBook(InMemoryConfigStore())
-    priced_count = refresh_price_book(list(snapshot.models), price_book)
+    priced_count = refresh_price_book(list(usable_models), price_book)
     selected = select_provider_diverse_models(
-        snapshot.models,
+        usable_models,
         limit=model_limit,
     )
     if not selected:
@@ -241,6 +276,7 @@ def bootstrap_provider_catalog_runtime(
 
     return ProviderCatalogBootstrapReport(
         registered_credentials=registered,
+        restored_credentials=tuple(restored_credentials),
         live_discovered_model_count=snapshot.live_model_count,
         catalog_model_count=len(snapshot.models),
         eligible_model_count=len(snapshot.models),
