@@ -166,8 +166,13 @@ class PriceBook:
         if not isinstance(raw, dict):
             return None
         try:
-            prompt_price = float(raw.get("prompt_price_per_1k", 0.0))
-            completion_price = float(raw.get("completion_price_per_1k", 0.0))
+            if (
+                "prompt_price_per_1k" not in raw
+                or "completion_price_per_1k" not in raw
+            ):
+                return None
+            prompt_price = float(raw["prompt_price_per_1k"])
+            completion_price = float(raw["completion_price_per_1k"])
         except (OverflowError, TypeError, ValueError):
             return None
         if (
