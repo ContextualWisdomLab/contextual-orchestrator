@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20 19:42, Asia/Seoul
+**As of:** 2026-08-20 19:44, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -82,11 +82,12 @@ required workflows, and a normal merge.
 
 | PR | Exact head | State / base | Evidence boundary and next action |
 |---:|---|---|---|
+| #783 | `6210b00` | ready, stacked on #776 | Review the total monotonic body deadline and exact-head framing regression; integrate after #776 with all protected evidence. |
 | #781 | `7e6dc15` | ready, stacked on #780 | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after #780. |
 | #780 | `76faecc` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, and exact-head hosted Checks before normal merge. |
 | #779 | `beb15a7` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main. |
 | #778 | `9186547` | ready, stacked on #765 | Review source-image preservation, explicit `vision` eligibility/failover, Responses normalization, and the private LineageWeave OCR recovery boundary. |
-| #776 | `0ec1151` | ready, stacked on #765 | Review fixed-length framing, exact reads, deadlines, close-on-error, and RFC 9112 evidence; rebase onto protected main after #765. |
+| #776 | `0ec1151` | ready, stacked on #765 | Review fixed-length framing plus the total-deadline regression; #783 supplies the root-cause implementation before retargeting onto protected main. |
 | #775 | `fb8fb62` | draft, based on main | Verify the exact CPython 3.12 Atheris marker, direct test contract, hash lock, hosted Fuzz job, and independent approval before promotion. |
 | #773 | `172e556` | ready, based on main | Review this dated baseline and ADR 0016; exact current head is self-referential and has no independent approval yet. |
 | #772 | `1d81910` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions. |
@@ -111,7 +112,7 @@ completed until the protected-main contract is satisfied.
 | #777 | Low-latency gateway routing metrics use coarse, inference-oriented histogram buckets and do not separate dispatch from upstream latency. | Add validated configurable bucket boundaries and distinct dispatch/upstream histograms; preserve metric names, labels, and bounded cardinality. |
 | #568 | Operators cannot compare provider-neutral reasoning profiles at equal budget. | Add role-specific effort profiles, recursion/workflow/access-list controls, and an ablation report with reproducible fixtures. |
 | #123 | A sole collaborator can be unable to satisfy last-push approval. | Add governance evidence/runbook or a protected-rule-compatible process; never bypass approval. |
-| #119 | Ambiguous or unbounded inbound framing threatens request integrity. | PR #776 adds bounded framing tests and hosted security evidence after its #765 stack is reconciled. |
+| #119 | Ambiguous or unbounded inbound framing threatens request integrity. | PR #776 adds fixed-length framing and PR #783 enforces the total body deadline; merge the stack only after exact-head hosted evidence. |
 | #118 | Liveness and authenticated readiness are not yet fully separated. | PR #780 implements the minimal `/healthz` and authenticated `/readyz` contract; merge only after exact-head Checks and independent approval. |
 | #117 | Trace access and inference access need separate authority. | PR #781 adds a verified `trace` purpose scope, pre-release audit event, and audit-outage fail-closed tests; merge after #780 and exact-head protected evidence. |
 | #116 | Browser admin sessions need separation from long-lived bearer credentials. | Add session-bound admin controls and regression tests. |
