@@ -4625,43 +4625,6 @@ def build_server(
                     except KeyError:
                         self._send_error(404, "embeddings_batch_not_found", f"embeddings batch {batch_id} not found")
                     return
-                if path == "/api/v1/workflow_runs":
-                    self._authorize("admin")
-                    page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
-                    self._send(_response_payload({
-                        "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size),
-                        "total_count": len(getattr(orchestrator, "_workflow_runs", {})),
-                        "page_number": page_number,
-                        "page_size": page_size,
-                    }, security.expose_trace_by_default))
-                    return
-                if path.startswith("/api/v1/workflow_runs/"):
-                    self._authorize("admin")
-                    workflow_run_id = path.rsplit("/", 1)[-1]
-                    try:
-                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.expose_trace_by_default))
-                        return
-                    except KeyError:
-                        self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
-                        return
-                if path.startswith("/api/v1/access_reports/"):
-                    self._authorize("admin")
-                    workflow_run_id = path.rsplit("/", 1)[-1]
-                    try:
-                        orchestrator.record_analytics_event(
-                            "access_report_viewed",
-                            {
-                                "endpoint_path": "/api/v1/access_reports/{workflow_run_id}",
-                                "workflow_run_id": workflow_run_id,
-                                "actor_scope": "admin",
-                                "status_code": 200,
-                            },
-                        )
-                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.expose_trace_by_default))
-                        return
-                    except KeyError:
-                        self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
-                        return
                 self._authorize("admin")
                 if path == "/api/v1/cost_attribution_dimensions":
                     self._send({"items": dimension_catalog(), "total_count": len(ATTRIBUTION_DIMENSIONS)})

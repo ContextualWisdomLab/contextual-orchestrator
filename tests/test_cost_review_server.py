@@ -21,7 +21,7 @@ from contextual_orchestrator import (  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, _readiness_payload, build_server  # noqa: E402
 
 
-def _serve():
+def _serve(security=None):
     agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
                          tags=("reasoning", "coding", "writing"), priority=1)]
     orchestrator = TaskOrchestrator(agents)
@@ -30,7 +30,12 @@ def _serve():
     price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
     coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
     token = "cost_token"
-    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=security or SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, server.server_address[1], token
@@ -96,6 +101,27 @@ def test_trace_read_endpoints_require_admin_authentication() -> None:
         assert body["items"] == []
     finally:
         server.shutdown()
+
+
+def test_trace_read_defaults_cannot_bypass_trace_purpose_authorization() -> None:
+    """Default trace exposure still requires the separate trace purpose scope."""
+    security = SecurityConfig(
+        auth_token="",
+        admin_token="admin_secret",
+        inference_token="inference_secret",
+        expose_trace_by_default=True,
+    )
+    server, port, _token = _serve(security)
+    try:
+        status, body = _request(
+            "GET",
+            f"http://127.0.0.1:{port}/api/v1/workflow_runs",
+            "admin_secret",
+        )
+    finally:
+        server.shutdown()
+    assert status == 401
+    assert body["error"]["code"] == "unauthorized"
 
 
 def test_readiness_never_exposes_backend_identifiers() -> None:
