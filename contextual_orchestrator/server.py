@@ -5925,10 +5925,16 @@ def build_server(
             )
             if timeout_supported:
                 previous_timeout = connection.gettimeout()
-                connection.settimeout(security.request_read_timeout_seconds)
+            deadline = time.monotonic() + float(security.request_read_timeout_seconds)
             try:
                 chunks = bytearray()
                 while len(chunks) < body_size:
+                    remaining = deadline - time.monotonic()
+                    if remaining <= 0:
+                        self.close_connection = True
+                        raise RequestError(408, "request_read_timeout", "request body read timed out")
+                    if timeout_supported:
+                        connection.settimeout(min(float(security.request_read_timeout_seconds), remaining))
                     chunk = self.rfile.read(body_size - len(chunks))
                     if not chunk:
                         self.close_connection = True
