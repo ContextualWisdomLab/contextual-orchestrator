@@ -36,7 +36,7 @@ operability are still being closed.
 | Boundary | Required behavior | Acceptance evidence |
 |---|---|---|
 | API | Preserve `/v1/chat/completions` and compatible error/stream contracts. | Contract tests plus hosted required workflows. |
-| Routing | Select by capability, provider health, cost, model mode, and explicit exclusions; do not route embedding-only models to chat synthesis. | Exact-head capability-isolation, discovery, and failover tests. |
+| Routing | Select by capability, provider health, cost, model mode, and explicit exclusions; do not route embedding-only models to chat synthesis. Embedding endpoints may delegate model selection to an enabled `embedding` capability agent. | Exact-head capability-isolation, discovery, failover, and #789 embedding-contract tests. |
 | Orchestration | Allocate shallow or deep work by task need; retain Thinker/Worker/Verifier/Synthesizer evidence, bounded recursion, and Conductor-style access lists. | Replayable workflow trace and equal-budget ablation evidence for #568. |
 | Provider plane | Discover model capabilities and price honestly, bootstrap credentials from KV, and use secure provider transport with fail-closed malformed responses. | Catalog/bootstrap, provider-contract, and security checks for #764/#765/#768/#769/#770. |
 | Failure plane | Classify tool failures, fail safely, preserve upstream truth, and retry only within a bounded policy. | #771 focused/full tests and hosted security checks. |
@@ -85,6 +85,7 @@ required workflows, and a normal merge.
 | #783 | `6210b00` | ready, stacked on #776 | Review the total monotonic body deadline and exact-head framing regression; integrate after #776 with all protected evidence. |
 | #781 | `f3aaac3` | ready, stacked on #780 | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after #780; the parent stack advanced, so predecessor evidence is stale. |
 | #787 | `a9bad37` | ready, stacked on #765 | Review explicit client-owned tool-loop opt-in, preserved 422 default, streaming rejection, and exact-head protected Checks after the #765 prerequisite integrates. |
+| #789 | `f715373` | ready, based on main | Review optional embedding model selection, capability-constrained pool validation, OpenAPI parity, ADR 0012, and fresh exact-head protected Checks before normal merge. |
 | #782 | `1e7ddb9` | ready, based on main | Review owner-bound workflow/access/evaluation reads, split-token admin evidence visibility, migration fail-closed behavior, and exact-head protected Checks before merge. |
 | #780 | `7c99b87` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, backend-identifier non-disclosure, and fresh exact-head hosted Checks before normal merge. |
 | #779 | `cf4a450` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main; predecessor evidence is stale. |
