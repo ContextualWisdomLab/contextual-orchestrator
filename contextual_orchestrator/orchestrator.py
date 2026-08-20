@@ -2832,11 +2832,14 @@ class TaskOrchestrator:
         required_tags: tuple[str, ...] = (),
     ) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role, required_tags=required_tags)
-        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
+        primary_matches = all(tag in primary.tags for tag in required_tags)
+        ordered = ([primary] if primary_matches else []) + [
+            agent for agent in ranked if agent.id != primary.id
+        ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible or [primary]
+        return healthy or eligible or ([primary] if not required_tags else [])
 
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:
