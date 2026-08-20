@@ -4764,6 +4764,9 @@ def build_server(
                     if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
+                        if agent_pool_id != "default":
+                            self._send_error(404, "agent_not_found", f"agent {worker_agent_id} not found")
+                            return
                         try:
                             payload = orchestrator._agent_to_admin_payload(orchestrator._agent(worker_agent_id))
                             payload["agent_pool_id"] = agent_pool_id
