@@ -79,16 +79,17 @@ required workflows, and a normal merge.
 | PR | Exact head | State / review | Checks snapshot | Dependency and next action |
 |---:|---|---|---|---|
 | #776 | `3830f38` | stacked / review not recorded, clean | no protected required Checks until parent #765 is integrated | Review fixed-length framing, exact read, deadline, close-on-error, and RFC 9112 evidence; retarget/rebase onto protected main after #765. |
+| #778 | `6e0daf8` | stacked on #765 / review not recorded, clean | no protected required Checks until parent #765 is integrated | Review source-image preservation, VISION-tag failover, Responses normalization, and the explicit LineageWeave OCR backfill boundary. |
 | #775 | `fb8fb62` | draft / `REVIEW_REQUIRED`, blocked | hosted Checks pending on the repaired head | Verify the exact CPython 3.12 Atheris marker keeps unsupported interpreters out while preserving the CPython 3.12 fuzz installation; obtain independent approval. |
 | #774 | `8977384` | stacked on non-default base `feat/paper-grounded-auto-orchestration-20260820`, review not recorded, clean | no required Checks reported for its non-default base branch | Rebase onto the current #765/main line; preserve same-provider temperature negotiation and do not merge a stale 72-file comparison. |
-| #773 | `41f4a0a` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review the current product/technical baseline and ADR 0016, then obtain independent approval. |
+| #773 | `2e24c53` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review the current product/technical baseline and ADR 0016, then obtain independent approval. |
 | #772 | `8452623` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review cache key, bypass, fail-open, and cost/routing interactions; wait for same-head Checks and independent approval. |
 | #771 | `2351cab` | ready / `REVIEW_REQUIRED`, blocked | most security checks passed; full suite, Hypothesis, Atheris, queue scan, Strix queued/in progress | Recheck exact-head failure-chain behavior and hosted Checks; obtain independent approval. |
 | #770 | `c01733b` | draft / `REVIEW_REQUIRED`, behind | most checks passed; coverage queued, Strix in progress | Rebase/integrate after catalog and transport dependencies; preserve honest fail-closed price evidence. |
 | #769 | `9654c28` | ready / `REVIEW_REQUIRED`, blocked | required checks passed except coverage evidence queued | Resolve coverage evidence and obtain last-push independent approval; do not self-approve. |
-| #768 | `f13ee66` | ready / `REVIEW_REQUIRED`, blocked | required workflows queued | Review the current remote head for embedding/chat capability separation; predecessor a4aef39 evidence is stale, so wait for full Checks and approval on f13ee66. |
+| #768 | `88fee97` | ready / `REVIEW_REQUIRED`, blocked | required workflows queued | Review the current remote head for embedding/chat capability separation; predecessor f13ee66 evidence is stale, so wait for full Checks and approval on 88fee97. |
 | #765 | `d3f9a9b` | draft / `REVIEW_REQUIRED`, blocked | most checks passed; coverage queued | Review secure provider JSON and role reasoning contract after #768/#769 integration. |
-| #764 | `f4f1b4a` | draft / `REVIEW_REQUIRED`, behind | required workflows queued | Stack after credential/catalog contract is settled; verify 3NF persistence and KV bootstrap. |
+| #764 | `854d7a2` | draft / `REVIEW_REQUIRED`, behind | required workflows queued | Stack after credential/catalog contract is settled; verify 3NF persistence and KV bootstrap. |
 | #763 | `385a5b4` | draft / `REVIEW_REQUIRED`, blocked | most checks passed; coverage queued, Strix in progress | Integrate with current provider transport and catalog; retain failover evidence. |
 | #762 | `be6b6c7` | ready / `REVIEW_REQUIRED`, blocked | required checks passed except coverage evidence queued | Implement purpose-limited authorization and field-level encryption follow-up; documentation alone is not completion. |
 
