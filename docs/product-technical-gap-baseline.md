@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20 20:46, Asia/Seoul
+**As of:** 2026-08-20 21:27, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -83,15 +83,16 @@ required workflows, and a normal merge.
 | PR | Exact head | State / base | Evidence boundary and next action |
 |---:|---|---|---|
 | #783 | `6210b00` | ready, stacked on #776 | Review the total monotonic body deadline and exact-head framing regression; integrate after #776 with all protected evidence. |
-| #781 | `f0712dc` | ready, stacked on #780 | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after #780; focused exact-head suite is `54 passed`. |
+| #781 | `f3aaac3` | ready, stacked on #780 | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after #780; the parent stack advanced, so predecessor evidence is stale. |
 | #782 | `fdbd1db` | ready, based on main | Review owner-bound workflow/access/evaluation reads, split-token admin evidence visibility, migration fail-closed behavior, and exact-head protected Checks before merge. |
 | #780 | `193752f` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, backend-identifier non-disclosure, and fresh exact-head hosted Checks before normal merge. |
-| #779 | `beb15a7` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main. |
+| #779 | `cf4a450` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main; predecessor evidence is stale. |
 | #778 | `9aa9973` | ready, stacked on #765 | Review source-image preservation, explicit `vision` eligibility/failover, Responses normalization, and the private LineageWeave OCR recovery boundary; focused exact-head suite is `94 passed`. |
 | #776 | `0ec1151` | ready, stacked on #765 | Review fixed-length framing plus the total-deadline regression; #783 supplies the root-cause implementation before retargeting onto protected main. |
 | #775 | `fb8fb62` | draft, based on main | Verify the exact CPython 3.12 Atheris marker, direct test contract, hash lock, hosted Fuzz job, and independent approval before promotion. |
-| #784 | `992e0f6` | ready, based on main | Review fail-closed release authorization, exact-head `gh api` collection, product-evidence separation, and fresh hosted Checks before protected merge. |
-| #773 | `8f77e3c` | ready, based on main | Review this dated baseline and ADR 0016; exact current head is self-referential and has no independent approval yet. |
+| #784 | `c7eb453` | ready, based on main | Review fail-closed release authorization, exact-head `gh api` collection, product-evidence separation, and fresh hosted Checks before protected merge; auto-merge was re-armed after the remote push. |
+| #785 | `a5f4e6c` | ready, based on main | Issue #568 implementation: exact local full suite `1455 passed`, profile/fuzz `34 passed`, new module statement/branch coverage `100%`; hosted Checks are queued and independent approval is required. |
+| #773 | `238e359` | ready, based on main | Review this dated baseline and ADR 0016; this snapshot will receive a new self-referential head when it is refreshed again, and it has no independent approval yet. |
 | #772 | `f72ddc8` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions; focused exact-head cache/cost/ledger suite is `45 passed`. |
 | #771 | `e1d4170` | ready, based on main | The tool-failure PR is limited to failure classification and safe fallback; exact-head fallback/security/HTTP contract suite is `134 passed` and Ruff/diff checks pass. Owner-bound evidence authorization is tracked separately in #782. Hosted Checks are queued; obtain independent approval before protected merge. |
 | #770 | `0777e14` | draft, based on stale main | Reconcile after #768. Preserve complete-price evidence, provider-family diversity, corrupt-row handling, and consume the shared ordinary-chat classifier rather than a local detector. |
@@ -111,8 +112,7 @@ completed until the protected-main contract is satisfied.
 
 | Issue | Customer-visible gap | Planned proof / next PR |
 |---:|---|---|
-| #777 | Low-latency gateway routing metrics use coarse, inference-oriented histogram buckets and do not separate dispatch from upstream latency. | Add validated configurable bucket boundaries and distinct dispatch/upstream histograms; preserve metric names, labels, and bounded cardinality. |
-| #568 | Operators cannot compare provider-neutral reasoning profiles at equal budget. | Add role-specific effort profiles, recursion/workflow/access-list controls, and an ablation report with reproducible fixtures. |
+| #568 | Operators cannot compare provider-neutral reasoning profiles at equal budget. | PR #785 adds versioned role profiles, exact snapshot hashing, provider-capability fail-closed request binding, and equal-budget theta-hat/RMSE ablation; production defaults remain locked until measured evidence is available. |
 | #123 | A sole collaborator can be unable to satisfy last-push approval. | Add governance evidence/runbook or a protected-rule-compatible process; never bypass approval. |
 | #119 | Ambiguous or unbounded inbound framing threatens request integrity. | PR #776 adds fixed-length framing and PR #783 enforces the total body deadline; merge the stack only after exact-head hosted evidence. |
 | #118 | Liveness and authenticated readiness are not yet fully separated. | PR #780 implements the minimal `/healthz` and authenticated `/readyz` contract; merge only after exact-head Checks and independent approval. |
@@ -121,7 +121,11 @@ completed until the protected-main contract is satisfied.
 | #103 | Release readiness must fail closed on stale head, missing review, or missing Checks evidence. | PR #784 separates product evidence from release authority and adds exact-head `gh api` collection; merge only after fresh protected evidence. |
 | #102 | Equivalent endpoints need race-to-first-valid completion without unsafe cancellation. | Add bounded concurrency and provider truth tests. |
 | #95 | Atheris locking must work on all supported CPython interpreters. | Land portable lock implementation and run the hosted fuzz job. |
-| #86 | NVIDIA NIM discovery needs live, evidence-grade capability/cost/quality measurement. | Use KV-registered NIM credentials in a controlled benchmark; publish provenance and limits. |
+| #86 | NVIDIA NIM discovery needs live, evidence-grade capability/cost/quality measurement. | Use KV-registered NIM credentials in a controlled benchmark; publish provenance and limits. The issue remains open and no accepted active implementation PR exists. |
+
+GitHub currently returns `404 Not Found` for issue `#777`; its earlier metric-gap
+row is therefore removed from the actionable queue rather than treated as a
+live work item.
 
 ## 6. Prioritized gap register
 
@@ -131,7 +135,7 @@ completed until the protected-main contract is satisfied.
 | P0 | Provider boundary is still being assembled across stacked PRs. | #768, #765, #764, #770, #763, #776, #778, and #779 are pending integration. | One current-main stack has capability isolation, secure JSON, bounded framing, multimodal evidence, KV bootstrap, honest catalog, optional-control negotiation, and failover with no duplicate logic. |
 | P0 | Operational failure paths are not yet one buyer-verifiable contract. | #771 and #772 are open. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
 | P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | ADR 0010 explicitly marks both follow-ups not started; #762 is documentation. | Purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests prove raw PII is only returned to an authorized purpose. |
-| P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | Product plan cites Fugu/TRINITY/Conductor; issue #568 remains open. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
+| P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | PR #785 supplies opt-in profiles, snapshot replay, and synthetic/estimated RMSE; the production gate remains closed pending buyer-held-out measurement. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
 | P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue #86 remains open; local catalog is not production telemetry. | KV-backed NIM discovery benchmark records model capability, price provenance, failure class, and quality result without secret leakage. |
 | P1 | Release gate and hourly loop need exact operational proof. | Central scheduler workflows own the loop; PR #784 adds the exact-head authority evaluator/collector, but protected approval and release evidence remain open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
 | P2 | Ecosystem boundaries need consumer proof. | `naruon`, `.github`, and sibling components are named consumers, but this repo remains one deployable product. | Add a minimal OpenAI-compatible connector contract test for a real consumer or defer extraction with a documented trigger; do not split speculatively. |
