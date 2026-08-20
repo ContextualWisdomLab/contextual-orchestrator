@@ -116,8 +116,8 @@ def test_embedding_deployments_never_enter_chat_agent_discovery() -> None:
     }
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        return_value=_Response(payload),
+        "contextual_orchestrator.model_discovery._fetch_json",
+        return_value=payload,
     ):
         discovered = discover_provider_models(source)
 
@@ -168,8 +168,8 @@ def test_bytez_chat_catalog_still_rejects_non_chat_identifiers() -> None:
     }
 
     with patch(
-        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
-        return_value=_Response(payload),
+        "contextual_orchestrator.model_discovery._fetch_json",
+        return_value=payload,
     ):
         discovered = discover_provider_models(source)
 
