@@ -48,6 +48,17 @@ def _server():
     return server, thread, server.server_address[1]
 
 
+def _server_without_embedding():
+    server = build_server(
+        TaskOrchestrator([ModelAgent("general_agent", "mock-planner", tags=("reasoning",))]),
+        port=0,
+        security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    return server, thread, server.server_address[1]
+
+
 def test_http_embeddings_rejects_model_outside_agent_pool() -> None:
     server, thread, port = _server()
     try:
@@ -78,6 +89,28 @@ def test_http_embeddings_accepts_model_in_agent_pool() -> None:
         assert body.get("object") == "list"
         assert body.get("model") == "mock-planner"
         assert isinstance(body.get("data"), list) and body["data"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_embeddings_auto_selects_enabled_embedding_agent() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, "/v1/embeddings", {"input": "invoice search chunk"})
+        assert status == 200, body
+        assert body.get("model") == "mock-planner"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_embeddings_auto_selection_fails_when_capability_is_missing() -> None:
+    server, thread, port = _server_without_embedding()
+    try:
+        status, body = _post(port, "/v1/embeddings", {"input": "invoice search chunk"})
+        assert status == 503, body
+        assert "embedding_unavailable" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -116,9 +149,22 @@ def test_http_batch_embeddings_accepts_model_in_agent_pool() -> None:
         thread.join(timeout=5)
 
 
+def test_http_batch_embeddings_auto_selects_enabled_embedding_agent() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, "/v1/batch/embeddings", {"inputs": ["alpha", "beta"]})
+        assert status == 200, body
+        assert body.get("model") == "mock-planner"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 if __name__ == "__main__":
     test_http_embeddings_rejects_model_outside_agent_pool()
     test_http_embeddings_accepts_model_in_agent_pool()
+    test_http_embeddings_auto_selects_enabled_embedding_agent()
     test_http_batch_embeddings_rejects_model_outside_agent_pool()
     test_http_batch_embeddings_accepts_model_in_agent_pool()
+    test_http_batch_embeddings_auto_selects_enabled_embedding_agent()
     print("ok")
