@@ -13,7 +13,6 @@ registering a subset of the five supported keys still works. Stdlib only
 
 from __future__ import annotations
 
-import json
 import re
 import urllib.error
 from dataclasses import dataclass
