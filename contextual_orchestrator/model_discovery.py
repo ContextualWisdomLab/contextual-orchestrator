@@ -20,7 +20,6 @@ import urllib.request
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .batch_routing import cheapest_upstream
 from .credentials import get_credential
 from .orchestrator import ModelAgent
 
@@ -249,9 +248,8 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
     """Write every discovered model's known pricing into the price book.
 
     Returns the number of price rows written. A model without provider-reported
-    pricing is skipped rather than defaulted to 0 -- an unpriced model already
-    costs 0 under ``PriceBook.compute_cost``'s "explicit, not silently expensive"
-    contract, so writing a fabricated 0 row here would just hide that signal.
+    pricing is skipped rather than defaulted to zero. Discovery ranking treats
+    that absence as unknown price evidence, never as proof that the model is free.
     """
     from .cost_ledger import PriceEntry
 
@@ -272,46 +270,89 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
     return written
 
 
+def _discovery_price_key(
+    model: DiscoveredModel,
+    price_book: "PriceBook",
+) -> tuple[int, float, str, str]:
+    """Rank known prices first, then deterministically order unknown prices."""
+    entry = price_book.get_price(model.provider_name, model.model_id)
+    if entry is None:
+        return (1, 0.0, model.provider_name, model.model_id)
+    cost, _currency = price_book.compute_cost(
+        model.provider_name,
+        model.model_id,
+        1000,
+        1000,
+    )
+    return (0, cost, model.provider_name, model.model_id)
+
+
+def _provider_family(provider_name: str) -> str:
+    """Collapse credentials that share one upstream provider outage domain."""
+    if provider_name in {"nvidia_nim", "nvidia_nim_sub"}:
+        return "nvidia_nim"
+    return provider_name
+
+
 def select_cheapest_discovered_agent(
     discovered: list[DiscoveredModel], price_book: "PriceBook"
 ) -> DiscoveredModel | None:
-    """Pick the lowest-cost discovered model per the price book (auto-optimization).
+    """Pick the cheapest candidate with trustworthy price evidence.
 
-    Reuses :func:`~contextual_orchestrator.batch_routing.cheapest_upstream`, the
-    existing cost-optimizing upstream selector. Call :func:`refresh_price_book`
-    first so discovered pricing is visible; an unpriced candidate costs ``0``
-    under that selector's documented contract and is treated as free, not
-    unknown -- so a genuinely unpriced provider (e.g. Bytez, priced by
-    GPU-second rather than per token) will always look cheapest here. Fine for
-    "auto-pick something free to try," but callers doing real cost comparison
-    should refresh pricing for every candidate they care about first.
+    A candidate without a price row is unknown, not free. Known prices therefore
+    sort first; when every candidate is unpriced, provider and model identifiers
+    provide deterministic fallback ordering without inventing a monetary value.
     """
     if not discovered:
         return None
-    candidates = [{"provider": model.provider_name, "model": model.model_id} for model in discovered]
-    winner = cheapest_upstream(candidates, price_book)
-    if winner is None:
-        return None
-    for model in discovered:
-        if model.provider_name == winner["provider"] and model.model_id == winner["model"]:
-            return model
-    return None  # pragma: no cover - winner always comes from candidates
+    return min(discovered, key=lambda model: _discovery_price_key(model, price_book))
 
 
 def select_top_n_cheapest_discovered_agents(
     discovered: list[DiscoveredModel], price_book: "PriceBook", limit: int
 ) -> list[DiscoveredModel]:
-    """Return the ``limit`` lowest-cost discovered models, cheapest first.
+    """Return up to ``limit`` candidates with known prices before unknown ones."""
+    if limit <= 0 or not discovered:
+        return []
+    return sorted(
+        discovered,
+        key=lambda model: _discovery_price_key(model, price_book),
+    )[:limit]
 
-    For bootstrapping a CI sidecar (or any first-boot pool) with more than one
-    enabled agent for failover, without hand-picking which discovered models to
-    trust. Same pricing contract as :func:`select_cheapest_discovered_agent`.
+
+def select_bootstrap_discovered_agents(
+    discovered: list[DiscoveredModel],
+    price_book: "PriceBook",
+    limit: int,
+) -> list[DiscoveredModel]:
+    """Build a deterministic, price-honest, provider-diverse initial pool.
+
+    Candidates retain the known-price-first ordering above, but the first pass
+    takes at most one model from each independent provider family. Remaining
+    capacity is filled in the same deterministic cost order. NVIDIA NIM primary
+    and sub credentials are one outage domain, so they participate in the second
+    pass only after independently hosted providers have had a chance to enter.
     """
     if limit <= 0 or not discovered:
         return []
 
-    def _cost(model: DiscoveredModel) -> float:
-        cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
-        return cost
+    ranked = sorted(
+        discovered,
+        key=lambda model: _discovery_price_key(model, price_book),
+    )
+    selected: list[DiscoveredModel] = []
+    deferred: list[DiscoveredModel] = []
+    provider_families: set[str] = set()
 
-    return sorted(discovered, key=_cost)[:limit]
+    for model in ranked:
+        family = _provider_family(model.provider_name)
+        if family in provider_families:
+            deferred.append(model)
+            continue
+        provider_families.add(family)
+        selected.append(model)
+        if len(selected) == limit:
+            return selected
+
+    selected.extend(deferred[: limit - len(selected)])
+    return selected
