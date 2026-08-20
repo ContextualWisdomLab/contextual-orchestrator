@@ -27,6 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .batch_routing import cheapest_upstream
+from .chat_capability import is_chat_compatible_model_id
 from .credentials import get_credential
 from .orchestrator import ModelAgent
 
@@ -34,39 +35,6 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
-
-_MODEL_TOKEN_RE = re.compile(r"[a-z0-9]+")
-_NON_CHAT_EXACT_TOKENS = frozenset(
-    {
-        "audio",
-        "bge",
-        "e5",
-        "embed",
-        "embedding",
-        "embeddings",
-        "guard",
-        "gte",
-        "image",
-        "images",
-        "moderation",
-        "realtime",
-        "rerank",
-        "reranker",
-        "safety",
-        "sora",
-        "speech",
-        "transcribe",
-        "transcription",
-        "tts",
-        "whisper",
-    }
-)
-_NON_CHAT_TOKEN_PREFIXES = (
-    "embed",
-    "moderat",
-    "rerank",
-    "transcrib",
-)
 
 
 @dataclass(frozen=True)
@@ -141,32 +109,6 @@ class ProviderDiscoveryError(RuntimeError):
     def __init__(self, provider_name: str, detail: str) -> None:
         self.provider_name = provider_name
         super().__init__(f"model discovery failed for provider {provider_name!r}: {detail}")
-
-
-def is_chat_compatible_model_id(model_id: str) -> bool:
-    """Return whether a model identifier is eligible for the chat-agent pool.
-
-    The classifier is intentionally conservative and only rejects identifiers
-    that clearly advertise a non-chat endpoint family. It normalizes provider
-    prefixes and common separators so values such as
-    ``azure/text-embedding-3-large`` and ``text_embedding_3_large`` cannot be
-    assigned to thinker, worker, verifier, or synthesizer roles.
-
-    Unknown identifiers remain eligible until explicit provider capability
-    metadata is available; this avoids fabricating positive reasoning or tool
-    capabilities from a name while still preserving ordinary chat discovery.
-    """
-    if type(model_id) is not str:
-        return False
-    tokens = tuple(_MODEL_TOKEN_RE.findall(model_id.casefold()))
-    if not tokens:
-        return False
-    for token in tokens:
-        if token in _NON_CHAT_EXACT_TOKENS:
-            return False
-        if token.startswith(_NON_CHAT_TOKEN_PREFIXES):
-            return False
-    return True
 
 
 def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
