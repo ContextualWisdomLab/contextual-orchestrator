@@ -274,9 +274,11 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
             not _is_valid_price_component(value)
             for row in rows
             for value in row[:2]
-        ) or len(set(rows)) != 1:
+        ) or any(row != rows[0] for row in rows[1:]):
             continue
         prompt_price, completion_price, currency_code = rows[0]
+        if prompt_price is None or completion_price is None:
+            continue
         price_book.set_price(
             PriceEntry(
                 provider_name=provider_name,
