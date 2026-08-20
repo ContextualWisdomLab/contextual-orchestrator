@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 08:08, Asia/Seoul
+**As of:** 2026-08-21 08:20, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -100,7 +100,7 @@ required workflows, and a normal merge.
 | PR | Exact head at snapshot | State / base | Evidence boundary and next action |
 |---:|---|---|---|
 | [#797](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/797) | `5dccb65fdd6088deb7c014f819340cceeb89c313` | ready, based on main | Hourly target-repository caller invokes the central reusable review/fix workflow with `max_prs=1`, `max_dispatches=1`, conflict resolution enabled, explicit scheduler secrets, and no `COPILOT_GITHUB_TOKEN` or manual dispatch; central #1183 and target #790 remain external prerequisites. Exact-head proof is focused `2 passed`, `actionlint`, `compileall`, and diff-check clean; hosted Checks and independent approval remain required. |
-| [#796](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/796) | `c6d4d2f60472dfdcc8cec7b02f6d82b2d0277db9` | ready, based on [#795](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/795) | Cost-ledger normalization separates execution facts from attribution dimensions, keeps migration transactional, enables SQLite foreign keys before schema work, and selects PostgreSQL metadata through the driver-native path. Exact local proof is focused `48 passed`, full `1449 passed in 549.55s`; hosted Checks and independent approval remain required. |
+| [#796](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/796) | `fb3b80ad17cd1d0912db7d1b025e1b8106130ec6` | ready, based on [#795](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/795) | Cost-ledger normalization separates execution facts from attribution dimensions, keeps migration transactional, enables SQLite foreign keys before schema work, selects PostgreSQL metadata through the driver-native path, and normalizes nullable legacy attribution to `unattributed`. Exact focused proof after the latest fix is `45 passed`; the full exact-head suite is being revalidated. Hosted Checks and independent approval remain required. |
 | [#794](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/794) | `c7c29da60954d6c32ff50869f84452f9af052bbf` | ready, based on main | Database naming repair renames the single-word state table to `orchestration_records`, preserves legacy rows through an atomic fail-closed migration, closes the connection on schema failure, and covers table/index/view/sequence/constraint naming forms. Exact local proof is focused `11 passed`, full `1441 passed`; hosted Checks and independent approval remain required. |
 | [#795](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/795) | `fbbbb487058732b5e3f08a85b15a9f7e3273abb5` | ready, based on [#794](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/794) | Durable agent-pool storage is normalized into scalar, ordered-tag, and provider-exclusion tables; legacy JSON migration remains transactional, and every SQLite connection enables foreign-key enforcement before work begins. Exact local proof is focused `21 passed`, full `1445 passed in 526.58s`; hosted Checks and independent approval remain required. |
 | [#793](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/793) | `3651a8181d0844a8daa196a73aff401fd34e78da` | ready, based on main | Request-framing repair rejects ambiguous/unbounded Content-Length before integer conversion and closes the connection after framing failure. Exact-head local proof is focused `31 passed` and full `1443 passed`; hosted Checks are pending and independent approval remains required. |
@@ -130,7 +130,7 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 08:08 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 08:20 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ### External central workflow prerequisite
