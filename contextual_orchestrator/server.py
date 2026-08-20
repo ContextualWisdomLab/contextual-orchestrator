@@ -182,9 +182,13 @@ def _request_body_size(headers: Any, max_body_bytes: int) -> int:
             "invalid_request_framing",
             "content-length must be a non-negative decimal value",
         )
-    body_size = int(value)
-    if body_size > max_body_bytes:
+    normalized = value.lstrip("0") or "0"
+    maximum = str(max_body_bytes)
+    if len(normalized) > len(maximum) or (
+        len(normalized) == len(maximum) and normalized > maximum
+    ):
         raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    body_size = int(normalized)
     return body_size
 
 

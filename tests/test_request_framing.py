@@ -61,6 +61,7 @@ def test_request_body_size_rejects_negative_malformed_and_oversized_lengths() ->
         error = _framing_error(_headers(content_length=value))
         assert error.code == "invalid_request_framing"
     assert _framing_error(_headers(content_length="1025"), 1024).code == "request_too_large"
+    assert _framing_error(_headers(content_length="9" * 5000), 1024).code == "request_too_large"
 
 
 def test_request_body_size_rejects_transfer_encoding_even_without_content_length() -> None:
@@ -128,6 +129,19 @@ def test_transfer_encoding_is_rejected_before_chunked_bytes_are_interpreted() ->
         server.server_close()
     assert b"400 Bad Request" in response
     assert b"invalid_request_framing" in response
+
+
+def test_unbounded_digit_content_length_is_rejected_and_connection_is_closed() -> None:
+    """Huge decimal headers cannot escape before the connection-close guard."""
+    server, thread, port = _start_server()
+    try:
+        response = _raw_request(port, b"Content-Length: " + (b"9" * 5000) + b"\r\n")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+        server.server_close()
+    assert b"HTTP/1.0 413 " in response
+    assert b"request_too_large" in response
 
 
 def test_short_body_is_rejected_after_peer_closes() -> None:
