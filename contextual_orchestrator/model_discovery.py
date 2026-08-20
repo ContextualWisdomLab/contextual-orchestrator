@@ -21,6 +21,7 @@ import urllib.request
 from dataclasses import dataclass, replace
 from typing import TYPE_CHECKING, Any
 
+from .chat_capability import is_general_chat_agent_model_id
 from .credentials import get_credential
 from .orchestrator import ModelAgent
 
@@ -84,7 +85,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
 
 @dataclass(frozen=True)
 class DiscoveredModel:
-    """One model found on a provider, with pricing when the provider reports it."""
+    """One general-chat model found on a provider, with reported pricing."""
 
     provider_name: str
     model_id: str
@@ -194,7 +195,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         if not isinstance(row, dict):
             continue
         model_id = row.get("id")
-        if type(model_id) is not str or not model_id:
+        if type(model_id) is not str or not model_id or not is_general_chat_agent_model_id(model_id):
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         discovered.append(
@@ -218,7 +219,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
         if not isinstance(row, dict):
             continue
         model_id = row.get("modelId")
-        if type(model_id) is not str or not model_id:
+        if type(model_id) is not str or not model_id or not is_general_chat_agent_model_id(model_id):
             continue
         discovered.append(
             DiscoveredModel(
@@ -287,7 +288,9 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
-    """Build a disabled-by-default ModelAgent for a discovered model (opt-in serving)."""
+    """Build a disabled general-chat agent or reject an ineligible record."""
+    if not is_general_chat_agent_model_id(discovered.model_id):
+        raise ValueError("model is not eligible for a general chat agent")
     return ModelAgent(
         id=agent_id_for(discovered),
         model=discovered.model_id,
@@ -322,6 +325,8 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 
     written = 0
     for model in _deduplicate_discovered_models(discovered):
+        if not is_general_chat_agent_model_id(model.model_id):
+            continue
         if not (
             _valid_price_component(model.prompt_price_per_1k)
             and _valid_price_component(model.completion_price_per_1k)
@@ -398,7 +403,11 @@ def select_cheapest_discovered_agent(
     sort first; when every candidate is unpriced, provider and model identifiers
     provide deterministic fallback ordering without inventing a monetary value.
     """
-    eligible = _deduplicate_discovered_models(discovered)
+    eligible = [
+        model
+        for model in _deduplicate_discovered_models(discovered)
+        if is_general_chat_agent_model_id(model.model_id)
+    ]
     if not eligible:
         return None
     return min(eligible, key=lambda model: _discovery_price_key(model, price_book))
@@ -410,7 +419,11 @@ def select_top_n_cheapest_discovered_agents(
     """Return up to ``limit`` unique candidates, known-priced before unknown."""
     if limit <= 0:
         return []
-    eligible = _deduplicate_discovered_models(discovered)
+    eligible = [
+        model
+        for model in _deduplicate_discovered_models(discovered)
+        if is_general_chat_agent_model_id(model.model_id)
+    ]
     if not eligible:
         return []
     return sorted(
@@ -435,7 +448,11 @@ def select_bootstrap_discovered_agents(
     """
     if limit <= 0:
         return []
-    eligible = _deduplicate_discovered_models(discovered)
+    eligible = [
+        model
+        for model in _deduplicate_discovered_models(discovered)
+        if is_general_chat_agent_model_id(model.model_id)
+    ]
     if not eligible:
         return []
 

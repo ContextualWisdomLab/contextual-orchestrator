@@ -350,7 +350,8 @@ def test_response_without_content_or_reasoning_fails_clearly() -> None:
         ModelClient()._response_content(agent, {"choices": [{"message": {}}]})
 
 
-def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
+@pytest.mark.parametrize("endpoint", ["responses", "/v1/responses"])
+def test_local_responses_passthrough_adapts_to_chat_transport(endpoint: str) -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=0, chat_template_args={"enable_thinking": False})
     with patch.object(client, "_validate_provider", return_value=None), patch.object(
@@ -369,7 +370,7 @@ def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
     ) as send:
         response = client.proxy_send(
             agent,
-            "responses",
+            endpoint,
             {
                 "model": "local-model",
                 "instructions": "Be concise.",
