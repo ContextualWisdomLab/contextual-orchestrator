@@ -4200,13 +4200,6 @@ class TaskOrchestrator:
         concrete_blockers = acceptance["concrete_blockers"]
         acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
         runtime_state = "blocked" if acceptance_blocked or concrete_blockers else "ready"
-        product_evidence_status = (
-            "commercial_release_blocked"
-            if runtime_state == "blocked"
-            else "commercial_release_ready_with_warnings"
-            if acceptance["follow_up_items"]
-            else "commercial_release_ready"
-        )
         release_authorization = evaluate_release_authorization(release_authority)
         release_artifacts = [
             self._buyer_evidence_item(
@@ -4403,6 +4396,13 @@ class TaskOrchestrator:
         summary = self._buyer_manifest_summary(release_artifacts + external_release_gaps)
         product_blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
+        product_evidence_status = (
+            "commercial_release_blocked"
+            if product_blocked_count
+            else "commercial_release_ready_with_warnings"
+            if acceptance["follow_up_items"]
+            else "commercial_release_ready"
+        )
         release_blocked_count = product_blocked_count + len(release_authorization["blockers"])
         if release_blocked_count:
             release_status = "commercial_release_blocked"

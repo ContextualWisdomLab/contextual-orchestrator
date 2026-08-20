@@ -170,6 +170,35 @@ def test_commercial_release_candidate_report_packages_ship_candidate() -> None:
     assert authorized_report["release_summary"]["blocked_count"] == 0
 
 
+def test_product_evidence_status_blocks_when_release_artifact_is_missing(monkeypatch) -> None:
+    """A missing repository artifact must block product evidence, not only authority."""
+    original_is_file = Path.is_file
+
+    def missing_release_candidate(path: Path) -> bool:
+        if path.as_posix().endswith("/docs/commercial_release_candidate.md"):
+            return False
+        return original_is_file(path)
+
+    monkeypatch.setattr(Path, "is_file", missing_release_candidate)
+
+    orchestrator = build()
+    exercise_runtime(orchestrator)
+    report = orchestrator.commercial_release_candidate_report(
+        locale_bundles=ADMIN_TRANSLATIONS,
+        security_profile={
+            "auth_mode": "split_token",
+            "allow_public_bind": False,
+            "expose_trace_by_default": False,
+            "rate_limit_requests": 60,
+            "max_concurrent_runs": 8,
+        },
+    )
+
+    assert report["product_evidence_status"] == "commercial_release_blocked"
+    assert report["release_summary"]["product_blocked_count"] == 1
+    assert report["release_status"] == "commercial_release_blocked"
+
+
 def test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract() -> None:
     assert "/api/v1/commercial_release_candidates/latest" in OPENAPI_SPEC["paths"]
     assert OPENAPI_SPEC["paths"]["/api/v1/commercial_release_candidates/latest"]["get"]["operationId"] == (
