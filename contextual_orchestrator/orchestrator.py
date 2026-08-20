@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
-import hashlib
 import http.client
 import io
 import ipaddress
@@ -33,6 +32,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .response_cache import ResponseCacheProvider, build_response_cache_key
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -1667,6 +1667,7 @@ class TaskOrchestrator:
         agents_db: str | None = None,
         cache_ttl: float = 0.0,
         cache_max_entries: int = 256,
+        cache_provider: ResponseCacheProvider | None = None,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -1698,6 +1699,9 @@ class TaskOrchestrator:
         self.circuit_failure_threshold = 3
         self.circuit_reset_seconds = 30.0
         # Optional exact-match response cache: default ttl 0 disables it (no behavior change).
+        if cache_provider is not None and cache_ttl:
+            raise ValueError("cache_provider and cache_ttl cannot both be configured")
+        self._cache_provider = cache_provider
         self._cache = _ResponseCache(cache_ttl, cache_max_entries) if cache_ttl and cache_ttl > 0 else None
         # Optional durable persistence: default None keeps all state purely in-memory
         # (zero behavior change). When set, runs/audit/analytics survive restart.
@@ -1832,16 +1836,54 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
+    def complete(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        bypass_cache: bool = False,
+        model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
+    ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
-        if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
-        cached = self._cache.get(key)
-        if cached is not None:
-            return cached
+        if not isinstance(bypass_cache, bool):
+            raise TypeError("bypass_cache must be a boolean")
+        if not isinstance(model_name, str) or not model_name.strip():
+            raise ValueError("model_name must be a non-empty string")
+        if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
+            raise ValueError("cache_partition must be a non-empty string when provided")
+        cache = self._cache_provider if self._cache_provider is not None else self._cache
+        if cache is None or bypass_cache:
+            result = self._dispatch(messages, mode)
+            result["cache_status"] = "bypass" if bypass_cache else "disabled"
+            return result
+        try:
+            key = self._cache_key(messages, mode, model_name, cache_partition)
+        except (TypeError, ValueError):
+            # Cache key serialization is an optimization boundary; unusual but
+            # valid caller objects must still reach the live provider path.
+            result = self._dispatch(messages, mode)
+            result["cache_status"] = "miss"
+            return result
+        try:
+            cached = cache.get(key)
+        except Exception:  # noqa: BLE001 - optional cache must fail open
+            cached = None
+        if (
+            isinstance(cached, Mapping)
+            and isinstance(cached.get("mode"), str)
+            and isinstance(cached.get("answer"), str)
+            and isinstance(cached.get("trace"), list)
+        ):
+            result = copy.deepcopy(dict(cached))
+            result["cache_status"] = "hit"
+            return result
         result = self._dispatch(messages, mode)
-        self._cache.put(key, result)
+        try:
+            cache.put(key, result)
+        except Exception:  # noqa: BLE001 - optional cache must fail open
+            pass
+        result["cache_status"] = "miss"
         return result
 
     def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
@@ -1894,17 +1936,50 @@ class TaskOrchestrator:
              "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
         )
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
-        return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+    def _cache_key(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
+    ) -> str:
+        parameters = {
+            "temperature": getattr(self.client, "default_temperature", None),
+            "top_p": getattr(self.client, "default_top_p", None),
+            "presence_penalty": getattr(self.client, "default_presence_penalty", None),
+            "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
+            "max_output_tokens": getattr(self.client, "max_output_tokens", None),
+        }
+        return build_response_cache_key(
+            messages,
+            mode,
+            model=model_name,
+            parameters=parameters,
+            partition=cache_partition,
+        )
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        *,
+        bypass_cache: bool = False,
+        model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
             if budget["exceeded"]:
                 raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        result = self.complete(
+            messages,
+            mode=mode,
+            bypass_cache=bypass_cache,
+            model_name=model_name,
+            cache_partition=cache_partition,
+        )
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -1913,6 +1988,7 @@ class TaskOrchestrator:
             "policy_mode": mode,
             "prompt_text": prompt,
             "answer": result["answer"],
+            "cache_status": result.get("cache_status", "disabled"),
             "trace": result["trace"],
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),

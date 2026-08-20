@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
+import hashlib
 import json
 import secrets
 import struct
@@ -252,6 +253,18 @@ def _error_payload(error_code: str, error_message: str, error_detail: dict[str, 
         "error_message": error_message,
         "error_detail": detail,
     }
+
+
+def _cache_bypass_header(value: str | None) -> bool:
+    """Parse the opt-in cache bypass header without accepting ambiguous values."""
+    if value is None or not value.strip():
+        return False
+    normalized = value.strip().lower()
+    if normalized in {"true", "1"}:
+        return True
+    if normalized in {"false", "0"}:
+        return False
+    raise RequestError(400, "invalid_cache_bypass", "X-Cache-Bypass must be true, false, 1, or 0")
 
 
 MAX_JSON_NESTING_DEPTH = 32
@@ -4817,6 +4830,8 @@ def build_server(
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
                 self._authorize(scope)
                 body = self._read_json()
+                cache_bypass = _cache_bypass_header(self.headers.get("x-cache-bypass"))
+                cache_partition = self._cache_partition()
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
@@ -4911,6 +4926,8 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            cache_bypass=cache_bypass,
+                            cache_partition=cache_partition,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5169,6 +5186,8 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            cache_bypass=cache_bypass,
+                            cache_partition=cache_partition,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5613,6 +5632,14 @@ def build_server(
         def _authorize(self, scope: str) -> None:
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
+
+        def _cache_partition(self) -> str:
+            """Return a non-secret cache partition for the authenticated bearer."""
+            raw = self.headers.get("authorization", "")
+            token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+            if not token:  # pragma: no cover - _authorize rejects this first
+                raise RequestError(401, "unauthorized", "bearer token is required")
+            return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()
