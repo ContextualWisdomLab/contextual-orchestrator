@@ -1,4 +1,4 @@
-"""Provider model-list discovery: turns registered KV credentials into agent candidates.
+"""Provider model-list discovery for chat-agent candidates.
 
 Queries each configured provider's model-list endpoint over its OpenAI-compatible
 (or provider-specific) discovery API and returns :class:`DiscoveredModel` rows that
@@ -9,6 +9,12 @@ Credentials are never fabricated: a provider resolves through :func:`get_credent
 (the KV registry), and a provider with nothing registered is silently skipped so
 registering a subset of the five supported keys still works. Stdlib only
 (``urllib.request``), matching this repo's dependency-free transport convention.
+
+This module owns the ordinary chat-agent discovery boundary. Provider catalogs may
+mix chat, embedding, reranking, transcription, moderation, image, and realtime
+models under one ``/models`` endpoint. Clearly non-chat identifiers are rejected
+before they can be converted to workers, selected by cost, or persisted into the
+chat agent pool.
 """
 
 from __future__ import annotations
@@ -28,6 +34,39 @@ if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+
+_MODEL_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_NON_CHAT_EXACT_TOKENS = frozenset(
+    {
+        "audio",
+        "bge",
+        "e5",
+        "embed",
+        "embedding",
+        "embeddings",
+        "guard",
+        "gte",
+        "image",
+        "images",
+        "moderation",
+        "realtime",
+        "rerank",
+        "reranker",
+        "safety",
+        "sora",
+        "speech",
+        "transcribe",
+        "transcription",
+        "tts",
+        "whisper",
+    }
+)
+_NON_CHAT_TOKEN_PREFIXES = (
+    "embed",
+    "moderat",
+    "rerank",
+    "transcrib",
+)
 
 
 @dataclass(frozen=True)
@@ -84,7 +123,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
 
 @dataclass(frozen=True)
 class DiscoveredModel:
-    """One model found on a provider, with pricing when the provider reports it."""
+    """One chat-compatible model found on a provider, with reported pricing."""
 
     provider_name: str
     model_id: str
@@ -102,6 +141,32 @@ class ProviderDiscoveryError(RuntimeError):
     def __init__(self, provider_name: str, detail: str) -> None:
         self.provider_name = provider_name
         super().__init__(f"model discovery failed for provider {provider_name!r}: {detail}")
+
+
+def is_chat_compatible_model_id(model_id: str) -> bool:
+    """Return whether a model identifier is eligible for the chat-agent pool.
+
+    The classifier is intentionally conservative and only rejects identifiers
+    that clearly advertise a non-chat endpoint family. It normalizes provider
+    prefixes and common separators so values such as
+    ``azure/text-embedding-3-large`` and ``text_embedding_3_large`` cannot be
+    assigned to thinker, worker, verifier, or synthesizer roles.
+
+    Unknown identifiers remain eligible until explicit provider capability
+    metadata is available; this avoids fabricating positive reasoning or tool
+    capabilities from a name while still preserving ordinary chat discovery.
+    """
+    if type(model_id) is not str:
+        return False
+    tokens = tuple(_MODEL_TOKEN_RE.findall(model_id.casefold()))
+    if not tokens:
+        return False
+    for token in tokens:
+        if token in _NON_CHAT_EXACT_TOKENS:
+            return False
+        if token.startswith(_NON_CHAT_TOKEN_PREFIXES):
+            return False
+    return True
 
 
 def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
@@ -132,13 +197,14 @@ def _price_per_1k(value: Any) -> float | None:
 
 
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
+    """Parse one OpenAI-compatible catalog into chat-compatible candidates."""
     rows = payload.get("data") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
         model_id = row.get("id")
-        if type(model_id) is not str or not model_id:
+        if not is_chat_compatible_model_id(model_id):
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         discovered.append(
@@ -156,13 +222,14 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
 
 
 def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
+    """Parse one Bytez chat catalog without admitting non-chat identifiers."""
     rows = payload.get("output") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
         model_id = row.get("modelId")
-        if type(model_id) is not str or not model_id:
+        if not is_chat_compatible_model_id(model_id):
             continue
         discovered.append(
             DiscoveredModel(
@@ -181,7 +248,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
 def discover_provider_models(
     source: ProviderModelSource, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
 ) -> list[DiscoveredModel]:
-    """Discover one provider's models, or ``[]`` if its credential is not registered."""
+    """Discover chat candidates, or ``[]`` when the credential is not registered."""
     api_key = get_credential(source.credential_name)
     if not api_key:
         return []
@@ -202,7 +269,7 @@ def discover_all_models(
     *,
     timeout: float = DISCOVERY_TIMEOUT_SECONDS,
 ) -> tuple[list[DiscoveredModel], list[ProviderDiscoveryError]]:
-    """Discover models across every provider with a registered credential.
+    """Discover chat candidates across providers with registered credentials.
 
     One provider's failure never blocks the others: errors are collected and
     returned alongside whatever models were successfully discovered.
@@ -231,7 +298,9 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
-    """Build a disabled-by-default ModelAgent for a discovered model (opt-in serving)."""
+    """Build a disabled chat ModelAgent or reject a non-chat discovery record."""
+    if not is_chat_compatible_model_id(discovered.model_id):
+        raise ValueError("non-chat model cannot be converted into a chat agent")
     return ModelAgent(
         id=agent_id_for(discovered),
         model=discovered.model_id,
@@ -246,7 +315,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
 
 
 def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook") -> int:
-    """Write every discovered model's known pricing into the price book.
+    """Write every discovered chat model's known pricing into the price book.
 
     Returns the number of price rows written. A model without provider-reported
     pricing is skipped rather than defaulted to 0 -- an unpriced model already
@@ -257,6 +326,8 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 
     written = 0
     for model in discovered:
+        if not is_chat_compatible_model_id(model.model_id):
+            continue
         if model.prompt_price_per_1k is None and model.completion_price_per_1k is None:
             continue
         price_book.set_price(
@@ -275,7 +346,7 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 def select_cheapest_discovered_agent(
     discovered: list[DiscoveredModel], price_book: "PriceBook"
 ) -> DiscoveredModel | None:
-    """Pick the lowest-cost discovered model per the price book (auto-optimization).
+    """Pick the lowest-cost chat-compatible model per the price book.
 
     Reuses :func:`~contextual_orchestrator.batch_routing.cheapest_upstream`, the
     existing cost-optimizing upstream selector. Call :func:`refresh_price_book`
@@ -286,13 +357,14 @@ def select_cheapest_discovered_agent(
     "auto-pick something free to try," but callers doing real cost comparison
     should refresh pricing for every candidate they care about first.
     """
-    if not discovered:
+    eligible = [model for model in discovered if is_chat_compatible_model_id(model.model_id)]
+    if not eligible:
         return None
-    candidates = [{"provider": model.provider_name, "model": model.model_id} for model in discovered]
+    candidates = [{"provider": model.provider_name, "model": model.model_id} for model in eligible]
     winner = cheapest_upstream(candidates, price_book)
     if winner is None:
         return None
-    for model in discovered:
+    for model in eligible:
         if model.provider_name == winner["provider"] and model.model_id == winner["model"]:
             return model
     return None  # pragma: no cover - winner always comes from candidates
@@ -301,17 +373,15 @@ def select_cheapest_discovered_agent(
 def select_top_n_cheapest_discovered_agents(
     discovered: list[DiscoveredModel], price_book: "PriceBook", limit: int
 ) -> list[DiscoveredModel]:
-    """Return the ``limit`` lowest-cost discovered models, cheapest first.
-
-    For bootstrapping a CI sidecar (or any first-boot pool) with more than one
-    enabled agent for failover, without hand-picking which discovered models to
-    trust. Same pricing contract as :func:`select_cheapest_discovered_agent`.
-    """
-    if limit <= 0 or not discovered:
+    """Return the ``limit`` cheapest chat-compatible models in ascending cost."""
+    if limit <= 0:
+        return []
+    eligible = [model for model in discovered if is_chat_compatible_model_id(model.model_id)]
+    if not eligible:
         return []
 
     def _cost(model: DiscoveredModel) -> float:
         cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
         return cost
 
-    return sorted(discovered, key=_cost)[:limit]
+    return sorted(eligible, key=_cost)[:limit]
