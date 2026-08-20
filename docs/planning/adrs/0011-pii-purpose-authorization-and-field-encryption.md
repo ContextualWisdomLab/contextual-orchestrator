@@ -118,6 +118,17 @@ field_classification, request_context) and returns an allow/deny decision
 with a reason code. Callers cannot elevate themselves with X-Purpose or an
 equivalent request header.
 
+The route-purpose registry is validated at startup. Every protected route
+must map to exactly one known purpose and an incomplete, duplicate, or
+unknown mapping prevents the service from becoming ready. A protected route
+with no registered purpose, or a request carrying an unknown purpose, is
+default-deny; there is no permissive fallback. The server constructs
+`request_context.tenant_id`, resource/case reference, and time window only
+from verified principal claims, route metadata, and server-owned resource
+state. Request JSON, query parameters, and headers may select a resource
+identifier for lookup but cannot assert tenant, purpose, case authorization,
+or time-window membership.
+
 ### 2. Classify fields at the producer boundary
 
 Do not use a second blanket regex to guess whether every string is PII.
@@ -130,12 +141,38 @@ Credential redaction remains an independent output/logging control. A
 credential-shaped secret is never returned even when the surrounding
 purpose permits raw product content.
 
+The producer boundary uses an allowlisted producer schema and field registry.
+Each sensitive leaf must resolve to an approved classification such as
+`pii.contact`, `pii.content`, or `secret.credential`; `pii.*` and `secret.*`
+are not accepted merely because a producer supplied a string with that
+prefix. `StateStore` rejects a write before persistence when a leaf is
+missing a classification, uses an unknown classification, or disagrees with
+the registered schema. A producer may explicitly register a non-sensitive
+operational class, but an unclassified value is never silently stored as
+ordinary JSON.
+
+Log and metric sanitization is a separate control from `redact_text`.
+Producer-field classifications drive removal or masking of classified PII
+from structured logs, metric labels, traces, and generic error details;
+credential redaction continues to protect secrets independently. Generic
+errors expose only a stable code and correlation id, never the rejected
+value, decrypted text, or provider exception detail.
+
 ### 3. Encrypt classified fields, not complete records
 
-Inject a FieldEncryptor behind the existing KV/KMS boundary:
+Inject a FieldEncryptor behind the existing KV/KMS boundary. Its ordinary
+write API is intentionally narrow:
 
-    encrypt(classification, plaintext, key_version?) -> EncryptedField
-    decrypt(principal, purpose, classification, envelope) -> plaintext
+    encrypt(classification, plaintext, encryption_context) -> EncryptedField
+    decrypt(principal, purpose, classification, envelope, encryption_context) -> plaintext
+
+`EncryptionContext` is immutable and contains `tenant_id`, `record_kind`,
+`field_path`, and `schema_version`; the adapter authenticates all four as
+AEAD associated data. Ordinary callers cannot supply `key_version`. The
+approved KV/KMS adapter selects the active version. An explicit target
+version is accepted only by a separately authorized `reencrypt`/migration
+operation that records its migration id, source version, target version,
+and operator authorization.
 
 The implementation must use an approved AEAD/KMS adapter and a unique nonce
 per encryption. The application may carry ciphertext and envelope metadata,
@@ -148,20 +185,57 @@ The persisted envelope contains only:
 
 For an AEAD with an appended tag, the storage adapter may keep the tag in the
 ciphertext blob; the wire/storage representation must still make the
-authenticated boundary explicit. Associated data should bind the tenant,
-record kind, field path, and schema version so ciphertext cannot be moved
-between tenants or fields unnoticed.
+authenticated boundary explicit. Associated data binds the immutable
+encryption context so ciphertext cannot be moved between tenants, record
+kinds, field paths, or schema versions unnoticed. Decryption rejects a
+context mismatch even when the envelope and key are otherwise valid.
 
-StateStore should serialize classified leaves into this envelope before
+StateStore serializes classified leaves into one canonical envelope before
 the SQLite/Postgres write. The record shell may retain non-sensitive
 timestamps, event names, correlation ids, retention class, and key version.
 Do not encrypt an entire audit record when that would prevent retention,
 indexing, deletion, or legal-hold controls.
 
+The canonical generic-JSON representation is identical in SQLite and
+PostgreSQL:
+
+    {
+      "type": "encrypted_field",
+      "version": 1,
+      "algorithm": "AES-256-GCM",
+      "key_version": "active-key-version",
+      "nonce_b64": "...",
+      "ciphertext_b64": "...",
+      "classification": "pii.content",
+      "field_path": "payload.body",
+      "schema_version": "2026-08-19"
+    }
+
+`type` is the discriminator, `version` is the envelope format version, and
+every binary value is standard base64 text. The authentication tag is
+included in `ciphertext_b64` for AES-GCM; an adapter using a detached tag
+must use the separately approved `tag_b64` field instead. No unregistered
+extra fields are permitted. Unknown envelope versions, algorithms,
+discriminators, missing required fields, invalid base64, duplicate keys, or
+classification/path mismatches are rejected on both write and read. The
+canonical serializer and parser are shared by SQLite and PostgreSQL so a
+database export cannot change the authenticated meaning of a field.
+
 No plaintext search over encrypted fields is part of this design. If an
 approved product requirement needs lookup, add a separate keyed digest with
 an explicit leakage review; never add deterministic encryption merely to
 make an ad-hoc query work.
+
+Existing audit and analytics records require a separate migration before the
+ADR can become accepted. The migration discovers all SQLite/PostgreSQL rows
+and exports, applies the approved producer schema and classification
+backfill, encrypts classified leaves into the canonical envelope, and
+quarantines or fails closed on ambiguous records. It records counts and
+digests, supports rollback before destructive cleanup, and verifies that no
+classified plaintext remains in database rows, backups, or exports. Legal
+hold and retention rows are included in discovery and verification; a
+non-sensitive record shell remains available for deletion and retention
+operations.
 
 ### 4. Read, audit, and failure behavior
 
@@ -181,6 +255,15 @@ resource/correlation id, field classification, decision, reason code, and
 key version where relevant; they do not contain bearer tokens, plaintext
 PII, or decrypted exception text.
 
+The access-decision audit is durable before a PII-bearing response is
+released. Where the store supports transactions, the audit event and
+response release decision commit atomically. Otherwise a durable outbox entry
+is committed first and the response is released only after the outbox write
+is acknowledged. If audit persistence or outbox acknowledgement fails,
+return a generic unavailable response and release no PII. Outbox replay is
+idempotent, and a missing audit record is a release-gate failure, not an
+operator warning.
+
 ### 5. Key lifecycle and migration
 
 * New writes use the active key version from the KV/KMS adapter.
@@ -188,6 +271,11 @@ PII, or decrypted exception text.
 * Rotation is bounded: write new version, re-encrypt eligible records in
   batches, verify authorized reads, then revoke the old version after
   retention and rollback windows.
+* Before revocation, count and digest every live envelope reference to the old
+  version across active rows, retention rows, legal holds, backups, and
+  exports. If any reference remains, keep the old key in decrypt-only state;
+  never revoke based only on a sample or on rows visible to the ordinary
+  retention query.
 * Revocation and missing-key behavior fail closed; a partial migration never
   silently writes plaintext.
 * A migration must preserve record deletion and retention semantics and
@@ -213,15 +301,20 @@ PII, or decrypted exception text.
 Implement in separate changes so the policy can be reviewed independently:
 
 1. Add immutable principal/purpose types and route-purpose mapping; test
-   wrong-tenant, wrong-role, missing-purpose, spoofed-header, and verifier
-   failure cases.
+   wrong-tenant, wrong-role, missing-purpose, unknown-purpose, incomplete
+   startup registry, spoofed-header, and verifier failure cases.
 2. Add field classification and a local fake FieldEncryptor; test nested
    SQLite persistence without plaintext, successful authorized reads, denied
-   reads, tamper detection, and unknown key versions.
+   reads, producer-schema rejection, tamper detection, malformed/unknown
+   envelopes, unknown algorithms, and associated-data replay across tenant,
+   record kind, field path, and schema-version changes.
 3. Add the approved KV/KMS adapter and Postgres parity tests. Do not make a
    local fake key provider the production default.
 4. Add rotation, revocation, retention, rollback, and export verification.
-5. Attach exact current-head security, dependency, SAST, and review evidence
+5. Migrate existing audit/analytics plaintext under a tested
+   discover-classify-encrypt-verify workflow, including legal holds and
+   rollback evidence.
+6. Attach exact current-head security, dependency, SAST, and review evidence
    before marking the ADR implemented.
 
 The ADR can move from proposed to accepted only when all of the following
@@ -237,20 +330,22 @@ are true:
 
 ## Research grounding
 
-* A Purpose-Based Access Control Model, IEEE International Conference on
-  Availability, Reliability and Security (ARES 2007), DOI
-  [10.1109/IAS.2007.29](https://doi.org/10.1109/IAS.2007.29). It formalizes
-  purpose as a policy input rather than treating role membership as a
-  complete privacy decision; that is why admin is not an implicit raw-PII
-  purpose here.
-* CryptDB: Protecting Confidentiality with Encrypted Query Processing,
-  USENIX OSDI 2011,
-  [paper](https://www.usenix.org/conference/osdi11/cryptdb-protecting-confidentiality-encrypted-query-processing).
-  It demonstrates that encrypted database operations involve measurable
-  leakage/performance trade-offs; this design therefore refuses to add
+* Yang, N., Barringer, H., & Zhang, N. (2007). A purpose-based access
+  control model. In *Proceedings of the 3rd International Symposium on
+  Information Assurance and Security (IAS 2007)*. IEEE.
+  https://doi.org/10.1109/IAS.2007.29. The model formalizes purpose as a
+  policy input rather than treating role membership as a complete privacy
+  decision; that is why admin is not an implicit raw-PII purpose here.
+* Popa, R. A., Redfield, C. M. S., Zeldovich, N., & Balakrishnan, H. (2011).
+  CryptDB: Protecting confidentiality with encrypted query processing. In
+  *Proceedings of the 23rd ACM Symposium on Operating Systems Principles*
+  (pp. 85–100). ACM. https://doi.org/10.1145/2043556.2043566. It demonstrates
+  that encrypted database operations involve measurable leakage and
+  performance trade-offs; this design therefore refuses to add
   deterministic/searchable encryption without a separate leakage review.
-* NIST SP 800-57 Part 1 Rev. 5, Recommendation for Key Management,
-  [NIST publication](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final).
+* National Institute of Standards and Technology. (2020). *Recommendation
+  for key management: Part 1—General (Revision 5)* (NIST Special Publication
+  800-57, Part 1, Revision 5). https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final.
   Its key-lifecycle guidance grounds versioning, protection, rotation,
   revocation, and retention requirements in this ADR.
 
