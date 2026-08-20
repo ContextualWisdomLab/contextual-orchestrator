@@ -30,6 +30,7 @@ fresh evidence passes every gate; restart with a newly collected file after
 the candidate head changes.
 
 ```bash
+mkdir -p artifacts/release-authority
 python scripts/ci/release_authority_snapshot.py \
   --repo ContextualWisdomLab/contextual-orchestrator \
   --pr <number> \

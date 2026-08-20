@@ -60,7 +60,7 @@ Expected: failure because `commercial_release_candidate_report` is not defined.
 
 - [ ] **Step 3: Implement the report**
 
-Add `commercial_release_candidate_report(...)` to `contextual_orchestrator/orchestrator.py`. Reuse `_buyer_evidence_item(...)` and `_buyer_manifest_summary(...)`. Return `release_status`, `measurement_status`, `release_summary`, `release_artifacts`, `external_release_gaps`, `concrete_blockers`, `review_process_policy`, `related_runtime_reports`, `library_split_decision`, `plugin_traceability`, and `release_links`.
+Add `commercial_release_candidate_report(...)` to `contextual_orchestrator/orchestrator.py`. Reuse `_buyer_evidence_item(...)` and `_buyer_manifest_summary(...)`. Return `release_status`, `product_evidence_status`, `release_authorization`, `measurement_status`, `release_summary`, `release_artifacts` (including the `release_authority_collector` record), `external_release_gaps`, `concrete_blockers`, `review_process_policy`, `related_runtime_reports`, `library_split_decision`, `plugin_traceability`, and `release_links`.
 
 - [ ] **Step 4: Run the focused report test**
 

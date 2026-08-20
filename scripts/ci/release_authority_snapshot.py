@@ -196,6 +196,7 @@ def _required_check_names(rulesets: list[Any]) -> list[str]:
 
 def _required_approval_count(rulesets: list[Any]) -> int:
     """Extract the repository's required independent approval count."""
+    counts: list[int] = []
     for ruleset in rulesets:
         if not isinstance(ruleset, dict) or not _main_ref(ruleset):
             continue
@@ -208,8 +209,8 @@ def _required_approval_count(rulesets: list[Any]) -> int:
             parameters = rule.get("parameters")
             count = parameters.get("required_approving_review_count") if isinstance(parameters, dict) else None
             if type(count) is int and count >= 0:
-                return count
-    return 0
+                counts.append(count)
+    return max(counts, default=0)
 
 
 def collect_authority(

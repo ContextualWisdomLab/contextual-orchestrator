@@ -18,7 +18,7 @@ artifact creation.
 
 Product evidence and release authorization are separate. Reviewer delay, queued
 model review, absent checks, stale checks, synthetic merge evidence, or missing
-independent approval never authorizes a release. Local product evidence remains
+required independent approval never authorizes a release. Local product evidence remains
 inspectable for buyer demonstrations while release status stays blocked until a
 fresh protected-main authority snapshot is supplied.
 

@@ -179,6 +179,16 @@ def test_pagination_and_ruleset_helpers_flatten_and_fail_closed() -> None:
     assert collector._rulesets_are_verified(rulesets) is True
     assert collector._required_check_names(rulesets) == ["Tests"]
     assert collector._required_approval_count(rulesets) == 2
+    approval_rulesets = [
+        {
+            "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["main"]}},
+            "rules": [{"type": "pull_request", "parameters": {"required_approving_review_count": count}}],
+        }
+        for count in (1, 2)
+    ]
+    assert collector._required_approval_count(approval_rulesets) == 2
+    assert collector._required_approval_count(list(reversed(approval_rulesets))) == 2
     assert collector._rulesets_are_verified([{"enforcement": "active", "conditions": {}, "rules": []}]) is False
 
 
