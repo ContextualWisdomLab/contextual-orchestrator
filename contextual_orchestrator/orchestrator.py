@@ -1148,6 +1148,16 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Passthrough a full request to one agent, returning the raw provider JSON."""
+        normalized_endpoint = endpoint.strip("/")
+        if normalized_endpoint.startswith("v1/"):
+            normalized_endpoint = normalized_endpoint[3:]
+        if (
+            normalized_endpoint in {"chat/completions", "completions", "responses"}
+            and not is_chat_compatible_model_id(agent.model)
+        ):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
@@ -1335,6 +1345,10 @@ class ModelClient:
         workloads (24h completion window, ~half the price); real-time chat should keep
         using ``chat``. The mock path answers synchronously so tests and local runs work.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
             results = {
                 custom_id: {"content": self._mock(agent, messages), "usage": None}
