@@ -20,7 +20,7 @@ affected_components:
   - "tests/test_cost_ledger.py"
 effort: M
 supersedes: null
-superseded-by: "0010-gateway-only-provider-contract"
+superseded-by: "0012-gateway-only-provider-contract"
 related:
   - path: "docs/planning/adrs/0002-explicit-local-mlx-evaluation.md"
     relation: influences

@@ -63,9 +63,9 @@ judgment: verifier decisions must use the structured model judge and fail
 closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
 
 Model and reasoning changes are governed by [ADR
-0011](planning/adrs/0011-paper-grounded-adaptive-reasoning-policy.md). The
+0013](planning/adrs/0013-paper-grounded-adaptive-reasoning-policy.md). The
 provider-neutral gateway boundary and direct-MLX prohibition are governed by
-[ADR 0010](planning/adrs/0010-gateway-only-provider-contract.md).
+[ADR 0012](planning/adrs/0012-gateway-only-provider-contract.md).
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 

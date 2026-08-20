@@ -1,5 +1,5 @@
 ---
-id: "0010"
+id: "0012"
 title: "Gateway-only provider contract; no direct MLX transport"
 status: accepted
 proposed_date: "2026-08-20"

@@ -28,7 +28,7 @@ affected_components:
   - "tests/test_openai_passthrough.py"
 effort: M
 supersedes: null
-superseded-by: "0010-gateway-only-provider-contract"
+superseded-by: "0012-gateway-only-provider-contract"
 related:
   - path: "docs/planning/adrs/0001-fail-closed-model-judgment.md"
     relation: informational

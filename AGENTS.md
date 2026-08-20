@@ -126,7 +126,7 @@ push or open a PR.
   claims about quality/cost trade-offs must be grounded in cited academic
   papers and current capability evidence. Do not introduce a model policy from
   a vendor blog, benchmark marketing claim, or an implementation convention.
-  The governing decision is [ADR 0011](docs/planning/adrs/0011-paper-grounded-adaptive-reasoning-policy.md).
+  The governing decision is [ADR 0013](docs/planning/adrs/0013-paper-grounded-adaptive-reasoning-policy.md).
 - `auto` is an orchestrator policy, not a provider `reasoning_effort` value. It
   may select a provider-supported value or an orchestrated multi-agent path,
   but the trace must retain the requested policy and the effective strategy.
@@ -140,6 +140,6 @@ push or open a PR.
   reasoning model.
 - MLX is not a public provider contract. Keep runtime-specific local model
   behavior behind an authenticated provider-neutral gateway as specified by
-  ADR 0010; do not add direct `mlx://` configuration, transport, or model
+  ADR 0012; do not add direct `mlx://` configuration, transport, or model
   selection logic.
 <!-- END cwl-agent-guidance -->

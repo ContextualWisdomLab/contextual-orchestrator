@@ -1,5 +1,5 @@
 ---
-id: "0011"
+id: "0013"
 title: "Paper-grounded adaptive reasoning and model capability policy"
 status: accepted
 proposed_date: "2026-08-20"
@@ -27,7 +27,7 @@ affected_components:
 supersedes: null
 superseded-by: null
 related:
-  - path: "docs/planning/adrs/0010-gateway-only-provider-contract.md"
+  - path: "docs/planning/adrs/0012-gateway-only-provider-contract.md"
     relation: extends
 effort: M
 ---
@@ -76,7 +76,7 @@ decisions from model-name folklore.
   `medium`, `high`, or `xhigh` to fixed worker counts or a vendor model name.
 - No direct MLX transport or MLX-specific model policy is permitted. Local
   runtimes remain behind the authenticated provider-neutral gateway boundary
-  in ADR 0010.
+  in ADR 0012.
 
 ## Evidence contract
 

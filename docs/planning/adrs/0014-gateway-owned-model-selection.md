@@ -1,4 +1,34 @@
-# ADR 0012: Gateway-owned model selection and multi-agent structured output
+---
+id: "0014"
+title: "Gateway-owned model selection and multi-agent structured output"
+status: accepted
+proposed_date: "2026-08-20"
+accepted_date: "2026-08-20"
+deciders:
+  - "repository maintainer"
+consulted:
+  - "gateway-only provider contract"
+  - "paper-grounded adaptive reasoning policy"
+informed:
+  - "LineageWeave"
+  - "fast-mlsirm"
+  - "contributors"
+affected_components:
+  - "contextual_orchestrator/__main__.py"
+  - "contextual_orchestrator/cost_router.py"
+  - "contextual_orchestrator/orchestrator.py"
+  - "contextual_orchestrator/server.py"
+supersedes: null
+superseded-by: null
+related:
+  - path: "docs/planning/adrs/0012-gateway-only-provider-contract.md"
+    relation: depends-on
+  - path: "docs/planning/adrs/0013-paper-grounded-adaptive-reasoning-policy.md"
+    relation: implements
+effort: M
+---
+
+# ADR 0014: Gateway-owned model selection and multi-agent structured output
 
 - Status: Accepted
 - Date: 2026-08-20
