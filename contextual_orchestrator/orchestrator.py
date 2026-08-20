@@ -1939,12 +1939,28 @@ class TaskOrchestrator:
         cache = self._cache_provider if self._cache_provider is not None else self._cache
         if cache is None or bypass_cache:
             return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode, model_name)
-        cached = cache.get(key)
-        if cached is not None:
-            return cached
+        try:
+            key = self._cache_key(messages, mode, model_name)
+        except (TypeError, ValueError):
+            # Cache key serialization is an optimization boundary; unusual but
+            # valid caller objects must still reach the live provider path.
+            return self._dispatch(messages, mode)
+        try:
+            cached = cache.get(key)
+        except Exception:  # noqa: BLE001 - optional cache must fail open
+            cached = None
+        if (
+            isinstance(cached, Mapping)
+            and isinstance(cached.get("mode"), str)
+            and isinstance(cached.get("answer"), str)
+            and isinstance(cached.get("trace"), list)
+        ):
+            return copy.deepcopy(dict(cached))
         result = self._dispatch(messages, mode)
-        cache.put(key, result)
+        try:
+            cache.put(key, result)
+        except Exception:  # noqa: BLE001 - optional cache must fail open
+            pass
         return result
 
     def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
