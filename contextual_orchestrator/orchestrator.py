@@ -822,6 +822,23 @@ class ModelClient:
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_with_retry(agent, payload, destination)
 
+    def embed_many(self, agent: ModelAgent, inputs: list[str]) -> list[list[float]]:
+        """Send one real embeddings request through the configured provider agent."""
+        if not inputs:
+            return []
+        if agent.base_url.startswith("mock://"):
+            raise RuntimeError("mock agents do not provide semantic embeddings")
+        destination = self._validate_provider(agent)
+        api_key = _provider_credential(agent)
+        credential_name = _provider_credential_name(agent)
+        if credential_name and not api_key:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
+            )
+        payload = {"model": agent.model, "input": inputs}
+        with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+            return self._send_embeddings_with_retry(agent, payload, destination)
+
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
 
@@ -916,6 +933,26 @@ class ModelClient:
         detail = f": {last_error}" if last_error else ""
         raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
 
+    def _send_embeddings_with_retry(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+    ) -> list[list[float]]:
+        """Call the provider embeddings endpoint with the chat retry policy."""
+        last_error: Exception | None = None
+        retry_limit = self._retry_limit(agent)
+        for attempt in range(retry_limit + 1):
+            try:
+                return self._send_embeddings(agent, payload, destination)
+            except Exception as exc:  # noqa: BLE001 - classify then decide
+                last_error = exc
+                if attempt >= retry_limit or not is_transient_error(exc):
+                    break
+                self._sleep(self._backoff_delay(attempt))
+        detail = f": {last_error}" if last_error else ""
+        raise RuntimeError(f"provider {agent.id} embeddings request failed{detail}") from last_error
+
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
         return self.local_max_retries if _is_local_provider_url(agent.base_url) else self.max_retries
@@ -955,6 +992,49 @@ class ModelClient:
         if isinstance(usage, dict):
             self._local.usage = usage
         return self._response_content(agent, data)
+
+    def _send_embeddings(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+    ) -> list[list[float]]:
+        """Perform one provider embeddings request and validate every vector."""
+        api_key = _provider_credential(agent)
+        headers = {"content-type": "application/json"}
+        if api_key:
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        request = urllib.request.Request(
+            self._provider_url(agent, "/embeddings"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with self._open_provider(request, destination) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        rows = data.get("data")
+        expected = payload.get("input")
+        if not isinstance(expected, list) or not isinstance(rows, list) or len(rows) != len(expected):
+            raise RuntimeError("provider embeddings response did not contain a complete vector batch")
+        ordered: list[list[float] | None] = [None] * len(expected)
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("index"), int):
+                raise RuntimeError("provider embeddings response contained an invalid index")
+            index = row["index"]
+            vector = row.get("embedding")
+            if not 0 <= index < len(expected) or not isinstance(vector, list) or not vector:
+                raise RuntimeError("provider embeddings response contained an invalid vector")
+            if not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in vector):
+                raise RuntimeError("provider embeddings response contained a non-finite vector")
+            if ordered[index] is not None:
+                raise RuntimeError("provider embeddings response contained a duplicate index")
+            ordered[index] = [float(value) for value in vector]
+        if any(vector is None for vector in ordered):
+            raise RuntimeError("provider embeddings response omitted a vector")
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            self._local.usage = usage
+        return [vector for vector in ordered if vector is not None]
 
     @staticmethod
     def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:

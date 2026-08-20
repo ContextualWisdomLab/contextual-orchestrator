@@ -77,10 +77,7 @@ class CostRoutingCoordinator:
             )
         else:
             self.batch_backend = batch_backend
-        self.embedding_batch_backend: EmbeddingBatchBackend = (
-            embedding_batch_backend
-            or LocalEmbeddingBatchBackend(token_counter=self.token_counter)
-        )
+        self.embedding_batch_backend: EmbeddingBatchBackend = embedding_batch_backend or self._default_embedding_backend()
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs: Dict[str, BatchJob] = {}
         # embeddings batch state: job handle + submitted requests + cached doc,
@@ -91,6 +88,43 @@ class CostRoutingCoordinator:
         self._embedding_part_counts: Dict[str, List[int]] = {}
         self._embedding_part_limits: Dict[str, Dict[str, int]] = {}
         self._embedding_documents: Dict[str, Dict[str, Any]] = {}
+
+    def _default_embedding_backend(self) -> EmbeddingBatchBackend:
+        """Use a provider-tagged embedding agent when one is configured."""
+        candidates = [
+            agent
+            for agent in getattr(self.orchestrator, "candidates", [])
+            if not agent.disabled
+            and "embedding" in agent.tags
+            and not agent.base_url.startswith("mock://")
+        ]
+        if not candidates:
+            return LocalEmbeddingBatchBackend(token_counter=self.token_counter)
+
+        def embed_batch(requests: List[EmbeddingBatchRequest]) -> List[List[float]]:
+            vectors: List[List[float] | None] = [None] * len(requests)
+            for model in {request.model for request in requests}:
+                matching = [agent for agent in candidates if agent.model == model]
+                if not matching:
+                    raise ValueError(f"embedding model {model!r} is not configured in the embedding agent pool")
+                indexes = [index for index, request in enumerate(requests) if request.model == model]
+                client = getattr(self.orchestrator, "client", None)
+                embed_many = getattr(client, "embed_many", None)
+                if not callable(embed_many):
+                    raise RuntimeError("configured embedding agent has no provider embedding client")
+                batch_vectors = embed_many(matching[0], [requests[index].input_text for index in indexes])
+                if len(batch_vectors) != len(indexes):
+                    raise RuntimeError("provider returned an incomplete embedding vector batch")
+                for index, vector in zip(indexes, batch_vectors):
+                    vectors[index] = vector
+            if any(vector is None for vector in vectors):
+                raise RuntimeError("provider returned an incomplete embedding vector batch")
+            return [vector for vector in vectors if vector is not None]
+
+        return LocalEmbeddingBatchBackend(
+            batch_embedder=embed_batch,
+            token_counter=self.token_counter,
+        )
 
     # ------------------------------------------------------------------
     # Provider / model resolution
