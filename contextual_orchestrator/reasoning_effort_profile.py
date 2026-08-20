@@ -166,6 +166,8 @@ def parse_reasoning_effort_profile(raw: Mapping[str, Any] | None) -> ReasoningEf
     """
     if raw is None:
         raise EffortProfileError("reasoning_effort_profile is required")
+    if not isinstance(raw, Mapping):
+        raise EffortProfileError("reasoning_effort_profile must be a JSON object")
     payload = dict(raw)
     unknown = sorted(set(payload) - _PROFILE_KEYS)
     if unknown:

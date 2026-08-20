@@ -8,7 +8,7 @@ and asserts the invariants that must hold *for arbitrary input*:
   ``AttributeError``, ``RecursionError``, ``SystemError`` or a hang; and
 * structural invariants on any successful result (shape, types, idempotence).
 
-CodeGraph (``codegraph explore``) surfaced these four surfaces as the ones that
+CodeGraph (``codegraph explore``) surfaced these seven surfaces as the ones that
 consume untrusted bytes/JSON:
 
 1. ``server._coerce_json`` / ``_validate_mode`` / ``_validate_messages`` /
@@ -18,7 +18,12 @@ consume untrusted bytes/JSON:
    over arbitrary trace payloads (regex + recursion).
 4. ``orchestrator.TaskOrchestrator.run`` (+ ``sse_stream_body``) -- end-to-end
    prompt processing on a mock (offline) provider.
-5. ``reasoning_effort_profile.parse_reasoning_effort_profile`` -- untrusted
+5. ``orchestrator._parse_model_judge_reply`` -- strict parsing of untrusted
+   model-generated verdicts.
+6. ``model_discovery._parse_openai_compatible`` / ``_parse_bytez`` -- parsing
+   of a remote provider's model-list HTTP response (attacker/compromised
+   provider-controlled JSON).
+7. ``reasoning_effort_profile.parse_reasoning_effort_profile`` -- untrusted
    role-compute JSON. Must raise ``EffortProfileError`` / ``TypeError`` /
    ``ValueError`` or return a finite profile. Never crash on NaN, bool-as-
    number, or unknown keys.
@@ -124,6 +129,80 @@ def exercise_request_body(raw: bytes) -> None:
                 assert set(message) == {"role", "content"}
                 assert message["role"] in server.ALLOWED_MESSAGE_ROLES
                 assert isinstance(message["content"], str)
+
+    # Omit-equivalent instructions/metadata must leave the body persist-clean.
+    if "instructions" in body:
+        try:
+            instructions = server._validate_responses_instructions(body)
+        except RequestError:
+            pass
+        else:
+            if instructions is None:
+                assert "instructions" not in body
+    if "metadata" in body:
+        try:
+            metadata = server._validate_openai_metadata(body)
+        except RequestError:
+            pass
+        else:
+            if metadata is None:
+                leftover = body.get("metadata")
+                assert leftover is None or (
+                    isinstance(leftover, dict)
+                    and not any(value is None for value in leftover.values())
+                )
+            else:
+                assert body.get("metadata") == metadata
+                assert all(isinstance(value, str) for value in metadata.values())
+
+    # response_format.json_schema.name must match [a-zA-Z0-9_-]{1,64} ASCII.
+    if "response_format" in body:
+        try:
+            fmt = server._validate_chat_response_format(body)
+        except RequestError:
+            pass
+        else:
+            if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
+                schema = fmt.get("json_schema")
+                if isinstance(schema, dict) and "name" in schema:
+                    schema_name = schema["name"]
+                    assert isinstance(schema_name, str) and 1 <= len(schema_name) <= 64
+                    assert schema_name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in schema_name
+                    )
+
+    # Tools honesty: successful function names match [a-zA-Z0-9_-]{1,64} ASCII.
+    if "tools" in body:
+        try:
+            tools = server._validate_chat_tools(body)
+        except RequestError:
+            pass
+        else:
+            if tools:
+                for item in tools:
+                    function = item.get("function")
+                    assert isinstance(function, dict)
+                    tool_name = function.get("name")
+                    assert isinstance(tool_name, str) and 1 <= len(tool_name) <= 64
+                    assert tool_name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in tool_name
+                    )
+
+    # Official Responses text.format: successful names are ASCII [a-zA-Z0-9_-]{1,64}.
+    if "text" in body:
+        try:
+            text_value = server._validate_responses_text(body)
+        except RequestError:
+            pass
+        else:
+            if isinstance(text_value, dict):
+                fmt = text_value.get("format")
+                if isinstance(fmt, dict) and fmt.get("type") == "json_schema":
+                    name = fmt.get("name")
+                    assert isinstance(name, str) and 1 <= len(name) <= 64
+                    assert name.isascii() and all(
+                        ch.isalnum() or ch in "_-" for ch in name
+                    )
 
 
 def exercise_agent_config(value: Any) -> None:
@@ -251,7 +330,10 @@ def exercise_reasoning_effort_profile(value: Any) -> None:
     if not isinstance(value, dict):
         return
     try:
-        profile = parse_reasoning_effort_profile(value)
+        # ``true_theta`` belongs to the ablation input, not the profile schema.
+        # Keep the two trust-boundary payloads separate so this branch is reachable.
+        profile_value = {key: item for key, item in value.items() if key != "true_theta"}
+        profile = parse_reasoning_effort_profile(profile_value)
     except (EffortProfileError, TypeError, ValueError):
         return
     assert profile.reasoning_effort in REASONING_EFFORT_LEVELS

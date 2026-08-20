@@ -1686,6 +1686,7 @@ class TaskOrchestrator:
         "thinker": ("planning", "reasoning", "research"),
         "worker": ("coding", "implementation", "reasoning"),
         "verifier": ("verification", "security", "review", "debugging"),
+        "judge": ("verification", "security", "review", "debugging"),
         "synthesizer": ("writing", "reasoning", "planning"),
     }
     DOMAIN_HINTS = {
