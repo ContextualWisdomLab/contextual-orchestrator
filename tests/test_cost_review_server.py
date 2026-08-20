@@ -73,8 +73,26 @@ def test_readyz_requires_admin_and_reports_secret_free_runtime_checks() -> None:
     assert status == 200
     assert body["status"] == "ready"
     assert set(body["checks"]) == {"orchestration", "sync_routing", "batch_routing", "embedding_batch"}
-    assert body["checks"]["batch_routing"]["backend"] == "local"
+    assert body["checks"]["batch_routing"] == {"status": "ready"}
     assert "usage_record_count" not in json.dumps(body)
+
+
+def test_readiness_never_exposes_backend_identifiers() -> None:
+    agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    orchestrator = TaskOrchestrator(agents)
+    coordinator = CostRoutingCoordinator(orchestrator)
+
+    class Backend:
+        name = "https://provider.invalid/api?token=secret"
+
+    coordinator.batch_backend = Backend()
+    coordinator.embedding_batch_backend = Backend()
+    body, status = _readiness_payload(orchestrator, coordinator)
+
+    assert status == 200
+    assert body["checks"]["batch_routing"] == {"status": "ready"}
+    assert "provider.invalid" not in json.dumps(body)
+    assert "secret" not in json.dumps(body)
 
 
 def test_readiness_keeps_interactive_service_ready_when_optional_batch_degrades() -> None:
