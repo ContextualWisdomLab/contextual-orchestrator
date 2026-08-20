@@ -58,6 +58,16 @@ class _CountingClient:
         return self._client.take_usage()
 
 
+class _BrokenCache:
+    """Failing custom provider used to prove cache outages do not fail requests."""
+
+    def get(self, key: str) -> dict | None:
+        raise ConnectionError("cache unavailable")
+
+    def put(self, key: str, value: dict) -> None:
+        raise ConnectionError("cache unavailable")
+
+
 def test_key_is_order_stable_but_model_and_mode_specific() -> None:
     messages = [{"role": "user", "content": "same"}]
     reordered = [{"content": "same", "role": "user"}]
@@ -107,6 +117,37 @@ def test_backend_errors_and_malformed_values_fail_open() -> None:
     client.fail_get = False
     client.fail_set = True
     provider.put("anything", {"answer": "live path remains available"})
+
+
+def test_semantically_malformed_cached_response_is_ignored() -> None:
+    client = _CountingClient()
+    redis = _FakeRedis()
+    provider = RedisResponseCacheProvider(redis, 60)
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "mock", tags=("reasoning", "writing"))],
+        client=client,
+        cache_provider=provider,
+    )
+    messages = [{"role": "user", "content": "recover from stale cache"}]
+    key = orchestrator._cache_key(messages, "auto")
+    redis.values[f"contextual_orchestrator_response:{key}"] = json.dumps({"answer": "stale"})
+
+    result = orchestrator.complete(messages)
+
+    assert result["answer"] != "stale"
+    assert client.calls == 1
+
+
+def test_custom_cache_provider_errors_fail_open() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "mock", tags=("reasoning", "writing"))],
+        client=_CountingClient(),
+        cache_provider=_BrokenCache(),
+    )
+
+    result = orchestrator.complete([{"role": "user", "content": "live response"}])
+
+    assert result["answer"]
 
 
 def test_orchestrator_uses_distributed_cache_and_honors_bypass() -> None:
