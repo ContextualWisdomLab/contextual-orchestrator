@@ -77,6 +77,27 @@ def test_readyz_requires_admin_and_reports_secret_free_runtime_checks() -> None:
     assert "usage_record_count" not in json.dumps(body)
 
 
+def test_trace_read_endpoints_require_admin_authentication() -> None:
+    """Trace and access-report reads must not become an unauthenticated data leak."""
+    server, port, token = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for path in (
+            "/api/v1/workflow_runs",
+            "/api/v1/workflow_runs/missing-run",
+            "/api/v1/access_reports/missing-run",
+        ):
+            status, body = _request("GET", f"{base}{path}")
+            assert status == 401
+            assert body["error"]["code"] == "unauthorized"
+
+        status, body = _request("GET", f"{base}/api/v1/workflow_runs", token)
+        assert status == 200
+        assert body["items"] == []
+    finally:
+        server.shutdown()
+
+
 def test_readiness_never_exposes_backend_identifiers() -> None:
     agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
     orchestrator = TaskOrchestrator(agents)
