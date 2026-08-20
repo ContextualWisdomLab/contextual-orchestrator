@@ -1,0 +1,391 @@
+name: Verify final chat capability contract
+
+on:
+  push:
+    branches:
+      - fix/chat-capability-isolation-embedding-models
+    paths:
+      - .github/workflows/repair-chat-capability-contract-final.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-final-chat-capability-contract
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Build and test exact patch read-only
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      base_sha: ${{ steps.export.outputs.base_sha }}
+      patch_b64: ${{ steps.export.outputs.patch_b64 }}
+    steps:
+      - name: Checkout exact trigger without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Materialize two-boundary capability contract
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from __future__ import annotations
+
+          from pathlib import Path
+          import re
+
+          chat = '''"""Classify chat transport compatibility and ordinary agent-role eligibility.
+
+          Provider catalogs mix endpoint-only models with models served through an
+          OpenAI-compatible chat transport. Transport compatibility is not the same as
+          fitness for an ordinary thinker, worker, verifier, or synthesizer role: audio and
+          policy-classification models can use chat transport, while embedding, reranking,
+          transcription, moderation-endpoint, image-generation, realtime, and speech-only
+          models cannot.
+          """
+
+          from __future__ import annotations
+
+          import re
+
+          _MODEL_TOKEN_RE = re.compile(r"[a-z0-9]+")
+          _TRANSPORT_INCOMPATIBLE_EXACT_TOKENS = frozenset(
+              {
+                  "bge",
+                  "e5",
+                  "embed",
+                  "embedding",
+                  "embeddings",
+                  "gte",
+                  "image",
+                  "images",
+                  "moderation",
+                  "realtime",
+                  "rerank",
+                  "reranker",
+                  "sora",
+                  "speech",
+                  "transcribe",
+                  "transcription",
+                  "tts",
+                  "whisper",
+              }
+          )
+          _TRANSPORT_INCOMPATIBLE_PREFIXES = (
+              "embed",
+              "moderat",
+              "rerank",
+              "transcrib",
+          )
+
+
+          def _model_tokens(model_id: str) -> tuple[str, ...]:
+              """Normalize one provider-prefixed model identifier into lowercase tokens."""
+              if type(model_id) is not str:
+                  return ()
+              return tuple(_MODEL_TOKEN_RE.findall(model_id.casefold()))
+
+
+          def is_chat_compatible_model_id(model_id: str) -> bool:
+              """Return whether an identifier can use the ordinary chat transport.
+
+              The classifier rejects only identifiers that clearly advertise an endpoint
+              family incompatible with chat messages. Audio-capable and safety-classifier
+              models remain transport-compatible because providers serve some of them over
+              ``/chat/completions``.
+              """
+              tokens = _model_tokens(model_id)
+              if not tokens:
+                  return False
+              for token in tokens:
+                  if token in _TRANSPORT_INCOMPATIBLE_EXACT_TOKENS:
+                      return False
+                  if token.startswith(_TRANSPORT_INCOMPATIBLE_PREFIXES):
+                      return False
+              return True
+
+
+          def is_general_chat_agent_model_id(model_id: str) -> bool:
+              """Return whether a chat model may enter ordinary orchestration roles.
+
+              Explicit guard and safety models can use chat transport but are specialized
+              policy classifiers, not general answer synthesizers. This negative role gate
+              does not infer reasoning, coding, vision, or verification capabilities.
+              """
+              tokens = _model_tokens(model_id)
+              if not tokens or not is_chat_compatible_model_id(model_id):
+                  return False
+              return not any(
+                  token == "safety"
+                  or token == "guard"
+                  or token.startswith("nemoguard")
+                  or token.endswith("guard")
+                  for token in tokens
+              )
+          '''
+          # The workflow YAML indentation is intentionally removed from generated source.
+          chat = "\n".join(line[10:] if line.startswith("          ") else line for line in chat.splitlines()) + "\n"
+          Path("contextual_orchestrator/chat_capability.py").write_text(chat, encoding="utf-8")
+
+          discovery_path = Path("contextual_orchestrator/model_discovery.py")
+          discovery = discovery_path.read_text(encoding="utf-8")
+          discovery = re.sub(
+              r"from \.chat_capability import (?:\([^)]*\)|[^\n]+)\n",
+              "from .chat_capability import (\n"
+              "    is_chat_compatible_model_id,\n"
+              "    is_general_chat_agent_model_id,\n"
+              ")\n",
+              discovery,
+              count=1,
+              flags=re.S,
+          )
+          discovery = discovery.replace(
+              "is_chat_compatible_model_id(",
+              "is_general_chat_agent_model_id(",
+          )
+          discovery = discovery.replace(
+              "Provider model-list discovery for chat-agent candidates.",
+              "Provider model-list discovery for general chat-agent candidates.",
+          )
+          discovery = discovery.replace(
+              "Clearly non-chat identifiers are rejected",
+              "Endpoint-incompatible and specialized policy-model identifiers are rejected",
+          )
+          discovery = discovery.replace(
+              '"""One chat-compatible model found on a provider, with reported pricing."""',
+              '"""One general chat-agent candidate found on a provider, with pricing."""',
+          )
+          discovery = discovery.replace(
+              '"""Build a disabled chat ModelAgent or reject a non-chat discovery record."""',
+              '"""Build a disabled general chat agent or reject an ineligible record."""',
+          )
+          discovery = discovery.replace(
+              'raise ValueError("non-chat model cannot be converted into a chat agent")',
+              'raise ValueError("model is not eligible for the general chat agent pool")',
+          )
+          discovery_path.write_text(discovery, encoding="utf-8")
+
+          orchestrator_path = Path("contextual_orchestrator/orchestrator.py")
+          orchestrator = orchestrator_path.read_text(encoding="utf-8")
+          orchestrator = re.sub(
+              r"from \.chat_capability import (?:\([^)]*\)|[^\n]+)\n",
+              "from .chat_capability import (\n"
+              "    is_chat_compatible_model_id,\n"
+              "    is_general_chat_agent_model_id,\n"
+              ")\n",
+              orchestrator,
+              count=1,
+              flags=re.S,
+          )
+
+          def replace_in_method(source: str, method: str) -> str:
+              start_marker = f"    def {method}("
+              start = source.find(start_marker)
+              if start < 0:
+                  raise SystemExit(f"missing method {method}")
+              next_def = source.find("\n    def ", start + len(start_marker))
+              end = len(source) if next_def < 0 else next_def
+              block = source[start:end]
+              block = block.replace(
+                  "is_chat_compatible_model_id(",
+                  "is_general_chat_agent_model_id(",
+              )
+              return source[:start] + block + source[end:]
+
+          for method in (
+              "_plan_generated",
+              "_parse_workflow_plan",
+              "_ranked_agents",
+              "_failover_candidates",
+          ):
+              orchestrator = replace_in_method(orchestrator, method)
+          orchestrator_path.write_text(orchestrator, encoding="utf-8")
+
+          transport_test = '''"""Regression tests for transport compatibility versus ordinary agent roles."""
+
+          from __future__ import annotations
+
+          import sys
+          from pathlib import Path
+
+          import pytest
+
+          sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+          from contextual_orchestrator.chat_capability import (  # noqa: E402
+              is_chat_compatible_model_id,
+              is_general_chat_agent_model_id,
+          )
+
+
+          @pytest.mark.parametrize(
+              "model_id",
+              [
+                  "gpt-audio",
+                  "gpt-4o-audio-preview",
+                  "gpt-4o-mini-audio-preview",
+                  "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
+                  "meta-llama/Llama-Guard-4-12B",
+              ],
+          )
+          def test_chat_endpoint_models_remain_transport_compatible(model_id: str) -> None:
+              """Do not reject models that provider contracts serve over chat."""
+              assert is_chat_compatible_model_id(model_id)
+
+
+          @pytest.mark.parametrize(
+              "model_id",
+              [
+                  "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
+                  "nvidia/llama-3.1-nemoguard-8b-content-safety",
+                  "meta-llama/Llama-Guard-4-12B",
+              ],
+          )
+          def test_guard_models_do_not_enter_general_synthesis_pool(model_id: str) -> None:
+              """Keep chat-served policy classifiers out of ordinary worker roles."""
+              assert not is_general_chat_agent_model_id(model_id)
+
+
+          @pytest.mark.parametrize(
+              "model_id",
+              [
+                  "gpt-audio",
+                  "gpt-4o-audio-preview",
+                  "gpt-5.2",
+                  "qwen/qwen3-235b-a22b-instruct",
+              ],
+          )
+          def test_general_generation_models_remain_agent_eligible(model_id: str) -> None:
+              """Preserve capable chat generation models for ordinary agent selection."""
+              assert is_general_chat_agent_model_id(model_id)
+
+
+          @pytest.mark.parametrize(
+              "model_id",
+              [
+                  "azure/text-embedding-3-large",
+                  "text_embedding_3_large",
+                  "company/reranker-v2",
+                  "gpt-4o-mini-transcribe",
+                  "omni-moderation-latest",
+                  "gpt-image-1",
+                  "gpt-realtime",
+                  "tts-1",
+              ],
+          )
+          def test_endpoint_only_models_fail_both_boundaries(model_id: str) -> None:
+              """Reject clear non-chat endpoint families before transport or role routing."""
+              assert not is_chat_compatible_model_id(model_id)
+              assert not is_general_chat_agent_model_id(model_id)
+          '''
+          transport_test = "\n".join(line[10:] if line.startswith("          ") else line for line in transport_test.splitlines()) + "\n"
+          Path("tests/test_chat_transport_role_separation.py").write_text(
+              transport_test,
+              encoding="utf-8",
+          )
+
+          incident_test = Path("tests/test_chat_model_capability_isolation.py")
+          incident = incident_test.read_text(encoding="utf-8")
+          incident = incident.replace(
+              'with pytest.raises(ValueError, match="non-chat model"):',
+              'with pytest.raises(ValueError, match="general chat agent pool"):',
+          )
+          incident_test.write_text(incident, encoding="utf-8")
+
+          doctoring = Path("docs/doctoring/embedding-chat-capability-isolation.md")
+          body = doctoring.read_text(encoding="utf-8")
+          if "### Transport-versus-role evidence" not in body:
+              section = '''
+          ### Transport-versus-role evidence
+
+          The runtime does not equate a token in a model name with an endpoint family.
+          OpenAI publishes audio-capable generation through its audio/chat guidance, and
+          NVIDIA NIM exposes OpenAI-compatible chat APIs for model families that include
+          specialized policy classifiers. Therefore `audio`, `guard`, and `safety` are not
+          transport-level disqualifiers. Explicit guard/safety identifiers are excluded at
+          the ordinary orchestration-role boundary until a specialized role and
+          authenticated capability record exist.
+
+          '''
+              section = "\n".join(line[10:] if line.startswith("          ") else line for line in section.splitlines()) + "\n"
+              anchor = "\n## References\n"
+              body = body.replace(anchor, "\n" + section + anchor, 1) if anchor in body else body.rstrip() + "\n\n" + section
+          references = (
+              "NVIDIA Corporation. (n.d.). *NVIDIA NIM for large language models: OpenAI-compatible API reference*. Retrieved August 20, 2026, from https://docs.nvidia.com/nim/large-language-models/latest/api-reference.html",
+              "OpenAI. (n.d.). *Audio and speech*. Retrieved August 20, 2026, from https://platform.openai.com/docs/guides/audio",
+          )
+          for reference in references:
+              if reference not in body:
+                  body = body.rstrip() + "\n\n" + reference + "\n"
+          doctoring.write_text(body, encoding="utf-8")
+
+          # No temporary workflow may survive in the verified patch.
+          for pattern in ("repair-chat-*.yml", "repair-chat-*.yaml"):
+              for workflow in Path(".github/workflows").glob(pattern):
+                  workflow.unlink()
+          PY
+
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Run focused and full verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q contextual_orchestrator
+          python -m pytest -q tests/test_chat_transport_role_separation.py tests/test_chat_model_capability_isolation.py
+          python -m pytest -q
+          git diff --check
+
+      - name: Export tested patch
+        id: export
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary > /tmp/final-chat-capability.patch
+          test -s /tmp/final-chat-capability.patch
+          echo "base_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "patch_b64=$(base64 -w0 /tmp/final-chat-capability.patch)" >> "$GITHUB_OUTPUT"
+
+  commit:
+    name: Commit tested patch without executing repository code
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout branch without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: fix/chat-capability-isolation-embedding-models
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify base, apply tested patch, and push
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.prepare.outputs.base_sha }}
+          PATCH_B64: ${{ needs.prepare.outputs.patch_b64 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "$EXPECTED_SHA"
+          printf '%s' "$PATCH_B64" | base64 -d > /tmp/final-chat-capability.patch
+          git apply --index /tmp/final-chat-capability.patch
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: finalize chat transport capability boundary"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:fix/chat-capability-isolation-embedding-models
