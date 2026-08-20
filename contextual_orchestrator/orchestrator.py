@@ -31,6 +31,10 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+from .chat_capability import (
+    is_chat_compatible_model_id,
+    is_general_chat_agent_model_id,
+)
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 
@@ -864,6 +868,8 @@ class ModelClient:
         ``default_top_p`` are used so request-scoped Completions sampling can be
         applied without threading kwargs through every orchestrator hop.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError("model is not chat-compatible and cannot serve a chat request")
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         effective_temperature = self.default_temperature if temperature is None else temperature
@@ -976,6 +982,15 @@ class ModelClient:
         """
         probe_timeout = _validate_provider_probe_timeout(timeout)
         started = time.monotonic()
+        if not is_chat_compatible_model_id(agent.model):
+            return {
+                "agent_id": agent.id,
+                "model": agent.model,
+                "status": "not_ready",
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "error_type": "ValueError",
+                "failure_code": "non_chat_model",
+            }
         self._local.usage = None
         failure_code = "provider_probe_failed"
         try:
@@ -1297,6 +1312,10 @@ class ModelClient:
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -1354,26 +1373,46 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Send one passthrough attempt without same-agent retry amplification."""
+        normalized_endpoint = endpoint.strip("/")
+        if normalized_endpoint.startswith("v1/"):
+            normalized_endpoint = normalized_endpoint[3:]
+        if (
+            normalized_endpoint in {"chat/completions", "completions", "responses"}
+            and not is_chat_compatible_model_id(agent.model)
+        ):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
-            return self._mock_raw(agent, endpoint, payload)
+            return self._mock_raw(agent, normalized_endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
-        if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
+        if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault("max_tokens", self.max_output_tokens)
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                 chat_response = self._send_raw(agent, "chat/completions", chat_payload, destination)
             return _chat_to_responses_payload(chat_response, payload)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-            return self._send_raw(agent, endpoint, payload, destination)
+            return self._send_raw(agent, normalized_endpoint, payload, destination)
 
     def proxy_send(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Passthrough a full request to one agent, returning the raw provider JSON."""
+        normalized_endpoint = endpoint.strip("/")
+        if normalized_endpoint.startswith("v1/"):
+            normalized_endpoint = normalized_endpoint[3:]
+        if (
+            normalized_endpoint in {"chat/completions", "completions", "responses"}
+            and not is_chat_compatible_model_id(agent.model)
+        ):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
-            return self._mock_raw(agent, endpoint, payload)
+            return self._mock_raw(agent, normalized_endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
-        if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
+        if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault("max_tokens", self.max_output_tokens)
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
@@ -1382,7 +1421,7 @@ class ModelClient:
                 )
             return _chat_to_responses_payload(chat_response, payload)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            return self._send_raw_with_retry(agent, endpoint, payload, destination)
+            return self._send_raw_with_retry(agent, normalized_endpoint, payload, destination)
 
     def _send_raw_with_retry(
         self,
@@ -1579,6 +1618,10 @@ class ModelClient:
         workloads (24h completion window, ~half the price); real-time chat should keep
         using ``chat``. The mock path answers synchronously so tests and local runs work.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
             results = {
                 custom_id: {"content": self._mock(agent, messages), "usage": None}
@@ -2767,6 +2810,7 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
+            if is_general_chat_agent_model_id(agent.model)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -2792,7 +2836,7 @@ class TaskOrchestrator:
         raw_steps = data.get("steps")
         if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
             raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
-        known_agents = {agent.id for agent in self.agents}
+        known_agents = {agent.id: agent for agent in self.agents}
         steps: list[WorkflowStep] = []
         for index, item in enumerate(raw_steps):
             if int(item.get("id", -1)) != index:
@@ -2807,8 +2851,9 @@ class TaskOrchestrator:
             if any(value < 0 or value >= index for value in access):
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
-            if agent_id not in known_agents:
-                # The planner named an unknown agent: reselect honestly instead of failing the plan.
+            assigned = known_agents.get(agent_id)
+            if assigned is None or not is_general_chat_agent_model_id(assigned.model):
+                # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
             steps.append(WorkflowStep(index, role, agent_id, subtask, access))
         if steps[-1].role not in {"synthesizer", "worker"}:
@@ -2845,7 +2890,10 @@ class TaskOrchestrator:
         """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
         lowered = text.lower()
         candidates = [
-            agent for agent in self.agents if all(tag in agent.tags for tag in required_tags)
+            agent
+            for agent in self.agents
+            if all(tag in agent.tags for tag in required_tags)
+            and is_general_chat_agent_model_id(agent.model)
         ]
         return sorted(
             candidates,
@@ -2859,7 +2907,9 @@ class TaskOrchestrator:
         ranked = self._ranked_agents(text, role, required_tags=required_tags)
         if not ranked:
             required = ", ".join(required_tags) or "none"
-            raise RuntimeError(f"no agent has required tags for role={role}: {required}")
+            raise RuntimeError(
+                f"no chat-compatible agent has required tags for role={role}: {required}"
+            )
         selected = ranked[0]
         if selected.disabled:  # pragma: no cover
             raise RuntimeError(f"no enabled agent available for role={role}")
@@ -2902,6 +2952,8 @@ class TaskOrchestrator:
         candidates = self._failover_candidates(
             primary, text, role, required_tags=required_tags
         )
+        if not candidates:
+            raise RuntimeError(f"no chat-compatible agent available for role={role}")
         last_error: Exception | None = None
         for agent in candidates:
             try:
