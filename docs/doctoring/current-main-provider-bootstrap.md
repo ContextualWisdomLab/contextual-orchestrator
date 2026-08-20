@@ -28,17 +28,18 @@ raw exception strings or credential values.
 A successful generic `/models` response is not itself evidence that every row can
 serve Chat Completions. OpenAI-compatible registries may mix chat models with
 embeddings, rerankers, speech, image generation, moderation, safety, or realtime
-transports. The bootstrap therefore applies a conservative identifier classifier
-before selection and reports both:
+transports. The bootstrap therefore applies a conservative negative compatibility
+filter before selection and reports both:
 
 - `discovered_model_count`: every syntactically valid catalog row; and
 - `eligible_model_count`: rows that are not clearly a non-chat transport.
 
-If no chat-capable row remains, bootstrap fails closed instead of activating the
-cheapest incompatible model. Selected chat models receive bounded role tags for
-worker/synthesizer and, only where the public identifier supports the inference,
-reasoning/verifier, coding, or vision. These tags seed normal orchestration; they do
-not constitute benchmark evidence or a provider capability guarantee.
+If no compatible row remains, bootstrap fails closed instead of activating the
+cheapest incompatible model. Surviving rows receive only generic serving tags:
+`discovered`, `chat`, `worker`, `writing`, and `synthesizer`. The bootstrap never
+infers reasoning, verification, coding, vision, or provider-native effort support
+from a model name. Those capabilities require explicit provider/catalog evidence or
+measured evaluation and are negotiated by the ordinary runtime policy.
 
 The bootstrap pool is provider-diverse before it is cost-ordered. Missing price is
 `unknown`, not zero. This avoids treating a provider such as Bytez, whose public
@@ -77,7 +78,7 @@ startup discovery path or invoke this bootstrap with a persistent `--agents-db`
 under its own deployment boundary.
 
 The workflow verifies that all five credential names were registered, at least one
-model was discovered, at least one chat-capable model survived classification, a
+model was discovered, at least one chat-compatible model survived classification, a
 bounded serving candidate set was produced, and no exact provider secret appears in
 the emitted report.
 
