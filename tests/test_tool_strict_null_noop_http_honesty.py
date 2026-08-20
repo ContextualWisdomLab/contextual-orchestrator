@@ -73,7 +73,8 @@ def test_http_chat_accepts_tool_function_strict_null() -> None:
                 ],
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

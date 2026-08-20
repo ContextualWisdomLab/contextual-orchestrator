@@ -133,7 +133,8 @@ def test_http_chat_accepts_tool_type_casefold() -> None:
                     ],
                 },
             )
-            assert status == 200, (tool_type, body)
+            assert status == 422, (tool_type, body)
+            assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -164,7 +165,8 @@ def test_http_chat_accepts_tool_choice_type_casefold() -> None:
                     },
                 },
             )
-            assert status == 200, (choice_type, body)
+            assert status == 422, (choice_type, body)
+            assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -256,7 +258,8 @@ def test_http_responses_accepts_tool_type_casefold() -> None:
                 ],
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

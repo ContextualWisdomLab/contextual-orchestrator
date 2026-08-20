@@ -139,7 +139,8 @@ def test_http_chat_accepts_tool_choice_required_with_tools() -> None:
                 "tool_choice": "required",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -179,7 +180,8 @@ def test_http_responses_accepts_tool_choice_required_with_tools() -> None:
                 "tool_choice": "required",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

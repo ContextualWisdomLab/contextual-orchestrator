@@ -582,7 +582,7 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
         payload["max_tokens"] = request["max_output_tokens"]
 
     tools: list[dict[str, Any]] = []
-    for tool in request.get("tools", []):
+    for tool in request.get("tools") or []:
         if not isinstance(tool, dict) or tool.get("type") != "function":
             continue
         function = {
@@ -694,7 +694,7 @@ class ModelClient:
         local_max_retries: int = 0,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
-        temperature: float = 0.2,
+        temperature: float | None = None,
         local_concurrency: int = 1,
         ca_bundle: str | None = None,
         verify_tls: bool = True,
@@ -704,7 +704,9 @@ class ModelClient:
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
-        self.default_temperature = 0.2
+        # ``None`` keeps internal orchestration provider-neutral; the CLI passes
+        # its explicit sampling default when that policy is desired.
+        self.default_temperature = temperature
         self.default_top_p: float | None = None
         self.default_presence_penalty: float | None = None
         self.default_frequency_penalty: float | None = None
@@ -714,7 +716,7 @@ class ModelClient:
         self.local_max_retries = int(local_max_retries)
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
-        self.temperature = temperature
+        self.temperature = 0.2 if temperature is None else temperature
         if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -806,10 +808,11 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": effective_temperature,
             "stream": False,
             "max_tokens": self.max_output_tokens,
         }
+        if effective_temperature is not None:
+            payload["temperature"] = effective_temperature
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
         if effective_presence is not None:  # pragma: no cover
