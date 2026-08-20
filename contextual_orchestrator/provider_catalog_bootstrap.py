@@ -96,7 +96,7 @@ def build_provider_catalog_store() -> ProviderCatalogStore:
     """Build a catalog store colocated with the active credential backend."""
     backend = get_backend()
     if isinstance(backend, PostgresCredentialBackend):
-        return PostgresProviderCatalogStore(backend._dsn)  # noqa: SLF001
+        return PostgresProviderCatalogStore(backend.connection_dsn)
     if isinstance(backend, InMemoryCredentialBackend):
         return InMemoryProviderCatalogStore()
     raise ProviderBootstrapError(
