@@ -78,3 +78,7 @@ def test_endpoint_only_models_fail_both_boundaries(model_id: str) -> None:
     """Reject endpoint-only model families before transport or ordinary role routing."""
     assert not is_chat_compatible_model_id(model_id)
     assert not is_general_chat_agent_model_id(model_id)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))
