@@ -1,5 +1,5 @@
 ---
-id: "0012"
+id: "0025"
 title: "Separate minimal liveness from authenticated readiness"
 status: accepted
 proposed_date: "2026-08-20"
