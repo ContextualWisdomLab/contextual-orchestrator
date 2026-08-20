@@ -19,6 +19,10 @@ copies each fact and its relational dimensions, and drops the temporary table
 only after all rows are inserted. A failed or ambiguous migration raises
 without publishing a partial ledger.
 
+Legacy nullable or empty attribution values are normalized to the stable
+`unattributed` dimension before insertion into the new `NOT NULL` tables, so
+older ledgers remain openable without inventing customer ownership.
+
 SQLite connections enable foreign-key enforcement before schema work begins,
 and the dimension catalog is seeded inside the migration transaction before
 child rows are inserted. Deleting a usage fact therefore cascades its

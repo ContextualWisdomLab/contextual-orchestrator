@@ -728,7 +728,7 @@ class SqlLedgerStore:
     def _insert_normalized_attribution(self, cur: Any, row: Dict[str, Any]) -> None:
         """Insert the five descriptive dimensions referenced by one usage row."""
         for dimension_name, column_name in _RELATIONAL_ATTRIBUTION_COLUMNS.items():
-            dimension_value = row[column_name]
+            dimension_value = row[column_name] or UNATTRIBUTED
             cur.execute(
                 _ATTRIBUTION_VALUE_INSERT_SQL[self._paramstyle],
                 (dimension_name, dimension_value),
