@@ -93,7 +93,7 @@ required workflows, and a normal merge.
 | #784 | `4a64e15` | ready, based on main | Review fail-closed release authorization, exact-head `gh api` collection, product-evidence separation, and fresh hosted Checks before protected merge. |
 | #773 | `9dfa9be` | ready, based on main | Review this dated baseline and ADR 0016; exact current head is self-referential and has no independent approval yet. |
 | #772 | `1d81910` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions. |
-| #771 | `f60adbc` | ready, based on main | Local exact-head suite is `1533 passed`; hosted security contexts are queued after structured failure-chain and external-admin resource-policy fixes. Obtain independent approval before protected merge. |
+| #771 | `5bbec44` | ready, based on main | Local exact-head suite is `1531 passed`; the tool-failure PR is now limited to failure classification and safe fallback, while owner-bound evidence authorization is tracked separately in #782. Hosted Checks are queued; obtain independent approval before protected merge. |
 | #770 | `0777e14` | draft, based on stale main | Reconcile after #768. Preserve complete-price evidence, provider-family diversity, corrupt-row handling, and consume the shared ordinary-chat classifier rather than a local detector. |
 | #769 | `9654c28` | ready, based on main | Core repository workflows succeeded on this head; obtain exact-head independent approval and remaining protected contexts. |
 | #768 | `88fee97` | ready, based on main | Review the current capability boundary, including ShieldGemma, legacy Completions, direct-run regressions, and exact-head hosted checks. |
