@@ -37,7 +37,7 @@ from .cost_ledger import (
 from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
-from .orchestrator import ModelAgent, ModelClient, TaskOrchestrator, WorkflowStep, load_agents
+from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 __all__ = [
