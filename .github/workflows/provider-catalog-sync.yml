@@ -94,7 +94,12 @@ jobs:
               'OPENROUTER_API_KEY',
               'OPENAI_API_KEY',
           )
-          leaked = [name for name in names if os.environ[name] and os.environ[name] in report]
+          leaked = [
+              name
+              for name in names
+              if os.environ[name].rstrip('\r\n')
+              and os.environ[name].rstrip('\r\n') in report
+          ]
           if leaked:
               raise SystemExit(f'provider bootstrap report leaked secret values for: {leaked}')
           PY

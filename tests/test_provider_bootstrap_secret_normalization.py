@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from pathlib import Path
+
 import pytest
 
 from contextual_orchestrator.credentials import (
@@ -53,3 +55,13 @@ def test_atomic_registration_preserves_normalized_secret_bytes() -> None:
     register_provider_credentials_atomically(credentials)
 
     assert get_credential("OPENROUTER_API_KEY") == "  edge-sensitive-router-secret  "
+
+
+def test_catalog_sync_leak_guard_matches_secret_normalization() -> None:
+    """The workflow checks the exact credential bytes that bootstrap handles."""
+    workflow = Path(".github/workflows/provider-catalog-sync.yml").read_text(
+        encoding="utf-8"
+    )
+
+    assert "os.environ[name].rstrip('\\r\\n')" in workflow
+    assert "os.environ[name] and os.environ[name] in report" not in workflow
