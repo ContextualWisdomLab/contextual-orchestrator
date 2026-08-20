@@ -29,6 +29,13 @@ be discovered. A provider-local discovery exception does not erase models return
 by other providers; the report contains only stable provider names and counts, never
 raw exception strings or credential values.
 
+`registered_credentials` is the post-rollback durable inventory, not merely the
+set of candidate names received from Actions. If a first-ever candidate key is
+reverted after a failed provider refresh, that name is omitted from the report
+and the hourly workflow fails its complete-inventory gate. Existing keys that
+are restored remain listed, so a transient provider outage can preserve
+last-known-good serving without falsely claiming that a missing key is durable.
+
 A successful generic `/models` response is not itself evidence that every row can
 serve Chat Completions. OpenAI-compatible registries may mix chat models with
 embeddings, rerankers, speech, image generation, moderation, safety, or realtime
