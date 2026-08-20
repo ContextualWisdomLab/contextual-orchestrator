@@ -2,7 +2,7 @@
 
 Provider model catalogs are heterogeneous: a model identifier may name a chat
 model, embedding model, reranker, transcription model, image model, or another
-endpoint family.  The helpers in this module prevent clearly non-chat model IDs
+endpoint family. The helpers in this module prevent clearly non-chat model IDs
 from crossing a chat-agent boundary even when an incompatible agent was persisted
 before discovery filtering was introduced.
 """
@@ -52,7 +52,7 @@ def is_chat_compatible_model_id(model_id: str) -> bool:
     """Return whether a model identifier is eligible for a chat-agent pool.
 
     The classifier intentionally rejects only identifiers that clearly advertise
-    a non-chat endpoint family.  Unknown identifiers remain eligible until an
+    a non-chat endpoint family. Unknown identifiers remain eligible until an
     authenticated capability registry can prove more specific endpoint support.
     """
     if type(model_id) is not str:
@@ -140,8 +140,8 @@ def install_runtime_chat_capability_guards(
         agents_by_id = {agent.id: agent for agent in self.agents}
         guarded_steps: list[Any] = []
         for step in steps:
-            assigned = agents_by_id.get(step.agent_id)
-            if assigned is not None and not is_chat_compatible_model_id(assigned.model):
+            assigned = agents_by_id[step.agent_id]
+            if not is_chat_compatible_model_id(assigned.model):
                 replacement = self._select_agent(step.subtask, step.role)
                 step = replace(step, agent_id=replacement.id)
             guarded_steps.append(step)
