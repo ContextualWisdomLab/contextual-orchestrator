@@ -11,6 +11,7 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
+from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     register_credential,
@@ -28,6 +29,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
+from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
 class _Response:
@@ -66,6 +68,23 @@ def _model(model_id: str, *, priced: bool = False) -> DiscoveredModel:
         auth_scheme="Bearer",
         prompt_price_per_1k=1.0 if priced else None,
         completion_price_per_1k=1.0 if priced else None,
+    )
+
+
+def _agent(
+    agent_id: str,
+    model_id: str,
+    *,
+    priority: int = 0,
+    tags: tuple[str, ...] = ("writing",),
+) -> ModelAgent:
+    """Build one mock-backed runtime agent for selection-path regressions."""
+    return ModelAgent(
+        id=agent_id,
+        model=model_id,
+        base_url="mock://local",
+        priority=priority,
+        tags=tags,
     )
 
 
@@ -173,3 +192,92 @@ def test_non_chat_discovery_is_not_priced_or_selected_for_chat() -> None:
     assert select_top_n_cheapest_discovered_agents(
         [embedding_model], price_book, 1
     ) == []
+
+
+def test_stale_embedding_agent_cannot_win_synthesizer_selection() -> None:
+    """Exclude an already-persisted embedding row even when it has high priority."""
+    embedding_agent = _agent(
+        "embedding_agent",
+        "azure/text-embedding-3-large",
+        priority=10_000,
+    )
+    chat_agent = _agent("chat_agent", "gpt-5.2")
+    orchestrator = TaskOrchestrator([embedding_agent, chat_agent])
+
+    assert orchestrator._select_agent("Produce the final answer.", "synthesizer") is chat_agent
+
+
+def test_all_non_chat_agents_fail_before_synthesis() -> None:
+    """Fail closed when a stale pool contains no chat-compatible worker."""
+    orchestrator = TaskOrchestrator(
+        [_agent("embedding_agent", "azure/text-embedding-3-large")]
+    )
+
+    with pytest.raises(RuntimeError, match="chat-compatible"):
+        orchestrator._select_agent("Produce the final answer.", "synthesizer")
+
+
+def test_generated_plan_reselects_non_chat_agent_assignment() -> None:
+    """Do not trust a generated plan that names a stale embedding agent directly."""
+    embedding_agent = _agent(
+        "embedding_agent",
+        "azure/text-embedding-3-large",
+        priority=10_000,
+    )
+    chat_agent = _agent("chat_agent", "gpt-5.2")
+    orchestrator = TaskOrchestrator([embedding_agent, chat_agent])
+    raw_plan = json.dumps(
+        {
+            "steps": [
+                {
+                    "id": 0,
+                    "role": "worker",
+                    "agent_id": "chat_agent",
+                    "subtask": "Execute the task.",
+                    "access": [],
+                },
+                {
+                    "id": 1,
+                    "role": "synthesizer",
+                    "agent_id": "embedding_agent",
+                    "subtask": "Produce the final answer.",
+                    "access": [0],
+                },
+            ]
+        }
+    )
+
+    steps = orchestrator._parse_workflow_plan(raw_plan)
+
+    assert steps[-1].agent_id == "chat_agent"
+
+
+def test_failover_candidates_exclude_stale_embedding_agents() -> None:
+    """Keep cross-agent retry from falling through to an incompatible endpoint."""
+    chat_agent = _agent("chat_agent", "gpt-5.2")
+    embedding_agent = _agent(
+        "embedding_agent",
+        "azure/text-embedding-3-large",
+        priority=10_000,
+    )
+    orchestrator = TaskOrchestrator([chat_agent, embedding_agent])
+
+    candidates = orchestrator._failover_candidates(
+        chat_agent,
+        "Produce the final answer.",
+        "synthesizer",
+    )
+
+    assert candidates == [chat_agent]
+
+
+def test_model_client_rejects_non_chat_model_before_mock_or_network_call() -> None:
+    """Keep the provider boundary fail-closed even when selection is bypassed."""
+    client = ModelClient()
+    embedding_agent = _agent("embedding_agent", "azure/text-embedding-3-large")
+
+    with pytest.raises(ValueError, match="chat-compatible"):
+        client.chat(
+            embedding_agent,
+            [{"role": "user", "content": "Produce the final answer."}],
+        )
