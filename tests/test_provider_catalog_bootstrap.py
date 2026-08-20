@@ -2,8 +2,12 @@
 
 from __future__ import annotations
 
+import pytest
+
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
+    get_credential,
+    register_credential,
     set_backend,
 )
 from contextual_orchestrator.model_discovery import (
@@ -132,5 +136,36 @@ def test_empty_catalog_preserves_lkg_but_nonchat_success_withdraws_it() -> None:
             assert "no persisted chat-compatible model" in str(error)
         else:
             raise AssertionError("non-chat-only authoritative catalog must fail")
+    finally:
+        set_backend(None)
+
+
+def test_unexpected_discovery_failure_restores_entire_credential_inventory() -> None:
+    """An unclassified bootstrap failure must not leave unvalidated secrets promoted."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        previous = {
+            name: f"previous-value-for-{name.casefold()}"
+            for name in PROVIDER_CREDENTIAL_NAMES
+        }
+        for name, value in previous.items():
+            register_credential(name, value)
+
+        def fail_discovery(_sources):
+            raise RuntimeError("unexpected discovery parser failure")
+
+        with pytest.raises(RuntimeError, match="unexpected discovery parser failure"):
+            bootstrap_provider_catalog_runtime(
+                environ=_environment(),
+                catalog_store=InMemoryProviderCatalogStore(),
+                sources=(_source("openai", "OPENAI_API_KEY"),),
+                discovery=fail_discovery,
+                model_limit=1,
+            )
+
+        assert {
+            name: get_credential(name)
+            for name in PROVIDER_CREDENTIAL_NAMES
+        } == previous
     finally:
         set_backend(None)
