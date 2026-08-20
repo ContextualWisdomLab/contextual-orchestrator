@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 08:20, Asia/Seoul
+**As of:** 2026-08-21 08:23, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -130,12 +130,12 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 08:20 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 08:23 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ### External central workflow prerequisite
 
-At the refreshed snapshot, the remote head ref for ContextualWisdomLab/.github PR [#1183](https://github.com/ContextualWisdomLab/.github/pull/1183) is `0651792f8e078f54f81e967bd70d55d93af1fdb2`, while central main remains `55a8b576725451dfe0a21a57d36a2f1a41619b24`. The proposed workflow checks out contextual-orchestrator main at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`, keeps the `PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN` publication boundary, and routes the five provider bootstrap keys only to the loopback inference sidecar. This remote evidence does not establish protected merge, Checks, or approval; those must be verified live before treating the central route as integrated.
+At the refreshed snapshot, the remote head ref for ContextualWisdomLab/.github PR [#1183](https://github.com/ContextualWisdomLab/.github/pull/1183) is `0afbb26073118de6000fe001fee55e5767848fa4`, while central main remains `55a8b576725451dfe0a21a57d36a2f1a41619b24`. The proposed workflow checks out contextual-orchestrator main at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`, keeps the `PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN` publication boundary, and routes the five provider bootstrap keys only to the loopback inference sidecar. This remote evidence does not establish protected merge, Checks, or approval; those must be verified live before treating the central route as integrated.
 
 The scheduler's earlier dry-run decision for PR #787 was `review_dispatch` for its non-main base; #787, #779, and #778 are now merged into the #765 parent stack. The target repository currently exposes no `opencode-review.yml` workflow of its own and the central repository-dispatch queue remains asynchronous. Until #1183 reaches protected main, remaining stacked PR review may remain absent or use the prior central model path; this is an external integration dependency, not evidence that the stacked code is merge-ready.
 
