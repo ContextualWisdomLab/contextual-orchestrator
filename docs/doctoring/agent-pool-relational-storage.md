@@ -17,12 +17,18 @@ The persistence layer now uses three normalized SQLite tables:
 Legacy JSON rows migrate transactionally. If decoding or schema validation
 fails, startup fails closed and the legacy table remains intact.
 
+Every short-lived SQLite connection enables `PRAGMA foreign_keys` before it
+begins work. This is required because SQLite applies that setting per
+connection and ignores attempts to change it during an open transaction.
+
 ## Verification
 
 `tests/test_agent_pool_db.py` covers restart persistence, add/patch/remove
 behavior, ordered multi-valued attributes, legacy migration, malformed legacy
-rollback, and the HTTP worker-agent contract. The focused run on the change
-head passed 9 tests; Ruff, compileall, and `git diff --check` also passed.
+rollback, foreign-key orphan rejection, cascade deletion, and the HTTP
+worker-agent contract. The focused persistence/naming run on the current
+change head passed 21 tests; Ruff, compileall, and `git diff --check` also
+passed.
 
 ## References (APA 7)
 
