@@ -52,7 +52,7 @@ def test_http_chat_accepts_reasoning_effort_known_levels() -> None:
     """Known o-series levels are default-effort no-ops (no effort plane)."""
     server, thread, port = _server()
     try:
-        for effort in ("low", "MEDIUM", " High ", "high", "minimal", "none"):
+        for effort in ("auto", "low", "MEDIUM", " High ", "high", "minimal", "none"):
             status, body = _post(
                 port,
                 {

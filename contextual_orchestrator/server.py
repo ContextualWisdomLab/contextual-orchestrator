@@ -3142,10 +3142,11 @@ def _validate_responses_store(body: dict[str, Any]) -> bool | None:
 
 
 
-# OpenAI o-series reasoning_effort levels. Without an effort plane this gateway
-# treats known levels as default-effort no-ops (parity with verbosity low/medium/high).
+# OpenAI o-series reasoning_effort levels plus the orchestrator-owned policy
+# value. Without an effort plane this gateway treats accepted values as
+# default-effort no-ops (parity with verbosity low/medium/high).
 _OPENAI_REASONING_EFFORT_LEVELS = frozenset(
-    {"none", "minimal", "low", "medium", "high"}
+    {"auto", "none", "minimal", "low", "medium", "high"}
 )
 
 
@@ -3153,9 +3154,10 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     """Chat Completions ``reasoning_effort`` — known levels are default-effort no-ops.
 
     OpenAI o-series models accept ``reasoning_effort`` (none/minimal/low/medium/high).
-    This gateway never threads the knob into ``ModelClient`` on the orchestration
-    path. Known levels are accepted as default-effort no-ops (no effort plane) so
-    o-series SDK defaults (often ``medium``) do not 400; unknown values fail closed.
+    ``auto`` is an orchestrator policy value, not a provider model value. This
+    gateway never threads the knob into ``ModelClient`` on the orchestration
+    path. Accepted values are default-effort no-ops when no effort plane exists;
+    unknown values fail closed.
     Explicit JSON null or empty/whitespace string is treat-as-omit.
     """
     if "reasoning_effort" not in body:
@@ -3174,7 +3176,7 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     raise RequestError(
         400,
         "invalid_reasoning_effort",
-        "reasoning_effort must be one of none, minimal, low, medium, high "
+        "reasoning_effort must be one of auto, none, minimal, low, medium, high "
         "on /v1/chat/completions",
     )
 
@@ -4166,8 +4168,9 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
     """Responses API ``reasoning`` — known effort levels are default-effort no-ops.
 
     OpenAI Responses accepts a ``reasoning`` object (effort/summary controls).
+    ``auto`` is an orchestrator policy value; provider calls do not receive it.
     This gateway proxies Responses but does not interpret or enforce reasoning
-    controls. Known ``effort`` levels (none/minimal/low/medium/high) with blank
+    controls. Known ``effort`` levels (auto/none/minimal/low/medium/high) with blank
     or omit ``summary`` are accepted as default-effort no-ops (chat
     ``reasoning_effort`` parity). Explicit JSON null, empty object, or empty
     string is treat-as-omit. Unknown effort/summary values fail closed.
@@ -4211,7 +4214,7 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
     raise RequestError(
         400,
         "invalid_reasoning",
-        "reasoning.effort must be one of none, minimal, low, medium, high "
+        "reasoning.effort must be one of auto, none, minimal, low, medium, high "
         "on /v1/responses",
     )
 

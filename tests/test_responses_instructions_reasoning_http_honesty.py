@@ -124,7 +124,7 @@ def test_http_responses_accepts_reasoning_effort_known_levels() -> None:
     """Known effort levels are default-effort no-ops (no effort plane)."""
     server, thread, port = _server()
     try:
-        for effort in ("low", "medium", "HIGH", "minimal", "none"):
+        for effort in ("auto", "low", "medium", "HIGH", "minimal", "none"):
             status, body = _post(
                 port,
                 {
