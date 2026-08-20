@@ -255,6 +255,19 @@ def test_select_top_n_cheapest_discovered_agents_orders_by_cost() -> None:
     assert top_two == [cheapest, middle]
 
 
+def test_unknown_price_is_fallback_after_priced_models() -> None:
+    """Discovery never treats an unknown provider price as a free winner."""
+    from contextual_orchestrator.cost_ledger import PriceEntry
+
+    price_book = PriceBook(InMemoryConfigStore())
+    priced = DiscoveredModel("openai", "priced_model", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer")
+    unpriced = DiscoveredModel("bytez", "unpriced_model", "BYTEZ_API_KEY", "https://api.bytez.com/models/v2/openai/v1", "Key")
+    price_book.set_price(PriceEntry("openai", "priced_model", 0.01, 0.01))
+
+    assert select_cheapest_discovered_agent([unpriced, priced], price_book) is priced
+    assert select_top_n_cheapest_discovered_agents([unpriced, priced], price_book, 1) == [priced]
+
+
 def test_select_top_n_cheapest_discovered_agents_zero_limit_returns_empty() -> None:
     price_book = PriceBook(InMemoryConfigStore())
     model = DiscoveredModel("openai", "a", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer")

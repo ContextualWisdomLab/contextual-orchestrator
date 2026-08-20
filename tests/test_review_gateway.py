@@ -56,8 +56,24 @@ def test_build_review_orchestrator_registers_all_provider_credentials(monkeypatc
 
     assert len(orchestrator.agents) == 2
     assert all(not agent.disabled for agent in orchestrator.agents)
-    assert all("review" in agent.tags for agent in orchestrator.agents)
+    assert all(agent.tags == ("review",) for agent in orchestrator.agents)
     assert all(get_credential(name) == environment[name] for name in review_gateway.REVIEW_CREDENTIAL_NAMES)
+
+
+def test_build_review_orchestrator_routes_to_cheapest_selected_agent(monkeypatch):
+    """Cost-ranked discovery remains the routing order after agent construction."""
+    discovered = [
+        _discovered("openai", "expensive_review", "OPENAI_API_KEY", 2.0),
+        _discovered("openrouter", "cheap_review", "OPENROUTER_API_KEY", 0.01),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENAI_API_KEY": "openai-secret", "OPENROUTER_API_KEY": "router-secret"},
+        max_agents=2,
+    )
+
+    assert orchestrator._select_agent("review this change", "worker").model == "cheap_review"
 
 
 def test_build_review_orchestrator_fails_closed_without_credentials():

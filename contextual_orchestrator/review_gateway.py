@@ -85,7 +85,13 @@ def build_review_orchestrator(
         replace(
             agent_from_discovered(model, priority=index),
             disabled=False,
-            tags=("review", "coding", "security", "reasoning", "verification"),
+            # The discovery catalog does not advertise reasoning, coding, or
+            # verification support. ``review`` is the gateway purpose, not a
+            # fabricated provider capability.
+            tags=("review",),
+            # TaskOrchestrator ranks larger priorities first. Discovery is
+            # already cheapest-first, so preserve that order for routing.
+            priority=-index,
         )
         for index, model in enumerate(selected)
     ]

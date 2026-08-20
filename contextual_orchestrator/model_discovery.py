@@ -20,7 +20,6 @@ import urllib.request
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .batch_routing import cheapest_upstream
 from .credentials import get_credential
 from .orchestrator import ModelAgent
 
@@ -275,43 +274,26 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 def select_cheapest_discovered_agent(
     discovered: list[DiscoveredModel], price_book: "PriceBook"
 ) -> DiscoveredModel | None:
-    """Pick the lowest-cost discovered model per the price book (auto-optimization).
-
-    Reuses :func:`~contextual_orchestrator.batch_routing.cheapest_upstream`, the
-    existing cost-optimizing upstream selector. Call :func:`refresh_price_book`
-    first so discovered pricing is visible; an unpriced candidate costs ``0``
-    under that selector's documented contract and is treated as free, not
-    unknown -- so a genuinely unpriced provider (e.g. Bytez, priced by
-    GPU-second rather than per token) will always look cheapest here. Fine for
-    "auto-pick something free to try," but callers doing real cost comparison
-    should refresh pricing for every candidate they care about first.
-    """
+    """Pick the lowest-cost discovered model, with unknown prices as fallback."""
     if not discovered:
         return None
-    candidates = [{"provider": model.provider_name, "model": model.model_id} for model in discovered]
-    winner = cheapest_upstream(candidates, price_book)
-    if winner is None:
-        return None
-    for model in discovered:
-        if model.provider_name == winner["provider"] and model.model_id == winner["model"]:
-            return model
-    return None  # pragma: no cover - winner always comes from candidates
+    return min(discovered, key=lambda model: _discovered_sort_key(model, price_book))
 
 
 def select_top_n_cheapest_discovered_agents(
     discovered: list[DiscoveredModel], price_book: "PriceBook", limit: int
 ) -> list[DiscoveredModel]:
-    """Return the ``limit`` lowest-cost discovered models, cheapest first.
-
-    For bootstrapping a CI sidecar (or any first-boot pool) with more than one
-    enabled agent for failover, without hand-picking which discovered models to
-    trust. Same pricing contract as :func:`select_cheapest_discovered_agent`.
-    """
+    """Return the ``limit`` cheapest discovered models, with unknown prices last."""
     if limit <= 0 or not discovered:
         return []
 
-    def _cost(model: DiscoveredModel) -> float:
-        cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
-        return cost
+    return sorted(discovered, key=lambda model: _discovered_sort_key(model, price_book))[:limit]
 
-    return sorted(discovered, key=_cost)[:limit]
+
+def _discovered_sort_key(model: DiscoveredModel, price_book: "PriceBook") -> tuple[int, float, str, str]:
+    """Sort priced models first and keep unknown-price fallback ordering stable."""
+    entry = price_book.get_price(model.provider_name, model.model_id)
+    if entry is None:
+        return (1, 0.0, model.provider_name, model.model_id)
+    cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
+    return (0, cost, model.provider_name, model.model_id)
