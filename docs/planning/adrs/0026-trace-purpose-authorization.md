@@ -1,5 +1,5 @@
 ---
-id: "0013"
+id: "0026"
 title: "Require a separate trace purpose for trace-bearing responses"
 status: accepted
 proposed_date: "2026-08-20"
