@@ -1,0 +1,237 @@
+name: Repair chat transport and role separation
+
+on:
+  push:
+    branches:
+      - fix/chat-capability-isolation-embedding-models
+    paths:
+      - .github/workflows/repair-chat-transport-role-separation.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-chat-transport-role-separation
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    name: Patch, verify, and self-delete
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact branch
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: fix/chat-capability-isolation-embedding-models
+          fetch-depth: 0
+          persist-credentials: true
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Separate endpoint transport from ordinary agent roles
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          Path("contextual_orchestrator/chat_capability.py").write_text(
+              '''"""Classify chat transport compatibility and ordinary agent-role eligibility.
+
+Provider catalogs mix endpoint-only models with models served through an
+OpenAI-compatible chat transport. Transport compatibility is not the same as
+fitness for an ordinary thinker, worker, verifier, or synthesizer role: audio and
+policy-classification models can use chat transport, while embedding, reranking,
+transcription, moderation-endpoint, image-generation, realtime, and speech-only
+models cannot.
+"""
+
+from __future__ import annotations
+
+import re
+
+_MODEL_TOKEN_RE = re.compile(r"[a-z0-9]+")
+_TRANSPORT_INCOMPATIBLE_EXACT_TOKENS = frozenset(
+    {
+        "bge",
+        "e5",
+        "embed",
+        "embedding",
+        "embeddings",
+        "gte",
+        "image",
+        "images",
+        "moderation",
+        "realtime",
+        "rerank",
+        "reranker",
+        "sora",
+        "speech",
+        "transcribe",
+        "transcription",
+        "tts",
+        "whisper",
+    }
+)
+_TRANSPORT_INCOMPATIBLE_PREFIXES = (
+    "embed",
+    "moderat",
+    "rerank",
+    "transcrib",
+)
+
+
+def _model_tokens(model_id: str) -> tuple[str, ...]:
+    """Normalize one provider-prefixed model identifier into lowercase tokens."""
+    if type(model_id) is not str:
+        return ()
+    return tuple(_MODEL_TOKEN_RE.findall(model_id.casefold()))
+
+
+def is_chat_compatible_model_id(model_id: str) -> bool:
+    """Return whether an identifier can use the ordinary chat transport.
+
+    The classifier rejects only identifiers that clearly advertise an endpoint
+    family incompatible with chat messages. Audio-capable and safety-classifier
+    models remain transport-compatible because providers serve some of them over
+    ``/chat/completions``.
+    """
+    tokens = _model_tokens(model_id)
+    if not tokens:
+        return False
+    for token in tokens:
+        if token in _TRANSPORT_INCOMPATIBLE_EXACT_TOKENS:
+            return False
+        if token.startswith(_TRANSPORT_INCOMPATIBLE_PREFIXES):
+            return False
+    return True
+
+
+def is_general_chat_agent_model_id(model_id: str) -> bool:
+    """Return whether a chat model may enter ordinary orchestration roles.
+
+    Explicit guard and safety models can use chat transport but are specialized
+    policy classifiers, not general answer synthesizers. This negative role gate
+    does not infer reasoning, coding, vision, or verification capabilities.
+    """
+    tokens = _model_tokens(model_id)
+    if not tokens or not is_chat_compatible_model_id(model_id):
+        return False
+    return not any(
+        token == "safety"
+        or token == "guard"
+        or token.startswith("nemoguard")
+        or token.endswith("guard")
+        for token in tokens
+    )
+''',
+              encoding="utf-8",
+          )
+
+          discovery_path = Path("contextual_orchestrator/model_discovery.py")
+          discovery = discovery_path.read_text(encoding="utf-8")
+          discovery = replace_once(
+              discovery,
+              "from .chat_capability import is_chat_compatible_model_id\n",
+              "from .chat_capability import (\n"
+              "    is_chat_compatible_model_id,\n"
+              "    is_general_chat_agent_model_id,\n"
+              ")\n",
+              "model discovery capability imports",
+          )
+          discovery = discovery.replace(
+              "is_chat_compatible_model_id(",
+              "is_general_chat_agent_model_id(",
+          )
+          # Keep the transport helper available from this module for compatibility
+          # with existing callers and focused tests; the ordinary discovery path
+          # must use the stricter general-role gate.
+          if "is_chat_compatible_model_id," not in discovery:
+              raise SystemExit("transport helper import was lost")
+          discovery_path.write_text(discovery, encoding="utf-8")
+
+          orchestrator_path = Path("contextual_orchestrator/orchestrator.py")
+          orchestrator = orchestrator_path.read_text(encoding="utf-8")
+          orchestrator = replace_once(
+              orchestrator,
+              "from .chat_capability import is_chat_compatible_model_id\n",
+              "from .chat_capability import (\n"
+              "    is_chat_compatible_model_id,\n"
+              "    is_general_chat_agent_model_id,\n"
+              ")\n",
+              "orchestrator capability imports",
+          )
+          orchestrator = replace_once(
+              orchestrator,
+              "            if is_chat_compatible_model_id(agent.model)\n"
+              "        )\n"
+              "        system = (\n",
+              "            if is_general_chat_agent_model_id(agent.model)\n"
+              "        )\n"
+              "        system = (\n",
+              "planner inventory role gate",
+          )
+          orchestrator = replace_once(
+              orchestrator,
+              "            if assigned is None or not is_chat_compatible_model_id(assigned.model):\n",
+              "            if assigned is None or not is_general_chat_agent_model_id(assigned.model):\n",
+              "generated assignment role gate",
+          )
+          orchestrator = replace_once(
+              orchestrator,
+              "            if is_chat_compatible_model_id(agent.model)\n"
+              "        ]\n\n"
+              "    def _select_agent",
+              "            if is_general_chat_agent_model_id(agent.model)\n"
+              "        ]\n\n"
+              "    def _select_agent",
+              "ranked agent role gate",
+          )
+          orchestrator = replace_once(
+              orchestrator,
+              "            if is_chat_compatible_model_id(agent.model)\n"
+              "        ]\n"
+              "        eligible = [agent for agent in ordered",
+              "            if is_general_chat_agent_model_id(agent.model)\n"
+              "        ]\n"
+              "        eligible = [agent for agent in ordered",
+              "failover role gate",
+          )
+          orchestrator_path.write_text(orchestrator, encoding="utf-8")
+
+          workflow = Path(".github/workflows/repair-chat-transport-role-separation.yml")
+          workflow.unlink()
+          PY
+
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Verify focused and full suites
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q contextual_orchestrator
+          python -m pytest -q tests/test_chat_transport_role_separation.py tests/test_chat_model_capability_isolation.py
+          python -m pytest -q
+
+      - name: Commit verified repair
+        shell: bash
+        run: |
+          set -euo pipefail
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -A
+          git diff --cached --check
+          git commit -m "fix: separate chat transport from synthesis roles"
+          git push origin HEAD:fix/chat-capability-isolation-embedding-models
