@@ -5,7 +5,7 @@ decision-makers:
   - contextual-orchestrator maintainers
 ---
 
-# ADR 0016: Product and technical gap baseline
+# ADR 0023: Product and technical gap baseline
 
 ## Decision
 
