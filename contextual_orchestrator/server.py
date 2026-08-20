@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import json
@@ -4402,6 +4403,7 @@ def build_server(
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
+    release_authority: Mapping[str, Any] | None = None,
 ) -> ThreadingHTTPServer:
     """Build, but do not start, the orchestration HTTP server.
 
@@ -4579,12 +4581,14 @@ def build_server(
                     self._send(orchestrator.commercial_release_candidate_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_gap_registers/latest":
                     self._send(orchestrator.commercial_gap_register_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_procurement_readiness/latest":
@@ -5752,8 +5756,16 @@ def serve(
     port: int = 8000,
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
+    release_authority: Mapping[str, Any] | None = None,
 ) -> None:
-    """Serve the admin console and resource-oriented orchestration API."""
-    server = build_server(orchestrator, host=host, port=port, security=security, clearfolio_url=clearfolio_url)
+    """Serve the API with an optional persisted release-authority snapshot."""
+    server = build_server(
+        orchestrator,
+        host=host,
+        port=port,
+        security=security,
+        clearfolio_url=clearfolio_url,
+        release_authority=release_authority,
+    )
     print(f"listening on http://{host}:{port}")
     server.serve_forever()

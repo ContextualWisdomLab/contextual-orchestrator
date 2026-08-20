@@ -123,7 +123,11 @@ def evaluate_release_authorization(
     checks = _as_list(authority.get("checks"))
     required_check_count = len(required_names or [])
     passing_check_count = 0
-    if required_names is None or any(not isinstance(name, str) or not name for name in required_names):
+    if (
+        required_names is None
+        or not required_names
+        or any(not isinstance(name, str) or not name for name in required_names)
+    ):
         blockers.append("required_check_inventory_invalid")
         required_names = []
     if len(set(required_names)) != len(required_names):
@@ -164,9 +168,13 @@ def evaluate_release_authorization(
     if not isinstance(review_policy, Mapping):
         blockers.append("review_policy_unavailable")
     else:
-        required_approval_count = review_policy.get("required_independent_approval_count", 0)
+        if "required_independent_approval_count" not in review_policy:
+            blockers.append("review_policy_invalid")
+            required_approval_count = 0
+        else:
+            required_approval_count = review_policy.get("required_independent_approval_count")
         author_login = review_policy.get("author_login")
-        if type(required_approval_count) is not int or required_approval_count < 0:
+        if type(required_approval_count) is not int or required_approval_count < 0 or not isinstance(author_login, str):
             blockers.append("review_policy_invalid")
             required_approval_count = 0
         if review_policy.get("head_sha") != protected_head_sha:
@@ -202,10 +210,14 @@ def evaluate_release_authorization(
         if not findings_complete:
             blockers.append("findings_inventory_incomplete")
         sources = _as_list(findings.get("sources"))
-        if sources is None or not _FINDING_SOURCES.issubset(set(sources)):
+        if (
+            sources is None
+            or any(not isinstance(source, str) or not source for source in sources)
+            or not _FINDING_SOURCES.issubset(set(sources))
+        ):
             blockers.append("findings_source_coverage_incomplete")
         unresolved = _as_list(findings.get("unresolved_findings"))
-        if unresolved is None:
+        if unresolved is None or any(not isinstance(finding, Mapping) for finding in unresolved):
             blockers.append("unresolved_finding_inventory_invalid")
         else:
             unresolved_finding_count = len(unresolved)

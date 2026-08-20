@@ -14,7 +14,32 @@ OPENAPI_SPEC = {
         "securitySchemes": {
             "admin_bearer_auth": {"type": "http", "scheme": "bearer"},
             "inference_bearer_auth": {"type": "http", "scheme": "bearer"},
-        }
+        },
+        "schemas": {
+            "ReleaseAuthorization": {
+                "type": "object",
+                "required": ["status", "authorized", "blockers", "evidence_identities"],
+                "properties": {
+                    "status": {"type": "string", "enum": ["release_authorized", "release_authorization_blocked"]},
+                    "authorized": {"type": "boolean"},
+                    "blockers": {"type": "array", "items": {"type": "string"}},
+                    "evidence_identities": {"type": "object"},
+                    "required_checks": {"type": "object"},
+                    "review": {"type": "object"},
+                    "findings": {"type": "object"},
+                },
+            },
+            "CommercialReleaseCandidate": {
+                "type": "object",
+                "required": ["release_status", "product_evidence_status", "release_authorization"],
+                "properties": {
+                    "release_status": {"type": "string"},
+                    "product_evidence_status": {"type": "string"},
+                    "release_authorization": {"$ref": "#/components/schemas/ReleaseAuthorization"},
+                    "release_summary": {"type": "object"},
+                },
+            },
+        },
     },
     "paths": {
         "/openapi.json": {
@@ -303,7 +328,12 @@ OPENAPI_SPEC = {
                 "operationId": "get_latest_commercial_release_candidate",
                 "summary": "Get commercial release candidate package for buyer due diligence",
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Commercial release candidate"}},
+                "responses": {
+                    "200": {
+                        "description": "Commercial release candidate with separate fail-closed release authority",
+                        "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommercialReleaseCandidate"}}},
+                    }
+                },
             }
         },
         "/api/v1/commercial_gap_registers/latest": {

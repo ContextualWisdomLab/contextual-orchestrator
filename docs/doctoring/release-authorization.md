@@ -22,9 +22,24 @@ demonstrations without claiming release authorization.
 
 ## Customer next action
 
-Run the protected CI collector against the exact candidate SHA, attach its
-machine-readable snapshot to the release review, then re-query the endpoint.
-The release status can change only after that fresh evidence passes every gate.
+Run the protected CI collector against the exact candidate SHA and persist its
+machine-readable output under `artifacts/release-authority/<sha>.json`. Start
+the gateway with `--release-authority-json` pointing at that file, then
+re-query the admin endpoint. The release status can change only after that
+fresh evidence passes every gate; restart with a newly collected file after
+the candidate head changes.
+
+```bash
+python scripts/ci/release_authority_snapshot.py \
+  --repo ContextualWisdomLab/contextual-orchestrator \
+  --pr <number> \
+  --expected-head-sha <sha> \
+  --required-check Tests \
+  --required-check Security \
+  --findings-json <path> > artifacts/release-authority/<sha>.json
+python -m contextual_orchestrator --serve \
+  --release-authority-json artifacts/release-authority/<sha>.json
+```
 
 ## References
 

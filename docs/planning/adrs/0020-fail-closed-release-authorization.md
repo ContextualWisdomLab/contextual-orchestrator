@@ -17,6 +17,11 @@ responsible for obtaining the current protected-head, ruleset, checks, review,
 and finding evidence. The evaluator returns only machine-readable blocker codes
 and non-sensitive counts.
 
+The serving CLI accepts the persisted collector JSON through
+`--release-authority-json` and passes it to the protected admin reports. A
+missing file or malformed snapshot leaves the reports blocked; a changed
+candidate requires a newly collected exact-head file.
+
 ## Consequences
 
 - Buyer demonstrations remain inspectable while release authorization is

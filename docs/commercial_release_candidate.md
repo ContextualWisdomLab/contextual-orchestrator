@@ -93,8 +93,8 @@ Warnings remain acceptable when they are explicitly labeled as
 `proposed_until_production` or `proposed_until_buyer_specific`.
 
 Release authorization additionally requires the exact protected `main` head,
-terminal-success required checks on that same head, one qualifying independent
-approval when policy requires it, and a complete zero-unresolved finding
+terminal-success required checks on that same head, the qualifying independent
+approval count declared by repository policy, and a complete zero-unresolved finding
 inventory covering human, CodeRabbit, GitHub Advanced Security, Dependabot,
 OpenCode, Noema, and Strix evidence. A missing authority snapshot is a blocker,
 not a warning.
@@ -112,13 +112,15 @@ not a warning.
 ## Verification
 
 ```bash
-python scripts/ci/release_authority_snapshot.py --repo ContextualWisdomLab/contextual-orchestrator --pr <number> --expected-head-sha <sha> --required-check Tests --required-check Security --findings-json <path>
-python tests/test_commercial_release_candidate.py
-python tests/test_release_authorization.py
-python tests/test_release_authority_snapshot.py
-python tests/test_commercial_acceptance_check.py
-python tests/test_commercial_evidence_export.py
-python tests/test_plugin_driven_artifacts.py
-python tests/test_api_contract.py
+mkdir -p artifacts/release-authority
+python scripts/ci/release_authority_snapshot.py --repo ContextualWisdomLab/contextual-orchestrator --pr <number> --expected-head-sha <sha> --required-check Tests --required-check Security --findings-json <path> > artifacts/release-authority/<sha>.json
+python -m contextual_orchestrator --serve --release-authority-json artifacts/release-authority/<sha>.json
+python -m pytest -q tests/test_commercial_release_candidate.py
+python -m pytest -q tests/test_release_authorization.py
+python -m pytest -q tests/test_release_authority_snapshot.py
+python -m pytest -q tests/test_commercial_acceptance_check.py
+python -m pytest -q tests/test_commercial_evidence_export.py
+python -m pytest -q tests/test_plugin_driven_artifacts.py
+python -m pytest -q tests/test_api_contract.py
 pytest -q
 ```

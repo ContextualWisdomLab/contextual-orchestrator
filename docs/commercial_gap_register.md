@@ -65,6 +65,11 @@ necessary.
 | `buyer_input_required` | Buyer-specific legal, procurement, ROI, deployment, or data-processing context must be supplied before buyer-specific claims. |
 | `blocked` | A concrete security, API contract, document, product, or Code Connect failure blocks commercial release. |
 
+`commercial_gap_register_blocked` also includes a missing or failing release-
+authority gate. That governance blocker is reported in `gap_summary` and
+`related_runtime_reports`; it does not become a synthetic `gap_item`. Individual
+`gap_status=blocked` rows remain reserved for concrete product blockers.
+
 ## KRW 2B Commercial Gap Register
 
 The register is acceptable for buyer review when:

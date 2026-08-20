@@ -115,6 +115,11 @@ def test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract()
     assert OPENAPI_SPEC["paths"]["/api/v1/commercial_release_candidates/latest"]["get"]["operationId"] == (
         "get_latest_commercial_release_candidate"
     )
+    response_schema = OPENAPI_SPEC["paths"]["/api/v1/commercial_release_candidates/latest"]["get"]["responses"]["200"]["content"]["application/json"]["schema"]
+    assert response_schema == {"$ref": "#/components/schemas/CommercialReleaseCandidate"}
+    assert OPENAPI_SPEC["components"]["schemas"]["CommercialReleaseCandidate"]["properties"]["release_authorization"] == {
+        "$ref": "#/components/schemas/ReleaseAuthorization"
+    }
     assert "/api/v1/commercial_release_candidates/latest" in ADMIN_HTML
     assert "commercial_release_candidate_title" in ADMIN_TRANSLATIONS["en"]
     assert "commercial_release_candidate_title" in ADMIN_TRANSLATIONS["ko"]
@@ -157,6 +162,28 @@ def test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract()
     assert release["release_status"] == "commercial_release_blocked"
     assert release["measurement_status"] == "local_commercial_release_candidate"
     assert "release_artifacts" in release
+
+
+def test_server_passes_explicit_release_authority_snapshot_to_report() -> None:
+    """An operator-supplied snapshot reaches the protected report boundary."""
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(admin_token="admin_secret", inference_token="inference_secret"),
+        release_authority={"repository": "wrong/repository"},
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, report = get_json(
+            f"http://127.0.0.1:{server.server_address[1]}/api/v1/commercial_release_candidates/latest",
+            "admin_secret",
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+    assert status == 200
+    assert "repository_mismatch" in report["release_authorization"]["blockers"]
 
 
 if __name__ == "__main__":  # pragma: no cover

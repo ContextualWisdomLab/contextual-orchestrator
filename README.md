@@ -314,6 +314,8 @@ python tests/test_buyer_handoff_bundle.py
 python tests/test_saleability_decision.py
 python tests/test_commercial_evidence_export.py
 python tests/test_commercial_acceptance_check.py
+python -m pytest -q tests/test_release_authorization.py
+python -m pytest -q tests/test_release_authority_snapshot.py
 python tests/test_commercial_buyer_acceptance_workflow.py
 python tests/test_commercial_release_candidate.py
 python tests/test_commercial_gap_register.py
