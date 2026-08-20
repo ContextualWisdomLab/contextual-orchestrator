@@ -32,7 +32,7 @@ def _serve():
             model="mock-a",
             base_url="mock://a",
             provider_name="mock",
-            tags=("reasoning", "coding", "writing"),
+            tags=("reasoning", "coding", "writing", "embedding"),
             priority=1,
         )
     ]

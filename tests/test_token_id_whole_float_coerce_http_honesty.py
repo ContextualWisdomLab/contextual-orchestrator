@@ -32,7 +32,7 @@ _TEST_AUTH_TOKEN = "token_id_whole_float_coerce_http_honesty_token"  # noqa: S10
 
 def build() -> TaskOrchestrator:
     return TaskOrchestrator(
-        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing", "embedding"))]
     )
 
 
