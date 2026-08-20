@@ -19,11 +19,18 @@ worker role.
 ## Causal boundary
 
 Provider-compatible `/models` registries can contain multiple endpoint families.
-The current discovery parser accepted every non-empty model identifier and exposed
+The original discovery parser accepted every non-empty model identifier and exposed
 it to agent creation, price selection, and durable pool synchronization. A catalog
 row naming an embedding deployment could therefore be scored for thinker, worker,
 verifier, or synthesizer work even though its serving endpoint accepts embedding
 input rather than chat messages.
+
+The first incident fix closed discovery and price-routing boundaries, but further
+root-cause tracing showed an already-persisted incompatible `ModelAgent` could still
+survive that filter. The runtime ranking path, generated workflow assignment,
+cross-agent failover, and direct `ModelClient.chat()` path previously trusted the
+persisted model identifier. That stale-state path is sufficient to reproduce the
+same unsupported Azure chat operation after a process restart or durable bootstrap.
 
 OpenAI documents `text-embedding-3-large` under the embeddings endpoint, separately
 from models supported by chat completions. Microsoft likewise demonstrates it with
@@ -34,7 +41,7 @@ operation; it cannot make an embedding deployment execute a chat operation.
 
 ## Decision
 
-The ordinary model-discovery module is a **chat-agent discovery boundary**.
+Chat capability is a **shared runtime invariant**, not only a discovery filter.
 
 1. Normalize provider prefixes and common separators in model identifiers.
 2. Reject identifiers that clearly advertise embedding, reranking, transcription,
@@ -44,13 +51,18 @@ The ordinary model-discovery module is a **chat-agent discovery boundary**.
 4. Re-check the invariant before converting a discovery record to `ModelAgent`.
 5. Re-check the invariant before writing chat pricing or running price-based chat
    selection.
-6. Leave unknown identifiers eligible without fabricating reasoning, tool, vision,
-   or verification capabilities from their names.
+6. Remove stale non-chat agents from thinker, worker, verifier, and synthesizer
+   ranking even if a durable configuration still contains them.
+7. Reselect a generated workflow step that explicitly names a stale non-chat agent.
+8. Remove non-chat agents from cross-agent failover candidates.
+9. Reject a non-chat model at `ModelClient.chat()` before mock or network transport.
+10. Leave unknown identifiers eligible without fabricating reasoning, tool, vision,
+    or verification capabilities from their names.
 
 This is deliberately a conservative negative filter. A future capability registry
 may replace name-based exclusion with authenticated provider metadata, measured
 endpoint probes, and separate endpoint-specific pools. Until that evidence exists,
-a clearly non-chat model fails closed at the chat boundary.
+a clearly non-chat model fails closed at every chat boundary.
 
 ## Rejected response
 
@@ -61,20 +73,28 @@ structurally unsupported, not transiently unavailable.
 
 ## Residual operational action
 
-This change prevents new incompatible catalog rows from entering the chat pool.
-A deployment that already persisted such a row must disable or withdraw that stale
-discovered agent. The durable provider-bootstrap slice owns exact-set activation and
-stale discovered-agent withdrawal; it must import this shared boundary when rebased.
+Runtime containment means an already-persisted embedding agent can no longer win
+chat selection or failover while stale data is being cleaned up. Durable state must
+still converge to the correct exact set: the provider-bootstrap slice owns stale
+discovered-agent withdrawal and must import the same shared classifier when rebased.
+Runtime rejection is defense in depth, not a substitute for deleting invalid
+persistent configuration.
 
 ## Verification evidence
 
 `tests/test_chat_model_capability_isolation.py` reproduces the exact Azure model ID
-and provider/separator aliases. It also verifies:
+and provider/separator aliases. It verifies:
 
 - OpenAI-compatible and Bytez catalog filtering;
 - malformed and prefix-only identifier handling;
 - agent-conversion rejection;
-- exclusion from the price book and cheapest-agent selection.
+- exclusion from the price book and cheapest-agent selection;
+- exclusion of a high-priority stale embedding agent from synthesizer selection;
+- fail-closed behavior when the persisted pool contains only non-chat agents;
+- generated-plan reassignment away from a stale embedding agent;
+- exclusion from cross-agent failover;
+- direct `ModelClient.chat()` rejection before transport;
+- idempotent runtime-guard installation.
 
 ## References
 
