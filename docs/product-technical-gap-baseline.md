@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 04:38, Asia/Seoul
+**As of:** 2026-08-21 04:45, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -92,20 +92,20 @@ role. This keeps the documented role vocabulary aligned with
 ## 4. Open PR inventory at the source-of-truth snapshot
 
 Checks below are a snapshot, not approval. `queued` and `in_progress` are not
-failures, but they also are not merge evidence. Protected main requires one
-independent approving review, last-push approval, resolved threads, all
+ failures, but they also are not merge evidence. Protected main requires two
+ approving reviews, an additional approval for unattributed changes,
+ last-push approval, resolved threads, all
 required workflows, and a normal merge.
 
 | PR | Exact head at snapshot | State / base | Evidence boundary and next action |
-|---:|---|---|---|
 | [#792](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/792) | `236a28b3f73380aaa39aa7b19a2bc475c2cbdf6f` | ready, based on main | Documentation-only release gap closure: adds the canonical SemVer changelog and explicitly keeps `0.1.0` unreleased until protected main, required Checks, independent review, and release artifacts are verified. Normal merge still requires the protected gate. |
 | [#790](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/790) | `0071751782ae535721e71785c3037989d2d27b77` | ready, based on main | Latest exact head keeps the gateway auth token outside the provider-key bootstrap gate. Exact-head review-gateway/model-discovery/API/security proof is `55 passed` with Ruff/diff clean; hosted Checks and independent approval remain required. |
 | [#788](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/788) | `d670601e61ca181a7b7134c7d0219f310334ff05` | ready, based on main | Review opaque admin-session TTL/revocation, same-origin cookie state changes, and Secure-by-default deployment. Run `32376890077` first exhausted NVIDIA NIM and then emitted an unsupported hardcoded-AWS-token claim at `server.py:1932`; the exact PR tree has no AWS token pattern, and the failed Strix job was rerun through the Actions API. Treat the rerun as pending until a fresh exact-head result is terminal. |
-| [#789](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/789) | `02e13a84bf4149e56d3bc6ee5cef41d8b13b2d4f` | ready, based on main | Current head removes stale direct-entry calls, duplicate fixture keys, and an unused import from the embedding contract tests, and carries the unique ADR 0024 identity. Focused proof is `43 passed`; exact full proof is `1441 passed in 529.91s`; hosted Checks are freshly queued and protected independent approval remains required. |
+| [#789](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/789) | `930bce1193d557f6dfe4252ef3187efb47dde194` | ready, based on main | Current head removes stale direct-entry calls, duplicate fixture keys, and an unused import from the embedding contract tests, and carries the unique ADR 0024 identity. Focused proof is `131 passed`; exact full proof is `1441 passed in 545.70s`; hosted Checks are freshly queued and protected approval remains required. |
 | [#782](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/782) | `1e7ddb96256a9379b3d8d4bb39c70a646f302bed` | ready, based on main | Review owner-bound workflow/access/evaluation reads, split-token admin evidence visibility, migration fail-closed behavior, and exact-head protected Checks before merge. |
 | [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) | `e4e6b7cf27f061ece9f0e03ce82a248480b31597` | ready, based on main | Parent-integrated current head includes #781 trace-purpose authorization and hardened trace fixtures. Exact proof is `1443 passed in 556.14s`; Ruff, compileall, and diff-check pass. Hosted Checks are freshly queued and protected independent approval remains required. |
 | [#775](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/775) | `fb8fb621faa66859e36fa9496d3d6deefd09c18e` | ready, based on main | Promoted after exact-head review: marker regression test passed, Python 3.10 resolver skips Atheris, Linux CPython 3.12 resolves Atheris 3.1.0, and the generated hash lock preserves `python_full_version == 3.12.*`. Hosted Checks are green; protected independent approval remains required. |
-| [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) | `1d8e882f0449efd525717981b8e9b01b1c309851` | ready, based on main | Current head preserves product release-artifact blockers without double-counting concrete blockers already included in the product count. Exact proof observed here is focused `26 passed`, full `1457 passed in 524.31s`, compileall, and diff-check clean; hosted Checks and independent approval remain required. |
+| [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) | `1d8e882f0449efd525717981b8e9b01b1c309851` | ready, based on main | Current head preserves product release-artifact blockers without double-counting concrete blockers already included in the product count. Exact proof is focused `28 passed`, full `1457 passed in 602.67s`; Ruff, compileall, and diff-check are clean. Hosted Checks are queued on this exact SHA and protected approval remains required. |
 | [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) | `ec609fa7b526a995346c34434e277eb12f5a0246` | ready, based on main | Issue [#568](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/568) exact-head proof is full suite `1461 passed in 580.97s`, focused judge/failover/passthrough/profile suite `69 passed`, and Ruff/diff clean; independent approval and protected Checks remain required. |
 | [#773](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/773) | self-reference — refetch live PR head | ready, based on main | This document is the PR's own changing artifact, so embedding its content SHA would become stale on every refresh commit. Refetch the live PR #773 head before relying on this row; review the dated product/technical gap register and ADR 0023 against the other exact heads. |
 | [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) | `f72ddc886cc55a3243ebe79f6498c7f942409c83` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions; exact-head cache/cost/ledger proof is `63 passed`, with full suite `1451 passed`. |
@@ -124,7 +124,7 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 04:38 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 04:45 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ### External central workflow prerequisite
@@ -156,7 +156,7 @@ live work item.
 
 | Priority | Gap | Current evidence | Definition of done |
 |---:|---|---|---|
-| P0 | Protected delivery cannot merge green PRs without independent approval. | Ruleset `18156473` requires one approval and last-push approval; several PRs are green but blocked. | A human/independent reviewer approves the exact current SHA, all threads resolve, hosted required workflows pass, and normal squash/merge succeeds. |
+| P0 | Protected delivery cannot merge green PRs without the required protected approvals. | Live ruleset `18156473` requires two approving reviews, an additional approval for unattributed changes, last-push approval, and resolved threads; several PRs are green but blocked. | Required independent reviewers approve the exact current SHA, all thread and workflow gates resolve, hosted required workflows pass, and normal squash/merge succeeds. |
 | P0 | Provider boundary is still being assembled across stacked PRs. | [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768), [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765), [#764](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/764), [#770](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/770), and [#763](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/763) are pending integration; #778 and #779 are integrated into #765, including temperature negotiation. Central OpenCode gateway routing is tracked by [.github#1170](https://github.com/ContextualWisdomLab/.github/pull/1170). | One current-main stack has capability isolation, secure JSON, bounded framing, multimodal evidence, KV bootstrap, honest catalog, optional-control negotiation, and failover with no duplicate logic; central review execution must use the same current gateway pin after protected integration. |
 | P0 | Operational failure paths are not yet one buyer-verifiable contract. | [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771) and [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) are open. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
 | P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | [ADR 0010](planning/adrs/0010-pii-audit-not-mask.md) explicitly marks both follow-ups not started; [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762) is documentation. | Purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests prove raw PII is only returned to an authorized purpose. |
