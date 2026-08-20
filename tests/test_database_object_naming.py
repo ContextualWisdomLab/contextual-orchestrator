@@ -33,8 +33,7 @@ def _extract_object_names(text: str) -> list[str]:
 def _application_sql_sources() -> list[Path]:
     """Return production SQL-bearing files, excluding test migration fixtures."""
     return sorted(
-        [* (ROOT / "contextual_orchestrator").rglob("*.py"),
-         * (ROOT / "docs").glob("*.sql")]
+        [*(ROOT / "contextual_orchestrator").rglob("*.py"), *(ROOT / "docs").glob("*.sql")]
     )
 
 
