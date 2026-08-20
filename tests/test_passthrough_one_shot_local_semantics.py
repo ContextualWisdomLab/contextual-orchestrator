@@ -12,6 +12,7 @@ import pytest
 
 from contextual_orchestrator import ModelAgent
 from contextual_orchestrator.orchestrator import ModelClient
+from contextual_orchestrator.passthrough_failover import _proxy_send_once
 
 
 def _local_agent() -> ModelAgent:
@@ -90,7 +91,7 @@ def test_one_shot_local_responses_preserves_translation_and_concurrency_slot() -
             side_effect=local_slot,
         ),
     ):
-        result = client.proxy_send_once(agent, "responses", request)
+        result = _proxy_send_once(client, agent, "responses", request)
 
     assert request == original
     assert slots == [(agent.id, 3, client.timeout)]
@@ -149,7 +150,7 @@ def test_one_shot_local_chat_still_uses_model_switch_concurrency_slot() -> None:
             side_effect=local_slot,
         ),
     ):
-        result = client.proxy_send_once(agent, "chat/completions", payload)
+        result = _proxy_send_once(client, agent, "chat/completions", payload)
 
     assert result["object"] == "chat.completion"
     assert slots == [(agent.id, 2, client.timeout)]
@@ -183,7 +184,8 @@ def test_one_shot_remote_passthrough_never_enters_same_agent_retry_wrapper() -> 
         patch.object(client, "_send_raw_with_retry") as retry_wrapper,
     ):
         with pytest.raises(urllib.error.HTTPError) as caught:
-            client.proxy_send_once(
+            _proxy_send_once(
+                client,
                 agent,
                 "chat/completions",
                 {
