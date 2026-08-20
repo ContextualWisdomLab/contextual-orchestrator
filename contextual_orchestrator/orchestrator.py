@@ -652,6 +652,19 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
     }
     if isinstance(request.get("metadata"), dict):
         response["metadata"] = request["metadata"]
+    echo: dict[str, Any] = {}
+    if isinstance(request.get("response_format"), dict):
+        echo["response_format"] = request["response_format"]
+    instructions = request.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        echo["instructions"] = instructions
+    metadata = request.get("metadata")
+    if isinstance(metadata, dict):
+        cleaned_metadata = {key: value for key, value in metadata.items() if value is not None}
+        if cleaned_metadata:
+            echo["metadata"] = cleaned_metadata
+    if echo:
+        response["echo"] = echo
     return response
 
 
