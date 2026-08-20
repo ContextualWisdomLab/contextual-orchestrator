@@ -13,6 +13,13 @@ from contextual_orchestrator import evaluate_release_authorization  # noqa: E402
 HEAD = "a" * 40
 
 
+class AlwaysNotEqualString(str):
+    """Model an untrusted string subclass that lies to a comparison."""
+
+    def __ne__(self, _other: object) -> bool:
+        return True
+
+
 def authority() -> dict[str, object]:
     """Return a complete trusted-snapshot shape for the nominal case."""
     return {
@@ -91,6 +98,31 @@ def test_author_only_or_dismissed_approval_blocks() -> None:
     ]
     result = evaluate_release_authorization(evidence)
     assert "independent_approval_missing" in result["blockers"]
+    assert result["review"]["independent_exact_head_approval_count"] == 0
+
+
+def test_string_subclass_cannot_bypass_author_exclusion() -> None:
+    """Untrusted string subclasses cannot make an author approval independent."""
+    evidence = authority()
+    evidence["review_policy"] = {
+        **evidence["review_policy"],
+        "author_login": AlwaysNotEqualString("author"),
+    }
+    evidence["reviewers"] = [
+        {
+            "login": "author",
+            "association": "MEMBER",
+            "state": "approved",
+            "head_sha": HEAD,
+            "dismissed": False,
+            "is_author": False,
+        }
+    ]
+
+    result = evaluate_release_authorization(evidence)
+
+    assert result["authorized"] is False
+    assert "review_policy_invalid" in result["blockers"]
     assert result["review"]["independent_exact_head_approval_count"] == 0
 
 

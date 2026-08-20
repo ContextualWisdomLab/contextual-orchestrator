@@ -173,7 +173,7 @@ def evaluate_release_authorization(
         else:
             required_approval_count = review_policy.get("required_independent_approval_count")
         author_login = review_policy.get("author_login")
-        if type(required_approval_count) is not int or required_approval_count < 0 or not isinstance(author_login, str):
+        if type(required_approval_count) is not int or required_approval_count < 0 or type(author_login) is not str:
             blockers.append("review_policy_invalid")
             required_approval_count = 0
         if review_policy.get("head_sha") != protected_head_sha:
@@ -187,7 +187,7 @@ def evaluate_release_authorization(
             blockers.append("review_evidence_invalid")
             continue
         login = reviewer.get("login")
-        if not isinstance(login, str) or not login:
+        if type(login) is not str or not login:
             blockers.append("review_evidence_invalid")
             continue
         # GitHub returns review events in submission order. Keep one latest
@@ -201,7 +201,8 @@ def evaluate_release_authorization(
             and reviewer.get("dismissed") is False
             and reviewer.get("is_author") is False
             and reviewer.get("association") in _APPROVED_ASSOCIATIONS
-            and reviewer.get("login") != author_login
+            and type(author_login) is str
+            and reviewer["login"] != author_login
         )
         if qualifies:
             independent_approval_count += 1
