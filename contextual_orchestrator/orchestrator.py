@@ -796,7 +796,7 @@ class ModelClient:
         self.local_max_retries = int(local_max_retries)
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
-        self.temperature = 0.2 if temperature is None else temperature
+        self.temperature = temperature
         if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -1307,10 +1307,12 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
+        effective_temperature = self.default_temperature if temperature is None else temperature
+        if effective_temperature is not None:  # pragma: no cover
+            payload["temperature"] = effective_temperature
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             yield from self._stream_send(agent, payload, destination)  # pragma: no cover
 
@@ -1598,26 +1600,28 @@ class ModelClient:
         self,
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
-        temperature: float,
+        temperature: float | None,
         poll_interval: float,
         poll_timeout: float,
         destination: ProviderDestination | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
-        lines = [
-            json.dumps({
+        lines = []
+        for custom_id, messages in requests.items():
+            body = {
+                "model": agent.model,
+                "messages": messages,
+                "max_tokens": self.max_output_tokens,
+            }
+            effective_temperature = self.default_temperature if temperature is None else temperature
+            if effective_temperature is not None:
+                body["temperature"] = effective_temperature
+            lines.append(json.dumps({
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
-                    "model": agent.model,
-                    "messages": messages,
-                    "temperature": self.temperature if temperature is None else temperature,
-                    "max_tokens": self.max_output_tokens,
-                },
-            }, ensure_ascii=False)
-            for custom_id, messages in requests.items()
-        ]
+                "body": body,
+            }, ensure_ascii=False))
         input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"), destination)
         batch_id = self._batch_json(agent, "POST", "/batches", {
             "input_file_id": input_file_id,
