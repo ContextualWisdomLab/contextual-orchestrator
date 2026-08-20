@@ -80,13 +80,13 @@ required workflows, and a normal merge.
 |---:|---|---|---|---|
 | #776 | `3830f38` | stacked / review not recorded, clean | no protected required Checks until parent #765 is integrated | Review fixed-length framing, exact read, deadline, close-on-error, and RFC 9112 evidence; retarget/rebase onto protected main after #765. |
 | #775 | `fb8fb62` | draft / `REVIEW_REQUIRED`, blocked | hosted Checks pending on the repaired head | Verify the exact CPython 3.12 Atheris marker keeps unsupported interpreters out while preserving the CPython 3.12 fuzz installation; obtain independent approval. |
-| #774 | `8977384` | stacked on closed branch, review not recorded, clean | no required Checks reported for its closed base branch | Rebase onto the current #765/main line; preserve same-provider temperature negotiation and do not merge a stale 72-file comparison. |
-| #773 | `fbe9767` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review the current product/technical baseline and ADR 0016, then obtain independent approval. |
+| #774 | `8977384` | stacked on non-default base `feat/paper-grounded-auto-orchestration-20260820`, review not recorded, clean | no required Checks reported for its non-default base branch | Rebase onto the current #765/main line; preserve same-provider temperature negotiation and do not merge a stale 72-file comparison. |
+| #773 | `41f4a0a` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review the current product/technical baseline and ADR 0016, then obtain independent approval. |
 | #772 | `8452623` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review cache key, bypass, fail-open, and cost/routing interactions; wait for same-head Checks and independent approval. |
 | #771 | `2351cab` | ready / `REVIEW_REQUIRED`, blocked | most security checks passed; full suite, Hypothesis, Atheris, queue scan, Strix queued/in progress | Recheck exact-head failure-chain behavior and hosted Checks; obtain independent approval. |
 | #770 | `c01733b` | draft / `REVIEW_REQUIRED`, behind | most checks passed; coverage queued, Strix in progress | Rebase/integrate after catalog and transport dependencies; preserve honest fail-closed price evidence. |
 | #769 | `9654c28` | ready / `REVIEW_REQUIRED`, blocked | required checks passed except coverage evidence queued | Resolve coverage evidence and obtain last-push independent approval; do not self-approve. |
-| #768 | `a4aef39` | ready / `REVIEW_REQUIRED`, blocked | required workflows queued | Review the current remote head for embedding/chat capability separation; predecessor d1e06d5 evidence is stale, so wait for full Checks and approval on a4aef39. |
+| #768 | `f13ee66` | ready / `REVIEW_REQUIRED`, blocked | required workflows queued | Review the current remote head for embedding/chat capability separation; predecessor a4aef39 evidence is stale, so wait for full Checks and approval on f13ee66. |
 | #765 | `d3f9a9b` | draft / `REVIEW_REQUIRED`, blocked | most checks passed; coverage queued | Review secure provider JSON and role reasoning contract after #768/#769 integration. |
 | #764 | `f4f1b4a` | draft / `REVIEW_REQUIRED`, behind | required workflows queued | Stack after credential/catalog contract is settled; verify 3NF persistence and KV bootstrap. |
 | #763 | `385a5b4` | draft / `REVIEW_REQUIRED`, blocked | most checks passed; coverage queued, Strix in progress | Integrate with current provider transport and catalog; retain failover evidence. |
@@ -100,6 +100,7 @@ an issue exists or a draft PR exists.
 
 | Issue | Customer-visible gap | Planned proof / next PR |
 |---:|---|---|
+| #777 | Low-latency gateway routing metrics use coarse, inference-oriented histogram buckets and do not separate dispatch from upstream latency. | Add validated configurable bucket boundaries and distinct dispatch/upstream histograms; preserve metric names, labels, and bounded cardinality. |
 | #568 | Operators cannot compare provider-neutral reasoning profiles at equal budget. | Add role-specific effort profiles, recursion/workflow/access-list controls, and an ablation report with reproducible fixtures. |
 | #123 | A sole collaborator can be unable to satisfy last-push approval. | Add governance evidence/runbook or a protected-rule-compatible process; never bypass approval. |
 | #119 | Ambiguous or unbounded inbound framing threatens request integrity. | PR #776 adds bounded framing tests and hosted security evidence after its #765 stack is reconciled. |
