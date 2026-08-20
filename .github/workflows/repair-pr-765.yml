@@ -1,0 +1,585 @@
+name: Repair PR 765 review findings
+
+on:
+  push:
+    branches:
+      - fix/auto-reasoning-effort-contract-rebased
+    paths:
+      - .github/workflows/repair-pr-765.yml
+
+permissions:
+  contents: write
+
+concurrency:
+  group: repair-pr-765
+  cancel-in-progress: false
+
+jobs:
+  repair:
+    name: TDD repair current review findings
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout exact branch head
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: fix/auto-reasoning-effort-contract-rebased
+          fetch-depth: 0
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Add RED regression tests
+        shell: bash
+        run: |
+          cat > tests/test_pr765_review_regressions.py <<'PY'
+          """Regression locks for the exact review findings on PR 765."""
+
+          from __future__ import annotations
+
+          from pathlib import Path
+          import socket
+          from types import SimpleNamespace
+          from unittest.mock import patch
+
+          import pytest
+
+          from contextual_orchestrator.credentials import (
+              InMemoryCredentialBackend,
+              register_credential,
+              set_backend,
+          )
+          from contextual_orchestrator.cost_router import CostRoutingCoordinator
+          from contextual_orchestrator.model_discovery import (
+              ProviderDiscoveryError,
+              ProviderModelSource,
+              discover_provider_models,
+          )
+          from contextual_orchestrator.orchestrator import ModelClient
+          import contextual_orchestrator.server as server_module
+
+
+          @pytest.fixture(autouse=True)
+          def _fresh_credential_backend():
+              set_backend(InMemoryCredentialBackend())
+              try:
+                  yield
+              finally:
+                  set_backend(None)
+
+
+          def test_discovery_rejects_private_dns_before_authorization_transport() -> None:
+              register_credential("PRIVATE_PROVIDER_KEY", "private-provider-secret")
+              source = ProviderModelSource(
+                  provider_name="private_provider",
+                  credential_name="PRIVATE_PROVIDER_KEY",
+                  list_url="https://models.example.test/v1/models",
+                  chat_base_url="https://models.example.test/v1",
+              )
+              addresses = [
+                  (
+                      socket.AF_INET,
+                      socket.SOCK_STREAM,
+                      socket.IPPROTO_TCP,
+                      "",
+                      ("127.0.0.1", 443),
+                  )
+              ]
+              with (
+                  patch(
+                      "contextual_orchestrator.orchestrator.socket.getaddrinfo",
+                      return_value=addresses,
+                  ),
+                  patch(
+                      "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+                      side_effect=AssertionError("unvalidated urllib transport used"),
+                  ),
+                  patch.object(
+                      ModelClient,
+                      "_open_provider",
+                      side_effect=AssertionError("provider opened before address rejection"),
+                  ) as opener,
+              ):
+                  with pytest.raises(ProviderDiscoveryError, match="non-public address"):
+                      discover_provider_models(source)
+              opener.assert_not_called()
+
+
+          class _AlwaysBatchPolicy:
+              def decide(self, _hints, _prompt_tokens):
+                  return SimpleNamespace(channel="batch", reason="test_batch_policy")
+
+
+          class _FakeOrchestrator:
+              def __init__(self) -> None:
+                  self.client = SimpleNamespace(local_concurrency=1)
+                  self.output_contract = None
+
+              def complete(self, messages, mode="auto"):
+                  return self.run(messages, mode=mode)
+
+              def run(
+                  self,
+                  messages,
+                  *,
+                  mode="auto",
+                  workflow_run_id=None,
+                  output_contract=None,
+              ):
+                  self.output_contract = output_contract
+                  return {
+                      "answer": "{}",
+                      "mode": mode,
+                      "trace": [],
+                      "workflow_run_id": workflow_run_id or "review_run",
+                  }
+
+
+          class _Coordinator(CostRoutingCoordinator):
+              def _record_completion(self, **_kwargs):
+                  return SimpleNamespace(
+                      usage_record_id="usage_record",
+                      prompt_tokens=1,
+                      completion_tokens=1,
+                      total_tokens=2,
+                      cost_amount=0.0,
+                      currency_code="USD",
+                  )
+
+
+          def test_structured_output_forces_sync_when_policy_selects_batch() -> None:
+              orchestrator = _FakeOrchestrator()
+              coordinator = _Coordinator(
+                  orchestrator,
+                  routing_policy=_AlwaysBatchPolicy(),
+              )
+              output_contract = {
+                  "type": "json_schema",
+                  "json_schema": {
+                      "name": "answer",
+                      "schema": {"type": "object", "properties": {}},
+                  },
+              }
+              result = coordinator.complete(
+                  [{"role": "user", "content": "Return JSON"}],
+                  response_format=output_contract,
+              )
+              assert result["channel"] == "sync"
+              assert result["routing_reason"].endswith("structured_output_forced_sync")
+              assert orchestrator.output_contract == output_contract
+
+
+          @pytest.mark.parametrize(
+              "schema",
+              [
+                  {"type": "object", "properties": []},
+                  {"type": "object", "required": ["answer", 7]},
+                  {"type": "array", "items": []},
+              ],
+          )
+          def test_malformed_json_schema_is_rejected_before_execution(schema) -> None:
+              body = {
+                  "response_format": {
+                      "type": "json_schema",
+                      "json_schema": {"name": "answer", "schema": schema},
+                  }
+              }
+              with pytest.raises(server_module.RequestError) as captured:
+                  server_module._validate_chat_response_format(body)
+              assert captured.value.status == 400
+              assert captured.value.code == "invalid_response_format"
+
+
+          @pytest.mark.parametrize(
+              ("field", "value"),
+              [
+                  ("temperature", 0.2),
+                  ("top_p", 0.9),
+                  ("presence_penalty", 0.1),
+                  ("frequency_penalty", -0.1),
+                  ("seed", 42),
+                  ("stop", ["END"]),
+                  ("logit_bias", {"1": 1}),
+                  ("logprobs", True),
+              ],
+          )
+          def test_responses_orchestration_rejects_unapplied_controls(field, value) -> None:
+              helper = getattr(
+                  server_module,
+                  "_reject_responses_orchestration_controls",
+                  None,
+              )
+              assert callable(helper)
+              with pytest.raises(server_module.RequestError) as captured:
+                  helper({field: value})
+              assert captured.value.status == 400
+              assert captured.value.code == "unsupported_responses_orchestration_controls"
+              assert captured.value.detail == {"fields": [field]}
+
+
+          def test_responses_orchestration_control_guard_is_wired_and_allows_noops() -> None:
+              helper = getattr(
+                  server_module,
+                  "_reject_responses_orchestration_controls",
+                  None,
+              )
+              assert callable(helper)
+              helper({"temperature": None, "logprobs": False})
+              source = Path(server_module.__file__).read_text(encoding="utf-8")
+              assert (
+                  "_reject_responses_orchestration_controls(body)\n"
+                  "                    chat_payload = _responses_to_chat_payload(body)"
+              ) in source
+          PY
+
+      - name: Confirm regressions are RED before implementation
+        shell: bash
+        run: |
+          set +e
+          python -m pytest tests/test_pr765_review_regressions.py -q
+          status=$?
+          set -e
+          if [ "$status" -eq 0 ]; then
+            echo "Expected review regressions to fail before implementation"
+            exit 1
+          fi
+
+      - name: Apply minimal production fixes and update transport tests
+        shell: bash
+        run: |
+          python - <<'PY'
+          from pathlib import Path
+          import re
+
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one exact match, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+
+          def replace_regex_once(path: str, pattern: str, replacement: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              updated, count = re.subn(pattern, replacement, text, count=1, flags=re.MULTILINE | re.DOTALL)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one regex match, found {count}")
+              target.write_text(updated, encoding="utf-8")
+
+
+          # Discovery: reuse the same credential-aware, public-address validated,
+          # DNS-pinned provider transport as inference before sending Authorization.
+          replace_once(
+              "contextual_orchestrator/model_discovery.py",
+              "from .orchestrator import ModelAgent\n",
+              "from .orchestrator import ModelAgent, ModelClient\n",
+          )
+          fetch_function = '''def _fetch_json(
+              url: str,
+              *,
+              api_key: str,
+              auth_scheme: str,
+              timeout: float,
+              credential_name: str,
+          ) -> Any:
+              """Fetch one catalog through the normal validated provider transport."""
+              parsed = urlparse(url)
+              if parsed.scheme != "https" or not parsed.hostname:
+                  raise ValueError("model discovery requires an https provider URL")
+              if parsed.username or parsed.password or parsed.fragment:
+                  raise ValueError("model discovery URL must not contain credentials or a fragment")
+              try:
+                  port = parsed.port
+              except ValueError as exc:
+                  raise ValueError("model discovery URL has an invalid port") from exc
+              origin = f"https://{parsed.hostname}"
+              if port not in (None, 443):
+                  origin = f"{origin}:{port}"
+              agent = ModelAgent(
+                  id="model_discovery_agent",
+                  model="model-catalog",
+                  base_url=origin,
+                  credential_key=credential_name,
+                  auth_scheme=auth_scheme,
+              )
+              client = ModelClient()
+              destination = client._validate_provider(agent)
+              request = urllib.request.Request(
+                  url,
+                  headers={"authorization": f"{auth_scheme} {api_key}"},
+                  method="GET",
+              )
+              with client._open_provider(request, destination, timeout=timeout) as response:
+                  body = response.read(8 * 1024 * 1024 + 1)
+              if len(body) > 8 * 1024 * 1024:
+                  raise ValueError("model discovery response exceeds the maximum size")
+              return json.loads(body.decode("utf-8"))
+          '''
+          replace_regex_once(
+              "contextual_orchestrator/model_discovery.py",
+              r"def _fetch_json\(.*?\n\n\ndef _price_per_1k",
+              fetch_function + "\n\ndef _price_per_1k",
+          )
+          replace_once(
+              "contextual_orchestrator/model_discovery.py",
+              "payload = _fetch_json(url, api_key=api_key, auth_scheme=source.auth_scheme, timeout=timeout)",
+              "payload = _fetch_json(\n"
+              "            url,\n"
+              "            api_key=api_key,\n"
+              "            auth_scheme=source.auth_scheme,\n"
+              "            timeout=timeout,\n"
+              "            credential_name=source.credential_name,\n"
+              "        )",
+          )
+          replace_once(
+              "contextual_orchestrator/model_discovery.py",
+              "except (urllib.error.URLError, TimeoutError, ValueError) as exc:",
+              "except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError, OSError) as exc:",
+          )
+
+          # Existing discovery tests now mock the validated transport boundary rather
+          # than urllib's unpinned global opener.
+          test_path = Path("tests/test_model_discovery.py")
+          test_text = test_path.read_text(encoding="utf-8")
+          test_text = test_text.replace(
+              "import json\nimport sys\nimport urllib.error\n",
+              "from contextlib import contextmanager\nimport json\nimport socket\nimport sys\nimport urllib.error\n",
+              1,
+          )
+          test_text = test_text.replace(
+              "from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402",
+              "from contextual_orchestrator import ModelAgent, ModelClient, TaskOrchestrator  # noqa: E402",
+              1,
+          )
+          marker = "\n\nOPENAI_SOURCE = ProviderModelSource("
+          helper = '''
+
+          @contextmanager
+          def _patched_transport(urlopen):
+              def open_provider(request, _destination=None, *, timeout=None):
+                  return urlopen(request, timeout=timeout)
+
+              with (
+                  patch.object(
+                      ModelClient,
+                      "_validate_provider",
+                      return_value=(socket.AF_INET, ("93.184.216.34", 443)),
+                  ),
+                  patch.object(ModelClient, "_open_provider", side_effect=open_provider),
+              ):
+                  yield
+          '''
+          if test_text.count(marker) != 1:
+              raise SystemExit("tests/test_model_discovery.py: source marker mismatch")
+          test_text = test_text.replace(marker, helper + marker, 1)
+          old_patch = 'with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):'
+          if test_text.count(old_patch) != 3:
+              raise SystemExit(
+                  "tests/test_model_discovery.py: expected three urllib transport patches"
+              )
+          test_text = test_text.replace(old_patch, "with _patched_transport(urlopen):")
+          test_path.write_text(test_text, encoding="utf-8")
+
+          # A structured-output request may not enter a batch backend that cannot
+          # carry or validate its output contract. Keep it synchronous instead.
+          replace_once(
+              "contextual_orchestrator/cost_router.py",
+              '''        if decision.channel == "batch":
+              request = BatchRequest(
+          ''',
+              '''        structured_output_forced_sync = (
+              decision.channel == "batch" and response_format is not None
+          )
+          if decision.channel == "batch" and not structured_output_forced_sync:
+              request = BatchRequest(
+          ''',
+          )
+          replace_once(
+              "contextual_orchestrator/cost_router.py",
+              '''        result["channel"] = "sync"
+          result["routing_reason"] = decision.reason
+          ''',
+              '''        result["channel"] = "sync"
+          result["routing_reason"] = (
+              f"{decision.reason};structured_output_forced_sync"
+              if structured_output_forced_sync
+              else decision.reason
+          )
+          ''',
+          )
+
+          server_path = Path("contextual_orchestrator/server.py")
+          server_text = server_path.read_text(encoding="utf-8")
+          schema_marker = "\ndef _validate_json_schema_value(value: Any, schema: dict[str, Any], path: str = \"$\") -> None:\n"
+          schema_helper = '''
+
+          def _validate_json_schema_definition(
+              schema: Any,
+              path: str = "response_format.json_schema.schema",
+          ) -> None:
+              """Validate the bounded JSON Schema structure before provider execution."""
+              if not isinstance(schema, dict):
+                  raise RequestError(400, "invalid_response_format", f"{path} must be an object")
+              properties = schema.get("properties")
+              if properties is not None:
+                  if not isinstance(properties, dict):
+                      raise RequestError(
+                          400,
+                          "invalid_response_format",
+                          f"{path}.properties must be an object",
+                      )
+                  for name, child in properties.items():
+                      if not isinstance(name, str) or not isinstance(child, dict):
+                          raise RequestError(
+                              400,
+                              "invalid_response_format",
+                              f"{path}.properties entries must map string names to objects",
+                          )
+                      _validate_json_schema_definition(child, f"{path}.properties.{name}")
+              required = schema.get("required")
+              if required is not None and (
+                  not isinstance(required, list)
+                  or any(not isinstance(name, str) for name in required)
+              ):
+                  raise RequestError(
+                      400,
+                      "invalid_response_format",
+                      f"{path}.required must be an array of strings",
+                  )
+              items = schema.get("items")
+              if items is not None:
+                  if not isinstance(items, dict):
+                      raise RequestError(
+                          400,
+                          "invalid_response_format",
+                          f"{path}.items must be an object",
+                      )
+                  _validate_json_schema_definition(items, f"{path}.items")
+              any_of = schema.get("anyOf")
+              if any_of is not None:
+                  if not isinstance(any_of, list) or any(
+                      not isinstance(option, dict) for option in any_of
+                  ):
+                      raise RequestError(
+                          400,
+                          "invalid_response_format",
+                          f"{path}.anyOf must be an array of objects",
+                      )
+                  for index, option in enumerate(any_of):
+                      _validate_json_schema_definition(option, f"{path}.anyOf[{index}]")
+          '''
+          if server_text.count(schema_marker) != 1:
+              raise SystemExit("server.py: JSON Schema value marker mismatch")
+          server_text = server_text.replace(schema_marker, schema_helper + schema_marker, 1)
+          schema_object_block = '''        if not isinstance(schema_body, dict):
+              raise RequestError(
+                  400,
+                  "invalid_response_format",
+                  "response_format.json_schema.schema must be an object",
+              )
+          '''
+          if server_text.count(schema_object_block) != 1:
+              raise SystemExit("server.py: response-format schema block mismatch")
+          server_text = server_text.replace(
+              schema_object_block,
+              schema_object_block + "        _validate_json_schema_definition(schema_body)\n",
+              1,
+          )
+
+          response_guard_marker = "\ndef _require_pool_model(orchestrator: Any, model_name: str) -> None:\n"
+          response_guard = '''
+
+          _UNSUPPORTED_RESPONSES_ORCHESTRATION_CONTROLS = (
+              "temperature",
+              "top_p",
+              "presence_penalty",
+              "frequency_penalty",
+              "seed",
+              "stop",
+              "logit_bias",
+              "logprobs",
+          )
+
+
+          def _reject_responses_orchestration_controls(body: dict[str, Any]) -> None:
+              """Reject request controls that the multi-agent Responses path cannot apply."""
+              unsupported: list[str] = []
+              for field in _UNSUPPORTED_RESPONSES_ORCHESTRATION_CONTROLS:
+                  if field not in body or body[field] is None:
+                      continue
+                  if field == "logprobs" and body[field] is False:
+                      continue
+                  unsupported.append(field)
+              if unsupported:
+                  raise RequestError(
+                      400,
+                      "unsupported_responses_orchestration_controls",
+                      "Responses orchestration cannot apply these provider controls",
+                      {"fields": unsupported},
+                  )
+          '''
+          if server_text.count(response_guard_marker) != 1:
+              raise SystemExit("server.py: pool-model marker mismatch")
+          server_text = server_text.replace(
+              response_guard_marker,
+              response_guard + response_guard_marker,
+              1,
+          )
+          responses_marker = "                    chat_payload = _responses_to_chat_payload(body)\n"
+          if server_text.count(responses_marker) != 1:
+              raise SystemExit(
+                  f"server.py: expected one orchestrated Responses marker, found {server_text.count(responses_marker)}"
+              )
+          server_text = server_text.replace(
+              responses_marker,
+              "                    _reject_responses_orchestration_controls(body)\n"
+              + responses_marker,
+              1,
+          )
+          server_path.write_text(server_text, encoding="utf-8")
+          PY
+
+      - name: Run focused review regressions and adjacent contracts
+        run: >-
+          python -m pytest -q
+          tests/test_pr765_review_regressions.py
+          tests/test_model_discovery.py
+          tests/test_cost_router.py
+          tests/test_chat_response_format_http_honesty.py
+          tests/test_chat_response_format_json_schema_omit_real_http_honesty.py
+          tests/test_responses_response_format_http_honesty.py
+
+      - name: Run exact branch test suite
+        run: python -m pytest -q
+
+      - name: Compile and inspect patch
+        shell: bash
+        run: |
+          python -m compileall -q contextual_orchestrator tests/test_pr765_review_regressions.py
+          git diff --check
+          git status --short
+
+      - name: Commit verified repair and remove one-shot workflow
+        shell: bash
+        run: |
+          rm .github/workflows/repair-pr-765.yml
+          git config user.name "contextual-orchestrator-maintainer"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add -- \
+            contextual_orchestrator/model_discovery.py \
+            contextual_orchestrator/cost_router.py \
+            contextual_orchestrator/server.py \
+            tests/test_model_discovery.py \
+            tests/test_pr765_review_regressions.py
+          git add -u -- .github/workflows/repair-pr-765.yml
+          git diff --cached --check
+          git commit -m "fix: resolve orchestration review findings"
+          git push origin HEAD:fix/auto-reasoning-effort-contract-rebased
