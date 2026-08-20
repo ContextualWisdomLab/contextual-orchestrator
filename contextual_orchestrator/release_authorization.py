@@ -8,10 +8,9 @@ tokens, prompts, reviewer credentials, or private reasoning.
 
 from __future__ import annotations
 
-from collections.abc import Mapping, Sequence
 import re
+from collections.abc import Mapping, Sequence
 from typing import Any
-
 
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 _APPROVED_ASSOCIATIONS = frozenset({"OWNER", "MEMBER", "COLLABORATOR"})

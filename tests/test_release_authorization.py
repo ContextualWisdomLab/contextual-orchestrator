@@ -215,3 +215,53 @@ def test_product_evidence_and_release_authority_are_separate() -> None:
     }
     assert report["release_status"] == "commercial_release_blocked"
     assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
+
+
+def test_valid_authority_flows_through_commercial_readiness_wrappers() -> None:
+    """A complete authority snapshot authorizes every downstream commercial gate."""
+    from contextual_orchestrator import ModelAgent, TaskOrchestrator
+    from contextual_orchestrator.admin import ADMIN_TRANSLATIONS
+
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+            ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation")),
+            ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "security", "review")),
+        ]
+    )
+    orchestrator.record_analytics_event(
+        "chat_completion_requested",
+        {"endpoint_path": "/v1/chat/completions", "actor_scope": "inference", "status_code": 200, "duration_ms": 8},
+    )
+    orchestrator.run(
+        [{"role": "user", "content": "Analyze the product, implement the control plane, verify it, and summarize."}],
+        mode="conduct",
+    )
+    orchestrator.run_evaluation(["Replay this commercial release candidate prompt."], mode="route")
+    security_profile = {
+        "auth_mode": "split_token",
+        "allow_public_bind": False,
+        "expose_trace_by_default": False,
+        "rate_limit_requests": 60,
+        "max_concurrent_runs": 8,
+    }
+    release = orchestrator.commercial_release_candidate_report(
+        locale_bundles=ADMIN_TRANSLATIONS,
+        security_profile=security_profile,
+        release_authority=authority(),
+    )
+    procurement = orchestrator.commercial_procurement_readiness_report(
+        locale_bundles=ADMIN_TRANSLATIONS,
+        security_profile=security_profile,
+        release_authority=authority(),
+    )
+    contract = orchestrator.commercial_contract_readiness_report(
+        locale_bundles=ADMIN_TRANSLATIONS,
+        security_profile=security_profile,
+        release_authority=authority(),
+    )
+
+    assert release["release_authorization"]["blockers"] == []
+    assert release["release_status"] == "commercial_release_ready_with_warnings"
+    assert procurement["release_authorization"]["status"] == "release_authorized"
+    assert contract["related_runtime_reports"]["release_authorization_status"] == "release_authorized"

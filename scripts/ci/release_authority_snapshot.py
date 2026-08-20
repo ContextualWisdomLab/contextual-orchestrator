@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 """Collect current GitHub evidence for the fail-closed release evaluator.
 
 This read-only helper deliberately delegates authentication to the installed
@@ -10,12 +9,11 @@ from __future__ import annotations
 
 import argparse
 import json
-from pathlib import Path
 import re
 import subprocess
 import sys
+from pathlib import Path
 from typing import Any
-
 
 _SHA_PATTERN = re.compile(r"^[0-9a-f]{40}$")
 
@@ -24,7 +22,7 @@ def _gh_json(repository: str, endpoint: str) -> dict[str, Any] | list[Any]:
     """Read every page of one GitHub REST endpoint without leaking diagnostics."""
     try:
         completed = subprocess.run(
-            ["gh", "api", "--paginate", "--slurp", "--repo", repository, endpoint],
+            ["gh", "api", "--paginate", "--slurp", endpoint],
             check=False,
             capture_output=True,
             text=True,
@@ -39,7 +37,7 @@ def _gh_json(repository: str, endpoint: str) -> dict[str, Any] | list[Any]:
     except json.JSONDecodeError as exc:
         raise RuntimeError("github_authority_response_invalid") from exc
     if not isinstance(value, (dict, list)):
-        raise RuntimeError("github_authority_response_invalid")
+        raise RuntimeError("github_authority_response_invalid")  # noqa: TRY004
     # ``gh --paginate --slurp`` wraps pages in a list. Unwrap the common
     # one-page case while retaining multiple pages for ``_page_items``.
     if isinstance(value, list) and len(value) == 1 and isinstance(value[0], (dict, list)):
@@ -56,7 +54,7 @@ def _read_findings(path: str | None) -> dict[str, Any]:
     except (OSError, UnicodeError, json.JSONDecodeError) as exc:
         raise RuntimeError("findings_inventory_invalid") from exc
     if not isinstance(value, dict):
-        raise RuntimeError("findings_inventory_invalid")
+        raise RuntimeError("findings_inventory_invalid")  # noqa: TRY004
     sources = value.get("sources")
     unresolved = value.get("unresolved_findings")
     if not isinstance(sources, list) or any(not isinstance(source, str) or not source for source in sources):
@@ -151,6 +149,27 @@ def _ruleset_rules(rulesets: list[Any]) -> list[dict[str, Any]]:
     return verified
 
 
+def _ruleset_details(repository: str, rulesets: list[Any]) -> list[dict[str, Any]]:
+    """Expand GitHub ruleset summaries before evaluating their rules."""
+    details: list[dict[str, Any]] = []
+    for ruleset in rulesets:
+        if not isinstance(ruleset, dict):
+            continue
+        if isinstance(ruleset.get("conditions"), dict) and isinstance(ruleset.get("rules"), list):
+            details.append(ruleset)
+            continue
+        ruleset_id = ruleset.get("id")
+        if type(ruleset_id) is not int or ruleset_id < 1:
+            continue
+        try:
+            detail = _gh_json(repository, f"repos/{repository}/rulesets/{ruleset_id}")
+        except RuntimeError:
+            continue
+        if isinstance(detail, dict):
+            details.append(detail)
+    return details
+
+
 def _rulesets_are_verified(rulesets: list[Any]) -> bool:
     """Verify that at least one active-main ruleset enforces CI checks."""
     return bool(_ruleset_rules(rulesets))
@@ -184,7 +203,7 @@ def _required_approval_count(rulesets: list[Any]) -> int:
         if not isinstance(rules, list):
             continue
         for rule in rules:
-            if not isinstance(rule, dict) or rule.get("type") != "required_pull_request_reviews":
+            if not isinstance(rule, dict) or rule.get("type") not in {"pull_request", "required_pull_request_reviews"}:
                 continue
             parameters = rule.get("parameters")
             count = parameters.get("required_approving_review_count") if isinstance(parameters, dict) else None
@@ -206,17 +225,17 @@ def collect_authority(
         raise RuntimeError("expected_head_sha_required")
     pull = _gh_json(repository, f"repos/{repository}/pulls/{pull_request_number}")
     if not isinstance(pull, dict):
-        raise RuntimeError("pull_request_response_invalid")
+        raise RuntimeError("pull_request_response_invalid")  # noqa: TRY004
     head = pull.get("head")
     base = pull.get("base")
     author = pull.get("user")
     if not isinstance(head, dict) or not isinstance(base, dict) or not isinstance(author, dict):
-        raise RuntimeError("pull_request_response_invalid")
+        raise RuntimeError("pull_request_response_invalid")  # noqa: TRY004
     head_sha = head.get("sha")
     base_branch = base.get("ref")
     author_login = author.get("login")
     if not isinstance(head_sha, str) or not isinstance(base_branch, str) or not isinstance(author_login, str):
-        raise RuntimeError("pull_request_response_invalid")
+        raise RuntimeError("pull_request_response_invalid")  # noqa: TRY004
 
     check_response = _gh_json(
         repository,
@@ -227,7 +246,7 @@ def collect_authority(
     rulesets: list[Any] = []
     try:
         ruleset_response = _gh_json(repository, f"repos/{repository}/rulesets?includes_parents=true&per_page=100")
-        rulesets = _page_items(ruleset_response)
+        rulesets = _ruleset_details(repository, _page_items(ruleset_response))
         ruleset_verified = _rulesets_are_verified(rulesets)
     except RuntimeError:
         ruleset_verified = False

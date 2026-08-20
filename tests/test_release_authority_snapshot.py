@@ -80,6 +80,37 @@ def test_invalid_findings_and_gh_output_are_safe(monkeypatch: pytest.MonkeyPatch
         collector._read_findings(str(invalid_findings))
 
 
+def test_gh_api_uses_full_endpoint_and_expands_ruleset_summaries(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Use gh's endpoint form and fetch detail fields omitted by list responses."""
+    calls: list[list[str]] = []
+
+    def fake_run(command: list[str], **kwargs: object) -> SimpleNamespace:
+        calls.append(command)
+        return SimpleNamespace(returncode=0, stdout='{"ok": true}', stderr="")
+
+    monkeypatch.setattr(collector.subprocess, "run", fake_run)
+    assert collector._gh_json("owner/repo", "repos/owner/repo/rulesets/7") == {"ok": True}
+    assert calls[0][0:4] == ["gh", "api", "--paginate", "--slurp"]
+    assert "--repo" not in calls[0]
+
+    monkeypatch.setattr(
+        collector,
+        "_gh_json",
+        lambda repository, endpoint: {
+            "id": 7,
+            "enforcement": "active",
+            "conditions": {"ref_name": {"include": ["~DEFAULT_BRANCH"]}},
+            "rules": [
+                {"type": "workflows", "parameters": {}},
+                {"type": "pull_request", "parameters": {"required_approving_review_count": 1}},
+            ],
+        },
+    )
+    rulesets = collector._ruleset_details("owner/repo", [{"id": 7}])
+    assert collector._rulesets_are_verified(rulesets) is True
+    assert collector._required_approval_count(rulesets) == 1
+
+
 def test_collect_authority_binds_current_pull_head(monkeypatch: pytest.MonkeyPatch) -> None:
     """The collector binds checks and reviews to the current contributor SHA."""
     head = "a" * 40

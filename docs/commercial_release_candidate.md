@@ -52,15 +52,14 @@ necessary.
 - `release_authorization`: machine-readable status, blocker reasons, exact-head
   identity, required-check counts, independent-approval counts, and findings
   inventory state. It contains no credentials, prompts, or reviewer secrets;
-- `release_authority_collector`: the read-only `gh api` collector that binds
-  current checks and reviews to the exact candidate head;
 - `measurement_status`: `local_commercial_release_candidate`;
 - `release_summary`: artifact count, release blocker count, product blocker
   count, warning count, and release-authority blocker count;
 - `release_artifacts`: acceptance check, runtime endpoint chain, repository
   distribution packet, security/package metadata, admin operator surface,
-  verification evidence, Figma artifacts, review-process policy, and packaging
-  decision;
+  verification evidence, Figma artifacts, review-process policy, packaging
+  decision, and the `release_authority_collector` record that binds current
+  checks and reviews to the exact candidate head;
 - `external_release_gaps`: production or buyer-specific evidence that remains
   proposed until the buyer supplies deployment, support, legal, or ROI context;
 - `concrete_blockers`: concrete security, API contract, document, product, or
