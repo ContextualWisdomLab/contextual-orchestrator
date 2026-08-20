@@ -37,7 +37,7 @@ The default matrix is:
 
 Structured adapters should raise `ToolExecutionError` with a stable failure kind, tool name, idempotency declaration, and outcome certainty. Legacy wrappers are classified from a bounded exception cause chain only when that chain identifies a tool runtime, including the exact Strix missing-tool message. Generic provider transport failures keep the previous agent-failover behavior.
 
-The route and Conduct-stage invocation path performs at most `tool_retry_attempts` same-agent retries. Exhausted safe retries become sequential agent failover. Every decision emits a secret-free audit record containing only the agent id, failure kind, action, reason code, and retry count.
+The route and Conduct-stage invocation path performs at most `tool_retry_attempts` same-agent retries, with a shared hard ceiling of four attempts. Exhausted safe retries become sequential agent failover. Every decision emits a secret-free audit record containing only the agent id, failure kind, action, reason code, and retry count.
 
 ## Safety invariants
 

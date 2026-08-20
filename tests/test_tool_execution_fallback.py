@@ -14,6 +14,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.orchestrator import ModelClient
 from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.tool_fallback import (
+    MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
     ToolFallbackAction,
     ToolFallbackStoppedError,
@@ -335,6 +336,32 @@ def test_tool_retry_attempts_requires_nonnegative_integer(value: object) -> None
     client = _ScriptedToolClient({"primary_worker": ["unused"], "backup_worker": ["unused"]})
     with pytest.raises(ValueError, match="tool_retry_attempts"):
         _orchestrator(client, tool_retry_attempts=value)  # type: ignore[arg-type]
+
+
+def test_tool_retry_attempts_rejects_values_above_shared_safety_ceiling() -> None:
+    client = _ScriptedToolClient({"primary_worker": ["unused"], "backup_worker": ["unused"]})
+    with pytest.raises(ValueError, match=str(MAX_TOOL_RETRY_ATTEMPTS)):
+        _orchestrator(client, tool_retry_attempts=MAX_TOOL_RETRY_ATTEMPTS + 1)
+
+
+def test_runtime_retry_budget_mutation_still_obeys_shared_safety_ceiling() -> None:
+    timeout = ToolExecutionError(
+        "read timed out",
+        tool_name="inspect_repository",
+        kind=ToolFailureKind.TIMEOUT,
+        idempotent=True,
+    )
+    client = _ScriptedToolClient(
+        {
+            "primary_worker": [timeout] * (MAX_TOOL_RETRY_ATTEMPTS + 1),
+            "backup_worker": ["backup recovered"],
+        }
+    )
+    orchestrator = _orchestrator(client, tool_retry_attempts=0)
+    orchestrator.tool_retry_attempts = MAX_TOOL_RETRY_ATTEMPTS + 100
+    result = orchestrator.route_once([{"role": "user", "content": "inspect repository"}])
+    assert result["answer"] == "backup recovered"
+    assert client.calls == ["primary_worker"] * (MAX_TOOL_RETRY_ATTEMPTS + 1) + ["backup_worker"]
 
 
 def _http_error(code: int) -> urllib.error.HTTPError:

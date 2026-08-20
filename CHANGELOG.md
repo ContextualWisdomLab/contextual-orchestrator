@@ -13,6 +13,7 @@ All notable changes to this project are documented in this file.
 ### Changed
 
 - Agent invocation now retries explicitly idempotent transient tool failures with bounded exponential backoff within a per-agent budget.
+- A shared four-attempt ceiling now bounds the configured same-agent tool retry budget.
 - Fail-closed tool decisions now have dedicated JSON and SSE error contracts, and preserve the observed failure kind in secret-free audit evidence.
 - Missing or unavailable tools move to the next eligible agent instead of terminating the workflow immediately.
 

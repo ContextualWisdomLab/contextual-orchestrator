@@ -7,6 +7,10 @@ from enum import Enum
 import socket
 import urllib.error
 
+# Hard ceiling prevents configuration drift from turning one request into an
+# unbounded retry loop. Longer recovery belongs on the durable batch path.
+MAX_TOOL_RETRY_ATTEMPTS = 4
+
 
 class ToolFailureKind(str, Enum):
     """Stable categories for failures reported by model tool runtimes."""

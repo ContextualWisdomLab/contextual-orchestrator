@@ -34,6 +34,7 @@ import urllib.request
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .tool_fallback import (
+    MAX_TOOL_RETRY_ATTEMPTS,
     ToolFallbackAction,
     ToolFallbackStoppedError,
     ToolFailureDecision,
@@ -1692,8 +1693,12 @@ class TaskOrchestrator:
             isinstance(tool_retry_attempts, bool)
             or not isinstance(tool_retry_attempts, int)
             or tool_retry_attempts < 0
+            or tool_retry_attempts > MAX_TOOL_RETRY_ATTEMPTS
         ):
-            raise ValueError("tool_retry_attempts must be a nonnegative integer")
+            raise ValueError(
+                "tool_retry_attempts must be a nonnegative integer at most "
+                f"{MAX_TOOL_RETRY_ATTEMPTS}"
+            )
         self.tool_retry_attempts = tool_retry_attempts
         if (
             isinstance(tool_retry_backoff_seconds, bool)
@@ -2560,6 +2565,7 @@ class TaskOrchestrator:
         side effects or policy/permission/argument errors fail closed.
         """
         candidates = self._failover_candidates(primary, text, role)
+        retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         last_error: Exception | None = None
         for agent in candidates:
             retry_attempt = 0
@@ -2572,7 +2578,7 @@ class TaskOrchestrator:
                     action = decision.action
                     if (
                         action is ToolFallbackAction.RETRY_SAME_AGENT
-                        and retry_attempt < self.tool_retry_attempts
+                        and retry_attempt < retry_limit
                     ):
                         retry_attempt += 1
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
