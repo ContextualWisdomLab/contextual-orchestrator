@@ -1884,7 +1884,9 @@ def _validate_mode(mode: Any) -> str:
 
 
 
-def _require_pool_model(orchestrator: Any, model_name: str) -> None:
+def _require_pool_model(
+    orchestrator: Any, model_name: str, *, required_capability: str | None = None
+) -> None:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
@@ -1896,7 +1898,9 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     for agent in agents:
         if getattr(agent, "disabled", False):
             continue
-        if getattr(agent, "model", None) == model_name:
+        if getattr(agent, "model", None) == model_name and (
+            required_capability is None or required_capability in getattr(agent, "tags", ())
+        ):
             return
     raise RequestError(
         400,
@@ -4381,12 +4385,27 @@ def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
     return value
 
 
-def _validate_embeddings_model(body: dict[str, Any]) -> str:
-    """OpenAI embeddings ``model`` — required non-empty string ≤256 chars.
+def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = None) -> str:
+    """Validate or auto-select an OpenAI embeddings model.
 
     Strip + write back (parity with chat/Completions/Responses) so padded
-    form/JS model names bind to the pool id on every surface.
+    form/JS model names bind to the pool id on every surface. An omitted model
+    is resolved by the orchestrator's explicit ``embedding`` capability pool;
+    no consumer-side sentinel model is accepted.
     """
+    if "model" not in body:
+        if orchestrator is None:
+            raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
+        try:
+            model = orchestrator.select_capability_agent("embedding").model
+        except (RuntimeError, ValueError) as exc:
+            raise RequestError(
+                503,
+                "embedding_unavailable",
+                "no enabled embedding-capable agent is available",
+            ) from exc
+        body["model"] = model
+        return model
     model = body.get("model")
     if model is None:
         raise RequestError(400, "invalid_model", "model is required")
@@ -5428,10 +5447,10 @@ def build_server(
                     # synchronously) and frames an OpenAI-shaped response so
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
-                    model_name = _validate_embeddings_model(body)
+                    model_name = _validate_embeddings_model(body, orchestrator)
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    _require_pool_model(orchestrator, model_name)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5517,16 +5536,8 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    # Require model — silent default to contextual-orchestrator was an
-                    # honesty gap for naruon/batch clients that omit the field.
-                    if "model" not in body:
-                        raise RequestError(
-                            400,
-                            "invalid_model",
-                            "model is required on /v1/batch/embeddings",
-                        )
-                    model_name = _validate_embeddings_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    model_name = _validate_embeddings_model(body, orchestrator)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
