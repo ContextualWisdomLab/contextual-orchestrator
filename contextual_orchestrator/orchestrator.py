@@ -1558,8 +1558,7 @@ class _StateStore:
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
     )
     _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = (
-        "CREATE INDEX IF NOT EXISTS orchestration_records_kind_seq "
-        "ON orchestration_records(kind, seq)"
+        f"CREATE INDEX IF NOT EXISTS {_INDEX_NAME} ON {_TABLE_NAME}(kind, seq)"
     )
     _DELETE_KEYED_SQL = "DELETE FROM orchestration_records WHERE kind = ? AND key = ?"
     _INSERT_SQL = "INSERT INTO orchestration_records (kind, key, payload) VALUES (?, ?, ?)"
@@ -1569,10 +1568,14 @@ class _StateStore:
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
-        self._migrate_legacy_table()
-        self._conn.execute(self._CREATE_RECORDS_SQL)
-        self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
-        self._conn.commit()
+        try:
+            self._migrate_legacy_table()
+            self._conn.execute(self._CREATE_RECORDS_SQL)
+            self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
+            self._conn.commit()
+        except Exception:
+            self._conn.close()
+            raise
 
     def _migrate_legacy_table(self) -> None:
         """Rename the pre-policy table without discarding persisted state."""
@@ -1590,7 +1593,7 @@ class _StateStore:
             )
         if has_legacy:
             self._conn.execute(
-                "ALTER TABLE records RENAME TO orchestration_records"
+                f"ALTER TABLE {self._LEGACY_TABLE_NAME} RENAME TO {self._TABLE_NAME}"
             )
             self._conn.execute(f"DROP INDEX IF EXISTS {self._LEGACY_INDEX_NAME}")
 
