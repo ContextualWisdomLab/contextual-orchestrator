@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import secrets
 import threading
 import sys
 import urllib.request
@@ -105,10 +106,12 @@ def test_trace_read_endpoints_require_admin_authentication() -> None:
 
 def test_trace_read_defaults_cannot_bypass_trace_purpose_authorization() -> None:
     """Default trace exposure still requires the separate trace purpose scope."""
+    admin_token = secrets.token_urlsafe(32)
+    inference_token = secrets.token_urlsafe(32)
     security = SecurityConfig(
         auth_token="",
-        admin_token="admin_secret",
-        inference_token="inference_secret",
+        admin_token=admin_token,
+        inference_token=inference_token,
         expose_trace_by_default=True,
     )
     server, port, _token = _serve(security)
@@ -116,7 +119,7 @@ def test_trace_read_defaults_cannot_bypass_trace_purpose_authorization() -> None
         status, body = _request(
             "GET",
             f"http://127.0.0.1:{port}/api/v1/workflow_runs",
-            "admin_secret",
+            admin_token,
         )
     finally:
         server.shutdown()
