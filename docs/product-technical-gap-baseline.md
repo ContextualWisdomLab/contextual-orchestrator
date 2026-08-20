@@ -82,6 +82,7 @@ required workflows, and a normal merge.
 
 | PR | Exact head | State / base | Evidence boundary and next action |
 |---:|---|---|---|
+| #781 | `7e6dc15` | ready, stacked on #780 | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after #780. |
 | #780 | `76faecc` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, and exact-head hosted Checks before normal merge. |
 | #779 | `4a5cc7a` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main. |
 | #778 | `6e0daf8` | ready, stacked on #765 | Review source-image preservation, explicit `vision` eligibility/failover, Responses normalization, and the private LineageWeave OCR recovery boundary. |
@@ -112,7 +113,7 @@ completed until the protected-main contract is satisfied.
 | #123 | A sole collaborator can be unable to satisfy last-push approval. | Add governance evidence/runbook or a protected-rule-compatible process; never bypass approval. |
 | #119 | Ambiguous or unbounded inbound framing threatens request integrity. | PR #776 adds bounded framing tests and hosted security evidence after its #765 stack is reconciled. |
 | #118 | Liveness and authenticated readiness are not yet fully separated. | PR #780 implements the minimal `/healthz` and authenticated `/readyz` contract; merge only after exact-head Checks and independent approval. |
-| #117 | Trace access and inference access need separate authority. | Add scoped authorization tests and audit evidence. |
+| #117 | Trace access and inference access need separate authority. | PR #781 adds a verified `trace` purpose scope, pre-release audit event, and audit-outage fail-closed tests; merge after #780 and exact-head protected evidence. |
 | #116 | Browser admin sessions need separation from long-lived bearer credentials. | Add session-bound admin controls and regression tests. |
 | #103 | Release readiness must fail closed on stale head, missing review, or missing Checks evidence. | Implement exact-head release gate and changelog/version proof. |
 | #102 | Equivalent endpoints need race-to-first-valid completion without unsafe cancellation. | Add bounded concurrency and provider truth tests. |
