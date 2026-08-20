@@ -73,7 +73,8 @@ The register is acceptable for buyer review when:
 - all external release gaps have owner, source, required input, and status;
 - `proposed_until_production` is classified as `production_input_required`;
 - `proposed_until_buyer_specific` is classified as `buyer_input_required`;
-- review-process delay is not counted as a product blocker;
+- missing release authority is an explicit blocker even when the product gap
+  rows remain useful for buyer action;
 - library split remains deferred until a real extraction trigger exists.
 
 ## Plugin Traceability

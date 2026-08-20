@@ -4461,7 +4461,12 @@ class TaskOrchestrator:
                 "is_blocker": False,
             })
 
-        blocked_count = len(concrete_blockers) + (1 if release_blocked else 0)
+        release_authority_blockers = release["release_authorization"]["blockers"]
+        blocked_count = (
+            len(concrete_blockers) + len(release_authority_blockers)
+            if release_blocked
+            else len(concrete_blockers)
+        )
         if blocked_count:
             gap_register_status = "commercial_gap_register_blocked"
         elif gap_items:
@@ -4486,7 +4491,7 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "blocked_count": blocked_count,
-                "review_process_is_blocker": release["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "gap_items": gap_items,
             "concrete_blockers": concrete_blockers,
@@ -4507,6 +4512,7 @@ class TaskOrchestrator:
             "review_process_policy": release["review_process_policy"],
             "related_runtime_reports": {
                 "commercial_release_status": release["release_status"],
+                "release_authorization_status": release["release_authorization"]["status"],
                 **release["related_runtime_reports"],
             },
             "library_split_decision": release["library_split_decision"],

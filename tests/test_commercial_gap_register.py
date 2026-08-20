@@ -58,7 +58,7 @@ def exercise_runtime(orchestrator: TaskOrchestrator) -> None:
     orchestrator.run_evaluation(["Replay this commercial gap register prompt."], mode="route")
 
 
-def test_commercial_gap_register_report_classifies_external_gaps_without_blocking_review() -> None:
+def test_commercial_gap_register_report_classifies_external_gaps_and_release_authority() -> None:
     orchestrator = build()
     exercise_runtime(orchestrator)
 
@@ -74,15 +74,15 @@ def test_commercial_gap_register_report_classifies_external_gaps_without_blockin
         },
     )
 
-    assert report["gap_register_status"] == "commercial_gap_register_open"
+    assert report["gap_register_status"] == "commercial_gap_register_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_gap_register"
     assert "not a valuation guarantee" in report["source_note"]
     assert report["gap_summary"]["total_gap_count"] == 2
     assert report["gap_summary"]["production_gap_count"] == 1
     assert report["gap_summary"]["buyer_specific_gap_count"] == 1
-    assert report["gap_summary"]["blocked_count"] == 0
-    assert report["gap_summary"]["review_process_is_blocker"] is False
+    assert report["gap_summary"]["blocked_count"] == 1
+    assert report["gap_summary"]["release_authority_blocker_count"] == 1
     assert report["concrete_blockers"] == []
     assert [item["gap_status"] for item in report["gap_items"]] == [
         "production_input_required",
@@ -90,7 +90,8 @@ def test_commercial_gap_register_report_classifies_external_gaps_without_blockin
     ]
     assert report["gap_items"][0]["source_evidence_type"] == "proposed_until_production"
     assert report["gap_items"][1]["source_evidence_type"] == "proposed_until_buyer_specific"
-    assert report["related_runtime_reports"]["commercial_release_status"] == "commercial_release_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_release_status"] == "commercial_release_blocked"
+    assert report["related_runtime_reports"]["release_authorization_status"] == "release_authorization_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["gap_register_links"]["runtime_endpoint"] == "/api/v1/commercial_gap_registers/latest"
 
@@ -111,7 +112,7 @@ def test_commercial_gap_register_endpoint_openapi_admin_and_docs_contract() -> N
     assert "/api/v1/commercial_gap_registers/latest" in gap_doc
     assert "KRW 2B Commercial Gap Register" in gap_doc
     assert "Figma Code Connect is not used" in gap_doc
-    assert "Review process is not a blocker" in gap_doc
+    assert "release-authority gate is" in gap_doc
     assert "Do not create a separate library, Git submodule, or extracted package now" in gap_doc
 
     server = build_server(
@@ -149,6 +150,6 @@ def test_commercial_gap_register_endpoint_openapi_admin_and_docs_contract() -> N
 
 
 if __name__ == "__main__":  # pragma: no cover
-    test_commercial_gap_register_report_classifies_external_gaps_without_blocking_review()
+    test_commercial_gap_register_report_classifies_external_gaps_and_release_authority()
     test_commercial_gap_register_endpoint_openapi_admin_and_docs_contract()
     print("ok")

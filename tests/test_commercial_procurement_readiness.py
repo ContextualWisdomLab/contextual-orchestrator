@@ -96,7 +96,7 @@ def test_commercial_procurement_readiness_report_tracks_ready_packet_and_warning
     assert items["production_support_slo_input"]["source_gap_status"] == "production_input_required"
     assert items["buyer_legal_roi_procurement_input"]["completion_state"] == "warning"
     assert items["buyer_legal_roi_procurement_input"]["source_gap_status"] == "buyer_input_required"
-    assert report["related_runtime_reports"]["commercial_gap_register_status"] == "commercial_gap_register_open"
+    assert report["related_runtime_reports"]["commercial_gap_register_status"] == "commercial_gap_register_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["procurement_links"]["runtime_endpoint"] == "/api/v1/commercial_procurement_readiness/latest"
 
