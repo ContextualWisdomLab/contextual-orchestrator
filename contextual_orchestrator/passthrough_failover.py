@@ -3,7 +3,7 @@
 Tool calls, structured responses, and Responses API calls must preserve one
 provider's raw response shape. This module keeps that contract while advancing
 to another capability-ranked model when the caller selected the virtual
-``contextual-orchestrator`` model and an upstream candidate fails.
+``contextual-orchestrator`` model and an upstream candidate fails transiently.
 """
 
 from __future__ import annotations
@@ -52,9 +52,11 @@ class TaskOrchestrator(BaseTaskOrchestrator):
         An explicitly requested concrete model remains sticky: serving another
         model would violate the caller's model contract. Requests for the virtual
         ``contextual-orchestrator`` model, or requests that omit ``model``, may
-        advance through capability-ranked candidates. Every candidate receives
-        at most one passthrough attempt, so a 429 is never amplified by replaying
-        the same large tool request.
+        advance through capability-ranked candidates only for transient upstream
+        failures. Every candidate receives at most one passthrough attempt, so a
+        429 is never amplified by replaying the same large tool request. Caller,
+        authentication, policy, and other non-transient failures are returned
+        immediately instead of being replayed to another provider.
         """
         messages = body.get("messages")
         if isinstance(messages, list):
@@ -85,20 +87,21 @@ class TaskOrchestrator(BaseTaskOrchestrator):
             upstream["model"] = agent.model
             try:
                 result = _proxy_send_once(self.client, agent, endpoint, upstream)
-            except Exception as exc:  # noqa: BLE001 - a failed virtual candidate yields to the next
+            except Exception as exc:  # noqa: BLE001 - transient virtual candidates may fail over
+                if not is_transient_error(exc):
+                    raise
                 last_error = exc
                 self._record_failure(agent.id)
-                if is_transient_error(exc):
-                    with self._circuit_lock:
-                        state = self._circuit.setdefault(
-                            agent.id,
-                            {"failures": 0.0, "opened_at": 0.0},
-                        )
-                        state["failures"] = max(
-                            state["failures"],
-                            float(self.circuit_failure_threshold),
-                        )
-                        state["opened_at"] = time.monotonic()
+                with self._circuit_lock:
+                    state = self._circuit.setdefault(
+                        agent.id,
+                        {"failures": 0.0, "opened_at": 0.0},
+                    )
+                    state["failures"] = max(
+                        state["failures"],
+                        float(self.circuit_failure_threshold),
+                    )
+                    state["opened_at"] = time.monotonic()
                 continue
             self._record_success(agent.id)
             return result
