@@ -604,6 +604,12 @@ _LEGACY_ATTRIBUTION_COLUMNS = (
     "group_name",
     "company_name",
 )
+_LEGACY_USAGE_SELECT_SQL = (
+    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, route_mode, "
+    "provider_name, model_name, prompt_tokens, completion_tokens, total_tokens, "
+    "cost_amount, currency_code, account_name, service_name, upstream_api, "
+    "team_name, group_name, company_name FROM llm_usage_records_legacy"
+)
 _DIMENSION_SELECT_SQL = {
     "qmark": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?",
     "pyformat": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s",
@@ -746,8 +752,7 @@ class SqlLedgerStore:
         except Exception as exc:
             raise RuntimeError("legacy usage-table migration is ambiguous") from exc
         self._execute_schema()
-        legacy_columns = ", ".join((*_CORE_USAGE_COLUMNS, *_LEGACY_ATTRIBUTION_COLUMNS))
-        cur.execute(f"SELECT {legacy_columns} FROM llm_usage_records_legacy")
+        cur.execute(_LEGACY_USAGE_SELECT_SQL)
         legacy_rows = cur.fetchall()
         for values in legacy_rows:
             row = dict(zip((*_CORE_USAGE_COLUMNS, *_LEGACY_ATTRIBUTION_COLUMNS), values))
@@ -772,6 +777,12 @@ class SqlLedgerStore:
         """Apply schema creation and migration statements before commit."""
         statements = [statement for statement in SCHEMA_SQL.strip().split(";") if statement.strip()]
         cur = self._conn.cursor()
+        # SQLite's legacy transaction mode does not begin a transaction for
+        # DDL. Start one before any catalog DDL so a failed legacy migration
+        # rolls back the rename, schema creation, copied rows, and cleanup as
+        # one unit. PEP-249 connections may already have an active transaction.
+        if not getattr(self._conn, "in_transaction", False):
+            cur.execute("BEGIN")
         # Create the independent catalog tables first. Deferring the usage and
         # child tables keeps a legacy-table rename from leaving child FKs aimed
         # at the temporary legacy name.

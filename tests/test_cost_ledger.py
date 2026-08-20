@@ -17,6 +17,7 @@ from contextual_orchestrator.cost_ledger import (  # noqa: E402
     NonBlockingLedgerStore,
     PriceBook,
     PriceEntry,
+    SCHEMA_SQL,
     SqlLedgerStore,
     dimension_catalog,
 )
@@ -445,6 +446,68 @@ def test_sql_ledger_maps_null_legacy_attribution_to_unattributed() -> None:
     assert row["account_name"] == "unattributed"
     assert row["service_name"] == "unattributed"
     assert row["team_name"] == "unattributed"
+
+
+def test_sql_ledger_rolls_back_seeded_catalog_legacy_migration() -> None:
+    """Restore the flattened ledger when a seeded-catalog copy fails midway."""
+    connection = sqlite3.connect(":memory:")
+    for statement in SCHEMA_SQL.strip().split(";")[:2]:
+        connection.execute(statement)
+    connection.executemany(
+        "INSERT INTO cost_attribution_dimensions "
+        "(dimension_name, dimension_label, dimension_order) VALUES (?, ?, ?)",
+        [(name, name.title(), order) for order, name in enumerate(ATTRIBUTION_DIMENSIONS)],
+    )
+    connection.execute(
+        """
+        CREATE TABLE llm_usage_records (
+            usage_record_id TEXT PRIMARY KEY, created_at INTEGER NOT NULL,
+            workflow_run_id TEXT, request_channel TEXT NOT NULL, route_mode TEXT,
+            provider_name TEXT, model_name TEXT, account_name TEXT,
+            service_name TEXT, upstream_api TEXT, team_name TEXT,
+            group_name TEXT, company_name TEXT, prompt_tokens INTEGER NOT NULL,
+            completion_tokens INTEGER NOT NULL, total_tokens INTEGER NOT NULL,
+            cost_amount REAL NOT NULL, currency_code TEXT NOT NULL
+        )
+        """
+    )
+    legacy_row = (
+        "usage_seeded", 123, None, "sync", None, "openai", "gpt-x",
+        "acct-1", "search", "openai", "alpha", "platform", "acme", 1, 2, 3, 4.5, "USD",
+    )
+    connection.executemany(
+        "INSERT INTO llm_usage_records VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+        [legacy_row, ("usage_seeded_2", *legacy_row[1:])],
+    )
+    connection.commit()
+
+    calls = 0
+    original = SqlLedgerStore._insert_normalized_attribution
+
+    def fail_on_second_row(store, cursor, row) -> None:
+        """Inject one deterministic copy failure after the first row."""
+        nonlocal calls
+        calls += 1
+        if calls == 2:
+            raise RuntimeError("simulated legacy copy failure")
+        original(store, cursor, row)
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SqlLedgerStore, "_insert_normalized_attribution", fail_on_second_row)
+        with pytest.raises(RuntimeError, match="simulated legacy copy failure"):
+            SqlLedgerStore(connection, paramstyle="qmark")
+
+    columns = {row[1] for row in connection.execute("PRAGMA table_info(llm_usage_records)")}
+    assert "account_name" in columns
+    assert connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        ("llm_usage_records_legacy",),
+    ).fetchone() is None
+    assert connection.execute("SELECT COUNT(*) FROM llm_usage_records").fetchone() == (2,)
+    assert connection.execute(
+        "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+        ("usage_record_attributions",),
+    ).fetchone() is None
 
 
 def test_sql_ledger_rejects_ambiguous_legacy_migration_without_renaming_source() -> None:
