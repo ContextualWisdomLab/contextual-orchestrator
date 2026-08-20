@@ -32,15 +32,20 @@ class SequencedProxyClient:
         return deepcopy(outcome)
 
 
-def _rate_limit() -> urllib.error.HTTPError:
-    """Return a realistic provider HTTP 429 error."""
+def _http_error(status: int, message: str) -> urllib.error.HTTPError:
+    """Return a realistic provider HTTP error for passthrough routing tests."""
     return urllib.error.HTTPError(
         "https://provider.example/v1/chat/completions",
-        429,
-        "rate limited",
+        status,
+        message,
         None,
         None,
     )
+
+
+def _rate_limit() -> urllib.error.HTTPError:
+    """Return a realistic transient provider HTTP 429 error."""
+    return _http_error(429, "rate limited")
 
 
 def _build(client: SequencedProxyClient) -> TaskOrchestrator:
@@ -107,10 +112,38 @@ def test_429_advances_immediately_and_preserves_tool_request() -> None:
     assert body == original
 
 
-def test_all_candidate_failures_chain_final_provider_error() -> None:
-    """Exhausted passthrough candidates must fail closed with the final cause."""
+def test_non_transient_request_error_is_not_replayed_to_another_provider() -> None:
+    """A provider 400 is caller/configuration evidence, not a failover signal."""
+    bad_request = _http_error(400, "unsupported request")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": bad_request,
+            "fallback_agent": {
+                "object": "chat.completion",
+                "model": "fallback-model",
+                "choices": [],
+            },
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "messages": [{"role": "user", "content": "invalid request"}],
+                "tools": [],
+            }
+        )
+
+    assert caught.value is bad_request
+    assert [call[0] for call in client.calls] == ["primary_agent"]
+    assert not orchestrator._circuit_open("primary_agent")
+
+
+def test_all_transient_candidate_failures_chain_final_provider_error() -> None:
+    """Exhausted transient candidates fail closed with the final provider cause."""
     first = _rate_limit()
-    final = RuntimeError("fallback unavailable")
+    final = _http_error(503, "fallback unavailable")
     client = SequencedProxyClient(
         {"primary_agent": first, "fallback_agent": final}
     )
