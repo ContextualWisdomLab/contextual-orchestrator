@@ -72,7 +72,7 @@ def build_review_orchestrator(
         raise ValueError("max_agents must be a positive integer")
     source_environment = os.environ if environment is None else environment
     registered = register_review_credentials(source_environment)
-    if not registered:
+    if not any(name in registered for name in REVIEW_CREDENTIAL_NAMES):
         raise NotConfigured("review gateway requires at least one provider credential")
 
     discovered, errors = discover_all_models()

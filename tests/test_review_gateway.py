@@ -129,6 +129,14 @@ def test_build_review_orchestrator_fails_closed_without_credentials():
         review_gateway.build_review_orchestrator({})
 
 
+def test_build_review_orchestrator_does_not_count_auth_as_provider_credential():
+    """The gateway auth token cannot satisfy the provider bootstrap gate."""
+    with pytest.raises(NotConfigured, match="provider credential"):
+        review_gateway.build_review_orchestrator(
+            {review_gateway.REVIEW_AUTH_CREDENTIAL_NAME: "local-review-token"}
+        )
+
+
 def test_build_review_orchestrator_rejects_invalid_agent_limit():
     """The sidecar refuses an invalid routing-pool bound before using credentials."""
     with pytest.raises(ValueError, match="max_agents"):
