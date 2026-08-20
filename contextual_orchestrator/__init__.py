@@ -39,6 +39,11 @@ from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
 from .token_counting import HeuristicTokenCounter, build_token_counter
+from .response_cache import (
+    RedisResponseCacheProvider,
+    ResponseCacheProvider,
+    build_response_cache_key,
+)
 
 __all__ = [
     "ModelAgent",
@@ -69,6 +74,9 @@ __all__ = [
     "get_config_store",
     "HeuristicTokenCounter",
     "build_token_counter",
+    "ResponseCacheProvider",
+    "RedisResponseCacheProvider",
+    "build_response_cache_key",
     # routing / batch
     "RoutingPolicy",
     "RoutingHints",
