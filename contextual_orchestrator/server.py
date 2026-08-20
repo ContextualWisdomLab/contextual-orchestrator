@@ -181,7 +181,7 @@ class SecurityConfig:
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate bearer token for admin or inference scope."""
+        """Validate bearer token for admin, inference, or trace purpose scope."""
         if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
         raw = headers.get("authorization", "")
@@ -198,6 +198,10 @@ class SecurityConfig:
                 expected = self.admin_token or self.auth_token
             elif scope == "inference":
                 expected = self.inference_token or self.auth_token
+            elif scope == "trace":
+                # Static single-token mode is a local escape hatch. Production
+                # deployments should use bearer_verifier for a separate purpose claim.
+                expected = self.auth_token
             else:
                 expected = ""
             valid = bool(expected) and secrets.compare_digest(token, expected)
@@ -5146,6 +5150,8 @@ def build_server(
                             include_trace = coerced_trace
                     else:
                         include_trace = bool(security.expose_trace_by_default)
+                    if include_trace:
+                        self._authorize_trace_access("/v1/chat/completions")
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
@@ -5650,6 +5656,25 @@ def build_server(
         def _authorize(self, scope: str) -> None:
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
+
+        def _authorize_trace_access(self, endpoint_path: str) -> None:
+            """Authorize and durably record a trace-purpose access decision."""
+            self._authorize("trace")
+            try:
+                orchestrator._append_audit_event(  # noqa: SLF001 - server owns the release gate
+                    "orchestration_trace_access_granted",
+                    {
+                        "endpoint_path": endpoint_path,
+                        "purpose": "trace.read",
+                        "actor_scope": "trace",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 - release no trace if audit is unavailable
+                raise RequestError(
+                    503,
+                    "trace_audit_unavailable",
+                    "trace access audit is unavailable",
+                ) from exc
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()
