@@ -385,3 +385,7 @@ def test_generated_planner_inventory_excludes_non_chat_agents() -> None:
     assert "embedding_agent" not in client.system_prompt
     assert "azure/text-embedding-3-large" not in client.system_prompt
     assert "chat_agent" in client.system_prompt
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))
