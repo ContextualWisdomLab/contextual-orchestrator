@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 import json
+import secrets
 import threading
 import sys
 import urllib.request
@@ -18,10 +19,10 @@ from contextual_orchestrator import (  # noqa: E402
     PriceEntry,
     TaskOrchestrator,
 )
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator.server import SecurityConfig, _readiness_payload, build_server  # noqa: E402
 
 
-def _serve():
+def _serve(security=None):
     agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a", provider_name="mock",
                          tags=("reasoning", "coding", "writing"), priority=1)]
     orchestrator = TaskOrchestrator(agents)
@@ -30,7 +31,12 @@ def _serve():
     price_book.set_price(PriceEntry("mock", "mock-a", prompt_price_per_1k=1.0, completion_price_per_1k=2.0))
     coordinator = CostRoutingCoordinator(orchestrator, config, price_book=price_book)
     token = "cost_token"
-    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token), coordinator=coordinator)
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=security or SecurityConfig(auth_token=token),
+        coordinator=coordinator,
+    )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, server.server_address[1], token
@@ -56,9 +62,100 @@ def test_healthz_is_unauthenticated_and_ok() -> None:
     finally:
         server.shutdown()
     assert status == 200
-    assert body["status"] == "ok"
-    assert body["service"] == "contextual-orchestrator"
-    assert "batch_backend" in body
+    assert body == {"status": "ok", "service": "contextual-orchestrator"}
+
+
+def test_readyz_requires_admin_and_reports_secret_free_runtime_checks() -> None:
+    server, port, token = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        status, body = _request("GET", f"{base}/readyz")
+        assert status == 401
+        assert body["error"]["code"] == "unauthorized"
+
+        status, body = _request("GET", f"{base}/readyz", token)
+    finally:
+        server.shutdown()
+    assert status == 200
+    assert body["status"] == "ready"
+    assert set(body["checks"]) == {"orchestration", "sync_routing", "batch_routing", "embedding_batch"}
+    assert body["checks"]["batch_routing"] == {"status": "ready"}
+    assert "usage_record_count" not in json.dumps(body)
+
+
+def test_trace_read_endpoints_require_admin_authentication() -> None:
+    """Trace and access-report reads must not become an unauthenticated data leak."""
+    server, port, token = _serve()
+    base = f"http://127.0.0.1:{port}"
+    try:
+        for path in (
+            "/api/v1/workflow_runs",
+            "/api/v1/workflow_runs/missing-run",
+            "/api/v1/access_reports/missing-run",
+        ):
+            status, body = _request("GET", f"{base}{path}")
+            assert status == 401
+            assert body["error"]["code"] == "unauthorized"
+
+        status, body = _request("GET", f"{base}/api/v1/workflow_runs", token)
+        assert status == 200
+        assert body["items"] == []
+    finally:
+        server.shutdown()
+
+
+def test_trace_read_defaults_cannot_bypass_trace_purpose_authorization() -> None:
+    """Default trace exposure still requires the separate trace purpose scope."""
+    admin_token = secrets.token_urlsafe(32)
+    inference_token = secrets.token_urlsafe(32)
+    security = SecurityConfig(
+        auth_token="",
+        admin_token=admin_token,
+        inference_token=inference_token,
+        expose_trace_by_default=True,
+    )
+    server, port, _token = _serve(security)
+    try:
+        status, body = _request(
+            "GET",
+            f"http://127.0.0.1:{port}/api/v1/workflow_runs",
+            admin_token,
+        )
+    finally:
+        server.shutdown()
+    assert status == 401
+    assert body["error"]["code"] == "unauthorized"
+
+
+def test_readiness_never_exposes_backend_identifiers() -> None:
+    agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    orchestrator = TaskOrchestrator(agents)
+    coordinator = CostRoutingCoordinator(orchestrator)
+
+    class Backend:
+        name = "https://provider.invalid/api?token=secret"
+
+    coordinator.batch_backend = Backend()
+    coordinator.embedding_batch_backend = Backend()
+    body, status = _readiness_payload(orchestrator, coordinator)
+
+    assert status == 200
+    assert body["checks"]["batch_routing"] == {"status": "ready"}
+    assert "provider.invalid" not in json.dumps(body)
+    assert "secret" not in json.dumps(body)
+
+
+def test_readiness_keeps_interactive_service_ready_when_optional_batch_degrades() -> None:
+    agents = [ModelAgent(id="mock_worker", model="mock-a", base_url="mock://a")]
+    orchestrator = TaskOrchestrator(agents)
+    coordinator = CostRoutingCoordinator(orchestrator)
+    coordinator.batch_backend = object()
+
+    body, status = _readiness_payload(orchestrator, coordinator)
+
+    assert status == 200
+    assert body["status"] == "ready_with_degraded_optional_dependencies"
+    assert body["checks"]["batch_routing"] == {"status": "degraded"}
 
 
 def test_chat_completion_reports_real_usage_and_records_cost() -> None:

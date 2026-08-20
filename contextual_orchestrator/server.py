@@ -181,7 +181,7 @@ class SecurityConfig:
             raise ValueError("public bind requires --allow-public-bind")
 
     def authorize(self, headers: Any, scope: str, client_address: str) -> None:
-        """Validate bearer token for admin or inference scope."""
+        """Validate bearer token for admin, inference, or trace purpose scope."""
         if not (self.auth_token or self.admin_token or self.inference_token or self.bearer_verifier):
             raise RequestError(401, "unauthorized", "bearer token is required")
         raw = headers.get("authorization", "")
@@ -198,6 +198,10 @@ class SecurityConfig:
                 expected = self.admin_token or self.auth_token
             elif scope == "inference":
                 expected = self.inference_token or self.auth_token
+            elif scope == "trace":
+                # Static single-token mode is a local escape hatch. Production
+                # deployments should use bearer_verifier for a separate purpose claim.
+                expected = self.auth_token
             else:
                 expected = ""
             valid = bool(expected) and secrets.compare_digest(token, expected)
@@ -4320,6 +4324,53 @@ def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str,
     return _strip_trace(safe_payload)
 
 
+def _readiness_payload(orchestrator: Any, coordinator: Any) -> tuple[dict[str, Any], int]:
+    """Build secret-free operator readiness without probing external providers."""
+    checks: dict[str, dict[str, Any]] = {}
+    try:
+        enabled_agents = len(orchestrator.agents)
+        checks["orchestration"] = {
+            "status": "ready" if enabled_agents else "not_ready",
+            "enabled_agent_count": enabled_agents,
+        }
+    except Exception:  # noqa: BLE001 - readiness must fail closed without details
+        checks["orchestration"] = {"status": "not_ready"}
+
+    try:
+        checks["sync_routing"] = {
+            "status": "ready" if orchestrator.client is not None else "not_ready",
+        }
+    except Exception:  # noqa: BLE001 - readiness must fail closed without details
+        checks["sync_routing"] = {"status": "not_ready"}
+
+    for check_name, backend_name in (
+        ("batch_routing", "batch_backend"),
+        ("embedding_batch", "embedding_batch_backend"),
+    ):
+        try:
+            backend = getattr(coordinator, backend_name)
+            # Backend identifiers may contain URLs, tenant names, or deployment
+            # secrets. Readiness exposes only a server-controlled status.
+            backend_id = getattr(backend, "name", None)
+            checks[check_name] = {
+                "status": "ready" if isinstance(backend_id, str) and backend_id else "degraded"
+            }
+        except Exception:  # noqa: BLE001 - optional outage is safe to report generically
+            checks[check_name] = {"status": "degraded"}
+
+    required = ("orchestration", "sync_routing")
+    required_ready = all(checks[name]["status"] == "ready" for name in required)
+    optional_degraded = any(
+        checks[name]["status"] == "degraded" for name in ("batch_routing", "embedding_batch")
+    )
+    status = "ready_with_degraded_optional_dependencies" if required_ready and optional_degraded else (
+        "ready" if required_ready else "not_ready"
+    )
+    return {"status": status, "service": "contextual-orchestrator", "checks": checks}, (
+        200 if required_ready else 503
+    )
+
+
 def responses_sse_body(response: dict[str, Any]) -> str:
     """Frame a completed Responses object as a valid SSE response."""
     sequence = 0
@@ -4428,18 +4479,13 @@ def build_server(
                     self._send(OPENAPI_SPEC)
                     return
                 if path == "/healthz":
-                    # Unauthenticated liveness probe for containers/orchestrators.
-                    self._send({
-                        "status": "ok",
-                        "service": "contextual-orchestrator",
-                        "agent_count": len(orchestrator.agents),
-                        "candidate_count": len(orchestrator.candidates),
-                        "enabled_agent_count": len(orchestrator.agents),
-                        "batch_backend": coordinator.batch_backend.name,
-                        "embedding_batch_backend": coordinator.embedding_batch_backend.name,
-                        "provider_readiness": "unprobed",
-                        "usage_record_count": len(coordinator.ledger.records()),
-                    })
+                    # Unauthenticated process liveness; do not traverse runtime state.
+                    self._send({"status": "ok", "service": "contextual-orchestrator"})
+                    return
+                if path == "/readyz":
+                    self._authorize("admin")
+                    readiness, status = _readiness_payload(orchestrator, coordinator)
+                    self._send(readiness, status)
                     return
                 if path == "/v1/models" or path.startswith("/v1/models/"):
                     # OpenAI model discovery is inference-scope (same bearer as chat).
@@ -4506,6 +4552,8 @@ def build_server(
                     state["document_viewer"] = (
                         {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
                     )
+                    if security.expose_trace_by_default:
+                        self._authorize_trace_access("/admin/state")
                     self._send(_response_payload(state, security.expose_trace_by_default))
                     return
                 if path == "/api/v1/agent_pools":
@@ -4685,6 +4733,8 @@ def build_server(
                     return
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
+                    if security.expose_trace_by_default:
+                        self._authorize_trace_access("/api/v1/workflow_runs")
                     self._send(_response_payload({
                         "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size),
                         "total_count": len(getattr(orchestrator, "_workflow_runs", {})),
@@ -4695,6 +4745,8 @@ def build_server(
                 if path.startswith("/api/v1/workflow_runs/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
+                        if security.expose_trace_by_default:
+                            self._authorize_trace_access("/api/v1/workflow_runs/{workflow_run_id}")
                         self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.expose_trace_by_default))
                         return
                     except KeyError:
@@ -4703,6 +4755,8 @@ def build_server(
                 if path.startswith("/api/v1/access_reports/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
+                        if security.expose_trace_by_default:
+                            self._authorize_trace_access("/api/v1/access_reports/{workflow_run_id}")
                         orchestrator.record_analytics_event(
                             "access_report_viewed",
                             {
@@ -4721,6 +4775,8 @@ def build_server(
                     evaluation_run_id = path.rsplit("/", 1)[-1]
                     runs = getattr(orchestrator, "_evaluation_runs", {})
                     if evaluation_run_id in runs:
+                        if security.expose_trace_by_default:
+                            self._authorize_trace_access("/api/v1/evaluation_runs/{evaluation_run_id}")
                         self._send(_response_payload(runs[evaluation_run_id], security.expose_trace_by_default))
                         return
                     self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
@@ -5095,20 +5151,7 @@ def build_server(
                         return
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
-                    if "include_orchestration_trace" in body:
-                        # Null/empty omit; bool, int 0/1, and "true"/"false"/"0"/"1"
-                        # strings coerce (SDK form/query parity with stream/store).
-                        coerced_trace = _coerce_optional_bool(
-                            body.get("include_orchestration_trace"),
-                            error_code="invalid_include_orchestration_trace",
-                            message="include_orchestration_trace must be a boolean",
-                        )
-                        if coerced_trace is None:
-                            include_trace = bool(security.expose_trace_by_default)
-                        else:
-                            include_trace = coerced_trace
-                    else:
-                        include_trace = bool(security.expose_trace_by_default)
+                    include_trace = self._trace_requested(body, "/v1/chat/completions")
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
@@ -5378,6 +5421,7 @@ def build_server(
                     return
                 if path.startswith("/api/v1/batch_routing_jobs/") and path.endswith("/results"):
                     job_id = path[len("/api/v1/batch_routing_jobs/"):-len("/results")]
+                    self._authorize_trace_access("/api/v1/batch_routing_jobs/{job_id}/results")
                     try:
                         retrieved = self._run(lambda: coordinator.retrieve_batch(job_id))
                     except KeyError:
@@ -5572,7 +5616,7 @@ def build_server(
                     if not isinstance(prompt, str):
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = self._trace_requested(body, "/admin/simulate")
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace))
                     return
@@ -5582,7 +5626,7 @@ def build_server(
                     if not isinstance(prompt, str) or not prompt:
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = self._trace_requested(body, "/api/v1/workflow_runs")
                     result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
                     self._send(_response_payload(result, include_trace), 201)
                     return
@@ -5594,7 +5638,7 @@ def build_server(
                     if not isinstance(prompts, list) or not prompts:
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
-                    include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
+                    include_trace = self._trace_requested(body, "/api/v1/evaluation_runs")
                     evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
@@ -5613,6 +5657,41 @@ def build_server(
         def _authorize(self, scope: str) -> None:
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
+
+        def _authorize_trace_access(self, endpoint_path: str) -> None:
+            """Authorize and durably record a trace-purpose access decision."""
+            self._authorize("trace")
+            try:
+                orchestrator._append_audit_event(  # noqa: SLF001 - server owns the release gate
+                    "orchestration_trace_access_granted",
+                    {
+                        "endpoint_path": endpoint_path,
+                        "purpose": "trace.read",
+                        "actor_scope": "trace",
+                    },
+                )
+            except Exception as exc:  # noqa: BLE001 - release no trace if audit is unavailable
+                raise RequestError(
+                    503,
+                    "trace_audit_unavailable",
+                    "trace access audit is unavailable",
+                ) from exc
+
+        def _trace_requested(self, body: dict[str, Any], endpoint_path: str) -> bool:
+            """Validate and authorize an explicit trace disclosure request."""
+            if "include_orchestration_trace" not in body:
+                include_trace = security.expose_trace_by_default
+            elif type(body["include_orchestration_trace"]) is not bool:
+                raise RequestError(
+                    400,
+                    "invalid_include_orchestration_trace",
+                    "include_orchestration_trace must be a boolean",
+                )
+            else:
+                include_trace = body["include_orchestration_trace"]
+            if include_trace:
+                self._authorize_trace_access(endpoint_path)
+            return include_trace
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()
