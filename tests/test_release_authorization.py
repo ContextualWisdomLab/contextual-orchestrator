@@ -117,6 +117,7 @@ def test_invalid_and_duplicate_evidence_is_not_coerced() -> None:
             "ruleset_verified": "true",
             "synthetic_merge": True,
             "protected_head_sha": "not-a-sha",
+            "contributor_head_sha": "not-a-contributor-sha",
             "required_check_names": ["Tests", "Tests", 1],
             "checks": [{"name": "Tests"}, {"name": "Tests"}, "bad"],
             "review_policy": {"required_independent_approval_count": True, "head_sha": "wrong"},
@@ -132,6 +133,7 @@ def test_invalid_and_duplicate_evidence_is_not_coerced() -> None:
         "ruleset_not_verified",
         "synthetic_merge_not_accepted",
         "invalid_protected_head_sha",
+        "invalid_contributor_head_sha",
         "required_check_inventory_invalid",
         "duplicate_check_evidence",
         "check_evidence_invalid",
@@ -140,6 +142,35 @@ def test_invalid_and_duplicate_evidence_is_not_coerced() -> None:
         "review_evidence_invalid",
         "findings_source_coverage_incomplete",
         "unresolved_finding_inventory_invalid",
+    }.issubset(result["blockers"])
+
+
+def test_missing_policy_components_and_exact_head_mismatch_block() -> None:
+    """Report every missing authority component instead of inferring defaults."""
+    evidence = authority()
+    evidence.update(
+        {
+            "base_branch": "develop",
+            "protected_head_sha": HEAD,
+            "contributor_head_sha": "b" * 40,
+            "required_check_names": ["Tests", "Tests", "Security"],
+            "checks": None,
+            "review_policy": None,
+            "reviewers": None,
+            "findings_inventory": None,
+        }
+    )
+    result = evaluate_release_authorization(evidence)
+    assert {
+        "protected_main_required",
+        "head_identity_mismatch",
+        "duplicate_required_check_name",
+        "check_evidence_unavailable",
+        "required_check_missing:Tests",
+        "required_check_missing:Security",
+        "review_policy_unavailable",
+        "review_evidence_unavailable",
+        "findings_inventory_unavailable",
     }.issubset(result["blockers"])
 
 

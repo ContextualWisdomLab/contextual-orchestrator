@@ -53,6 +53,24 @@ def test_invalid_findings_and_gh_output_are_safe(monkeypatch: pytest.MonkeyPatch
         lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="[]", stderr=""),
     )
     assert collector._gh_json("owner/repo", "repos/owner/repo/rulesets") == []
+    monkeypatch.setattr(
+        collector.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="not-json", stderr=""),
+    )
+    with pytest.raises(RuntimeError, match="github_authority_response_invalid"):
+        collector._gh_json("owner/repo", "repos/owner/repo/rulesets")
+    monkeypatch.setattr(
+        collector.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="null", stderr=""),
+    )
+    with pytest.raises(RuntimeError, match="github_authority_response_invalid"):
+        collector._gh_json("owner/repo", "repos/owner/repo/rulesets")
+    invalid_findings = tmp_path / "list.json"
+    invalid_findings.write_text("[]", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="findings_inventory_invalid"):
+        collector._read_findings(str(invalid_findings))
 
 
 def test_collect_authority_binds_current_pull_head(monkeypatch: pytest.MonkeyPatch) -> None:
@@ -82,11 +100,46 @@ def test_collect_authority_binds_current_pull_head(monkeypatch: pytest.MonkeyPat
     assert snapshot["protected_head_sha"] == head
     assert snapshot["checks"][0]["conclusion"] == "success"
     assert snapshot["reviewers"][0]["state"] == "approved"
+    assert collector._review_rows(["bad"], head_sha=head, author_login="author") == []
+    assert collector._review_rows([{"user": None, "state": "DISMISSED"}], head_sha=head, author_login="author")[0]["dismissed"] is True
+
+
+def test_collect_authority_handles_missing_ruleset_and_head_mismatch(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A ruleset query failure and changed expected head remain fail-closed inputs."""
+    head = "a" * 40
+
+    def fake_api(repository: str, endpoint: str):
+        if "pulls/7/reviews" in endpoint:
+            return {}
+        if "rulesets" in endpoint:
+            raise RuntimeError("unavailable")
+        if "check-runs" in endpoint:
+            return []
+        return {"head": {"sha": head}, "base": {"ref": "main"}, "user": {"login": "author"}}
+
+    monkeypatch.setattr(collector, "_gh_json", fake_api)
+    snapshot = collector.collect_authority("owner/repo", 7, [], {}, expected_head_sha="b" * 40)
+    assert snapshot["ruleset_verified"] is False
+    assert snapshot["head_is_current"] is False
+    assert snapshot["reviewers"] == []
 
 
 def test_collect_authority_rejects_malformed_pull_response(monkeypatch: pytest.MonkeyPatch) -> None:
     """Malformed GitHub responses stop collection before evidence is emitted."""
     monkeypatch.setattr(collector, "_gh_json", lambda repository, endpoint: [])
+    with pytest.raises(RuntimeError, match="pull_request_response_invalid"):
+        collector.collect_authority("owner/repo", 7, [], {})
+    monkeypatch.setattr(collector, "_gh_json", lambda repository, endpoint: {"head": {}, "base": {}, "user": {}})
+    with pytest.raises(RuntimeError, match="pull_request_response_invalid"):
+        collector.collect_authority("owner/repo", 7, [], {})
+    monkeypatch.setattr(collector, "_gh_json", lambda repository, endpoint: {"head": [], "base": {}, "user": {}})
+    with pytest.raises(RuntimeError, match="pull_request_response_invalid"):
+        collector.collect_authority("owner/repo", 7, [], {})
+    monkeypatch.setattr(
+        collector,
+        "_gh_json",
+        lambda repository, endpoint: {"head": {"sha": 1}, "base": {"ref": "main"}, "user": {"login": "author"}},
+    )
     with pytest.raises(RuntimeError, match="pull_request_response_invalid"):
         collector.collect_authority("owner/repo", 7, [], {})
 
