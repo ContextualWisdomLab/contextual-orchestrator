@@ -12,6 +12,10 @@ from contextual_orchestrator.credentials import (
     get_credential,
     set_backend,
 )
+from contextual_orchestrator.chat_capability import (
+    is_chat_compatible_model_id,
+    is_general_chat_agent_model_id,
+)
 from contextual_orchestrator.model_discovery import DiscoveredModel
 from contextual_orchestrator import review_gateway
 
@@ -74,6 +78,49 @@ def test_build_review_orchestrator_routes_to_cheapest_selected_agent(monkeypatch
     )
 
     assert orchestrator._select_agent("review this change", "worker").model == "cheap_review"
+
+
+def test_build_review_orchestrator_excludes_endpoint_only_models(monkeypatch):
+    """Embedding and image catalog rows never enter the review-agent pool."""
+    discovered = [
+        _discovered("openai", "text-embedding-3-large", "OPENAI_API_KEY", 0.001),
+        _discovered("openai", "gpt-review", "OPENAI_API_KEY", 2.0),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENAI_API_KEY": "openai-secret"}, max_agents=1
+    )
+
+    assert [agent.model for agent in orchestrator.agents] == ["gpt-review"]
+
+
+def test_build_review_orchestrator_fails_closed_without_general_chat_models(monkeypatch):
+    """A catalog containing only endpoint-specific models cannot start review."""
+    discovered = [_discovered("openai", "text-embedding-3-large", "OPENAI_API_KEY", 0.001)]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    with pytest.raises(NotConfigured, match="general chat models"):
+        review_gateway.build_review_orchestrator({"OPENAI_API_KEY": "openai-secret"})
+
+
+@pytest.mark.parametrize(
+    ("model_id", "chat_compatible", "general_agent"),
+    [
+        ("text-embedding-3-large", False, False),
+        ("gpt-image-1", False, False),
+        ("gpt-review", True, True),
+        ("nvidia/llama-3.1-nemoguard-8b-content-safety", True, False),
+        (None, False, False),
+        ("", False, False),
+    ],
+)
+def test_chat_capability_boundary_is_explicit(
+    model_id, chat_compatible: bool, general_agent: bool
+) -> None:
+    """The gateway rejects endpoint-only and specialized role identifiers."""
+    assert is_chat_compatible_model_id(model_id) is chat_compatible
+    assert is_general_chat_agent_model_id(model_id) is general_agent
 
 
 def test_build_review_orchestrator_fails_closed_without_credentials():

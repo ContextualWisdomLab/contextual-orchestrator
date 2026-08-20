@@ -16,6 +16,7 @@ from typing import Mapping
 
 from .credentials import NotConfigured, register_credential
 from .cost_ledger import PriceBook
+from .chat_capability import is_general_chat_agent_model_id
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     agent_from_discovered,
@@ -75,9 +76,12 @@ def build_review_orchestrator(
         detail = f"; failed providers: {providers}" if providers else ""
         raise NotConfigured(f"review gateway discovered no provider models{detail}")
 
+    chat_discovered = [model for model in discovered if is_general_chat_agent_model_id(model.model_id)]
+    if not chat_discovered:
+        raise NotConfigured("review gateway discovered no general chat models")
     price_book = PriceBook(InMemoryConfigStore())
-    refresh_price_book(discovered, price_book)
-    selected = select_top_n_cheapest_discovered_agents(discovered, price_book, max_agents)
+    refresh_price_book(chat_discovered, price_book)
+    selected = select_top_n_cheapest_discovered_agents(chat_discovered, price_book, max_agents)
     if not selected:
         raise NotConfigured("review gateway selected no provider models")
 
