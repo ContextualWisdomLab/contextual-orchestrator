@@ -78,11 +78,13 @@ and provider/separator aliases. It also verifies:
 
 ## References
 
-BerriAI. (2026). *LiteLLM: Call 100+ LLMs using the OpenAI input/output format*.
-https://docs.litellm.ai/
+BerriAI. (n.d.). *LiteLLM: Call 100+ LLMs using the OpenAI input/output format*.
+Retrieved August 20, 2026, from https://docs.litellm.ai/
 
-Microsoft. (2026). *How to switch between OpenAI and Azure OpenAI endpoints*.
-Microsoft Learn. https://learn.microsoft.com/en-us/azure/developer/ai/how-to/switching-endpoints
+Microsoft. (n.d.). *How to switch between OpenAI and Azure OpenAI endpoints*.
+Microsoft Learn. Retrieved August 20, 2026, from
+https://learn.microsoft.com/en-us/azure/developer/ai/how-to/switching-endpoints
 
-OpenAI. (2026). *Data controls in the OpenAI platform: Default usage policies by
-endpoint*. https://platform.openai.com/docs/models/default-usage-policies-by-endpoint
+OpenAI. (n.d.). *Data controls in the OpenAI platform: Default usage policies by
+endpoint*. Retrieved August 20, 2026, from
+https://platform.openai.com/docs/models/default-usage-policies-by-endpoint
