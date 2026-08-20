@@ -78,7 +78,11 @@ required workflows, and a normal merge.
 
 | PR | Exact head | State / review | Checks snapshot | Dependency and next action |
 |---:|---|---|---|---|
-| #772 | `9a3c3d0` | ready / `REVIEW_REQUIRED`, blocked | required workflows queued | Review cache key, bypass, fail-open, and cost/routing interactions; wait for same-head Checks and independent approval. |
+| #776 | `3830f38` | stacked / review not recorded, clean | no protected required Checks until parent #765 is integrated | Review fixed-length framing, exact read, deadline, close-on-error, and RFC 9112 evidence; retarget/rebase onto protected main after #765. |
+| #775 | `74de99a` | draft / `REVIEW_REQUIRED`, blocked | hosted Checks not yet sufficient | Verify the Python marker keeps Atheris out of unsupported production/Dependabot resolution while preserving CPython 3.12 fuzz installation; obtain independent approval. |
+| #774 | `8977384` | stacked on closed branch, review not recorded, clean | no required Checks reported for its closed base branch | Rebase onto the current #765/main line; preserve same-provider temperature negotiation and do not merge a stale 72-file comparison. |
+| #773 | `fbe9767` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review the current product/technical baseline and ADR 0016, then obtain independent approval. |
+| #772 | `8452623` | ready / `REVIEW_REQUIRED`, blocked | required workflows pending | Review cache key, bypass, fail-open, and cost/routing interactions; wait for same-head Checks and independent approval. |
 | #771 | `2351cab` | ready / `REVIEW_REQUIRED`, blocked | most security checks passed; full suite, Hypothesis, Atheris, queue scan, Strix queued/in progress | Recheck exact-head failure-chain behavior and hosted Checks; obtain independent approval. |
 | #770 | `c01733b` | draft / `REVIEW_REQUIRED`, behind | most checks passed; coverage queued, Strix in progress | Rebase/integrate after catalog and transport dependencies; preserve honest fail-closed price evidence. |
 | #769 | `9654c28` | ready / `REVIEW_REQUIRED`, blocked | required checks passed except coverage evidence queued | Resolve coverage evidence and obtain last-push independent approval; do not self-approve. |
@@ -98,7 +102,7 @@ an issue exists or a draft PR exists.
 |---:|---|---|
 | #568 | Operators cannot compare provider-neutral reasoning profiles at equal budget. | Add role-specific effort profiles, recursion/workflow/access-list controls, and an ablation report with reproducible fixtures. |
 | #123 | A sole collaborator can be unable to satisfy last-push approval. | Add governance evidence/runbook or a protected-rule-compatible process; never bypass approval. |
-| #119 | Ambiguous or unbounded inbound framing threatens request integrity. | Add bounded framing tests and hosted security evidence. |
+| #119 | Ambiguous or unbounded inbound framing threatens request integrity. | PR #776 adds bounded framing tests and hosted security evidence after its #765 stack is reconciled. |
 | #118 | Liveness and authenticated readiness are not yet fully separated. | Add unauthenticated liveness and purpose-limited readiness checks. |
 | #117 | Trace access and inference access need separate authority. | Add scoped authorization tests and audit evidence. |
 | #116 | Browser admin sessions need separation from long-lived bearer credentials. | Add session-bound admin controls and regression tests. |
