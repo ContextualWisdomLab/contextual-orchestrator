@@ -54,7 +54,6 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
 }
 # Tool calls still require provider-native loop semantics; structured JSON is
 # orchestrated through the conduct+synthesis path below instead of passthrough.
-PASSTHROUGH_TRIGGER_KEYS = {"tools", "tool_choice", "functions", "function_call"}
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
     "include_orchestration_trace", "stream", "attribution", "routing",
@@ -846,10 +845,10 @@ def _reject_responses_orchestration_controls(body: dict[str, Any]) -> None:
         "top_logprobs",
     )
     unsupported: list[str] = []
-    for field in fields:
-        if field not in body:
+    for field_name in fields:
+        if field_name not in body:
             continue
-        value = body[field]
+        value = body[field_name]
         if value is None or (isinstance(value, str) and not value.strip()):
             continue
         if isinstance(value, (list, dict)) and not value:
@@ -858,7 +857,7 @@ def _reject_responses_orchestration_controls(body: dict[str, Any]) -> None:
             continue
         if field == "top_logprobs" and value == 0:
             continue
-        unsupported.append(field)
+        unsupported.append(field_name)
     if unsupported:
         raise RequestError(
             400,
@@ -5179,8 +5178,7 @@ def build_server(
                         _validate_chat_response_format(body)
                     if "tools" in body:
                         _validate_chat_tools(body)
-                    if "tool_choice" in body:
-                        _validate_chat_tool_choice(body)
+                    tool_choice = _validate_chat_tool_choice(body) if "tool_choice" in body else None
                     if "parallel_tool_calls" in body:
                         # Always type-check. With tools, true/false both valid for
                         # provider passthrough; without tools, true fails closed.
@@ -5227,10 +5225,8 @@ def build_server(
                     frequency_penalty = sampling["frequency_penalty"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
-                    if tools_list or any(
-                        key in body and body.get(key) is not None
-                        for key in PASSTHROUGH_TRIGGER_KEYS
-                        if key != "tools"
+                    if tools_list or isinstance(tool_choice, dict) or (
+                        isinstance(tool_choice, str) and tool_choice not in {"none", "auto"}
                     ):
                         raise RequestError(
                             422,
