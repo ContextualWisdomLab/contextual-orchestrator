@@ -271,3 +271,7 @@ def test_main_reports_collection_errors_and_success(monkeypatch: pytest.MonkeyPa
     monkeypatch.setattr(collector, "collect_authority", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("blocked")))
     assert collector.main(["--repo", "owner/repo", "--pr", "7", "--expected-head-sha", "a" * 40]) == 2
     assert "blocked" in capsys.readouterr().err
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))
