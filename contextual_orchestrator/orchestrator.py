@@ -538,6 +538,57 @@ def _responses_text(value: Any) -> str:
     return "".join(parts)
 
 
+def _responses_chat_content(value: Any) -> str | list[dict[str, Any]]:
+    """Normalize Responses text and URL images into Chat content parts."""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        return ""
+    parts: list[dict[str, Any]] = []
+    has_image = False
+    for item in value:
+        if isinstance(item, str):
+            parts.append({"type": "text", "text": item})
+            continue
+        if not isinstance(item, dict):
+            continue
+        part_type = item.get("type")
+        if part_type in {"input_image", "image_url"}:
+            raw_image = item.get("image_url")
+            image_url = (
+                {"url": raw_image}
+                if isinstance(raw_image, str)
+                else copy.deepcopy(raw_image)
+            )
+            if (
+                not isinstance(image_url, dict)
+                or not isinstance(image_url.get("url"), str)
+                or not image_url["url"].strip()
+            ):
+                raise ValueError("Responses input_image requires a non-empty image_url")
+            detail = item.get("detail", image_url.get("detail"))
+            if detail is None or (isinstance(detail, str) and not detail.strip()):
+                image_url.pop("detail", None)
+            else:
+                if (
+                    not isinstance(detail, str)
+                    or detail.strip().lower() not in {"auto", "low", "high"}
+                ):
+                    raise ValueError(
+                        "Responses input_image detail must be one of auto, low, high"
+                    )
+                image_url["detail"] = detail.strip().lower()
+            parts.append({"type": "image_url", "image_url": image_url})
+            has_image = True
+            continue
+        text = item.get("text")
+        if isinstance(text, str):
+            parts.append({"type": "text", "text": text})
+    if has_image:
+        return parts
+    return "".join(str(part["text"]) for part in parts)
+
+
 def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     # Keep Responses compatibility at the public control-plane boundary; a
     # provider-neutral local gateway may expose Chat Completions downstream.
@@ -566,7 +617,7 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
                 role = "system"
             if role not in {"system", "user", "assistant"}:
                 raise ValueError(f"unsupported local Responses message role: {role}")
-            content = _responses_text(item.get("content"))
+            content = _responses_chat_content(item.get("content"))
             if content:
                 messages.append({"role": role, "content": content})
         elif item_type == "function_call_output":
@@ -2072,7 +2123,8 @@ class TaskOrchestrator:
         already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
         """
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        agent = self._select_agent(text, "worker", required_tags=required_tags)
         parts: list[str] = []
         for delta in self.client.stream_chat(agent, messages):
             parts.append(delta)
@@ -2548,9 +2600,12 @@ class TaskOrchestrator:
     def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        agent = self._select_agent(text, "worker", required_tags=required_tags)
         start = time.perf_counter()
-        answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
+        answer, served_id, usage = self._invoke(
+            agent, messages, text=text, role="worker", required_tags=required_tags
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
             "id": 0,
@@ -2581,6 +2636,8 @@ class TaskOrchestrator:
     ) -> dict[str, Any]:
         """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
         task = self._latest_user_text(messages)
+        source_images = self._source_image_parts(messages)
+        required_tags = ("vision",) if source_images else ()
         plan_source = "template"
         if self.policy.workflow_planning == "generated":
             try:
@@ -2595,8 +2652,19 @@ class TaskOrchestrator:
         trace: list[dict[str, Any]] = []
 
         for step in steps:
-            agent = self._agent(step.agent_id)
+            agent = (
+                self._select_agent(task, step.role, required_tags=required_tags)
+                if required_tags
+                else self._agent(step.agent_id)
+            )
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
+            instruction = f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
+            user_content: str | list[dict[str, Any]] = instruction
+            if source_images:
+                user_content = [
+                    {"type": "text", "text": instruction},
+                    *copy.deepcopy(source_images),
+                ]
             step_messages = [
                 {
                     "role": "system",
@@ -2608,7 +2676,7 @@ class TaskOrchestrator:
                 },
                 {
                     "role": "user",
-                    "content": f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}",
+                    "content": user_content,
                 },
             ]
             if output_contract is not None and step.id == steps[-1].id:
@@ -2617,10 +2685,17 @@ class TaskOrchestrator:
                     f"Honor this output contract exactly: {json.dumps(output_contract, ensure_ascii=False, sort_keys=True)}"
                 )
             start = time.perf_counter()
-            output, served_id, usage = self._invoke(agent, step_messages, text=task, role=step.role)
+            output, served_id, usage = self._invoke(
+                agent,
+                step_messages,
+                text=task,
+                role=step.role,
+                required_tags=required_tags,
+            )
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
+            row["agent_id"] = agent.id
             row["latency_ms"] = round(elapsed, 2)
             row["output"] = output
             if usage is not None:
@@ -2748,13 +2823,28 @@ class TaskOrchestrator:
                 domain_score += 2
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
-    def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
+    def _ranked_agents(
+        self, text: str, role: str, *, required_tags: tuple[str, ...] = ()
+    ) -> list[ModelAgent]:
         """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
         lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        candidates = [
+            agent for agent in self.agents if all(tag in agent.tags for tag in required_tags)
+        ]
+        return sorted(
+            candidates,
+            key=lambda agent: self._score_agent(agent, role, lowered),
+            reverse=True,
+        )
 
-    def _select_agent(self, text: str, role: str) -> ModelAgent:
-        selected = self._ranked_agents(text, role)[0]
+    def _select_agent(
+        self, text: str, role: str, *, required_tags: tuple[str, ...] = ()
+    ) -> ModelAgent:
+        ranked = self._ranked_agents(text, role, required_tags=required_tags)
+        if not ranked:
+            required = ", ".join(required_tags) or "none"
+            raise RuntimeError(f"no agent has required tags for role={role}: {required}")
+        selected = ranked[0]
         if selected.disabled:  # pragma: no cover
             raise RuntimeError(f"no enabled agent available for role={role}")
         if role in selected.provider_exclusions:  # pragma: no cover
@@ -2778,7 +2868,13 @@ class TaskOrchestrator:
         return ranked[0]
 
     def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        required_tags: tuple[str, ...] = (),
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -2787,7 +2883,9 @@ class TaskOrchestrator:
         ``(output, served_agent_id, usage)`` — usage is the provider-reported token
         usage when available (else None), so spend analytics can prefer it.
         """
-        candidates = self._failover_candidates(primary, text, role)
+        candidates = self._failover_candidates(
+            primary, text, role, required_tags=required_tags
+        )
         last_error: Exception | None = None
         for agent in candidates:
             try:
@@ -2801,13 +2899,23 @@ class TaskOrchestrator:
             return output, agent.id, usage
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
 
-    def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
-        ranked = self._ranked_agents(text, role)
-        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
+    def _failover_candidates(
+        self,
+        primary: ModelAgent,
+        text: str,
+        role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
+    ) -> list[ModelAgent]:
+        ranked = self._ranked_agents(text, role, required_tags=required_tags)
+        primary_matches = all(tag in primary.tags for tag in required_tags)
+        ordered = ([primary] if primary_matches else []) + [
+            agent for agent in ranked if agent.id != primary.id
+        ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible or [primary]
+        return healthy or eligible or ([primary] if not required_tags else [])
 
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:
@@ -2850,6 +2958,17 @@ class TaskOrchestrator:
             if text:
                 return text
         return ""  # pragma: no cover
+
+    @staticmethod
+    def _source_image_parts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+        """Copy source image parts so every evidence step receives the pixels."""
+        return [
+            copy.deepcopy(part)
+            for message in messages
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+            if isinstance(part, dict) and part.get("type") == "image_url"
+        ]
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""

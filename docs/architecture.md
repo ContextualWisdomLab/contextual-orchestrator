@@ -52,6 +52,9 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `Orchestrator.route_once`: the low-latency routing path.
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
+- Image-bearing Chat Completions and Responses retain their typed source image
+  blocks in every evidence-bearing workflow step; access lists still constrain
+  prior model outputs. See [ADR 0018](planning/adrs/0018-multimodal-evidence-preserving-orchestration.md).
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
@@ -86,6 +89,9 @@ Official Responses `text.format` accepts `type` text / json_object / json_schema
 OpenAI. (n.d.-a). *Create chat completion*. OpenAI Platform. https://platform.openai.com/docs/api-reference/chat/create
 
 OpenAI. (n.d.-b). *Create a model response*. OpenAI Platform. https://platform.openai.com/docs/api-reference/responses/create
+
+Tang, Y., et al. (2026). *Sakana Fugu technical report* (arXiv:2606.21228).
+arXiv. https://doi.org/10.48550/arXiv.2606.21228
 
 Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
 
