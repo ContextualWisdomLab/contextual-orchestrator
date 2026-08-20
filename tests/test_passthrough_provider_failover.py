@@ -112,6 +112,65 @@ def test_429_advances_immediately_and_preserves_tool_request() -> None:
     assert body == original
 
 
+@pytest.mark.parametrize("status", [404, 410])
+def test_virtual_request_advances_when_discovered_candidate_disappears(
+    status: int,
+) -> None:
+    """A stale discovered candidate must not block another compatible worker."""
+    unavailable = _http_error(status, "model unavailable")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": unavailable,
+            "fallback_agent": {
+                "object": "chat.completion",
+                "model": "fallback-model",
+                "choices": [],
+            },
+        }
+    )
+    orchestrator = _build(client)
+
+    result = orchestrator.proxy_completion(
+        {
+            "model": "contextual-orchestrator",
+            "messages": [{"role": "user", "content": "review code"}],
+            "tools": [],
+        }
+    )
+
+    assert result["model"] == "fallback-model"
+    assert [call[0] for call in client.calls] == ["primary_agent", "fallback_agent"]
+
+
+@pytest.mark.parametrize("status", [404, 410])
+def test_explicit_concrete_model_remains_sticky_when_unavailable(status: int) -> None:
+    """An explicit concrete model must never be silently replaced."""
+    unavailable = _http_error(status, "model unavailable")
+    client = SequencedProxyClient(
+        {
+            "primary_agent": unavailable,
+            "fallback_agent": {
+                "object": "chat.completion",
+                "model": "fallback-model",
+                "choices": [],
+            },
+        }
+    )
+    orchestrator = _build(client)
+
+    with pytest.raises(urllib.error.HTTPError) as caught:
+        orchestrator.proxy_completion(
+            {
+                "model": "primary-model",
+                "messages": [{"role": "user", "content": "review code"}],
+                "tools": [],
+            }
+        )
+
+    assert caught.value is unavailable
+    assert [call[0] for call in client.calls] == ["primary_agent"]
+
+
 def test_non_transient_request_error_is_not_replayed_to_another_provider() -> None:
     """A provider 400 is caller/configuration evidence, not a failover signal."""
     bad_request = _http_error(400, "unsupported request")
