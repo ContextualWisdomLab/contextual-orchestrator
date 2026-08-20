@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 02:39, Asia/Seoul
+**As of:** 2026-08-21 02:54, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -113,7 +113,7 @@ required workflows, and a normal merge.
 | [#770](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/770) | `386c9a03d1d7076106e4061776e81ffd6dac4d6f` | draft, based on stale main | Reconcile after [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768). Preserve complete-price evidence, provider-family diversity, corrupt-row handling, and consume the shared ordinary-chat classifier rather than a local detector. |
 | [#769](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/769) | `9654c285c54443acf6358193925f4e0e8ae501ce` | ready, based on main | Core repository workflows succeeded on this head; obtain exact-head independent approval and remaining protected contexts. |
 | [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768) | `88fee976ca4222309f625058a6f95f09e66744ec` | ready, based on main | Review the current capability boundary, including ShieldGemma, legacy Completions, direct-run regressions, and exact-head hosted checks. |
-| [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) | `0a3ab0b901d0b39d610f26538243bb5b3c1b3c61` | draft, based on main | Current parent includes merged #778 at merge commit `0a3ab0b901d0b39d610f26538243bb5b3c1b3c61`, the merged #779 temperature-negotiation stack at `a4e9a780a56c08e131367f3b904f5c855b3a1b33`, and the complete-body-at-deadline fix; exact framing/deadline proof is `20 passed`. Reconcile after [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768)/[#769](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/769). |
+| [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) | `0a3ab0b901d0b39d610f26538243bb5b3c1b3c61` | draft, based on main | Current parent includes merged #778 at merge commit `0a3ab0b901d0b39d610f26538243bb5b3c1b3c61`, the merged #779 temperature-negotiation stack at `a4e9a780a56c08e131367f3b904f5c855b3a1b33`, and the complete-body-at-deadline fix. Fresh local proof is `1509 passed in 550.51s`; Ruff, compile, and diff checks are clean. Reconcile after [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768)/[#769](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/769) and obtain current hosted approval/Checks. |
 | [#764](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/764) | `55814b9520133306777834ead0c7d380c3e1c820` | draft, based on main | Verify 3NF catalog persistence, credential promotion/rollback, last-known-good semantics, exact-set stale withdrawal, and shared capability-classifier adoption after rebase. |
 | [#763](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/763) | `385a5b4e8d41dd6decab9f0845538e03fc71b51e` | draft, based on main | Reconcile with [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765)/[#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768); preserve one-shot local Responses translation, local concurrency coordination, concrete-model stickiness, and adaptive provider failover. |
 | [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762) | `be6b6c792165061e16f7d05a06251e5b8ee47519` | ready, based on main | The exact-head ADR closes the documented purpose, classification, AEAD/KMS, migration, and audit-gate review gaps; merge the design only after current-head independent approval, then implement its acceptance criteria separately. |
@@ -124,7 +124,7 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 02:39 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 02:54 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ### External central workflow prerequisite
