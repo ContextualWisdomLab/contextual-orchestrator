@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20 19:10, Asia/Seoul
+**As of:** 2026-08-20 19:15, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -82,6 +82,7 @@ required workflows, and a normal merge.
 
 | PR | Exact head | State / base | Evidence boundary and next action |
 |---:|---|---|---|
+| #780 | `76faecc` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, and exact-head hosted Checks before normal merge. |
 | #779 | `4a5cc7a` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main. |
 | #778 | `6e0daf8` | ready, stacked on #765 | Review source-image preservation, explicit `vision` eligibility/failover, Responses normalization, and the private LineageWeave OCR recovery boundary. |
 | #776 | `3830f38` | ready, stacked on #765 | Review fixed-length framing, exact reads, deadlines, close-on-error, and RFC 9112 evidence; rebase onto protected main after #765. |
@@ -110,7 +111,7 @@ completed until the protected-main contract is satisfied.
 | #568 | Operators cannot compare provider-neutral reasoning profiles at equal budget. | Add role-specific effort profiles, recursion/workflow/access-list controls, and an ablation report with reproducible fixtures. |
 | #123 | A sole collaborator can be unable to satisfy last-push approval. | Add governance evidence/runbook or a protected-rule-compatible process; never bypass approval. |
 | #119 | Ambiguous or unbounded inbound framing threatens request integrity. | PR #776 adds bounded framing tests and hosted security evidence after its #765 stack is reconciled. |
-| #118 | Liveness and authenticated readiness are not yet fully separated. | Add unauthenticated liveness and purpose-limited readiness checks. |
+| #118 | Liveness and authenticated readiness are not yet fully separated. | PR #780 implements the minimal `/healthz` and authenticated `/readyz` contract; merge only after exact-head Checks and independent approval. |
 | #117 | Trace access and inference access need separate authority. | Add scoped authorization tests and audit evidence. |
 | #116 | Browser admin sessions need separation from long-lived bearer credentials. | Add session-bound admin controls and regression tests. |
 | #103 | Release readiness must fail closed on stale head, missing review, or missing Checks evidence. | Implement exact-head release gate and changelog/version proof. |
