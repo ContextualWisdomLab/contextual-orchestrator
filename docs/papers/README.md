@@ -53,6 +53,22 @@ These sources govern model and reasoning-policy decisions. They are cited and
 linked rather than vendored because this repository does not assume that every
 paper permits redistribution of its PDF.
 
+- **Sakana Fugu Technical Report** — Yujin Tang et al. arXiv:2606.21228,
+  2026. https://arxiv.org/abs/2606.21228
+  Grounds query-adaptive scaffolds over specialized agent teams. It supports
+  preserving modality evidence for each assigned specialist; it does not
+  justify selecting a model from its name.
+- **TRINITY: An Evolved LLM Coordinator** — Jinglue Xu, Qi Sun, Peter
+  Schwendeman, Stefan Nielsen, Edoardo Cetin, Yujin Tang. arXiv:2512.04695,
+  2025. https://arxiv.org/abs/2512.04695
+  Grounds explicit Thinker, Worker, and Verifier role assignment over a
+  heterogeneous pool.
+- **Learning to Orchestrate Agents in Natural Language with the Conductor** —
+  Stefan Nielsen, Edoardo Cetin, Peter Schwendeman, Qi Sun, Jinglue Xu, Yujin
+  Tang. arXiv:2512.04388, 2025. https://arxiv.org/abs/2512.04388
+  Grounds targeted communication topology and natural-language subtasks. The
+  access list controls prior agent outputs, not removal of the source image.
+
 - **Route to Reason: Adaptive Routing for LLM and Reasoning Strategy Selection**
   — Zhihong Pan, Kai Zhang, Yuze Zhao, Yupeng Han. arXiv:2505.19435, 2025.
   https://arxiv.org/abs/2505.19435
