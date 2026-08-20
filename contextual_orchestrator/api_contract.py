@@ -39,6 +39,24 @@ OPENAPI_SPEC = {
                     "release_summary": {"type": "object"},
                 },
             },
+            "CommercialProcurementReadiness": {
+                "type": "object",
+                "required": ["procurement_status", "release_authorization"],
+                "properties": {
+                    "procurement_status": {"type": "string"},
+                    "release_authorization": {"$ref": "#/components/schemas/ReleaseAuthorization"},
+                    "procurement_summary": {"type": "object"},
+                },
+            },
+            "CommercialContractReadiness": {
+                "type": "object",
+                "required": ["contract_status", "release_authorization"],
+                "properties": {
+                    "contract_status": {"type": "string"},
+                    "release_authorization": {"$ref": "#/components/schemas/ReleaseAuthorization"},
+                    "contract_summary": {"type": "object"},
+                },
+            },
         },
     },
     "paths": {
@@ -349,7 +367,7 @@ OPENAPI_SPEC = {
                 "operationId": "get_latest_commercial_procurement_readiness",
                 "summary": "Get commercial procurement readiness for buyer due diligence",
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Commercial procurement readiness"}},
+                "responses": {"200": {"description": "Commercial procurement readiness with release authority", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommercialProcurementReadiness"}}}}},
             }
         },
         "/api/v1/commercial_contract_readiness/latest": {
@@ -357,7 +375,7 @@ OPENAPI_SPEC = {
                 "operationId": "get_latest_commercial_contract_readiness",
                 "summary": "Get commercial contract readiness for buyer due diligence",
                 "security": [{"admin_bearer_auth": []}],
-                "responses": {"200": {"description": "Commercial contract readiness"}},
+                "responses": {"200": {"description": "Commercial contract readiness with release authority", "content": {"application/json": {"schema": {"$ref": "#/components/schemas/CommercialContractReadiness"}}}}},
             }
         },
         "/api/v1/commercial_onboarding_readiness/latest": {

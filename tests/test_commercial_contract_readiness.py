@@ -79,16 +79,18 @@ def test_commercial_contract_readiness_report_tracks_terms_and_buyer_warnings() 
     )
     items = item_by_name(report)
 
-    assert report["contract_status"] == "commercial_contract_ready_with_warnings"
+    assert report["contract_status"] == "commercial_contract_blocked"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_contract_readiness"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["contract_summary"]["blocked_count"] == 0
+    assert report["contract_summary"]["blocked_count"] == 1
     assert report["contract_summary"]["warning_count"] == 2
     assert report["contract_summary"]["support_slo_gap_count"] == 1
     assert report["contract_summary"]["buyer_order_form_gap_count"] == 1
+    assert report["contract_summary"]["release_authority_blocker_count"] == 1
     assert report["contract_summary"]["review_process_is_blocker"] is False
     assert report["concrete_blockers"] == []
+    assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
     assert items["license_commercial_rights"]["completion_state"] == "ready"
     assert items["security_privacy_terms"]["completion_state"] == "ready"
     assert items["audit_export_obligations"]["completion_state"] == "ready"
@@ -96,7 +98,7 @@ def test_commercial_contract_readiness_report_tracks_terms_and_buyer_warnings() 
     assert items["support_slo_terms"]["source_gap_status"] == "production_input_required"
     assert items["buyer_order_form_input"]["completion_state"] == "warning"
     assert items["buyer_order_form_input"]["source_gap_status"] == "buyer_input_required"
-    assert report["related_runtime_reports"]["commercial_procurement_status"] == "commercial_procurement_ready_with_warnings"
+    assert report["related_runtime_reports"]["commercial_procurement_status"] == "commercial_procurement_blocked"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["contract_links"]["runtime_endpoint"] == "/api/v1/commercial_contract_readiness/latest"
 
@@ -106,6 +108,9 @@ def test_commercial_contract_readiness_endpoint_openapi_admin_and_docs_contract(
     assert OPENAPI_SPEC["paths"]["/api/v1/commercial_contract_readiness/latest"]["get"]["operationId"] == (
         "get_latest_commercial_contract_readiness"
     )
+    assert OPENAPI_SPEC["components"]["schemas"]["CommercialContractReadiness"]["properties"]["release_authorization"] == {
+        "$ref": "#/components/schemas/ReleaseAuthorization"
+    }
     assert "/api/v1/commercial_contract_readiness/latest" in ADMIN_HTML
     assert "commercial_contract_readiness_title" in ADMIN_TRANSLATIONS["en"]
     assert "commercial_contract_readiness_title" in ADMIN_TRANSLATIONS["ko"]
@@ -117,7 +122,7 @@ def test_commercial_contract_readiness_endpoint_openapi_admin_and_docs_contract(
     assert "/api/v1/commercial_contract_readiness/latest" in contract_doc
     assert "KRW 2B Commercial Contract Readiness" in contract_doc
     assert "Figma Code Connect is not used" in contract_doc
-    assert "Review process is not a blocker" in contract_doc
+    assert "release-authority result is a separate blocker" in contract_doc
     assert "Do not create a separate library, Git submodule, or extracted package now" in contract_doc
 
     server = build_server(

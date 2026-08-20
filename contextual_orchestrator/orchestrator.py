@@ -4495,6 +4495,7 @@ class TaskOrchestrator:
             },
             "gap_items": gap_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release["release_authorization"],
             "gap_status_rules": [
                 {
                     "gap_status": "production_input_required",
@@ -4530,12 +4531,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a procurement/legal readiness gate over commercial evidence."""
         gap_register = self.commercial_gap_register_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -4546,6 +4549,8 @@ class TaskOrchestrator:
         production_gap = gap_by_status.get("production_input_required")
         buyer_gap = gap_by_status.get("buyer_input_required")
         concrete_blockers = gap_register["concrete_blockers"]
+        release_authorization = gap_register["release_authorization"]
+        release_authority_blockers = release_authorization["blockers"]
         procurement_items = [
             {
                 "item_name": "license_and_rights",
@@ -4664,7 +4669,7 @@ class TaskOrchestrator:
         state_counts = Counter(item["completion_state"] for item in procurement_items)
         production_gap_count = 1 if production_gap else 0
         buyer_specific_gap_count = 1 if buyer_gap else 0
-        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers) + len(release_authority_blockers)
         warning_count = state_counts.get("warning", 0)
         if blocked_count:
             procurement_status = "commercial_procurement_blocked"
@@ -4691,9 +4696,11 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "review_process_is_blocker": gap_register["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "procurement_items": procurement_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "procurement_status_rules": [
                 {
                     "procurement_status": "commercial_procurement_ready",
@@ -4728,12 +4735,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a contract-readiness gate over procurement evidence."""
         procurement = self.commercial_procurement_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -4747,6 +4756,8 @@ class TaskOrchestrator:
         buyer_item = procurement_by_name["buyer_legal_roi_procurement_input"]
         packaging_item = procurement_by_name["packaging_decision"]
         concrete_blockers = procurement["concrete_blockers"]
+        release_authorization = procurement["release_authorization"]
+        release_authority_blockers = release_authorization["blockers"]
         support_slo_gap_count = 1 if support_item["completion_state"] == "warning" else 0
         buyer_order_form_gap_count = 1 if buyer_item["completion_state"] == "warning" else 0
         contract_items = [
@@ -4866,7 +4877,7 @@ class TaskOrchestrator:
             },
         ]
         state_counts = Counter(item["completion_state"] for item in contract_items)
-        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers)
+        blocked_count = state_counts.get("blocked", 0) + len(concrete_blockers) + len(release_authority_blockers)
         warning_count = state_counts.get("warning", 0)
         if blocked_count:
             contract_status = "commercial_contract_blocked"
@@ -4894,9 +4905,11 @@ class TaskOrchestrator:
                 "support_slo_gap_count": support_slo_gap_count,
                 "buyer_order_form_gap_count": buyer_order_form_gap_count,
                 "review_process_is_blocker": procurement["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "contract_items": contract_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "contract_status_rules": [
                 {
                     "contract_status": "commercial_contract_ready",

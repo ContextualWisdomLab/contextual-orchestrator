@@ -41,9 +41,10 @@ report = orchestrator.commercial_release_candidate_report(
 assert report["release_status"] == "commercial_release_blocked"
 assert report["product_evidence_status"] == "commercial_release_ready_with_warnings"
 assert report["measurement_status"] == "local_commercial_release_candidate"
-assert report["release_summary"]["blocked_count"] == 0
+assert report["release_summary"]["blocked_count"] == 1
 assert report["release_summary"]["warning_count"] == 2
 assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
+assert "release_authority_collector" in {item["item_name"] for item in report["release_artifacts"]}
 assert report["library_split_decision"]["decision"] == "keep_single_product"
 ```
 

@@ -4595,12 +4595,14 @@ def build_server(
                     self._send(orchestrator.commercial_procurement_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_contract_readiness/latest":
                     self._send(orchestrator.commercial_contract_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_onboarding_readiness/latest":

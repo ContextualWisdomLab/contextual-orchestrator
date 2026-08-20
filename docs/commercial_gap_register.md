@@ -50,6 +50,9 @@ necessary.
 - `gap_items`: owner/action rows with `gap_name`, `gap_type`, `gap_status`,
   `owner`, `reviewer`, `sources`, `source_evidence_type`, `current_evidence`,
   `required_input`, and `is_blocker`;
+- `release_authorization`: the same fail-closed authority result used by the
+  release candidate, so procurement and contract consumers retain the
+  protected-head blocker;
 - `concrete_blockers`: security, API contract, document, product, or Code
   Connect failures;
 - `related_runtime_reports`: release, acceptance, export, saleability, handoff,

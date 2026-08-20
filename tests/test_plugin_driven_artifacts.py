@@ -26,7 +26,7 @@ def test_plugin_design_brief_preserves_enterprise_control_plane() -> None:
         "Ponytail",
         "Data Analytics",
         "Commercial readiness",
-        "Review process is not a blocker",
+            "release-authority result is a separate blocker",
     ]:
         assert expected_text in brief
 
@@ -102,7 +102,7 @@ def test_superpowers_plan_records_no_code_connect_constraint() -> None:
         "Do not create a separate library, Git submodule, or extracted package",
         "commercial_readiness_pass_rate",
         "KRW 2B Commercial Readiness Flow",
-        "Review process is not a blocker",
+            "release-authority result is a separate blocker",
         "pytest -q",
     ]:
         assert expected_text in commercial_plan
