@@ -40,3 +40,7 @@ def test_explicit_policy_classifier_markers_remain_role_ineligible(model_id: str
     """Keep exact guard, safety, and NemoGuard markers out of general synthesis roles."""
     assert is_chat_compatible_model_id(model_id)
     assert not is_general_chat_agent_model_id(model_id)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))
