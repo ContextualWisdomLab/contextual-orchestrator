@@ -105,7 +105,11 @@ def test_auto_protocol_retries_without_temperature_after_provider_capability_rej
     agent = ModelAgent("auto_agent", "gpt-reasoning", "https://provider.example/v1")
     calls: list[dict] = []
     error = urllib.error.HTTPError(
-        "https://provider.example/v1/chat/completions", 400, "bad request", {}, io.BytesIO(b"{}")
+        "https://provider.example/v1/chat/completions",
+        400,
+        "bad request",
+        {},
+        io.BytesIO(b'{"error":{"message":"unsupported parameter: temperature"}}'),
     )
 
     def send(_agent, endpoint, payload, _destination=None, _timeout=None):
@@ -119,6 +123,30 @@ def test_auto_protocol_retries_without_temperature_after_provider_capability_rej
     assert client._send(agent, {"messages": [{"role": "user", "content": "question"}], "temperature": 0.2}) == "ok"
     assert calls[0]["temperature"] == 0.2
     assert "temperature" not in calls[1]
+
+
+def test_chat_protocol_does_not_retry_unrelated_temperature_validation_error() -> None:
+    client = ModelClient()
+    agent = ModelAgent("chat_agent", "gpt-reasoning", "https://provider.example/v1", provider_protocol="chat_completions")
+    payload = {"messages": [{"role": "user", "content": "question"}], "temperature": 3.0}
+    calls: list[dict] = []
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/chat/completions",
+        400,
+        "bad request",
+        {},
+        io.BytesIO(b'{"error":{"message":"temperature must be between 0 and 2"}}'),
+    )
+
+    def send(_agent, endpoint, request_payload, _destination=None, _timeout=None):
+        assert endpoint == "chat/completions"
+        calls.append(request_payload)
+        raise error
+
+    client._send_provider_json = send  # type: ignore[method-assign]
+    with pytest.raises(urllib.error.HTTPError):
+        client._send(agent, payload)
+    assert calls == [payload]
 
 
 def test_chat_protocol_retries_without_temperature_after_422_capability_rejection() -> None:

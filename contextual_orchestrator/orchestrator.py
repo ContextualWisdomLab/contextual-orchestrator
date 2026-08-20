@@ -718,6 +718,48 @@ def is_provider_capability_error(exc: BaseException) -> bool:
     return False
 
 
+def is_temperature_capability_error(exc: BaseException) -> bool:
+    """Return True only when the provider explicitly rejects temperature support."""
+    pending: list[BaseException | None] = [exc]
+    seen: set[int] = set()
+    while pending:
+        current = pending.pop()
+        if current is None or id(current) in seen:
+            continue
+        seen.add(id(current))
+        if isinstance(current, urllib.error.HTTPError) and current.code in PROVIDER_CAPABILITY_ERROR_STATUS:
+            details = [str(getattr(current, "reason", "")), str(getattr(current, "msg", ""))]
+            stream = getattr(current, "fp", None)
+            if stream is not None:
+                try:
+                    position = stream.tell()
+                    body = stream.read()
+                    stream.seek(position)
+                    if isinstance(body, bytes):
+                        details.append(body.decode("utf-8", errors="replace"))
+                    elif isinstance(body, str):
+                        details.append(body)
+                except (AttributeError, OSError, TypeError, ValueError):
+                    pass
+            detail = " ".join(details).lower()
+            if "temperature" in detail and any(
+                marker in detail
+                for marker in (
+                    "unsupported",
+                    "not supported",
+                    "not allowed",
+                    "unknown parameter",
+                    "unrecognized parameter",
+                    "unexpected parameter",
+                    "does not accept",
+                    "doesn't support",
+                )
+            ):
+                return True
+        pending.extend((current.__cause__, current.__context__))
+    return False
+
+
 def is_provider_protocol_fallback_error(exc: BaseException) -> bool:
     """Return True when an auto-protocol provider rejected the endpoint shape."""
     pending: list[BaseException | None] = [exc]
@@ -971,7 +1013,7 @@ class ModelClient:
         try:
             data = self._send_provider_json(agent, "chat/completions", normalized, destination, timeout)
         except urllib.error.HTTPError as exc:
-            if "temperature" in normalized and is_provider_capability_error(exc):
+            if "temperature" in normalized and is_temperature_capability_error(exc):
                 retry_payload = dict(normalized)
                 retry_payload.pop("temperature", None)
                 data = self._send_provider_json(agent, "chat/completions", retry_payload, destination, timeout)
@@ -1003,7 +1045,7 @@ class ModelClient:
                 timeout,
             )
         except urllib.error.HTTPError as exc:
-            if "temperature" not in response_payload or not is_provider_capability_error(exc):
+            if "temperature" not in response_payload or not is_temperature_capability_error(exc):
                 raise
             retry_payload = dict(response_payload)
             retry_payload.pop("temperature", None)
@@ -1337,7 +1379,7 @@ class ModelClient:
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
             except urllib.error.HTTPError as exc:
-                if "temperature" in payload and is_provider_capability_error(exc):
+                if "temperature" in payload and is_temperature_capability_error(exc):
                     retry_payload = dict(payload)
                     retry_payload.pop("temperature", None)
                     try:
