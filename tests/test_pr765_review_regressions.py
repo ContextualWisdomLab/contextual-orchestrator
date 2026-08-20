@@ -5,6 +5,7 @@ from __future__ import annotations
 import pytest
 
 from contextual_orchestrator import server
+from contextual_orchestrator.orchestrator import ModelAgent, ModelClient
 
 
 @pytest.mark.parametrize(
@@ -72,3 +73,26 @@ def test_empty_responses_controls_remain_omit_equivalent() -> None:
             "top_logprobs": 0,
         }
     )
+
+
+def test_internal_chat_omits_unrequested_temperature(monkeypatch) -> None:
+    """Internal workflow calls must not invent a sampling value unsupported by a model."""
+    client = ModelClient()
+    agent = ModelAgent(
+        id="azure_worker",
+        model="azure/gpt-5.5",
+        base_url="https://gateway.example.com",
+        credential_key="",
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
+
+    def capture_payload(_agent, payload, _destination):
+        captured.update(payload)
+        return "OK"
+
+    monkeypatch.setattr(client, "_send_with_retry", capture_payload)
+
+    assert client.chat(agent, [{"role": "user", "content": "Synthesize."}]) == "OK"
+    assert "temperature" not in captured
