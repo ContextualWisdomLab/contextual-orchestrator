@@ -33,9 +33,15 @@ import math
 from typing import Any
 
 from contextual_orchestrator import server
+from contextual_orchestrator.model_discovery import (
+    ProviderModelSource,
+    _parse_bytez,
+    _parse_openai_compatible,
+)
 from contextual_orchestrator.orchestrator import (
     ModelAgent,
     TaskOrchestrator,
+    _parse_model_judge_reply,
     chat_completion_chunks,
     redact_text,
     redact_value,
@@ -138,6 +144,36 @@ def exercise_agent_config(value: Any) -> None:
     assert isinstance(agent.disabled, bool)
 
 
+_FUZZ_OPENAI_SOURCE = ProviderModelSource(
+    provider_name="fuzz_openai",
+    credential_name="FUZZ_OPENAI_API_KEY",
+    list_url="https://example.invalid/v1/models",
+    chat_base_url="https://example.invalid/v1",
+)
+_FUZZ_BYTEZ_SOURCE = ProviderModelSource(
+    provider_name="fuzz_bytez",
+    credential_name="FUZZ_BYTEZ_API_KEY",
+    list_url="https://example.invalid/models/v2/list/models",
+    chat_base_url="https://example.invalid/models/v2/openai/v1",
+    auth_scheme="Key",
+    style="bytez",
+    task_filter="chat",
+)
+
+
+def exercise_provider_model_payload(value: Any) -> None:
+    """Drive provider model-list parsers over arbitrary decoded values."""
+    for source, parser in (
+        (_FUZZ_OPENAI_SOURCE, _parse_openai_compatible),
+        (_FUZZ_BYTEZ_SOURCE, _parse_bytez),
+    ):
+        discovered = parser(value, source)
+        assert isinstance(discovered, list)
+        for model in discovered:
+            assert isinstance(model.model_id, str) and model.model_id
+            assert model.provider_name == source.provider_name
+
+
 def exercise_redaction(text: str) -> None:
     """Drive secret/PII redaction over arbitrary text and structures.
 
@@ -231,3 +267,13 @@ def exercise_reasoning_effort_profile(value: Any) -> None:
         return
     assert production_default_change_allowed(report) is False
     assert report["measurement_status"] == "estimated"
+
+
+def exercise_model_judge_reply(reply: str) -> None:
+    """Drive strict model-judge parsing over arbitrary untrusted text."""
+    try:
+        decision, reason = _parse_model_judge_reply(reply)
+    except ValueError:
+        return
+    assert decision in {"ACCEPT", "REJECT"}
+    assert isinstance(reason, str) and reason.strip()

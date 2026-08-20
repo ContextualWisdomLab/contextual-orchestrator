@@ -57,6 +57,42 @@ class EffortProfileError(ValueError):
     """Raised when a reasoning-effort profile is missing, unknown, or unsafe."""
 
 
+def apply_request_profile(
+    payload: dict[str, Any],
+    profile: "ReasoningEffortProfile | None",
+    *,
+    supports_reasoning_effort: bool,
+    default_max_output_tokens: int,
+) -> dict[str, Any]:
+    """Apply one validated profile to an upstream request body.
+
+    Sampling controls remain separate from provider-native reasoning effort.
+    When provider support is not proven, ``abstain`` and ``error`` fail closed;
+    ``omit`` sends only the independently valid sampling and output-token
+    controls. The helper never writes prompts, credentials, or private
+    reasoning traces.
+    """
+    if profile is None:
+        payload.setdefault("max_tokens", default_max_output_tokens)
+        return payload
+    if not isinstance(profile, ReasoningEffortProfile):
+        raise EffortProfileError("effort profile must be a ReasoningEffortProfile")
+    validated = parse_reasoning_effort_profile(profile.as_dict())
+    if not supports_reasoning_effort and validated.unsupported_provider_fallback != "omit":
+        raise EffortProfileError(
+            "provider reasoning_effort support is unproven; profile requested "
+            f"{validated.unsupported_provider_fallback!r}"
+        )
+    payload["max_tokens"] = validated.max_output_tokens
+    payload["temperature"] = validated.temperature
+    payload["top_p"] = validated.top_p
+    if validated.seed is not None:
+        payload["seed"] = validated.seed
+    if supports_reasoning_effort:
+        payload["reasoning_effort"] = validated.reasoning_effort
+    return payload
+
+
 @dataclass(frozen=True)
 class ReasoningEffortProfile:
     """One versioned compute profile for a single workflow role.
@@ -242,7 +278,7 @@ def snapshot_role_effort_catalog(
         profile = catalog[role]
         if not isinstance(profile, ReasoningEffortProfile):
             raise EffortProfileError(f"{role} must be a ReasoningEffortProfile")
-        role_profiles[role] = profile.as_dict()
+        role_profiles[role] = parse_reasoning_effort_profile(profile.as_dict()).as_dict()
     canonical = json.dumps(
         {"profile_version": PROFILE_VERSION, "role_profiles": role_profiles},
         sort_keys=True,
