@@ -8,10 +8,35 @@ from contextual_orchestrator.sampling_contract import install_sampling_contract
 
 
 class _FakeModelClient:
-    def __init__(self, temperature=0.2) -> None:
+    def __init__(
+        self,
+        timeout=90,
+        max_output_tokens=2048,
+        max_retries=2,
+        local_max_retries=0,
+        retry_backoff=0.5,
+        retry_backoff_cap=8.0,
+        temperature=0.2,
+        local_concurrency=1,
+        ca_bundle=None,
+        verify_tls=True,
+        allowed_provider_hosts=None,
+    ) -> None:
         self.default_temperature = 0.2
         self.temperature = temperature
         self.batch_payload = b""
+        self.configuration = {
+            "timeout": timeout,
+            "max_output_tokens": max_output_tokens,
+            "max_retries": max_retries,
+            "local_max_retries": local_max_retries,
+            "retry_backoff": retry_backoff,
+            "retry_backoff_cap": retry_backoff_cap,
+            "local_concurrency": local_concurrency,
+            "ca_bundle": ca_bundle,
+            "verify_tls": verify_tls,
+            "allowed_provider_hosts": allowed_provider_hosts,
+        }
 
     def _send_with_retry(self, _agent, payload, _destination=None, *, timeout=None):
         return {"payload": payload, "timeout": timeout}
@@ -27,10 +52,12 @@ class _FakeModelClient:
 def test_installation_omits_unrequested_temperature_across_transports() -> None:
     install_sampling_contract(_FakeModelClient)
     install_sampling_contract(_FakeModelClient)
-    client = _FakeModelClient()
+    client = _FakeModelClient(timeout=17, allowed_provider_hosts=["gateway.example.com"])
 
     assert client.default_temperature is None
     assert client.temperature is None
+    assert client.configuration["timeout"] == 17
+    assert client.configuration["allowed_provider_hosts"] == ["gateway.example.com"]
     assert client._send_with_retry(
         None,
         {"model": "provider/model", "temperature": None},
