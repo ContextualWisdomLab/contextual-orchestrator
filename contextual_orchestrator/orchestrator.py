@@ -828,6 +828,15 @@ class ModelClient:
         """
         probe_timeout = _validate_provider_probe_timeout(timeout)
         started = time.monotonic()
+        if not is_chat_compatible_model_id(agent.model):
+            return {
+                "agent_id": agent.id,
+                "model": agent.model,
+                "status": "not_ready",
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "error_type": "ValueError",
+                "failure_code": "non_chat_model",
+            }
         self._local.usage = None
         failure_code = "provider_probe_failed"
         try:
@@ -1073,6 +1082,10 @@ class ModelClient:
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -2437,6 +2450,7 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
+            if is_chat_compatible_model_id(agent.model)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"

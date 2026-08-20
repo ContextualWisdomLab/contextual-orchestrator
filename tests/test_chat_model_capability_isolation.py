@@ -281,3 +281,88 @@ def test_model_client_rejects_non_chat_model_before_mock_or_network_call() -> No
             embedding_agent,
             [{"role": "user", "content": "Produce the final answer."}],
         )
+
+
+def test_non_chat_primary_fails_over_only_to_chat_agents() -> None:
+    """Drop an incompatible primary while retaining a compatible fallback."""
+    embedding_agent = _agent("embedding_agent", "azure/text-embedding-3-large")
+    chat_agent = _agent("chat_agent", "gpt-5.2")
+    orchestrator = TaskOrchestrator([embedding_agent, chat_agent])
+
+    candidates = orchestrator._failover_candidates(
+        embedding_agent,
+        "Produce the final answer.",
+        "synthesizer",
+    )
+
+    assert candidates == [chat_agent]
+
+
+def test_streaming_client_rejects_non_chat_model_before_transport() -> None:
+    """Apply the same endpoint boundary to streaming chat requests."""
+    client = ModelClient()
+    embedding_agent = _agent("embedding_agent", "azure/text-embedding-3-large")
+
+    with pytest.raises(ValueError, match="chat-compatible"):
+        next(
+            client.stream_chat(
+                embedding_agent,
+                [{"role": "user", "content": "Produce the final answer."}],
+            )
+        )
+
+
+def test_probe_reports_non_chat_model_without_provider_transport(monkeypatch) -> None:
+    """Readiness must fail closed with a stable code before network access."""
+    client = ModelClient()
+    embedding_agent = _agent("embedding_agent", "azure/text-embedding-3-large")
+    monkeypatch.setattr(
+        client,
+        "_validate_provider",
+        lambda _agent: (_ for _ in ()).throw(AssertionError("transport reached")),
+    )
+
+    assert client.probe(embedding_agent)["failure_code"] == "non_chat_model"
+
+
+def test_generated_planner_inventory_excludes_non_chat_agents() -> None:
+    """Do not advertise stale endpoint-incompatible agents to the planner."""
+    embedding_agent = _agent("embedding_agent", "azure/text-embedding-3-large")
+    chat_agent = _agent("chat_agent", "gpt-5.2", tags=("reasoning", "writing"))
+
+    class PlannerClient:
+        def __init__(self) -> None:
+            self.system_prompt = ""
+
+        def chat(self, _agent, messages, **_kwargs):
+            self.system_prompt = messages[0]["content"]
+            return json.dumps(
+                {
+                    "steps": [
+                        {
+                            "id": 0,
+                            "role": "worker",
+                            "agent_id": "chat_agent",
+                            "subtask": "Execute the task.",
+                            "access": [],
+                        },
+                        {
+                            "id": 1,
+                            "role": "synthesizer",
+                            "agent_id": "chat_agent",
+                            "subtask": "Produce the answer.",
+                            "access": [0],
+                        },
+                    ]
+                }
+            )
+
+    client = PlannerClient()
+    orchestrator = TaskOrchestrator([embedding_agent, chat_agent], client=client)
+
+    steps = orchestrator._plan_generated("Produce the final answer.")
+
+    assert steps[-1].agent_id == "chat_agent"
+    assert "embedding_agent" not in client.system_prompt
+    assert "azure/text-embedding-3-large" not in client.system_prompt
+    assert "chat_agent" in client.system_prompt
