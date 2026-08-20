@@ -32,6 +32,26 @@ def test_openapi_uses_resource_oriented_operation_ids() -> None:
     assert all(is_two_word_snake_case(operation_id) for operation_id in operation_ids)
 
 
+def test_openapi_documents_compatibility_front_door() -> None:
+    expected_paths = {
+        "/openapi.json",
+        "/healthz",
+        "/v1/models",
+        "/v1/models/{model_id}",
+        "/v1/chat/completions",
+        "/v1/completions",
+        "/v1/embeddings",
+        "/v1/responses",
+        "/v1/batch/embeddings",
+        "/v1/batch/embeddings/{batch_id}",
+    }
+    assert expected_paths <= OPENAPI_SPEC["paths"].keys()
+    assert "security" not in OPENAPI_SPEC["paths"]["/healthz"]["get"]
+    assert OPENAPI_SPEC["paths"]["/v1/chat/completions"]["post"]["security"] == [
+        {"inference_bearer_auth": []}
+    ]
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_rest_resource_paths_use_two_word_snake_case()
     test_openapi_uses_resource_oriented_operation_ids()
