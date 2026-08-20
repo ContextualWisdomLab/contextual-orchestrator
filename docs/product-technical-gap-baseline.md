@@ -1,10 +1,10 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20, Asia/Seoul  
-**Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`  
+**As of:** 2026-08-20, Asia/Seoul
+**Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
-deployables.  
+deployables.
 **Customer next action:** use this document to select the next mergeable PR and
 to verify its exact-head evidence before approving or releasing it.
 
