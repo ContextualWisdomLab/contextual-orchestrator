@@ -123,6 +123,7 @@ class CostRoutingCoordinator:
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
         cache_bypass: bool = False,
+        cache_partition: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -159,16 +160,21 @@ class CostRoutingCoordinator:
             run_kwargs["model_name"] = model_name
         if cache_bypass:
             run_kwargs["bypass_cache"] = True
+        if cache_partition is not None:
+            run_kwargs["cache_partition"] = cache_partition
         result = self.orchestrator.run(messages, **run_kwargs)
+        cache_hit = result.get("cache_status") == "hit"
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),
             route_mode=result.get("mode"),
-            request_channel="sync",
+            request_channel="cache" if cache_hit else "sync",
             attribution=attribution,
             model_name=model_name,
-            provider_model=self._served_provider_model(result, model_name),
+            provider_model=("cache", "response") if cache_hit else self._served_provider_model(result, model_name),
             workflow_run_id=result.get("workflow_run_id"),
+            prompt_tokens=0 if cache_hit else None,
+            completion_tokens=0 if cache_hit else None,
         )
         result["channel"] = "sync"
         result["routing_reason"] = decision.reason

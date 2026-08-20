@@ -10,7 +10,6 @@ from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
 from functools import wraps
-import hashlib
 import http.client
 import io
 import ipaddress
@@ -1930,21 +1929,28 @@ class TaskOrchestrator:
         *,
         bypass_cache: bool = False,
         model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
         if not isinstance(bypass_cache, bool):
             raise TypeError("bypass_cache must be a boolean")
         if not isinstance(model_name, str) or not model_name.strip():
             raise ValueError("model_name must be a non-empty string")
+        if cache_partition is not None and (not isinstance(cache_partition, str) or not cache_partition.strip()):
+            raise ValueError("cache_partition must be a non-empty string when provided")
         cache = self._cache_provider if self._cache_provider is not None else self._cache
         if cache is None or bypass_cache:
-            return self._dispatch(messages, mode)
+            result = self._dispatch(messages, mode)
+            result["cache_status"] = "bypass" if bypass_cache else "disabled"
+            return result
         try:
-            key = self._cache_key(messages, mode, model_name)
+            key = self._cache_key(messages, mode, model_name, cache_partition)
         except (TypeError, ValueError):
             # Cache key serialization is an optimization boundary; unusual but
             # valid caller objects must still reach the live provider path.
-            return self._dispatch(messages, mode)
+            result = self._dispatch(messages, mode)
+            result["cache_status"] = "miss"
+            return result
         try:
             cached = cache.get(key)
         except Exception:  # noqa: BLE001 - optional cache must fail open
@@ -1955,12 +1961,15 @@ class TaskOrchestrator:
             and isinstance(cached.get("answer"), str)
             and isinstance(cached.get("trace"), list)
         ):
-            return copy.deepcopy(dict(cached))
+            result = copy.deepcopy(dict(cached))
+            result["cache_status"] = "hit"
+            return result
         result = self._dispatch(messages, mode)
         try:
             cache.put(key, result)
         except Exception:  # noqa: BLE001 - optional cache must fail open
             pass
+        result["cache_status"] = "miss"
         return result
 
     def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
@@ -2018,6 +2027,7 @@ class TaskOrchestrator:
         messages: list[ChatMessage],
         mode: str,
         model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
     ) -> str:
         parameters = {
             "temperature": getattr(self.client, "default_temperature", None),
@@ -2026,7 +2036,13 @@ class TaskOrchestrator:
             "frequency_penalty": getattr(self.client, "default_frequency_penalty", None),
             "max_output_tokens": getattr(self.client, "max_output_tokens", None),
         }
-        return build_response_cache_key(messages, mode, model=model_name, parameters=parameters)
+        return build_response_cache_key(
+            messages,
+            mode,
+            model=model_name,
+            parameters=parameters,
+            partition=cache_partition,
+        )
 
     def run(
         self,
@@ -2036,6 +2052,7 @@ class TaskOrchestrator:
         *,
         bypass_cache: bool = False,
         model_name: str = "contextual-orchestrator",
+        cache_partition: str | None = None,
     ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
@@ -2047,6 +2064,7 @@ class TaskOrchestrator:
             mode=mode,
             bypass_cache=bypass_cache,
             model_name=model_name,
+            cache_partition=cache_partition,
         )
         prompt = self._latest_user_text(messages)
         record = {
@@ -2056,6 +2074,7 @@ class TaskOrchestrator:
             "policy_mode": mode,
             "prompt_text": prompt,
             "answer": result["answer"],
+            "cache_status": result.get("cache_status", "disabled"),
             "trace": result["trace"],
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),

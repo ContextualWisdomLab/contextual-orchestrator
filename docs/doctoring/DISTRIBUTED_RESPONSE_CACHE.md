@@ -13,9 +13,14 @@ The local TTL/LRU path remains the standalone default.
 |---|---|---|
 | Provider-neutral contract | `ResponseCacheProvider` protocol | import and round-trip tests |
 | Redis/Dragonfly compatibility | injected `get`/`set(..., ex=ttl)` client | fake client with bytes and TTL evidence |
-| Safe keying | SHA-256 model/mode/message envelope digest | key stability and collision-scope tests |
+| Safe keying | SHA-256 model/mode/message/parameter/partition envelope digest | key stability and partition-isolation tests |
 | Cache outage behavior | read/write exceptions fail open | backend failure tests |
 | Explicit bypass | strict `X-Cache-Bypass` parser | valid and ambiguous header tests |
+| Cost honesty | cache hits use zero tokens and zero cost on the `cache` channel | ledger replay test |
+
+HTTP cache partitions are derived from the authenticated bearer digest and are
+never returned or persisted as raw credentials. Direct library callers choose a
+non-secret `cache_partition` when identical prompts must remain isolated.
 
 ## References — APA 7th
 

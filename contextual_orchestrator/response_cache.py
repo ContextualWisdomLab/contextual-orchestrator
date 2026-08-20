@@ -25,6 +25,7 @@ def build_response_cache_key(
     *,
     model: str = "contextual-orchestrator",
     parameters: Mapping[str, Any] | None = None,
+    partition: str | None = None,
 ) -> str:
     """Build a deterministic key from the semantic request envelope.
 
@@ -32,12 +33,15 @@ def build_response_cache_key(
     keeps prompts and user data out of Redis keys while avoiding false hits across
     models or orchestration modes.
     """
+    if partition is not None and (not isinstance(partition, str) or not partition.strip()):
+        raise ValueError("partition must be a non-empty string when provided")
     payload = json.dumps(
         {
             "model": model,
             "mode": mode,
             "messages": messages,
             "parameters": dict(parameters or {}),
+            "partition": partition,
         },
         sort_keys=True,
         ensure_ascii=False,

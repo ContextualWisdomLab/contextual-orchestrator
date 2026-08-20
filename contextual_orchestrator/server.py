@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
+import hashlib
 import json
 import secrets
 import struct
@@ -4852,6 +4853,7 @@ def build_server(
                 self._authorize(scope)
                 body = self._read_json()
                 cache_bypass = _cache_bypass_header(self.headers.get("x-cache-bypass"))
+                cache_partition = self._cache_partition()
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
@@ -4947,6 +4949,7 @@ def build_server(
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
+                            cache_partition=cache_partition,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5206,6 +5209,7 @@ def build_server(
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             cache_bypass=cache_bypass,
+                            cache_partition=cache_partition,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5657,6 +5661,14 @@ def build_server(
         def _authorize(self, scope: str) -> None:
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
+
+        def _cache_partition(self) -> str:
+            """Return a non-secret cache partition for the authenticated bearer."""
+            raw = self.headers.get("authorization", "")
+            token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+            if not token:  # pragma: no cover - _authorize rejects this first
+                raise RequestError(401, "unauthorized", "bearer token is required")
+            return hashlib.sha256(token.encode("utf-8")).hexdigest()
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()
