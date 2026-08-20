@@ -1,0 +1,431 @@
+name: Verify provider catalog normalization repair
+
+on:
+  push:
+    branches:
+      - feat/current-main-provider-bootstrap
+    paths:
+      - .github/workflows/repair-provider-catalog-normalization.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: repair-provider-catalog-normalization
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Patch and test with read-only token
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      base_sha: ${{ steps.patch.outputs.base_sha }}
+      patch_b64: ${{ steps.patch.outputs.patch_b64 }}
+    steps:
+      - name: Checkout exact triggering commit without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Apply 3NF, error-code, and secret-scope repairs
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(path: str, old: str, new: str) -> None:
+              target = Path(path)
+              text = target.read_text(encoding="utf-8")
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{path}: expected one match for {old!r}, found {count}")
+              target.write_text(text.replace(old, new, 1), encoding="utf-8")
+
+          store_path = "contextual_orchestrator/provider_catalog_store.py"
+          replace_once(
+              store_path,
+              '''    model_name text NOT NULL,
+              chat_base_url text NOT NULL,
+              auth_scheme text NOT NULL,
+              prompt_price_per_1k numeric(20, 8),
+          ''',
+              '''    model_name text NOT NULL,
+              prompt_price_per_1k numeric(20, 8),
+          ''',
+          )
+          replace_once(
+              store_path,
+              '''_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+          ''',
+              '''_CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+          _ALLOWED_REFRESH_ERROR_CODES = frozenset(
+              {"provider_discovery_error", "empty_provider_catalog", "unknown_error"}
+          )
+          ''',
+          )
+          replace_once(
+              store_path,
+              '''def _normalize_tags(tags: Sequence[str]) -> tuple[str, ...]:
+          ''',
+              '''def _normalize_error_code(value: object) -> str:
+              """Return one approved secret-free refresh failure code."""
+              if not isinstance(value, str):
+                  return "unknown_error"
+              normalized = value.strip().casefold()
+              return (
+                  normalized
+                  if normalized in _ALLOWED_REFRESH_ERROR_CODES
+                  else "unknown_error"
+              )
+
+
+          def _normalize_tags(tags: Sequence[str]) -> tuple[str, ...]:
+          ''',
+          )
+          old_failure = '''        stable_code = (
+              error_code.strip().casefold()
+              if isinstance(error_code, str) and error_code.strip()
+              else "unknown_error"
+          )
+          '''
+          if Path(store_path).read_text(encoding="utf-8").count(old_failure) != 2:
+              raise SystemExit("expected two raw error-code normalization blocks")
+          Path(store_path).write_text(
+              Path(store_path).read_text(encoding="utf-8").replace(
+                  old_failure,
+                  '''        stable_code = _normalize_error_code(error_code)
+          ''',
+              ),
+              encoding="utf-8",
+          )
+          replace_once(
+              store_path,
+              '''                        "provider_model_id, provider_account_id, model_name, "
+                          "chat_base_url, auth_scheme, prompt_price_per_1k, "
+                          "completion_price_per_1k, currency_code, "
+                          "serving_eligible_flag, enabled_flag, first_seen_at, "
+                          "last_seen_at"
+                          ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                          "true, %s, %s) "
+          ''',
+              '''                        "provider_model_id, provider_account_id, model_name, "
+                          "prompt_price_per_1k, completion_price_per_1k, "
+                          "currency_code, serving_eligible_flag, enabled_flag, "
+                          "first_seen_at, last_seen_at"
+                          ") VALUES (%s, %s, %s, %s, %s, %s, %s, true, %s, %s) "
+          ''',
+          )
+          replace_once(
+              store_path,
+              '''                        "model_name = EXCLUDED.model_name, "
+                          "chat_base_url = EXCLUDED.chat_base_url, "
+                          "auth_scheme = EXCLUDED.auth_scheme, "
+                          "prompt_price_per_1k = EXCLUDED.prompt_price_per_1k, "
+          ''',
+              '''                        "model_name = EXCLUDED.model_name, "
+                          "prompt_price_per_1k = EXCLUDED.prompt_price_per_1k, "
+          ''',
+          )
+          replace_once(
+              store_path,
+              '''                            model_name,
+                              model.chat_base_url,
+                              model.auth_scheme,
+                              model.prompt_price_per_1k,
+          ''',
+              '''                            model_name,
+                              model.prompt_price_per_1k,
+          ''',
+          )
+          replace_once(
+              store_path,
+              '''                    "SELECT model_name, chat_base_url, auth_scheme, "
+                      "prompt_price_per_1k, completion_price_per_1k, currency_code "
+                      "FROM provider_model WHERE provider_account_id = %s "
+                      "AND enabled_flag = true AND serving_eligible_flag = true "
+                      "ORDER BY model_name",
+          ''',
+              '''                    "SELECT pm.model_name, pa.chat_base_url, pa.auth_scheme, "
+                      "pm.prompt_price_per_1k, pm.completion_price_per_1k, "
+                      "pm.currency_code FROM provider_model AS pm "
+                      "JOIN provider_account AS pa "
+                      "ON pa.provider_account_id = pm.provider_account_id "
+                      "WHERE pm.provider_account_id = %s "
+                      "AND pm.enabled_flag = true "
+                      "AND pm.serving_eligible_flag = true "
+                      "ORDER BY pm.model_name",
+          ''',
+          )
+
+          sql_path = "docs/provider_catalog_database.sql"
+          replace_once(
+              sql_path,
+              '''    model_name text NOT NULL,
+              chat_base_url text NOT NULL,
+              auth_scheme text NOT NULL,
+              prompt_price_per_1k numeric(20, 8),
+          ''',
+              '''    model_name text NOT NULL,
+              prompt_price_per_1k numeric(20, 8),
+          ''',
+          )
+
+          tests_path = "tests/test_provider_catalog_store.py"
+          replace_once(
+              tests_path,
+              '''    assert "encrypted_value" not in lowered
+          ''',
+              '''    assert "encrypted_value" not in lowered
+              model_table = lowered.split(
+                  "create table if not exists provider_model (", 1
+              )[1].split(");", 1)[0]
+              assert "chat_base_url" not in model_table
+              assert "auth_scheme" not in model_table
+          ''',
+          )
+          replace_once(
+              tests_path,
+              '''    store.record_failure(source, error_code="provider_timeout")
+              assert [model.model_id for model in store.serving_models(source)] == [
+                  "model-a"
+              ]
+          ''',
+              '''    store.record_failure(source, error_code="provider_timeout: secret-token")
+              assert [model.model_id for model in store.serving_models(source)] == [
+                  "model-a"
+              ]
+              assert store.refresh_evidence()[-1].error_code == "unknown_error"
+          ''',
+          )
+          replace_once(
+              tests_path,
+              '''    assert "serving_eligible_flag = true" in query
+              assert params == (provider_account_id(source),)
+          ''',
+              '''    assert "JOIN provider_account AS pa" in query
+              assert "serving_eligible_flag = true" in query
+              assert params == (provider_account_id(source),)
+          ''',
+          )
+
+          adr_old = Path("docs/adr/0013-durable-provider-catalog.md")
+          adr = adr_old.read_text(encoding="utf-8")
+          heading = "# ADR 0013: Durable provider catalog and last-known-good composition\n\n- **Status:** Proposed\n- **Date:** 2026-08-20\n- **Decision owners:** Contextual Orchestrator maintainers\n\n"
+          if not adr.startswith(heading):
+              raise SystemExit("durable catalog ADR header mismatch")
+          body = adr[len(heading):]
+          body = body.replace(
+              "Use a normalized PostgreSQL catalog colocated with the encrypted credential\nregistry.",
+              "Use a third-normal-form PostgreSQL catalog colocated with the encrypted credential\nregistry. Provider transport fields remain on `provider_account`; `provider_model`\nreferences that account rather than duplicating endpoint or authentication data.",
+              1,
+          )
+          adr_new = Path(
+              "docs/planning/adrs/0015-durable-provider-catalog.md"
+          )
+          adr_new.write_text(
+              '''---
+          id: "0015"
+          title: "Durable provider catalog and last-known-good composition"
+          status: proposed
+          proposed_date: "2026-08-20"
+          accepted_date: null
+          deciders:
+            - "repository maintainer"
+          consulted:
+            - "NIST SP 800-53 Rev. 5"
+            - "NIST AI 600-1"
+          informed:
+            - "LineageWeave"
+            - "fast-mlsirm"
+            - "contributors"
+          affected_components:
+            - "contextual_orchestrator/provider_bootstrap.py"
+            - "contextual_orchestrator/provider_catalog_bootstrap.py"
+            - "contextual_orchestrator/provider_catalog_store.py"
+            - ".github/workflows/provider-catalog-sync.yml"
+          supersedes: null
+          superseded-by: null
+          related:
+            - path: "docs/planning/adrs/0012-gateway-only-provider-contract.md"
+              relation: depends-on
+            - path: "docs/planning/adrs/0014-gateway-owned-model-selection.md"
+              relation: extends
+          effort: L
+          ---
+
+          # Durable provider catalog and last-known-good composition
+
+          '''.replace("          ", "")
+              + body,
+              encoding="utf-8",
+          )
+          adr_old.unlink()
+          try:
+              adr_old.parent.rmdir()
+          except OSError:
+              pass
+
+          workflow_path = Path(".github/workflows/provider-catalog-sync.yml")
+          workflow = workflow_path.read_text(encoding="utf-8")
+          job_env = '''    env:
+                CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
+                CONTEXTUAL_ORCHESTRATOR_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
+                CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
+                NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+                NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+                BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+                OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+                OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          '''.replace("            ", "")
+          if workflow.count(job_env) != 1:
+              raise SystemExit("provider workflow job-level secret env mismatch")
+          workflow = workflow.replace(job_env, "", 1)
+          require_step = '''      - name: Require durable database bootstrap configuration
+                shell: bash
+                run: |
+                  set -euo pipefail
+                  test -n "${CONTEXTUAL_ORCHESTRATOR_KV_DSN}"
+                  test -n "${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE}"
+
+          '''.replace("            ", "")
+          if workflow.count(require_step) != 1:
+              raise SystemExit("provider workflow require step mismatch")
+          workflow = workflow.replace(require_step, "", 1)
+          bootstrap_name = '''      - name: Register credentials and refresh normalized model catalog
+                shell: bash
+                run: |
+          '''.replace("            ", "")
+          bootstrap_replacement = '''      - name: Register credentials and refresh normalized model catalog
+                shell: bash
+                env:
+                  CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
+                  CONTEXTUAL_ORCHESTRATOR_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
+                  CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
+                  NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+                  NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+                  BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+                  OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+                  OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+                run: |
+                  test -n "${CONTEXTUAL_ORCHESTRATOR_KV_DSN}"
+                  test -n "${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE}"
+          '''.replace("            ", "")
+          if workflow.count(bootstrap_name) != 1:
+              raise SystemExit("provider workflow bootstrap step mismatch")
+          workflow = workflow.replace(
+              bootstrap_name,
+              bootstrap_replacement,
+              1,
+          )
+          verification_start = '''      - name: Verify report contains no exact provider secret
+                shell: bash
+                run: |
+          '''.replace("            ", "")
+          if workflow.count(verification_start) != 1:
+              raise SystemExit("provider workflow secret verification step mismatch")
+          # Keep exact-value verification inside the only step that receives secrets.
+          verification_body = workflow.split(verification_start, 1)[1]
+          workflow = workflow.split(verification_start, 1)[0]
+          marker = "          PY\n"
+          if workflow.count(marker) < 1:
+              raise SystemExit("provider bootstrap Python block terminator missing")
+          insert_at = workflow.rfind(marker) + len(marker)
+          secret_check = '''          python - <<'PY'
+                import os
+                from pathlib import Path
+
+                report_text = Path('provider-bootstrap-report.json').read_text(
+                    encoding='utf-8'
+                )
+                names = (
+                    'NVIDIA_NIM_API_KEY',
+                    'NVIDIA_NIM_API_KEY_SUB',
+                    'BYTEZ_API_KEY',
+                    'OPENROUTER_API_KEY',
+                    'OPENAI_API_KEY',
+                )
+                leaked = [
+                    name
+                    for name in names
+                    if os.environ[name] and os.environ[name] in report_text
+                ]
+                if leaked:
+                    raise SystemExit(
+                        f'provider bootstrap report leaked secret values for: {leaked}'
+                    )
+                PY
+          '''.replace("            ", "")
+          workflow = workflow[:insert_at] + secret_check + workflow[insert_at:]
+          workflow_path.write_text(workflow, encoding="utf-8")
+
+          Path(".github/workflows/repair-provider-catalog-normalization.yml").unlink()
+          PY
+
+          test ! -e docs/adr/0013-durable-provider-catalog.md
+          test -e docs/planning/adrs/0015-durable-provider-catalog.md
+          ! grep -n 'chat_base_url text NOT NULL' docs/provider_catalog_database.sql
+          ! grep -n 'auth_scheme text NOT NULL' docs/provider_catalog_database.sql
+          ! grep -n '^    env:' .github/workflows/provider-catalog-sync.yml
+
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Run focused and full verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q contextual_orchestrator
+          python -m pytest -q tests/test_provider_bootstrap.py tests/test_provider_catalog_store.py tests/test_provider_catalog_bootstrap.py
+          python -m pytest -q
+          git diff --check
+
+      - name: Export verified patch
+        id: patch
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary > /tmp/provider-catalog-normalization.patch
+          test -s /tmp/provider-catalog-normalization.patch
+          echo "base_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "patch_b64=$(base64 -w0 /tmp/provider-catalog-normalization.patch)" >> "$GITHUB_OUTPUT"
+
+  commit:
+    name: Commit verified catalog patch without executing repository code
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout branch without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: feat/current-main-provider-bootstrap
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact base, apply tested patch, and push
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.prepare.outputs.base_sha }}
+          PATCH_B64: ${{ needs.prepare.outputs.patch_b64 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          printf '%s' "${PATCH_B64}" | base64 -d > /tmp/provider-catalog-normalization.patch
+          git apply --index /tmp/provider-catalog-normalization.patch
+          git diff --cached --check
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: normalize durable provider catalog authority"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:feat/current-main-provider-bootstrap
