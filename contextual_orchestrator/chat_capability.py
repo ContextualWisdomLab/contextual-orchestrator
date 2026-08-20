@@ -90,6 +90,7 @@ def is_general_chat_agent_model_id(model_id: str) -> bool:
     return not any(
         token == "safety"
         or token == "guard"
+        or token == "shieldgemma"
         or token.startswith("nemoguard")
         for token in tokens
     )

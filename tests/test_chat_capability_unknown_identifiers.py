@@ -34,6 +34,7 @@ def test_unknown_names_that_merely_end_with_guard_remain_eligible(model_id: str)
         "meta-llama/llama-guard-4-12b",
         "nvidia/llama-3.1-nemotron-safety-guard-8b-v3",
         "nvidia/llama-3.1-nemoguard-8b-topic-control",
+        "google/shieldgemma-2b-it",
     ],
 )
 def test_explicit_policy_classifier_markers_remain_role_ineligible(model_id: str) -> None:
