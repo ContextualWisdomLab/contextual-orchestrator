@@ -15,8 +15,9 @@ consumer-integration work. Implement the smallest independently verifiable gap
 next; do not split a repository without a second consumer, independent release
 cadence, or security-provenance boundary.
 
-The authoritative baseline is
+The authoritative, normative baseline is
 [`docs/product-technical-gap-baseline.md`](../../product-technical-gap-baseline.md).
+That baseline links back to this ADR as its governing decision record.
 Each PR must refresh its exact head, Checks, review threads, and protected merge
 state before it is called merge-ready.
 

@@ -1,12 +1,17 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 00:24, Asia/Seoul
+**As of:** 2026-08-21 00:41, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
 deployables.
 **Customer next action:** use this document to select the next mergeable PR and
 to verify its exact-head evidence before approving or releasing it.
+
+**Normative decision record:** [ADR 0016 — Product and technical gap
+baseline](planning/adrs/0016-product-technical-gap-baseline.md). Privacy
+requirements additionally follow [ADR 0010 — PII audit, not
+masking](planning/adrs/0010-pii-audit-not-mask.md).
 
 > This is a dated planning snapshot, not a live merge dashboard. PR heads,
 > checks, reviews, and base relationships can change after publication. Always
@@ -73,6 +78,17 @@ Rust boundary when profiling demonstrates transport, parsing, or concurrency
 cost that the existing process cannot meet, and preserve the OpenAI-compatible
 module contract.
 
+### Runtime role mapping
+
+`thinker` is the canonical runtime and trace role for planning work. `planner`
+is the planning responsibility, not a separate `WorkflowStep.role`: the
+generated-plan path selects its planner model through the `thinker` role,
+invokes that control-plane planning call, and then emits execution trace rows
+with the declared `thinker`, `worker`, `verifier`, or `synthesizer` roles. A
+planner call itself is not silently relabeled as a distinct `planner` trace
+role. This keeps the documented role vocabulary aligned with
+`TaskOrchestrator.ROLE_TAGS`, `WorkflowStep.role`, and the API trace contract.
+
 ## 4. Open PR inventory at the source-of-truth snapshot
 
 Checks below are a snapshot, not approval. `queued` and `in_progress` are not
@@ -89,7 +105,7 @@ required workflows, and a normal merge.
 | [#781](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/781) | `caf1eb34d92f8d1e3d99a98f4278378f6bc4e85f` | ready, stacked on [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior at the current parent-integrated head before merging after [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780). |
 | [#787](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/787) | `36e3be0bca5f64b7c5150351b2d505ea536a46a4` | ready, stacked on [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) | Exact-head local proof is full suite `1474 passed in 626.39s`, focused tool-loop suite `51 passed`, and Ruff/diff clean; review the explicit client-owned loop opt-in and merge only after [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) plus protected approval. |
 | [#788](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/788) | `d670601e61ca181a7b7134c7d0219f310334ff05` | ready, based on main | Review opaque admin-session TTL/revocation, same-origin cookie state changes, Secure-by-default deployment, and fresh exact-head security Checks before normal merge. |
-| [#789](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/789) | `3a80d91b8c879e57d30ab87af664546b8712fb15` | ready, based on main | Review optional embedding model selection, capability-constrained pool validation, OpenAPI parity, ADR 0012, and fresh exact-head protected Checks before normal merge. |
+| [#789](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/789) | `3a80d91b8c879e57d30ab87af664546b8712fb15` | ready, based on main | Review optional embedding model selection, capability-constrained pool validation, OpenAPI parity, [ADR 0012](https://github.com/ContextualWisdomLab/contextual-orchestrator/blob/3a80d91b8c879e57d30ab87af664546b8712fb15/docs/planning/adrs/0012-auto-embedding-model-selection.md), and fresh exact-head protected Checks before normal merge. |
 | [#782](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/782) | `1e7ddb96256a9379b3d8d4bb39c70a646f302bed` | ready, based on main | Review owner-bound workflow/access/evaluation reads, split-token admin evidence visibility, migration fail-closed behavior, and exact-head protected Checks before merge. |
 | [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) | `7c99b873c7583106dd1140439fd20cdbb885ef35` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, backend-identifier non-disclosure, and fresh exact-head hosted Checks before normal merge. |
 | [#779](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/779) | `cf4a4501fa5057f89b21cad5033c5925755cd150` | ready, stacked on [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) reaches protected main; predecessor evidence is stale. |
@@ -98,7 +114,7 @@ required workflows, and a normal merge.
 | [#775](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/775) | `fb8fb621faa66859e36fa9496d3d6deefd09c18e` | draft, based on main | Verify the exact CPython 3.12 Atheris marker, direct test contract, hash lock, hosted Fuzz job, and independent approval before promotion. |
 | [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) | `f29ae25e0d298e020977482f6a9bcb7549f9e9a8` | ready, based on main | Review fail-closed release authorization, exact-head `gh api` collection, product-evidence separation, and fresh hosted Checks before protected merge; auto-merge was re-armed after the remote push. |
 | [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) | `ec609fa7b526a995346c34434e277eb12f5a0246` | ready, based on main | Issue [#568](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/568) exact-head proof is full suite `1461 passed in 580.97s`, focused judge/failover/passthrough/profile suite `69 passed`, and Ruff/diff clean; independent approval and protected Checks remain required. |
-| [#773](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/773) | `ddc0769a18a7193772b933052b95a8b5b80b7a9f` | ready, based on main | Review this dated baseline and [ADR 0016](planning/adrs/0016-product-technical-gap-baseline.md) against the exact heads in this table; the snapshot records current gateway and reasoning-profile evidence, includes the changelog gap PR, and still has no independent approval. |
+| [#773](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/773) | `3ba8880042935e5f30d96756f5e69291a5e89138` | ready, based on main | Review this dated baseline and [ADR 0016](planning/adrs/0016-product-technical-gap-baseline.md) against the exact heads in this table; this row now names the current baseline PR head, records current gateway and reasoning-profile evidence, includes the changelog gap PR, and still has no independent approval. |
 | [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) | `f72ddc886cc55a3243ebe79f6498c7f942409c83` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions; focused exact-head cache/cost/ledger suite is `45 passed`. |
 | [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771) | `e1d417070885d5c0d0f0e62bd7d2e07736e87f01` | ready, based on main | The tool-failure PR is limited to failure classification and safe fallback; exact-head fallback/security/HTTP contract suite is `134 passed` and Ruff/diff checks pass. Owner-bound evidence authorization is tracked separately in [#782](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/782). Hosted Checks are queued; obtain independent approval before protected merge. |
 | [#770](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/770) | `386c9a03d1d7076106e4061776e81ffd6dac4d6f` | draft, based on stale main | Reconcile after [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768). Preserve complete-price evidence, provider-family diversity, corrupt-row handling, and consume the shared ordinary-chat classifier rather than a local detector. |
@@ -115,7 +131,7 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 00:18 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 00:41 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ## 5. Open issue and product-gap queue
