@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 06:52, Asia/Seoul
+**As of:** 2026-08-21 07:15, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -98,8 +98,9 @@ Checks below are a snapshot, not approval. `queued` and `in_progress` are not
 required workflows, and a normal merge.
 
 | PR | Exact head at snapshot | State / base | Evidence boundary and next action |
-| [#794](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/794) | `c7c29da60954d6c32ff50869f84452f9af052bbf` | ready, based on main | Database naming repair renames the single-word state table to `orchestration_records`, preserves legacy rows through an atomic fail-closed migration, closes the connection on schema failure, and covers table/index/view/sequence/constraint naming forms. Exact local proof is focused `11 passed`, full `1441 passed`; hosted Checks and independent approval remain required. |
 |---:|---|---|---|
+| [#794](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/794) | `c7c29da60954d6c32ff50869f84452f9af052bbf` | ready, based on main | Database naming repair renames the single-word state table to `orchestration_records`, preserves legacy rows through an atomic fail-closed migration, closes the connection on schema failure, and covers table/index/view/sequence/constraint naming forms. Exact local proof is focused `11 passed`, full `1441 passed`; hosted Checks and independent approval remain required. |
+| [#795](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/795) | `fbbbb487058732b5e3f08a85b15a9f7e3273abb5` | ready, based on [#794](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/794) | Durable agent-pool storage is normalized into scalar, ordered-tag, and provider-exclusion tables; legacy JSON migration remains transactional, and every SQLite connection enables foreign-key enforcement before work begins. Exact local proof is focused `21 passed`, full `1445 passed in 526.58s`; hosted Checks and independent approval remain required. |
 | [#793](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/793) | `3651a8181d0844a8daa196a73aff401fd34e78da` | ready, based on main | Request-framing repair rejects ambiguous/unbounded Content-Length before integer conversion and closes the connection after framing failure. Exact-head local proof is focused `31 passed` and full `1443 passed`; hosted Checks are pending and independent approval remains required. |
 | [#792](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/792) | `236a28b3f73380aaa39aa7b19a2bc475c2cbdf6f` | ready, based on main | Documentation-only release gap closure: adds the canonical SemVer changelog and explicitly keeps `0.1.0` unreleased until protected main, required Checks, independent review, and release artifacts are verified. Normal merge still requires the protected gate. |
 | [#790](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/790) | `0071751782ae535721e71785c3037989d2d27b77` | ready, based on main | Latest exact head keeps the gateway auth token outside the provider-key bootstrap gate. Exact-head review-gateway/model-discovery/API/security proof is `55 passed` with Ruff/diff clean; hosted Checks and independent approval remain required. |
@@ -127,7 +128,7 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 06:52 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 07:15 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ### External central workflow prerequisite
