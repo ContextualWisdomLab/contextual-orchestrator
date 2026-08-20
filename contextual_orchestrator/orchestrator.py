@@ -1159,9 +1159,9 @@ class ModelClient:
                 f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
             )
         if agent.base_url.startswith("mock://"):
-            return self._mock_raw(agent, endpoint, payload)
+            return self._mock_raw(agent, normalized_endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
-        if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
+        if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault("max_tokens", self.max_output_tokens)
             if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
@@ -1172,7 +1172,7 @@ class ModelClient:
                 )
             return _chat_to_responses_payload(chat_response, payload)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            return self._send_raw_with_retry(agent, endpoint, payload, destination)
+            return self._send_raw_with_retry(agent, normalized_endpoint, payload, destination)
 
     def _send_raw_with_retry(
         self,
@@ -2576,6 +2576,8 @@ class TaskOrchestrator:
         usage when available (else None), so spend analytics can prefer it.
         """
         candidates = self._failover_candidates(primary, text, role)
+        if not candidates:
+            raise RuntimeError(f"no chat-compatible agent available for role={role}")
         last_error: Exception | None = None
         for agent in candidates:
             try:

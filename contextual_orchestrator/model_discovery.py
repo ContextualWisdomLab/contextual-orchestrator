@@ -26,7 +26,6 @@ import urllib.request
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
-from .batch_routing import cheapest_upstream
 from .chat_capability import is_general_chat_agent_model_id
 from .credentials import get_credential
 from .orchestrator import ModelAgent
@@ -91,7 +90,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
 
 @dataclass(frozen=True)
 class DiscoveredModel:
-    """One chat-compatible model found on a provider, with reported pricing."""
+    """One general chat-agent eligible model found on a provider, with pricing."""
 
     provider_name: str
     model_id: str
@@ -139,7 +138,7 @@ def _price_per_1k(value: Any) -> float | None:
 
 
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
-    """Parse one OpenAI-compatible catalog into chat-compatible candidates."""
+    """Parse one OpenAI-compatible catalog into general chat-agent candidates."""
     rows = payload.get("data") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
     for row in rows if isinstance(rows, list) else []:
@@ -164,7 +163,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
 
 
 def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
-    """Parse one Bytez chat catalog without admitting non-chat identifiers."""
+    """Parse one Bytez chat catalog without admitting ineligible identifiers."""
     rows = payload.get("output") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
     for row in rows if isinstance(rows, list) else []:
@@ -288,11 +287,11 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 def select_cheapest_discovered_agent(
     discovered: list[DiscoveredModel], price_book: "PriceBook"
 ) -> DiscoveredModel | None:
-    """Pick the lowest-cost chat-compatible model per the price book.
+    """Pick the lowest-cost general chat-agent model per the price book.
 
-    Reuses :func:`~contextual_orchestrator.batch_routing.cheapest_upstream`, the
-    existing cost-optimizing upstream selector. Call :func:`refresh_price_book`
-    first so discovered pricing is visible; an unpriced candidate costs ``0``
+    Uses the same representative request cost as the top-N selector. Call
+    :func:`refresh_price_book` first so discovered pricing is visible; an
+    unpriced candidate costs ``0``
     under that selector's documented contract and is treated as free, not
     unknown -- so a genuinely unpriced provider (e.g. Bytez, priced by
     GPU-second rather than per token) will always look cheapest here. Fine for
@@ -302,28 +301,23 @@ def select_cheapest_discovered_agent(
     eligible = [model for model in discovered if is_general_chat_agent_model_id(model.model_id)]
     if not eligible:
         return None
-    candidates = [{"provider": model.provider_name, "model": model.model_id} for model in eligible]
-    winner = cheapest_upstream(candidates, price_book)
-    if winner is None:
-        return None
-    for model in eligible:
-        if model.provider_name == winner["provider"] and model.model_id == winner["model"]:
-            return model
-    return None  # pragma: no cover - winner always comes from candidates
+    return min(eligible, key=lambda model: _discovered_cost(model, price_book))
 
 
 def select_top_n_cheapest_discovered_agents(
     discovered: list[DiscoveredModel], price_book: "PriceBook", limit: int
 ) -> list[DiscoveredModel]:
-    """Return the ``limit`` cheapest chat-compatible models in ascending cost."""
+    """Return the ``limit`` cheapest general chat-agent models in ascending cost."""
     if limit <= 0:
         return []
     eligible = [model for model in discovered if is_general_chat_agent_model_id(model.model_id)]
     if not eligible:
         return []
 
-    def _cost(model: DiscoveredModel) -> float:
-        cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
-        return cost
+    return sorted(eligible, key=lambda model: _discovered_cost(model, price_book))[:limit]
 
-    return sorted(eligible, key=_cost)[:limit]
+
+def _discovered_cost(model: DiscoveredModel, price_book: "PriceBook") -> float:
+    """Price the representative discovery request used by both selectors."""
+    cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
+    return cost

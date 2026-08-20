@@ -93,7 +93,10 @@ persistent configuration.
 ## Verification evidence
 
 `tests/test_chat_model_capability_isolation.py` reproduces the exact Azure model ID
-and provider/separator aliases. It verifies:
+and provider/separator aliases. Together with
+`tests/test_chat_capability_unknown_identifiers.py`,
+`tests/test_chat_transport_role_separation.py`, and
+`tests/test_chat_passthrough_capability_isolation.py`, it verifies:
 
 - OpenAI-compatible and Bytez catalog filtering;
 - malformed and prefix-only identifier handling;
@@ -107,6 +110,9 @@ and provider/separator aliases. It verifies:
 - readiness failure with a stable non-chat code before provider access;
 - planner inventory and generated-plan isolation;
 - distinction between chat-served audio/policy models and general agent roles.
+- conservative unknown-identifier handling, including unrelated `vanguard` names;
+- endpoint-family exclusions for image-generation (`dall-e`), CLIP, and SigLIP;
+- normalized `/v1/responses` passthrough and pre-transport rejection of embedding models.
 
 ## References
 

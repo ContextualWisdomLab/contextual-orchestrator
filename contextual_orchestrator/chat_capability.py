@@ -16,6 +16,8 @@ _MODEL_TOKEN_RE = re.compile(r"[a-z0-9]+")
 _TRANSPORT_INCOMPATIBLE_EXACT_TOKENS = frozenset(
     {
         "bge",
+        "clip",
+        "dall",
         "e5",
         "embed",
         "embedding",
@@ -27,6 +29,7 @@ _TRANSPORT_INCOMPATIBLE_EXACT_TOKENS = frozenset(
         "realtime",
         "rerank",
         "reranker",
+        "siglip",
         "sora",
         "speech",
         "transcribe",
@@ -52,6 +55,11 @@ def is_chat_compatible_model_id(model_id: str) -> bool:
     ``/chat/completions``.
     """
     tokens = _model_tokens(model_id)
+    return _is_transport_compatible_tokens(tokens)
+
+
+def _is_transport_compatible_tokens(tokens: tuple[str, ...]) -> bool:
+    """Judge transport compatibility from already-normalized model tokens."""
     if not tokens:
         return False
     for token in tokens:
@@ -64,7 +72,7 @@ def is_chat_compatible_model_id(model_id: str) -> bool:
 
 def _model_tokens(model_id: str) -> tuple[str, ...]:
     """Normalize one provider-prefixed model identifier into lowercase tokens."""
-    if type(model_id) is not str:
+    if not isinstance(model_id, str):
         return ()
     return tuple(_MODEL_TOKEN_RE.findall(model_id.casefold()))
 
@@ -77,7 +85,7 @@ def is_general_chat_agent_model_id(model_id: str) -> bool:
     does not infer reasoning, coding, vision, or verification capabilities.
     """
     tokens = _model_tokens(model_id)
-    if not tokens or not is_chat_compatible_model_id(model_id):
+    if not tokens or not _is_transport_compatible_tokens(tokens):
         return False
     return not any(
         token == "safety"

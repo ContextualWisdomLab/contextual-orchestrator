@@ -32,7 +32,7 @@ def _chat_agent() -> ModelAgent:
     )
 
 
-@pytest.mark.parametrize("endpoint", ["chat/completions", "/v1/chat/completions", "responses"])
+@pytest.mark.parametrize("endpoint", ["chat/completions", "/v1/chat/completions", "responses", "/v1/responses"])
 def test_proxy_send_rejects_embedding_before_mock_or_network_transport(endpoint: str) -> None:
     """Keep raw OpenAI passthrough from bypassing the chat transport invariant."""
     client = ModelClient()

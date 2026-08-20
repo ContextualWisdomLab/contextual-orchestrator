@@ -276,6 +276,20 @@ def test_failover_candidates_exclude_stale_embedding_agents() -> None:
     assert candidates == [chat_agent]
 
 
+def test_invoke_fails_clearly_when_no_general_chat_agent_remains() -> None:
+    """Report the role boundary instead of claiming that zero candidates failed."""
+    embedding_agent = _agent("embedding_agent", "azure/text-embedding-3-large")
+    orchestrator = TaskOrchestrator([embedding_agent])
+
+    with pytest.raises(RuntimeError, match="no chat-compatible agent available"):
+        orchestrator._invoke(
+            embedding_agent,
+            [{"role": "user", "content": "Produce the final answer."}],
+            text="Produce the final answer.",
+            role="worker",
+        )
+
+
 def test_model_client_rejects_non_chat_model_before_mock_or_network_call() -> None:
     """Keep the provider boundary fail-closed even when selection is bypassed."""
     client = ModelClient()
