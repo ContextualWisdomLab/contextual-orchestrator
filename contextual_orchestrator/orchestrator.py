@@ -1534,6 +1534,13 @@ class _AgentPoolStore:
         ).fetchone()
         return row is not None
 
+    @staticmethod
+    def _connect(path: str) -> sqlite3.Connection:
+        """Open a pool connection with relationship integrity enabled first."""
+        conn = sqlite3.connect(path)
+        conn.execute("PRAGMA foreign_keys = ON")
+        return conn
+
     @classmethod
     def _create_normalized_schema(cls, conn: sqlite3.Connection) -> None:
         """Create the 3NF parent and ordered child tables if absent."""
@@ -1623,7 +1630,6 @@ class _AgentPoolStore:
     @classmethod
     def _initialize_schema(cls, conn: sqlite3.Connection) -> None:
         """Create or transactionally migrate the agent-pool schema."""
-        conn.execute("PRAGMA foreign_keys = ON")
         agent_exists = cls._table_exists(conn, cls._AGENT_TABLE_NAME)
         tag_exists = cls._table_exists(conn, cls._TAG_TABLE_NAME)
         exclusion_exists = cls._table_exists(conn, cls._EXCLUSION_TABLE_NAME)
@@ -1655,7 +1661,7 @@ class _AgentPoolStore:
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._path = path
-        conn = sqlite3.connect(self._path)
+        conn = self._connect(self._path)
         try:
             conn.execute("BEGIN")
             self._initialize_schema(conn)
@@ -1668,7 +1674,7 @@ class _AgentPoolStore:
 
     def save(self, agent: "ModelAgent") -> None:
         with self._lock:
-            conn = sqlite3.connect(self._path)
+            conn = self._connect(self._path)
             try:
                 config = agent.to_config()
                 conn.execute(
@@ -1721,7 +1727,7 @@ class _AgentPoolStore:
 
     def load_all(self) -> list["ModelAgent"]:
         with self._lock:
-            conn = sqlite3.connect(self._path)
+            conn = self._connect(self._path)
             try:
                 rows = conn.execute(
                     """

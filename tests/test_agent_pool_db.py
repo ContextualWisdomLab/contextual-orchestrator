@@ -99,6 +99,35 @@ def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> 
         assert restored == [agent]
 
 
+def test_agent_pool_foreign_keys_reject_orphans_and_cascade_deletes() -> None:
+    """Keep child rows attached to a parent on every runtime connection."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        agent = ModelAgent("integrity_agent", "model-x")
+        orchestrator = TaskOrchestrator([agent], agents_db=db)
+        orchestrator._pool_store.save(agent)
+        connection = orchestrator._pool_store._connect(db)
+        try:
+            assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) "
+                    "VALUES (?, ?, ?)",
+                    ("missing_agent", 0, "orphan"),
+                )
+            connection.execute(
+                "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) "
+                "VALUES (?, ?, ?)",
+                (agent.id, 0, "attached"),
+            )
+            connection.execute("DELETE FROM agent_pool WHERE agent_id = ?", (agent.id,))
+            assert connection.execute(
+                "SELECT COUNT(*) FROM agent_pool_tags WHERE agent_id = ?", (agent.id,)
+            ).fetchone() == (0,)
+        finally:
+            connection.close()
+
+
 def test_legacy_agent_pool_payloads_migrate_transactionally() -> None:
     """Upgrade legacy JSON rows while preserving their public agent contract."""
     with tempfile.TemporaryDirectory() as directory:
