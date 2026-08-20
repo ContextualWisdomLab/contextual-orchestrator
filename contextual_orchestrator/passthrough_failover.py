@@ -27,7 +27,13 @@ _MAX_PROVIDER_ERROR_CHAIN_DEPTH = 8
 
 
 def _provider_error_chain(error: BaseException) -> Iterator[BaseException]:
-    """Yield a bounded, cycle-safe provider exception cause/context chain."""
+    """Yield a bounded, cycle-safe provider exception cause/context chain.
+
+    An explicit ``raise ... from cause`` is authoritative. An implicit context
+    is inspected only when it was not deliberately suppressed with
+    ``raise ... from None``; suppressed history must not turn a terminal wrapper
+    into an adaptive fallback signal.
+    """
     current: BaseException | None = error
     seen: set[int] = set()
     for _ in range(_MAX_PROVIDER_ERROR_CHAIN_DEPTH):
@@ -35,7 +41,12 @@ def _provider_error_chain(error: BaseException) -> Iterator[BaseException]:
             return
         seen.add(id(current))
         yield current
-        current = current.__cause__ or current.__context__
+        if current.__cause__ is not None:
+            current = current.__cause__
+        elif current.__suppress_context__:
+            return
+        else:
+            current = current.__context__
 
 
 def _is_adaptive_failover_error(error: BaseException) -> bool:
