@@ -4320,6 +4320,48 @@ def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str,
     return _strip_trace(safe_payload)
 
 
+def _readiness_payload(orchestrator: Any, coordinator: Any) -> tuple[dict[str, Any], int]:
+    """Build secret-free operator readiness without probing external providers."""
+    checks: dict[str, dict[str, Any]] = {}
+    try:
+        enabled_agents = len(orchestrator.agents)
+        checks["orchestration"] = {
+            "status": "ready" if enabled_agents else "not_ready",
+            "enabled_agent_count": enabled_agents,
+        }
+    except Exception:  # noqa: BLE001 - readiness must fail closed without details
+        checks["orchestration"] = {"status": "not_ready"}
+
+    try:
+        checks["sync_routing"] = {
+            "status": "ready" if orchestrator.client is not None else "not_ready",
+        }
+    except Exception:  # noqa: BLE001 - readiness must fail closed without details
+        checks["sync_routing"] = {"status": "not_ready"}
+
+    for check_name, backend_name in (
+        ("batch_routing", "batch_backend"),
+        ("embedding_batch", "embedding_batch_backend"),
+    ):
+        try:
+            backend = getattr(coordinator, backend_name)
+            checks[check_name] = {"status": "ready", "backend": backend.name}
+        except Exception:  # noqa: BLE001 - optional outage is safe to report generically
+            checks[check_name] = {"status": "degraded"}
+
+    required = ("orchestration", "sync_routing")
+    required_ready = all(checks[name]["status"] == "ready" for name in required)
+    optional_degraded = any(
+        checks[name]["status"] == "degraded" for name in ("batch_routing", "embedding_batch")
+    )
+    status = "ready_with_degraded_optional_dependencies" if required_ready and optional_degraded else (
+        "ready" if required_ready else "not_ready"
+    )
+    return {"status": status, "service": "contextual-orchestrator", "checks": checks}, (
+        200 if required_ready else 503
+    )
+
+
 def responses_sse_body(response: dict[str, Any]) -> str:
     """Frame a completed Responses object as a valid SSE response."""
     sequence = 0
@@ -4428,18 +4470,13 @@ def build_server(
                     self._send(OPENAPI_SPEC)
                     return
                 if path == "/healthz":
-                    # Unauthenticated liveness probe for containers/orchestrators.
-                    self._send({
-                        "status": "ok",
-                        "service": "contextual-orchestrator",
-                        "agent_count": len(orchestrator.agents),
-                        "candidate_count": len(orchestrator.candidates),
-                        "enabled_agent_count": len(orchestrator.agents),
-                        "batch_backend": coordinator.batch_backend.name,
-                        "embedding_batch_backend": coordinator.embedding_batch_backend.name,
-                        "provider_readiness": "unprobed",
-                        "usage_record_count": len(coordinator.ledger.records()),
-                    })
+                    # Unauthenticated process liveness; do not traverse runtime state.
+                    self._send({"status": "ok", "service": "contextual-orchestrator"})
+                    return
+                if path == "/readyz":
+                    self._authorize("admin")
+                    readiness, status = _readiness_payload(orchestrator, coordinator)
+                    self._send(readiness, status)
                     return
                 if path == "/v1/models" or path.startswith("/v1/models/"):
                     # OpenAI model discovery is inference-scope (same bearer as chat).
