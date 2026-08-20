@@ -3,13 +3,15 @@
 Tool calls, structured responses, and Responses API calls must preserve one
 provider's raw response shape. This module keeps that contract while advancing
 to another capability-ranked model when the caller selected the virtual
-``contextual-orchestrator`` model and an upstream candidate fails transiently.
+``contextual-orchestrator`` model and an upstream candidate becomes transiently
+unavailable.
 """
 
 from __future__ import annotations
 
 import time
-from typing import Any
+from typing import Any, Iterator
+import urllib.error
 
 from .orchestrator import (
     ModelAgent,
@@ -18,6 +20,35 @@ from .orchestrator import (
     _coerce_input_text,
     is_transient_error,
 )
+
+
+_CANDIDATE_UNAVAILABLE_HTTP_STATUS = frozenset({404, 410})
+_MAX_PROVIDER_ERROR_CHAIN_DEPTH = 8
+
+
+def _provider_error_chain(error: BaseException) -> Iterator[BaseException]:
+    """Yield a bounded, cycle-safe provider exception cause/context chain."""
+    current: BaseException | None = error
+    seen: set[int] = set()
+    for _ in range(_MAX_PROVIDER_ERROR_CHAIN_DEPTH):
+        if current is None or id(current) in seen:
+            return
+        seen.add(id(current))
+        yield current
+        current = current.__cause__ or current.__context__
+
+
+def _is_adaptive_failover_error(error: BaseException) -> bool:
+    """Classify transient or stale-candidate failures through provider wrappers."""
+    for candidate in _provider_error_chain(error):
+        if is_transient_error(candidate):
+            return True
+        if (
+            isinstance(candidate, urllib.error.HTTPError)
+            and candidate.code in _CANDIDATE_UNAVAILABLE_HTTP_STATUS
+        ):
+            return True
+    return False
 
 
 def _proxy_send_once(
@@ -49,12 +80,16 @@ class TaskOrchestrator(BaseTaskOrchestrator):
     ) -> dict[str, Any]:
         """Preserve raw response shapes while failing over virtual-model requests.
 
-        An explicitly requested concrete model remains sticky: serving another
-        model would violate the caller's model contract. Requests for the virtual
-        ``contextual-orchestrator`` model, or requests that omit ``model``, may
-        advance through capability-ranked candidates only for transient upstream
-        failures. Every candidate receives at most one passthrough attempt, so a
-        429 is never amplified by replaying the same large tool request. Caller,
+        An explicitly requested concrete model remains sticky and receives its
+        original provider error: serving another model would violate the caller's
+        model contract. Requests for the virtual ``contextual-orchestrator``
+        model, or requests that omit ``model``, may advance through
+        capability-ranked candidates for transient upstream failures and for a
+        discovered model that has become unavailable (HTTP 404/410). Provider
+        SDK wrapper causes are inspected through a bounded, cycle-safe chain.
+
+        Every candidate receives at most one passthrough attempt, so a 429 is
+        never amplified by replaying the same large tool request. Caller,
         authentication, policy, and other non-transient failures are returned
         immediately instead of being replayed to another provider.
         """
@@ -66,6 +101,7 @@ class TaskOrchestrator(BaseTaskOrchestrator):
 
         requested_model = body.get("model")
         requested_agent = self._requested_agent(requested_model)
+        adaptive_request = requested_agent is None
         if requested_agent is not None:
             if requested_agent.disabled:
                 raise RuntimeError(f"requested model {requested_model!r} is disabled")
@@ -87,8 +123,8 @@ class TaskOrchestrator(BaseTaskOrchestrator):
             upstream["model"] = agent.model
             try:
                 result = _proxy_send_once(self.client, agent, endpoint, upstream)
-            except Exception as exc:  # noqa: BLE001 - transient virtual candidates may fail over
-                if not is_transient_error(exc):
+            except Exception as exc:  # noqa: BLE001 - only adaptive provider failures may fail over
+                if not adaptive_request or not _is_adaptive_failover_error(exc):
                     raise
                 last_error = exc
                 self._record_failure(agent.id)
