@@ -6,6 +6,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -96,6 +97,30 @@ def test_commercial_gap_register_report_classifies_external_gaps_and_release_aut
     assert report["gap_register_links"]["runtime_endpoint"] == "/api/v1/commercial_gap_registers/latest"
 
 
+def test_commercial_gap_register_counts_product_release_blocker() -> None:
+    """A blocked product artifact remains visible without an authority blocker."""
+    orchestrator = build()
+    release = {
+        "release_status": "commercial_release_blocked",
+        "external_release_gaps": [],
+        "concrete_blockers": [],
+        "release_summary": {"product_blocked_count": 1},
+        "release_authorization": {
+            "status": "release_authorized",
+            "blockers": [],
+        },
+        "review_process_policy": {"is_blocker": False},
+        "related_runtime_reports": {},
+        "library_split_decision": {"decision": "keep_single_product"},
+        "plugin_traceability": {},
+    }
+    with patch.object(orchestrator, "commercial_release_candidate_report", return_value=release):
+        report = orchestrator.commercial_gap_register_report()
+
+    assert report["gap_register_status"] == "commercial_gap_register_blocked"
+    assert report["gap_summary"]["blocked_count"] == 1
+
+
 def test_commercial_gap_register_endpoint_openapi_admin_and_docs_contract() -> None:
     assert "/api/v1/commercial_gap_registers/latest" in OPENAPI_SPEC["paths"]
     assert OPENAPI_SPEC["paths"]["/api/v1/commercial_gap_registers/latest"]["get"]["operationId"] == (
@@ -161,5 +186,6 @@ def test_commercial_gap_register_endpoint_openapi_admin_and_docs_contract() -> N
 
 if __name__ == "__main__":  # pragma: no cover
     test_commercial_gap_register_report_classifies_external_gaps_and_release_authority()
+    test_commercial_gap_register_counts_product_release_blocker()
     test_commercial_gap_register_endpoint_openapi_admin_and_docs_contract()
     print("ok")
