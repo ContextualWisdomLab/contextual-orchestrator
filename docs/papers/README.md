@@ -71,6 +71,17 @@ paper permits redistribution of its PDF.
   2026. https://arxiv.org/abs/2603.07915
   Grounds per-step selection of the minimum sufficient effort with repeated
   verification rather than a fixed effort for every step.
+- **Improving Factuality and Reasoning in Language Models through Multiagent
+  Debate** — Yilun Du, Shuang Li, Antonio Torralba, Joshua B. Tenenbaum, Igor
+  Mordatch. arXiv:2305.14325, 2023. https://arxiv.org/abs/2305.14325
+  Grounds independent proposals, multi-round debate, and final synthesis as
+  an optional escalation path. It does not justify treating majority vote as
+  proof or using debate for every request.
+- **Adaptive Test-Time Compute Allocation for Reasoning LLMs via Constrained
+  Policy Optimization** — Zhiyuan Zhai, Bingcong Li, Bingnan Xiao, Ming Li,
+  Xin Wang. arXiv:2604.14853, 2026. https://arxiv.org/abs/2604.14853
+  Grounds budget-constrained, per-input compute allocation instead of a fixed
+  reasoning-effort-to-worker-count mapping.
 
 ## Transport references (not policy sources)
 

@@ -11,6 +11,8 @@ consulted:
   - "Route-and-Reason: Scaling Large Language Model Reasoning with Reinforced Model Router"
   - "Reasoning on a Budget: A Survey of Adaptive and Controllable Test-Time Compute in LLMs"
   - "Ares: Adaptive Reasoning Effort Selection for Efficient LLM Agents"
+  - "Improving Factuality and Reasoning in Language Models through Multiagent Debate"
+  - "Adaptive Test-Time Compute Allocation for Reasoning LLMs via Constrained Policy Optimization"
 informed:
   - "LineageWeave"
   - "fast-mlsirm"
@@ -61,6 +63,17 @@ decisions from model-name folklore.
   orchestrator may use heterogeneous workers, independent attempts,
   verification, and synthesis. Traces must record the effective strategy and
   must not label a non-reasoning worker as a reasoning model.
+- Multi-agent debate is an available escalation strategy, not a mandatory
+  replacement for one worker. The orchestrator may select independent
+  proposals, debate, verification, and synthesis when task difficulty and the
+  budget justify it; otherwise it may use one capable worker with the same
+  evidence and trace contract. A debate result is not accepted by majority
+  vote alone: the final synthesis must retain source attribution and pass the
+  requested output contract.
+- Adaptive compute allocation is evaluated as a constrained policy. The
+  orchestrator must spend additional attempts or verification where the
+  expected quality gain justifies the cost, rather than mapping `low`,
+  `medium`, `high`, or `xhigh` to fixed worker counts or a vendor model name.
 - No direct MLX transport or MLX-specific model policy is permitted. Local
   runtimes remain behind the authenticated provider-neutral gateway boundary
   in ADR 0010.
@@ -87,5 +100,9 @@ default into this repository's reasoning policy.
   different model behavior.
 - Adaptive multi-agent execution is measurable as orchestration, rather than
   being misrepresented as a provider's native reasoning capability.
+- Structured-output requests, including `json_schema`, stay inside the same
+  multi-agent workflow. Unsupported worker-format capabilities are negotiated
+  or rejected; they must not silently downgrade the request to a single-agent
+  passthrough.
 - Historical MLX benchmark and transport ADRs remain available as provenance,
   but they are not supported configuration guidance.
