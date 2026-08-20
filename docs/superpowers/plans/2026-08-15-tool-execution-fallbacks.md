@@ -1,6 +1,6 @@
 # Tool-execution fallback implementation plan
 
-> Date: 2026-08-15  
+> Date: 2026-08-15
 > Scope: `contextual-orchestrator` route and Conduct-stage agent invocation
 
 ## Problem
