@@ -167,7 +167,13 @@ class _FastMLSIJudgeAdapter:
     def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
-        output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="judge")
+        output, served_id, usage = self.orchestrator._invoke(
+            self._agent(),
+            messages,
+            text=self.text,
+            role="judge",
+            eligibility_role="verifier",
+        )
         return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
 
     def complete_structured(
@@ -2741,7 +2747,13 @@ class TaskOrchestrator:
         return ranked[0]
 
     def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        eligibility_role: str | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call an agent with bounded, safety-aware tool retry and failover.
 
@@ -2749,8 +2761,11 @@ class TaskOrchestrator:
         agent/tool-runtime failures: missing tools move to a compatible agent,
         explicitly idempotent transient calls retry the same agent, and ambiguous
         side effects or policy/permission/argument errors fail closed.
+
+        ``eligibility_role`` keeps operator exclusions tied to the role used to
+        select the primary when the call's effort profile has a distinct name.
         """
-        candidates = self._failover_candidates(primary, text, role)
+        candidates = self._failover_candidates(primary, text, eligibility_role or role)
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
         for agent in candidates:
             retry_attempt = 0
