@@ -78,7 +78,10 @@ create table provider_credentials (
 create table provider_account (
   provider_account_id text primary key,
   provider_name text not null,
-  credential_name text not null references provider_credentials(credential_name),
+  -- Credential rollback deliberately stays independent of catalog rows so a
+  -- failed candidate promotion cannot delete last-known-good model metadata.
+  -- The runtime catalog DDL uses the same application-managed relationship.
+  credential_name text not null,
   list_url text not null,
   chat_base_url text not null,
   auth_scheme text not null,
