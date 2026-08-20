@@ -17,8 +17,11 @@ because the provider response shape is richer.
 - An omitted chat or Responses `model` is represented by the virtual
   `contextual-orchestrator` model and is resolved inside the orchestrator.
 - `reasoning_effort=auto` (or Responses `reasoning.effort=auto`) is an
-  orchestrator-owned policy value. Provider-native levels remain accepted,
-  but no effort value is forwarded to a provider that cannot represent it.
+  orchestrator-only policy value and is never forwarded as a provider field.
+  Provider-native levels are forwarded only after the selected agent declares
+  that capability; support is never inferred from a model name. If no selected
+  provider declares the requested level, the gateway rejects the request rather
+  than silently falling back to a different effort.
 - `--auto-discover-model-agents` expands an empty seed agent from its configured
   HTTPS `/models` endpoint. Embedding-only registry rows are excluded from the
   chat pool. Consumers provide only the gateway URL and credential.

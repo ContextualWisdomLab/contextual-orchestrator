@@ -220,7 +220,7 @@ def test_http_responses_accepts_digit_and_float_max_output_tokens() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_whole_float_n_and_seed() -> None:
+def test_http_responses_rejects_unapplied_whole_float_seed() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -233,7 +233,8 @@ def test_http_responses_accepts_whole_float_n_and_seed() -> None:
                 "seed": 7.0,
             },
         )
-        assert status == 200, body
+        assert status == 400, body
+        assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)

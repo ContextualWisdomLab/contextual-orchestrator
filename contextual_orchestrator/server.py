@@ -832,6 +832,42 @@ def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None
     return value
 
 
+def _reject_responses_orchestration_controls(body: dict[str, Any]) -> None:
+    """Reject non-empty controls the multi-agent Responses path cannot apply."""
+    fields = (
+        "temperature",
+        "top_p",
+        "presence_penalty",
+        "frequency_penalty",
+        "seed",
+        "stop",
+        "logit_bias",
+        "logprobs",
+        "top_logprobs",
+    )
+    unsupported: list[str] = []
+    for field in fields:
+        if field not in body:
+            continue
+        value = body[field]
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if isinstance(value, (list, dict)) and not value:
+            continue
+        if field == "logprobs" and value is False:
+            continue
+        if field == "top_logprobs" and value == 0:
+            continue
+        unsupported.append(field)
+    if unsupported:
+        raise RequestError(
+            400,
+            "unsupported_responses_orchestration_controls",
+            "Responses orchestration cannot apply these provider controls",
+            {"fields": unsupported},
+        )
+
+
 def _validate_responses_seed(body: dict[str, Any]) -> int | None:
     """Responses ``seed`` — signed int64; valid values pass through to the provider.
 
@@ -1647,6 +1683,7 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
             "invalid_text",
             "text.format.schema must be an object",
         )
+    _validate_json_schema_definition(schema_body, "text.format.schema")
     if "description" in fmt:
         description_value = fmt.get("description")
         if description_value is None or (
@@ -1809,6 +1846,43 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
         "invalid_model",
         f"model {model_name!r} is not available in the agent pool",
     )
+
+
+def _validate_json_schema_definition(
+    schema: Any,
+    path: str = "response_format.json_schema.schema",
+) -> None:
+    """Validate nested JSON Schema containers before evaluating a response."""
+    if not isinstance(schema, dict):
+        raise RequestError(400, "invalid_response_format", f"{path} must be an object")
+    properties = schema.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict):
+            raise RequestError(400, "invalid_response_format", f"{path}.properties must be an object")
+        for name, child in properties.items():
+            if not isinstance(name, str) or not isinstance(child, dict):
+                raise RequestError(
+                    400,
+                    "invalid_response_format",
+                    f"{path}.properties entries must map string names to objects",
+                )
+            _validate_json_schema_definition(child, f"{path}.properties.{name}")
+    required = schema.get("required")
+    if required is not None and (
+        not isinstance(required, list) or any(not isinstance(name, str) for name in required)
+    ):
+        raise RequestError(400, "invalid_response_format", f"{path}.required must be an array of strings")
+    items = schema.get("items")
+    if items is not None:
+        if not isinstance(items, dict):
+            raise RequestError(400, "invalid_response_format", f"{path}.items must be an object")
+        _validate_json_schema_definition(items, f"{path}.items")
+    any_of = schema.get("anyOf")
+    if any_of is not None:
+        if not isinstance(any_of, list) or any(not isinstance(option, dict) for option in any_of):
+            raise RequestError(400, "invalid_response_format", f"{path}.anyOf must be an array of objects")
+        for index, option in enumerate(any_of):
+            _validate_json_schema_definition(option, f"{path}.anyOf[{index}]")
 
 
 def _validate_json_schema_value(value: Any, schema: dict[str, Any], path: str = "$") -> None:
@@ -3684,6 +3758,7 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.schema must be an object",
             )
+        _validate_json_schema_definition(schema_body)
         # Explicit JSON null / blank description is omit-equivalent: pop so
         # passthrough matches omit (parity with Responses text.format).
         if "description" in schema:
@@ -5659,6 +5734,7 @@ def build_server(
                                     if key in text_format
                                 },
                             }
+                    _reject_responses_orchestration_controls(body)
                     chat_payload = _responses_to_chat_payload(body)
                     model_client = orchestrator.client
                     previous_max_tokens = model_client.max_output_tokens

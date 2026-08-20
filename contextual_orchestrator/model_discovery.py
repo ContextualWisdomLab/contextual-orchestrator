@@ -23,7 +23,7 @@ from urllib.parse import urlparse
 
 from .batch_routing import cheapest_upstream
 from .credentials import get_credential
-from .orchestrator import ModelAgent
+from .orchestrator import ModelAgent, ModelClient
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
@@ -105,18 +105,46 @@ class ProviderDiscoveryError(RuntimeError):
         super().__init__(f"model discovery failed for provider {provider_name!r}: {detail}")
 
 
-def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
+def _fetch_json(
+    url: str,
+    *,
+    api_key: str,
+    auth_scheme: str,
+    timeout: float,
+    credential_name: str,
+) -> Any:
+    """Fetch a provider catalog through the validated, DNS-pinned transport."""
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("model discovery requires an https provider URL")
+    if parsed.username or parsed.password or parsed.fragment:
+        raise ValueError("model discovery URL must not contain credentials or a fragment")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("model discovery URL has an invalid port") from exc
+    origin = f"https://{parsed.hostname}"
+    if port not in (None, 443):
+        origin = f"{origin}:{port}"
+    agent = ModelAgent(
+        id="model_discovery_agent",
+        model="model_catalog",
+        base_url=origin,
+        credential_key=credential_name,
+        auth_scheme=auth_scheme,
+    )
+    client = ModelClient()
+    destination = client._validate_provider(agent)
     request = urllib.request.Request(
         url,
         headers={"authorization": f"{auth_scheme} {api_key}"},
         method="GET",
     )
-    # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        return json.loads(response.read().decode("utf-8"))
+    with client._open_provider(request, destination, timeout=timeout) as response:
+        body = response.read(8 * 1024 * 1024 + 1)
+    if len(body) > 8 * 1024 * 1024:
+        raise ValueError("model discovery response exceeds the maximum size")
+    return json.loads(body.decode("utf-8"))
 
 
 def _price_per_1k(value: Any) -> float | None:
@@ -187,8 +215,14 @@ def discover_provider_models(
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
     try:
-        payload = _fetch_json(url, api_key=api_key, auth_scheme=source.auth_scheme, timeout=timeout)
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:  # pragma: no cover - network path
+        payload = _fetch_json(
+            url,
+            api_key=api_key,
+            auth_scheme=source.auth_scheme,
+            timeout=timeout,
+            credential_name=source.credential_name,
+        )
+    except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError, OSError) as exc:  # pragma: no cover - network path
         raise ProviderDiscoveryError(source.provider_name, str(exc)) from exc
     if source.style == "bytez":
         return _parse_bytez(payload, source)

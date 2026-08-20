@@ -124,7 +124,7 @@ def test_http_responses_accepts_reasoning_effort_known_levels() -> None:
     """Known effort levels are default-effort no-ops (no effort plane)."""
     server, thread, port = _server()
     try:
-        for effort in ("auto", "low", "medium", "HIGH", "minimal", "none"):
+        for effort in ("low", "medium", "HIGH", "minimal", "none"):
             status, body = _post(
                 port,
                 {
@@ -134,6 +134,23 @@ def test_http_responses_accepts_reasoning_effort_known_levels() -> None:
                 },
             )
             assert status == 200, (effort, body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_accepts_orchestrator_owned_reasoning_effort_auto() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "think automatically",
+                "reasoning": {"effort": "auto"},
+            },
+        )
+        assert status == 200, body
     finally:
         server.shutdown()
         thread.join(timeout=5)

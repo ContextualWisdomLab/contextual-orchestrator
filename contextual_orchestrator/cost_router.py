@@ -135,7 +135,8 @@ class CostRoutingCoordinator:
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
 
-        if decision.channel == "batch":
+        structured_output_forced_sync = decision.channel == "batch" and response_format is not None
+        if decision.channel == "batch" and not structured_output_forced_sync:
             request = BatchRequest(
                 messages=messages,
                 model=model_name,
@@ -169,7 +170,11 @@ class CostRoutingCoordinator:
             workflow_run_id=result.get("workflow_run_id"),
         )
         result["channel"] = "sync"
-        result["routing_reason"] = decision.reason
+        result["routing_reason"] = (
+            f"{decision.reason};structured_output_forced_sync"
+            if structured_output_forced_sync
+            else decision.reason
+        )
         result["usage_record_id"] = record.usage_record_id
         result["usage"] = {
             "prompt_tokens": record.prompt_tokens,

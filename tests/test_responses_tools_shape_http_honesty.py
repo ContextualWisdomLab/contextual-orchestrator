@@ -61,7 +61,7 @@ def _valid_tools() -> list[dict]:
     ]
 
 
-def test_http_responses_accepts_valid_tools_and_auto_choice() -> None:
+def test_http_responses_rejects_tools_until_multi_agent_tool_protocol_exists() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -73,7 +73,8 @@ def test_http_responses_accepts_valid_tools_and_auto_choice() -> None:
                 "tool_choice": "auto",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -172,7 +173,7 @@ def test_http_responses_rejects_named_tool_choice_not_in_tools() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_valid_tools_and_auto_choice()
+    test_http_responses_rejects_tools_until_multi_agent_tool_protocol_exists()
     test_http_responses_rejects_empty_tools_array()
     test_http_responses_rejects_tool_without_function_type()
     test_http_responses_accepts_tool_choice_auto_without_tools_as_omit()

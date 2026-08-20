@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+import socket
 import sys
 import urllib.error
 import urllib.parse
@@ -23,6 +25,7 @@ from contextual_orchestrator.cost_ledger import PriceBook  # noqa: E402
 from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
+    ProviderDiscoveryError,
     ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
@@ -32,6 +35,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
 )
+from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
 @pytest.fixture(autouse=True)
@@ -53,8 +57,25 @@ class _Response:
     def __exit__(self, *_args):
         return False
 
-    def read(self) -> bytes:
+    def read(self, _size: int = -1) -> bytes:
         return self._body
+
+
+@contextmanager
+def _patched_provider_transport(urlopen):
+    """Keep discovery tests offline while exercising the validated transport seam."""
+    def open_provider(request, _destination=None, *, timeout=None):
+        return urlopen(request, timeout=timeout)
+
+    with (
+        patch.object(
+            ModelClient,
+            "_validate_provider",
+            return_value=(socket.AF_INET, ("93.184.216.34", 443)),
+        ),
+        patch.object(ModelClient, "_open_provider", side_effect=open_provider),
+    ):
+        yield
 
 
 OPENAI_SOURCE = ProviderModelSource(
@@ -101,7 +122,7 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
         seen_requests.append(request)
         return _Response(payload)
 
-    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+    with _patched_provider_transport(urlopen):
         discovered = discover_provider_models(OPENROUTER_SOURCE)
 
     assert seen_requests[0].get_header("Authorization") == "Bearer sk-router"
@@ -125,6 +146,27 @@ def test_discover_local_gateway_is_not_a_model_discovery_source() -> None:
         discover_provider_models(source)
 
 
+def test_discover_rejects_private_provider_before_authorized_transport() -> None:
+    register_credential("PRIVATE_PROVIDER_KEY", "private-provider-secret")
+    source = ProviderModelSource(
+        provider_name="private_provider",
+        credential_name="PRIVATE_PROVIDER_KEY",
+        list_url="https://models.example.test/v1/models",
+        chat_base_url="https://models.example.test/v1",
+    )
+    with (
+        patch.object(
+            ModelClient,
+            "_resolve_addresses",
+            return_value=[(socket.AF_INET, ("127.0.0.1", 443))],
+        ),
+        patch.object(ModelClient, "_open_provider") as open_provider,
+    ):
+        with pytest.raises(ProviderDiscoveryError, match="non-public address"):
+            discover_provider_models(source)
+    open_provider.assert_not_called()
+
+
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
     register_credential("BYTEZ_API_KEY", "bytez-secret")
     payload = {
@@ -139,7 +181,7 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
         seen_requests.append(request)
         return _Response(payload)
 
-    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+    with _patched_provider_transport(urlopen):
         discovered = discover_provider_models(BYTEZ_SOURCE)
 
     assert seen_requests[0].get_header("Authorization") == "Key bytez-secret"
@@ -160,7 +202,7 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
             raise urllib.error.URLError("connection refused")
         return _Response({"data": [{"id": "meta/llama-3.3"}]})
 
-    with patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen):
+    with _patched_provider_transport(urlopen):
         discovered, errors = discover_all_models((OPENAI_SOURCE, OPENROUTER_SOURCE))
 
     assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
