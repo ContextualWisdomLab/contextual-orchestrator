@@ -1,0 +1,183 @@
+name: Verify chat passthrough capability
+
+on:
+  push:
+    branches:
+      - fix/chat-capability-isolation-embedding-models
+    paths:
+      - .github/workflows/verify-chat-passthrough-capability.yml
+
+permissions:
+  contents: read
+
+concurrency:
+  group: verify-chat-passthrough-capability
+  cancel-in-progress: false
+
+jobs:
+  prepare:
+    name: Prove RED, apply GREEN, and verify read-only
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    outputs:
+      base_sha: ${{ steps.export.outputs.base_sha }}
+      patch_b64: ${{ steps.export.outputs.patch_b64 }}
+    steps:
+      - name: Checkout exact triggering commit without credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: ${{ github.sha }}
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Set up Python
+        uses: actions/setup-python@ece7cb06caefa5fff74198d8649806c4678c61a1 # actions/setup-python@v6
+        with:
+          python-version: "3.12"
+
+      - name: Install hash-locked test dependencies
+        run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r fuzz/requirements-property.txt
+
+      - name: Confirm passthrough and batch bypass regressions are RED
+        shell: bash
+        run: |
+          set -euo pipefail
+          set +e
+          python -m pytest -q tests/test_chat_passthrough_capability_isolation.py > /tmp/red.log 2>&1
+          status=$?
+          set -e
+          cat /tmp/red.log
+          test "${status}" -ne 0
+          grep -Eq "DID NOT RAISE|Failed" /tmp/red.log
+
+      - name: Apply transport guards to raw passthrough and batch chat
+        shell: bash
+        run: |
+          set -euo pipefail
+          python - <<'PY'
+          from pathlib import Path
+
+          def replace_once(text: str, old: str, new: str, label: str) -> str:
+              count = text.count(old)
+              if count != 1:
+                  raise SystemExit(f"{label}: expected exactly one match, found {count}")
+              return text.replace(old, new, 1)
+
+          path = Path("contextual_orchestrator/orchestrator.py")
+          text = path.read_text(encoding="utf-8")
+          text = replace_once(
+              text,
+              '''    def proxy_send(
+                  self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+              ) -> dict[str, Any]:
+                  """Passthrough a full request to one agent, returning the raw provider JSON."""
+                  if agent.base_url.startswith("mock://"):
+              ''',
+              '''    def proxy_send(
+                  self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+              ) -> dict[str, Any]:
+                  """Passthrough a full request to one agent, returning the raw provider JSON."""
+                  normalized_endpoint = endpoint.strip("/")
+                  if normalized_endpoint.startswith("v1/"):
+                      normalized_endpoint = normalized_endpoint[3:]
+                  if (
+                      normalized_endpoint in {"chat/completions", "completions", "responses"}
+                      and not is_chat_compatible_model_id(agent.model)
+                  ):
+                      raise ValueError(
+                          f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+                      )
+                  if agent.base_url.startswith("mock://"):
+              ''',
+              "raw passthrough transport guard",
+          )
+          text = replace_once(
+              text,
+              '''        ``requests`` maps a caller custom_id to its messages. Suited to eval/benchmark
+                  workloads (24h completion window, ~half the price); real-time chat should keep
+                  using ``chat``. The mock path answers synchronously so tests and local runs work.
+                  """
+                  if agent.base_url.startswith("mock://"):
+              ''',
+              '''        ``requests`` maps a caller custom_id to its messages. Suited to eval/benchmark
+                  workloads (24h completion window, ~half the price); real-time chat should keep
+                  using ``chat``. The mock path answers synchronously so tests and local runs work.
+                  """
+                  if not is_chat_compatible_model_id(agent.model):
+                      raise ValueError(
+                          f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+                      )
+                  if agent.base_url.startswith("mock://"):
+              ''',
+              "batch chat transport guard",
+          )
+          path.write_text(text, encoding="utf-8")
+          Path(".github/workflows/verify-chat-passthrough-capability.yml").unlink()
+          PY
+
+      - name: Snapshot intended patch before executing tests
+        shell: bash
+        run: |
+          set -euo pipefail
+          git diff --binary > /tmp/expected.patch
+          test -s /tmp/expected.patch
+
+      - name: Run focused and full verification
+        shell: bash
+        run: |
+          set -euo pipefail
+          python -m compileall -q contextual_orchestrator
+          python -m pytest -q tests/test_chat_passthrough_capability_isolation.py tests/test_chat_transport_role_separation.py tests/test_chat_model_capability_isolation.py tests/test_openai_passthrough.py tests/test_local_mlx.py
+          python -m pytest -q
+          git diff --check
+          git diff --binary > /tmp/actual.patch
+          cmp /tmp/expected.patch /tmp/actual.patch
+
+      - name: Export verified patch
+        id: export
+        shell: bash
+        run: |
+          set -euo pipefail
+          echo "base_sha=${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "patch_b64=$(base64 -w0 /tmp/expected.patch)" >> "$GITHUB_OUTPUT"
+
+  commit:
+    name: Commit verified patch without executing repository code
+    needs: prepare
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    permissions:
+      contents: write
+    steps:
+      - name: Checkout branch without persisted credentials
+        uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
+        with:
+          ref: fix/chat-capability-isolation-embedding-models
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Verify exact base, apply tested patch, and push
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          EXPECTED_SHA: ${{ needs.prepare.outputs.base_sha }}
+          PATCH_B64: ${{ needs.prepare.outputs.patch_b64 }}
+        run: |
+          set -euo pipefail
+          test "$(git rev-parse HEAD)" = "${EXPECTED_SHA}"
+          printf '%s' "${PATCH_B64}" | base64 -d > /tmp/verified.patch
+          git apply --index /tmp/verified.patch
+          git diff --cached --check
+          actual_paths="$(git diff --cached --name-only | sort)"
+          expected_paths="$(cat <<'EOF'
+.github/workflows/verify-chat-passthrough-capability.yml
+contextual_orchestrator/orchestrator.py
+EOF
+)"
+          test "${actual_paths}" = "${expected_paths}"
+          test ! -e .github/workflows/verify-chat-passthrough-capability.yml
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git commit -m "fix: guard raw and batch chat transport boundaries"
+          git push "https://x-access-token:${GH_TOKEN}@github.com/${GITHUB_REPOSITORY}.git" HEAD:fix/chat-capability-isolation-embedding-models
