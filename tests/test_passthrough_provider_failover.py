@@ -126,3 +126,13 @@ def test_all_candidate_failures_chain_final_provider_error() -> None:
 
     assert caught.value.__cause__ is final
     assert [call[0] for call in client.calls] == ["primary_agent", "fallback_agent"]
+
+
+def test_cli_server_constructs_the_failover_orchestrator() -> None:
+    """The production ``python -m`` server path must use provider failover."""
+    from contextual_orchestrator import __main__ as cli
+    from contextual_orchestrator.passthrough_failover import (
+        TaskOrchestrator as FailoverTaskOrchestrator,
+    )
+
+    assert cli.TaskOrchestrator is FailoverTaskOrchestrator
