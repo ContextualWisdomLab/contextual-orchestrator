@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   sync:
-    name: Bootstrap provider KV and verify model candidates
+    name: Bootstrap provider KV and verify chat candidates
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
@@ -76,6 +76,8 @@ jobs:
               )
           if report['discovered_model_count'] < 1:
               raise SystemExit('provider bootstrap discovered no models')
+          if report['eligible_model_count'] < 1:
+              raise SystemExit('provider bootstrap discovered no chat-capable models')
           if not report['selected_agent_ids']:
               raise SystemExit('provider bootstrap produced no serving candidates')
           if report['enabled_agent_ids'] or report['durable_agent_pool']:
@@ -85,6 +87,7 @@ jobs:
           print(json.dumps({
               'registered_credentials': sorted(registered),
               'discovered_model_count': report['discovered_model_count'],
+              'eligible_model_count': report['eligible_model_count'],
               'selected_agent_count': len(report['selected_agent_ids']),
               'activated_agent_count': len(report['enabled_agent_ids']),
               'providers_with_errors': report['providers_with_errors'],

@@ -17,6 +17,7 @@ import argparse
 from dataclasses import dataclass, replace
 import json
 import os
+import re
 from typing import Mapping, Sequence
 
 from .cost_ledger import PriceBook
@@ -42,6 +43,71 @@ PROVIDER_CREDENTIAL_NAMES: tuple[str, ...] = tuple(
 )
 """Fixed organization credential inventory accepted by the bootstrap boundary."""
 
+_NON_CHAT_EXACT_TOKENS = frozenset(
+    {
+        "audio",
+        "bge",
+        "e5",
+        "embed",
+        "embedding",
+        "embeddings",
+        "guard",
+        "gte",
+        "image",
+        "images",
+        "moderation",
+        "realtime",
+        "rerank",
+        "reranker",
+        "safety",
+        "sora",
+        "speech",
+        "transcribe",
+        "transcription",
+        "tts",
+        "whisper",
+    }
+)
+_NON_CHAT_TOKEN_PREFIXES = (
+    "embed",
+    "moderation",
+    "rerank",
+    "transcrib",
+)
+_REASONING_MARKERS = (
+    "claude",
+    "deepseek",
+    "gemma",
+    "gpt",
+    "kimi",
+    "llama",
+    "mistral",
+    "mixtral",
+    "nemotron",
+    "o1",
+    "o3",
+    "o4",
+    "phi",
+    "qwen",
+    "r1",
+    "reason",
+)
+_CODING_MARKERS = (
+    "code",
+    "coder",
+    "codex",
+    "deepseek",
+    "devstral",
+    "qwen",
+)
+_VISION_MARKERS = (
+    "4o",
+    "multimodal",
+    "omni",
+    "vision",
+    "vl",
+)
+
 
 class ProviderBootstrapError(RuntimeError):
     """Raised when trusted provider bootstrap cannot establish a usable catalog."""
@@ -53,6 +119,7 @@ class ProviderBootstrapReport:
 
     registered_credentials: tuple[str, ...]
     discovered_model_count: int
+    eligible_model_count: int
     selected_agent_ids: tuple[str, ...]
     enabled_agent_ids: tuple[str, ...]
     durable_agent_pool: bool
@@ -64,6 +131,7 @@ class ProviderBootstrapReport:
         return {
             "registered_credentials": list(self.registered_credentials),
             "discovered_model_count": self.discovered_model_count,
+            "eligible_model_count": self.eligible_model_count,
             "selected_agent_ids": list(self.selected_agent_ids),
             "enabled_agent_ids": list(self.enabled_agent_ids),
             "durable_agent_pool": self.durable_agent_pool,
@@ -143,6 +211,41 @@ def register_provider_credentials_atomically(credentials: Mapping[str, str]) -> 
     return tuple(sorted(normalized))
 
 
+def _model_tokens(model_id: str) -> tuple[str, ...]:
+    """Return conservative lower-case tokens used for capability classification."""
+    return tuple(token for token in re.split(r"[^a-z0-9]+", model_id.casefold()) if token)
+
+
+def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
+    """Exclude catalog rows whose advertised identifier is clearly non-chat.
+
+    OpenAI-compatible ``/models`` responses often omit an explicit task field and
+    may mix embeddings, rerankers, speech, image generation, moderation, or realtime
+    transports with chat models. Such rows must never be activated in the ordinary
+    chat worker pool merely because they were inexpensive or appeared first.
+    """
+    tokens = _model_tokens(model.model_id)
+    for token in tokens:
+        if token in _NON_CHAT_EXACT_TOKENS:
+            return False
+        if token.startswith(_NON_CHAT_TOKEN_PREFIXES):
+            return False
+    return bool(tokens)
+
+
+def capability_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
+    """Infer conservative role tags from a chat candidate's public model identifier."""
+    identifier = model.model_id.casefold()
+    tags = ["discovered", "chat", "worker", "writing", "synthesizer"]
+    if any(marker in identifier for marker in _REASONING_MARKERS):
+        tags.extend(("reasoning", "thinker", "verification", "verifier"))
+    if any(marker in identifier for marker in _CODING_MARKERS):
+        tags.append("coding")
+    if any(marker in identifier for marker in _VISION_MARKERS):
+        tags.append("vision")
+    return tuple(dict.fromkeys(tags))
+
+
 def _known_cost_sort_key(model: DiscoveredModel) -> tuple[int, float, str, str]:
     """Sort known-price models before unknown-price models without inventing free cost."""
     prices = (model.prompt_price_per_1k, model.completion_price_per_1k)
@@ -155,17 +258,20 @@ def _known_cost_sort_key(model: DiscoveredModel) -> tuple[int, float, str, str]:
 def select_provider_diverse_models(
     discovered: Sequence[DiscoveredModel], *, limit: int
 ) -> list[DiscoveredModel]:
-    """Choose a bounded pool while preserving provider/account diversity.
+    """Choose a bounded chat pool while preserving provider/account diversity.
 
-    The first pass selects the best known-cost candidate from every discovered
-    provider account. Remaining slots are filled by the same honest cost ordering.
-    Unknown price is never coerced to zero. Model quality/capability decisions remain
-    the responsibility of the ordinary orchestrator routing policy after bootstrap.
+    Clearly non-chat model identifiers are excluded first. The first pass then
+    selects the best known-cost candidate from every discovered provider account.
+    Remaining slots are filled by the same honest cost ordering. Unknown price is
+    never coerced to zero. Model quality decisions remain the responsibility of the
+    ordinary orchestrator routing policy after bootstrap.
     """
     if limit < 1:
         raise ValueError("provider bootstrap model limit must be positive")
     unique: dict[tuple[str, str, str], DiscoveredModel] = {}
     for model in discovered:
+        if not is_chat_serving_candidate(model):
+            continue
         unique[(model.provider_name, model.credential_name, model.model_id)] = model
     ordered = sorted(unique.values(), key=_known_cost_sort_key)
     selected: list[DiscoveredModel] = []
@@ -188,6 +294,15 @@ def select_provider_diverse_models(
     return selected
 
 
+def _active_agent_from_discovered(model: DiscoveredModel) -> ModelAgent:
+    """Convert one selected chat model into an enabled, role-tagged agent."""
+    return replace(
+        agent_from_discovered(model),
+        disabled=False,
+        tags=capability_tags_for_discovered(model),
+    )
+
+
 def _synchronize_durable_agent_pool(
     agents_db: str,
     selected: Sequence[DiscoveredModel],
@@ -197,7 +312,7 @@ def _synchronize_durable_agent_pool(
         [ModelAgent("bootstrap_agent", "bootstrap-model")],
         agents_db=agents_db,
     )
-    agents = [replace(agent_from_discovered(model), disabled=False) for model in selected]
+    agents = [_active_agent_from_discovered(model) for model in selected]
     selected_ids = {agent.id for agent in agents}
     bootstrap.sync_discovered_agents(agents)
 
@@ -227,26 +342,29 @@ def bootstrap_provider_runtime(
     agents_db: str | None = None,
     model_limit: int = 16,
 ) -> ProviderBootstrapReport:
-    """Register trusted secrets, discover models, and optionally activate a durable pool."""
+    """Register trusted secrets, discover chat models, and optionally activate a pool."""
     credentials = collect_provider_credentials(environ, require_all=require_all_credentials)
     registered = register_provider_credentials_atomically(credentials)
     discovered, errors = discover_all_models()
     if not discovered:
         raise ProviderBootstrapError("provider bootstrap discovered no usable models")
 
+    eligible = [model for model in discovered if is_chat_serving_candidate(model)]
+    if not eligible:
+        raise ProviderBootstrapError("provider bootstrap discovered no chat-capable models")
+
     price_book = PriceBook(InMemoryConfigStore())
     priced_count = refresh_price_book(discovered, price_book)
-    selected = select_provider_diverse_models(discovered, limit=model_limit)
+    selected = select_provider_diverse_models(eligible, limit=model_limit)
+    if not selected:
+        raise ProviderBootstrapError("provider bootstrap selected no chat-capable models")
     selected_ids = tuple(agent_id_for(model) for model in selected)
-    enabled_ids = (
-        _synchronize_durable_agent_pool(agents_db, selected)
-        if agents_db
-        else ()
-    )
+    enabled_ids = _synchronize_durable_agent_pool(agents_db, selected) if agents_db else ()
 
     return ProviderBootstrapReport(
         registered_credentials=registered,
         discovered_model_count=len(discovered),
+        eligible_model_count=len(eligible),
         selected_agent_ids=selected_ids,
         enabled_agent_ids=enabled_ids,
         durable_agent_pool=bool(agents_db),

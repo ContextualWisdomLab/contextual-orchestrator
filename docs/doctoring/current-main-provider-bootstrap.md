@@ -25,14 +25,29 @@ be discovered. A provider-local discovery exception does not erase models return
 by other providers; the report contains only stable provider names and counts, never
 raw exception strings or credential values.
 
+A successful generic `/models` response is not itself evidence that every row can
+serve Chat Completions. OpenAI-compatible registries may mix chat models with
+embeddings, rerankers, speech, image generation, moderation, safety, or realtime
+transports. The bootstrap therefore applies a conservative identifier classifier
+before selection and reports both:
+
+- `discovered_model_count`: every syntactically valid catalog row; and
+- `eligible_model_count`: rows that are not clearly a non-chat transport.
+
+If no chat-capable row remains, bootstrap fails closed instead of activating the
+cheapest incompatible model. Selected chat models receive bounded role tags for
+worker/synthesizer and, only where the public identifier supports the inference,
+reasoning/verifier, coding, or vision. These tags seed normal orchestration; they do
+not constitute benchmark evidence or a provider capability guarantee.
+
 The bootstrap pool is provider-diverse before it is cost-ordered. Missing price is
 `unknown`, not zero. This avoids treating a provider such as Bytez, whose public
 catalog may use a non-token billing unit, as a fabricated free route.
 
 Candidate selection and durable serving activation are separate claims:
 
-- `selected_agent_ids` records the bounded candidates produced by the discovery
-  and selection run;
+- `selected_agent_ids` records the bounded chat candidates produced by discovery
+  and selection;
 - `enabled_agent_ids` is populated only when an explicit durable `--agents-db`
   is supplied and the selected agents are confirmed active in that pool; and
 - `durable_agent_pool` states whether the activation claim is backed by a
@@ -40,8 +55,9 @@ Candidate selection and durable serving activation are separate claims:
 
 When a durable pool is refreshed, the bootstrap tombstones its synthetic seed and
 previously discovered agents that are absent from the current bounded selection.
-Operator-managed agents are preserved. This prevents retired or withdrawn provider
-models from continuing to receive traffic after a later discovery run.
+Operator-managed agents are preserved. This prevents retired, withdrawn, or newly
+classified non-chat provider models from continuing to receive traffic after a
+later discovery run.
 
 ## Operational workflow
 
@@ -54,21 +70,23 @@ execution. The production environment must provide:
 - `CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE`.
 
 The GitHub-hosted workflow has an ephemeral filesystem. It therefore registers the
-five credentials in the durable PostgreSQL KV and verifies discovery plus
-`selected_agent_ids`; it does not claim durable agent-pool activation. A long-running
-service may either use the ordinary KV-backed startup discovery path or invoke this
-bootstrap with a persistent `--agents-db` under its own deployment boundary.
+five credentials in the durable PostgreSQL KV and verifies discovery,
+`eligible_model_count`, and `selected_agent_ids`; it does not claim durable
+agent-pool activation. A long-running service may either use the ordinary KV-backed
+startup discovery path or invoke this bootstrap with a persistent `--agents-db`
+under its own deployment boundary.
 
 The workflow verifies that all five credential names were registered, at least one
-model was discovered, a bounded serving candidate set was produced, and no exact
-provider secret appears in the emitted report.
+model was discovered, at least one chat-capable model survived classification, a
+bounded serving candidate set was produced, and no exact provider secret appears in
+the emitted report.
 
 ## Research and standards grounding
 
 The automatic pool remains a routing input rather than an unsupported claim that a
 single cheapest model is universally best. Quality/performance selection remains in
 the orchestrator's paper-grounded routing and orchestration layer; this bootstrap
-only establishes the candidate set and failure isolation.
+only establishes a compatible candidate set and failure isolation.
 
 National Institute of Standards and Technology. (2020). *Security and privacy
 controls for information systems and organizations* (NIST Special Publication

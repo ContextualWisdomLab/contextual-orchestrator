@@ -107,10 +107,10 @@ def test_unknown_credential_name_is_rejected_before_any_write():
 def test_diverse_selection_prefers_known_cost_without_treating_unknown_as_free():
     """Unknown-cost Bytez candidates stay usable but cannot win as fabricated zero cost."""
     models = [
-        _model("openai", "OPENAI_API_KEY", "expensive", 4.0),
-        _model("openai", "OPENAI_API_KEY", "cheap", 1.0),
-        _model("openrouter", "OPENROUTER_API_KEY", "router", 2.0),
-        _model("bytez", "BYTEZ_API_KEY", "unknown", None),
+        _model("openai", "OPENAI_API_KEY", "gpt-expensive", 4.0),
+        _model("openai", "OPENAI_API_KEY", "gpt-cheap", 1.0),
+        _model("openrouter", "OPENROUTER_API_KEY", "mistral-router", 2.0),
+        _model("bytez", "BYTEZ_API_KEY", "llama-unknown", None),
     ]
     selected = provider_bootstrap.select_provider_diverse_models(
         models,
@@ -120,10 +120,45 @@ def test_diverse_selection_prefers_known_cost_without_treating_unknown_as_free()
         (item.provider_name, item.model_id)
         for item in selected
     ] == [
-        ("openai", "cheap"),
-        ("openrouter", "router"),
-        ("bytez", "unknown"),
+        ("openai", "gpt-cheap"),
+        ("openrouter", "mistral-router"),
+        ("bytez", "llama-unknown"),
     ]
+
+
+def test_non_chat_catalog_rows_are_never_selected_for_chat_service():
+    """Embeddings, rerankers, speech, image, moderation, and realtime rows stay inert."""
+    models = [
+        _model("openai", "OPENAI_API_KEY", "text-embedding-3-small", 0.1),
+        _model("openai", "OPENAI_API_KEY", "whisper-1", 0.1),
+        _model("openai", "OPENAI_API_KEY", "gpt-image-1", 0.1),
+        _model("openai", "OPENAI_API_KEY", "omni-moderation-latest", 0.1),
+        _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "nv-rerankqa-mistral-4b-v3", 0.1),
+        _model("openrouter", "OPENROUTER_API_KEY", "openai/gpt-4.1-mini", 2.0),
+    ]
+    selected = provider_bootstrap.select_provider_diverse_models(models, limit=10)
+    assert [(item.provider_name, item.model_id) for item in selected] == [
+        ("openrouter", "openai/gpt-4.1-mini")
+    ]
+
+
+def test_capability_tags_are_role_aware_without_fabricated_capabilities():
+    """Known reasoning/coding/vision identifiers get bounded role tags."""
+    model = _model(
+        "openrouter",
+        "OPENROUTER_API_KEY",
+        "qwen/qwen-vl-coder",
+        1.0,
+    )
+    tags = provider_bootstrap.capability_tags_for_discovered(model)
+    assert tags[:5] == (
+        "discovered",
+        "chat",
+        "worker",
+        "writing",
+        "synthesizer",
+    )
+    assert {"reasoning", "thinker", "verification", "verifier", "coding", "vision"} <= set(tags)
 
 
 def test_bootstrap_registers_then_discovers_without_environment_runtime_reads(
@@ -152,6 +187,7 @@ def test_bootstrap_registers_then_discovers_without_environment_runtime_reads(
     )
 
     assert report.discovered_model_count == 1
+    assert report.eligible_model_count == 1
     assert report.selected_agent_ids == ("openai_gpt_test",)
     assert report.enabled_agent_ids == ()
     assert report.durable_agent_pool is False
@@ -177,6 +213,32 @@ def test_bootstrap_fails_closed_when_no_model_is_discovered(monkeypatch):
         )
 
 
+def test_bootstrap_fails_closed_when_catalog_has_only_non_chat_models(monkeypatch):
+    """A successful catalog request is not service-ready without a chat candidate."""
+    monkeypatch.setattr(
+        provider_bootstrap,
+        "discover_all_models",
+        lambda: (
+            [
+                _model(
+                    "openai",
+                    "OPENAI_API_KEY",
+                    "text-embedding-3-small",
+                    0.1,
+                )
+            ],
+            [],
+        ),
+    )
+    with pytest.raises(
+        provider_bootstrap.ProviderBootstrapError,
+        match="no chat-capable models",
+    ):
+        provider_bootstrap.bootstrap_provider_runtime(
+            environ=_complete_environment()
+        )
+
+
 def test_durable_pool_withdraws_bootstrap_and_stale_discovered_agents(
     monkeypatch,
     tmp_path,
@@ -186,7 +248,7 @@ def test_durable_pool_withdraws_bootstrap_and_stale_discovered_agents(
     old_model = _model(
         "openai",
         "OPENAI_API_KEY",
-        "retired-model",
+        "gpt-retired-model",
         1.0,
     )
     old_agent = replace(
@@ -202,7 +264,7 @@ def test_durable_pool_withdraws_bootstrap_and_stale_discovered_agents(
     new_model = _model(
         "openrouter",
         "OPENROUTER_API_KEY",
-        "current-model",
+        "qwen-current-coder",
         2.0,
     )
     monkeypatch.setattr(
@@ -216,8 +278,10 @@ def test_durable_pool_withdraws_bootstrap_and_stale_discovered_agents(
         model_limit=1,
     )
 
-    assert report.selected_agent_ids == ("openrouter_current_model",)
-    assert report.enabled_agent_ids == ("openrouter_current_model",)
+    assert report.discovered_model_count == 1
+    assert report.eligible_model_count == 1
+    assert report.selected_agent_ids == ("openrouter_qwen_current_coder",)
+    assert report.enabled_agent_ids == ("openrouter_qwen_current_coder",)
     assert report.durable_agent_pool is True
 
     restarted = TaskOrchestrator(
@@ -225,10 +289,12 @@ def test_durable_pool_withdraws_bootstrap_and_stale_discovered_agents(
         agents_db=agents_db,
     )
     assert {agent.id for agent in restarted.agents} == {
-        "openrouter_current_model"
+        "openrouter_qwen_current_coder"
     }
+    active = restarted.agents[0]
+    assert {"discovered", "chat", "worker", "synthesizer", "reasoning", "coding"} <= set(active.tags)
     assert all(
-        agent.id not in {"bootstrap_agent", "openai_retired_model"}
+        agent.id not in {"bootstrap_agent", "openai_gpt_retired_model"}
         for agent in restarted.agents
     )
 
@@ -249,6 +315,7 @@ def test_cli_report_never_contains_secret_values(monkeypatch, capsys):
     output = capsys.readouterr().out
     report = json.loads(output)
     assert "OPENAI_API_KEY" in output
+    assert report["eligible_model_count"] == 1
     assert report["selected_agent_ids"] == ["openai_gpt_test"]
     assert report["enabled_agent_ids"] == []
     assert report["durable_agent_pool"] is False
