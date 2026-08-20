@@ -1,7 +1,7 @@
 # ADR 0025: Use descriptive multi-word database object names
 
 - Status: Accepted
-- Date: 2026-08-21
+- Date: 2026-08-20
 - Decision owners: contextual-orchestrator maintainers
 
 ## Decision
