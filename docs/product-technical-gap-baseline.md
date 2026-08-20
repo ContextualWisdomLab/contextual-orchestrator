@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20 19:15, Asia/Seoul
+**As of:** 2026-08-20 19:37, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -84,18 +84,18 @@ required workflows, and a normal merge.
 |---:|---|---|---|
 | #781 | `7e6dc15` | ready, stacked on #780 | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after #780. |
 | #780 | `76faecc` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, and exact-head hosted Checks before normal merge. |
-| #779 | `4a5cc7a` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main. |
-| #778 | `6e0daf8` | ready, stacked on #765 | Review source-image preservation, explicit `vision` eligibility/failover, Responses normalization, and the private LineageWeave OCR recovery boundary. |
-| #776 | `3830f38` | ready, stacked on #765 | Review fixed-length framing, exact reads, deadlines, close-on-error, and RFC 9112 evidence; rebase onto protected main after #765. |
+| #779 | `beb15a7` | ready, stacked on #765 | Current successor for optional-temperature capability negotiation. Review exact same-provider retry semantics, then integrate only after #765 reaches protected main. |
+| #778 | `9186547` | ready, stacked on #765 | Review source-image preservation, explicit `vision` eligibility/failover, Responses normalization, and the private LineageWeave OCR recovery boundary. |
+| #776 | `0ec1151` | ready, stacked on #765 | Review fixed-length framing, exact reads, deadlines, close-on-error, and RFC 9112 evidence; rebase onto protected main after #765. |
 | #775 | `fb8fb62` | draft, based on main | Verify the exact CPython 3.12 Atheris marker, direct test contract, hash lock, hosted Fuzz job, and independent approval before promotion. |
-| #773 | `2aeac55` | ready, based on main | Review this dated baseline and ADR 0016; refresh the remote head before approval because this row is self-referential. |
-| #772 | `8452623` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions. |
-| #771 | `2351cab` | ready, based on main | Recheck bounded cause-chain classification, idempotent-only retries, ambiguous-outcome fail-closed behavior, public error hygiene, and exact-head hosted checks. |
+| #773 | `172e556` | ready, based on main | Review this dated baseline and ADR 0016; exact current head is self-referential and has no independent approval yet. |
+| #772 | `1d81910` | ready, based on main | Review cache-key isolation, strict bypass parsing, fail-open backend behavior, malformed cache entries, and routing/cost/stream interactions. |
+| #771 | `b706952` | ready, based on main | Local exact-head suite is `1533 passed`; hosted security contexts are queued after structured failure-chain and external-admin resource-policy fixes. Obtain independent approval before protected merge. |
 | #770 | `0777e14` | draft, based on stale main | Reconcile after #768. Preserve complete-price evidence, provider-family diversity, corrupt-row handling, and consume the shared ordinary-chat classifier rather than a local detector. |
 | #769 | `9654c28` | ready, based on main | Core repository workflows succeeded on this head; obtain exact-head independent approval and remaining protected contexts. |
 | #768 | `88fee97` | ready, based on main | Review the current capability boundary, including ShieldGemma, legacy Completions, direct-run regressions, and exact-head hosted checks. |
 | #765 | `d3f9a9b` | draft, based on main | Reconcile after #768/#769; preserve DNS-pinned discovery, structured-output honesty, gateway-owned reasoning policy, and omitted sampling controls. |
-| #764 | `854d7a2` | draft, based on stale main | Verify 3NF catalog persistence, credential promotion/rollback, last-known-good semantics, exact-set stale withdrawal, and shared capability-classifier adoption after rebase. |
+| #764 | `55814b9` | draft, based on main | Verify 3NF catalog persistence, credential promotion/rollback, last-known-good semantics, exact-set stale withdrawal, and shared capability-classifier adoption after rebase. |
 | #763 | `385a5b4` | draft, based on main | Reconcile with #765/#768; preserve one-shot local Responses translation, local concurrency coordination, concrete-model stickiness, and adaptive provider failover. |
 | #762 | `be6b6c7` | ready, based on main | Core workflows succeeded; merge the design only after current-head independent approval, then implement its authorization/encryption acceptance criteria separately. |
 
