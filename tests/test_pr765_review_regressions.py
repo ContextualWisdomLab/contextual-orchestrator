@@ -103,7 +103,7 @@ def test_internal_chat_preserves_explicit_temperature(monkeypatch) -> None:
     """An explicit caller sampling control remains an honest provider passthrough."""
     client = ModelClient()
     agent = ModelAgent(
-        id="worker",
+        id="chat_worker",
         model="provider/model",
         base_url="https://gateway.example.com",
         credential_key="",
