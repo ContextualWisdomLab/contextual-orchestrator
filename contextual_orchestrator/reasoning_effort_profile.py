@@ -15,8 +15,9 @@ from __future__ import annotations
 import hashlib
 import json
 import math
+from collections.abc import Iterable, Mapping
 from dataclasses import asdict, dataclass
-from typing import Any, Iterable, Mapping
+from typing import Any
 
 PROFILE_VERSION = "reasoning_effort_profile.v1"
 PRODUCTION_RMSE_IMPROVEMENT_THRESHOLD = 0.55
@@ -59,7 +60,7 @@ class EffortProfileError(ValueError):
 
 def apply_request_profile(
     payload: dict[str, Any],
-    profile: "ReasoningEffortProfile | None",
+    profile: ReasoningEffortProfile | None,
     *,
     supports_reasoning_effort: bool,
     default_max_output_tokens: int,
