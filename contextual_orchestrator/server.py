@@ -4925,6 +4925,7 @@ def build_server(
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/admin/session":
                     security.check_rate_limit(self.client_address[0])
+                    security.validate_admin_session_origin(self.headers)
                     session_id = security._extract_admin_session_cookie(self.headers)
                     self._send(
                         {"session_status": "cleared", "session_revoked": security.revoke_admin_session(session_id)},
