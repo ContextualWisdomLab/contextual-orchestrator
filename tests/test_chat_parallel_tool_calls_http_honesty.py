@@ -141,5 +141,5 @@ if __name__ == "__main__":
     test_http_chat_parallel_tool_calls_false_without_tools_ok()
     test_http_chat_parallel_tool_calls_true_without_tools_fail_closed()
     test_http_chat_parallel_tool_calls_non_boolean_fail_closed()
-    test_http_chat_parallel_tool_calls_true_with_tools_passthrough()
+    test_http_chat_parallel_tool_calls_true_rejects_single_agent_fallback()
     print("ok")

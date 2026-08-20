@@ -188,9 +188,9 @@ def test_http_tools_rejects_mixed_nested_and_flat() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_flat_function_tools()
-    test_http_responses_accepts_flat_tools_with_tool_choice_name()
-    test_http_chat_still_accepts_nested_function_tools()
-    test_http_chat_accepts_flat_function_tools_too()
+    test_http_responses_rejects_flat_function_tools_without_single_agent_fallback()
+    test_http_responses_rejects_flat_tools_with_tool_choice_name()
+    test_http_chat_rejects_nested_function_tools_without_single_agent_fallback()
+    test_http_chat_rejects_flat_function_tools_without_single_agent_fallback()
     test_http_tools_rejects_mixed_nested_and_flat()
     print("ok")

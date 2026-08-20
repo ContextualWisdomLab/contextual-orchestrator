@@ -225,7 +225,7 @@ def test_http_responses_rejects_unapplied_top_logprobs_whole_float_string() -> N
 
 if __name__ == "__main__":
     test_http_chat_accepts_n_whole_float_string()
-    test_http_responses_accepts_seed_whole_float_string()
+    test_http_responses_rejects_unapplied_seed_whole_float_string()
     test_http_chat_rejects_fractional_float_string_n()
     test_http_chat_accepts_top_logprobs_zero_float_strings()
     test_http_chat_still_rejects_nonzero_top_logprobs_float_string()

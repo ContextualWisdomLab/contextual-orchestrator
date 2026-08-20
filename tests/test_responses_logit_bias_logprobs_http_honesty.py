@@ -168,7 +168,7 @@ def test_http_responses_rejects_non_boolean_logprobs() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_empty_and_valid_logit_bias()
+    test_http_responses_accepts_empty_and_rejects_unapplied_logit_bias()
     test_http_responses_rejects_non_digit_logit_bias_key()
     test_http_responses_rejects_out_of_range_logit_bias_value()
     test_http_responses_accepts_logprobs_false()
