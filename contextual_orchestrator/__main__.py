@@ -351,6 +351,12 @@ def main() -> None:
         default=64 * 1024,
         help="Maximum JSON request body size in bytes (default: 65536).",
     )
+    parser.add_argument(
+        "--request-read-timeout-seconds",
+        type=float,
+        default=10.0,
+        help="Maximum time to read one fixed-length JSON body (default: 10 seconds).",
+    )
     parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
                         help=f"Concurrent requests for local gateway batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
@@ -451,6 +457,7 @@ def main() -> None:
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
                 max_body_bytes=args.max_body_bytes,
+                request_read_timeout_seconds=args.request_read_timeout_seconds,
             ),
             clearfolio_url=args.clearfolio_url,
         )
