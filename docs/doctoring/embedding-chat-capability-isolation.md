@@ -1,7 +1,7 @@
 # Embedding-to-chat capability isolation incident
 
-**Status:** Accepted incident decision  
-**Date:** 2026-08-20  
+**Status:** Accepted incident decision
+**Date:** 2026-08-20
 **Affected consumer:** LineageWeave buyer-surface stack around PR #260
 
 ## Incident
