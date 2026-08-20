@@ -1,0 +1,136 @@
+"""End-to-end durable provider catalog bootstrap contracts."""
+
+from __future__ import annotations
+
+from contextual_orchestrator.credentials import (
+    InMemoryCredentialBackend,
+    set_backend,
+)
+from contextual_orchestrator.model_discovery import (
+    DiscoveredModel,
+    ProviderDiscoveryError,
+    ProviderModelSource,
+)
+from contextual_orchestrator.provider_bootstrap import PROVIDER_CREDENTIAL_NAMES
+from contextual_orchestrator.provider_catalog_bootstrap import (
+    bootstrap_provider_catalog_runtime,
+)
+from contextual_orchestrator.provider_catalog_store import (
+    InMemoryProviderCatalogStore,
+)
+
+
+def _environment() -> dict[str, str]:
+    return {
+        name: f"value-for-{name.casefold()}"
+        for name in PROVIDER_CREDENTIAL_NAMES
+    }
+
+
+def _source(provider: str, credential: str) -> ProviderModelSource:
+    return ProviderModelSource(
+        provider_name=provider,
+        credential_name=credential,
+        list_url=f"https://{provider}.example/v1/models",
+        chat_base_url=f"https://{provider}.example/v1",
+    )
+
+
+def _model(source: ProviderModelSource, model_id: str) -> DiscoveredModel:
+    return DiscoveredModel(
+        provider_name=source.provider_name,
+        model_id=model_id,
+        credential_name=source.credential_name,
+        chat_base_url=source.chat_base_url,
+        auth_scheme=source.auth_scheme,
+        prompt_price_per_1k=1.0,
+        completion_price_per_1k=2.0,
+    )
+
+
+def test_failed_provider_uses_persisted_last_known_good_model() -> None:
+    """A later provider outage keeps its last successful compatible model."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        openrouter = _source("openrouter", "OPENROUTER_API_KEY")
+        store = InMemoryProviderCatalogStore()
+
+        first = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(openai, openrouter),
+            discovery=lambda _sources: (
+                [_model(openai, "gpt-live"), _model(openrouter, "router-live")],
+                [],
+            ),
+            model_limit=4,
+        )
+        assert first.catalog_model_count == 2
+        assert first.last_known_good_model_count == 0
+
+        second = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(openai, openrouter),
+            discovery=lambda _sources: (
+                [_model(openrouter, "router-new")],
+                [ProviderDiscoveryError("openai", "secret-bearing detail")],
+            ),
+            model_limit=4,
+        )
+        assert second.live_discovered_model_count == 1
+        assert second.catalog_model_count == 2
+        assert second.last_known_good_model_count == 1
+        assert second.catalog_refresh_failure_count == 1
+        assert second.providers_with_errors == ("openai",)
+        assert set(second.selected_agent_ids) == {
+            "openai_gpt_live",
+            "openrouter_router_new",
+        }
+        assert "secret-bearing detail" not in str(second.as_dict())
+    finally:
+        set_backend(None)
+
+
+def test_empty_catalog_preserves_lkg_but_nonchat_success_withdraws_it() -> None:
+    """Empty refresh is failure; authoritative non-chat success is withdrawal."""
+    set_backend(InMemoryCredentialBackend())
+    try:
+        openai = _source("openai", "OPENAI_API_KEY")
+        store = InMemoryProviderCatalogStore()
+        bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(openai,),
+            discovery=lambda _sources: ([_model(openai, "gpt-live")], []),
+            model_limit=1,
+        )
+
+        empty = bootstrap_provider_catalog_runtime(
+            environ=_environment(),
+            catalog_store=store,
+            sources=(openai,),
+            discovery=lambda _sources: ([], []),
+            model_limit=1,
+        )
+        assert empty.last_known_good_model_count == 1
+        assert empty.catalog_model_count == 1
+
+        try:
+            bootstrap_provider_catalog_runtime(
+                environ=_environment(),
+                catalog_store=store,
+                sources=(openai,),
+                discovery=lambda _sources: (
+                    [_model(openai, "text-embedding-3-small")],
+                    [],
+                ),
+                model_limit=1,
+            )
+        except RuntimeError as error:
+            assert "no persisted chat-compatible model" in str(error)
+        else:
+            raise AssertionError("non-chat-only authoritative catalog must fail")
+    finally:
+        set_backend(None)

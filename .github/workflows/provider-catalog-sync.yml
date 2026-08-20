@@ -14,7 +14,7 @@ concurrency:
 
 jobs:
   sync:
-    name: Bootstrap provider KV and verify chat candidates
+    name: Bootstrap durable provider KV and model catalog
     if: github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     environment: production
@@ -39,7 +39,7 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Require durable KV bootstrap configuration
+      - name: Require durable database bootstrap configuration
         shell: bash
         run: |
           set -euo pipefail
@@ -49,19 +49,16 @@ jobs:
       - name: Install hash-pinned runtime dependencies
         run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r requirements.lock
 
-      - name: Register complete provider inventory and verify discovery
-        id: bootstrap
+      - name: Register credentials and refresh normalized model catalog
         shell: bash
         run: |
           set -euo pipefail
-          python -m contextual_orchestrator.provider_bootstrap --model-limit 24 > provider-bootstrap-report.json
+          python -m contextual_orchestrator.provider_catalog_bootstrap --model-limit 24 > provider-bootstrap-report.json
           python - <<'PY'
           import json
           from pathlib import Path
 
-          report = json.loads(
-              Path('provider-bootstrap-report.json').read_text(encoding='utf-8')
-          )
+          report = json.loads(Path('provider-bootstrap-report.json').read_text(encoding='utf-8'))
           expected = {
               'NVIDIA_NIM_API_KEY',
               'NVIDIA_NIM_API_KEY_SUB',
@@ -71,30 +68,27 @@ jobs:
           }
           registered = set(report['registered_credentials'])
           if registered != expected:
-              raise SystemExit(
-                  f'credential inventory mismatch: {sorted(expected - registered)}'
-              )
-          if report['discovered_model_count'] < 1:
-              raise SystemExit('provider bootstrap discovered no models')
-          if report['eligible_model_count'] < 1:
-              raise SystemExit('provider bootstrap discovered no chat-capable models')
+              raise SystemExit(f'credential inventory mismatch: {sorted(expected - registered)}')
+          if report['catalog_backend'] != 'postgres':
+              raise SystemExit('provider catalog is not durable PostgreSQL')
+          if report['catalog_model_count'] < 1 or report['eligible_model_count'] < 1:
+              raise SystemExit('provider catalog has no compatible serving model')
           if not report['selected_agent_ids']:
-              raise SystemExit('provider bootstrap produced no serving candidates')
+              raise SystemExit('provider catalog produced no serving candidates')
           if report['enabled_agent_ids'] or report['durable_agent_pool']:
-              raise SystemExit(
-                  'ephemeral Actions sync must not claim durable agent activation'
-              )
+              raise SystemExit('ephemeral Actions sync must not claim agent-pool activation')
           print(json.dumps({
               'registered_credentials': sorted(registered),
-              'discovered_model_count': report['discovered_model_count'],
-              'eligible_model_count': report['eligible_model_count'],
+              'live_discovered_model_count': report['live_discovered_model_count'],
+              'catalog_model_count': report['catalog_model_count'],
+              'last_known_good_model_count': report['last_known_good_model_count'],
               'selected_agent_count': len(report['selected_agent_ids']),
-              'activated_agent_count': len(report['enabled_agent_ids']),
+              'catalog_refresh_failure_count': report['catalog_refresh_failure_count'],
               'providers_with_errors': report['providers_with_errors'],
           }, sort_keys=True))
           PY
 
-      - name: Verify report does not contain exact provider secrets
+      - name: Verify report contains no exact provider secret
         shell: bash
         run: |
           set -euo pipefail
@@ -102,9 +96,7 @@ jobs:
           import os
           from pathlib import Path
 
-          report = Path(
-              'provider-bootstrap-report.json'
-          ).read_text(encoding='utf-8')
+          report = Path('provider-bootstrap-report.json').read_text(encoding='utf-8')
           names = (
               'NVIDIA_NIM_API_KEY',
               'NVIDIA_NIM_API_KEY_SUB',
@@ -112,13 +104,7 @@ jobs:
               'OPENROUTER_API_KEY',
               'OPENAI_API_KEY',
           )
-          leaked = [
-              name
-              for name in names
-              if os.environ[name] and os.environ[name] in report
-          ]
+          leaked = [name for name in names if os.environ[name] and os.environ[name] in report]
           if leaked:
-              raise SystemExit(
-                  f'provider bootstrap report leaked secret values for: {leaked}'
-              )
+              raise SystemExit(f'provider bootstrap report leaked secret values for: {leaked}')
           PY
