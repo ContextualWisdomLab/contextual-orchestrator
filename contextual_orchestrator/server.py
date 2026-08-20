@@ -5996,7 +5996,7 @@ def build_server(
                         self.close_connection = True
                         raise RequestError(400, "invalid_request_framing", "request body ended before content-length")
                     chunks.extend(chunk)
-                    if time.monotonic() >= read_deadline:
+                    if len(chunks) < body_size and time.monotonic() >= read_deadline:
                         self.close_connection = True
                         raise RequestError(408, "request_read_timeout", "request body read timed out")
             except (TimeoutError, socket.timeout):
