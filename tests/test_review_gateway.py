@@ -178,6 +178,7 @@ def test_main_starts_authenticated_gateway(monkeypatch):
     security = captured["security"]
     assert security.auth_token == "local-review-token"
     assert security.allow_public_bind is False
+    assert get_credential(review_gateway.REVIEW_AUTH_CREDENTIAL_NAME) == "local-review-token"
 
 
 def test_main_requires_authentication(monkeypatch):

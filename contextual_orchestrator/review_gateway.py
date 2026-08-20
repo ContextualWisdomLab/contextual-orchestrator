@@ -14,7 +14,7 @@ import os
 from dataclasses import replace
 from typing import Mapping
 
-from .credentials import NotConfigured, register_credential
+from .credentials import NotConfigured, get_credential, register_credential
 from .cost_ledger import PriceBook
 from .chat_capability import is_general_chat_agent_model_id
 from .kv_config import InMemoryConfigStore
@@ -35,10 +35,11 @@ REVIEW_CREDENTIAL_NAMES: tuple[str, ...] = (
     "OPENAI_API_KEY",
 )
 DEFAULT_REVIEW_AGENT_LIMIT = 12
+REVIEW_AUTH_CREDENTIAL_NAME = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 
 
 def register_review_credentials(environment: Mapping[str, str]) -> tuple[str, ...]:
-    """Register non-empty CI provider keys in the process-local KV.
+    """Register non-empty CI provider and gateway credentials in the KV.
 
     ``environment`` is bootstrap input only. The returned names contain no
     secret values and are suitable for diagnostics or tests.
@@ -49,6 +50,10 @@ def register_review_credentials(environment: Mapping[str, str]) -> tuple[str, ..
         if value:
             register_credential(name, value)
             registered.append(name)
+    auth_value = environment.get(REVIEW_AUTH_CREDENTIAL_NAME, "").strip()
+    if auth_value:
+        register_credential(REVIEW_AUTH_CREDENTIAL_NAME, auth_value)
+        registered.append(REVIEW_AUTH_CREDENTIAL_NAME)
     return tuple(registered)
 
 
@@ -113,23 +118,26 @@ def _build_parser() -> argparse.ArgumentParser:
     parser.add_argument("--max-agents", type=int, default=DEFAULT_REVIEW_AGENT_LIMIT)
     parser.add_argument(
         "--auth-token",
-        default=os.environ.get("CONTEXTUAL_ORCHESTRATOR_TOKEN", ""),
-        help="Bearer token for the local review gateway (prefer the environment bootstrap).",
+        default="",
+        help="Explicit local bearer token; otherwise resolve --auth-token-key from the KV.",
     )
+    parser.add_argument("--auth-token-key", default=REVIEW_AUTH_CREDENTIAL_NAME)
     return parser
 
 
 def main() -> None:
     """Discover providers and serve the authenticated OpenAI-compatible sidecar."""
     args = _build_parser().parse_args()
-    if not args.auth_token:
-        raise SystemExit("CONTEXTUAL_ORCHESTRATOR_TOKEN or --auth-token is required")
+    register_review_credentials(os.environ)
+    auth_token = args.auth_token or get_credential(args.auth_token_key)
+    if not auth_token:
+        raise SystemExit(f"KV credential {args.auth_token_key!r} or --auth-token is required")
     orchestrator = build_review_orchestrator(max_agents=args.max_agents)
     serve(
         orchestrator,
         host=args.host,
         port=args.port,
-        security=SecurityConfig(auth_token=args.auth_token),
+        security=SecurityConfig(auth_token=auth_token),
     )
 
 
