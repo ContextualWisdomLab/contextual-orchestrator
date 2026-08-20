@@ -1,10 +1,11 @@
-"""Shared chat-capability classification and runtime fail-closed guards.
+"""Classify chat transport compatibility and ordinary agent-role eligibility.
 
-Provider model catalogs are heterogeneous: a model identifier may name a chat
-model, embedding model, reranker, transcription model, image model, or another
-endpoint family. The helpers in this module prevent clearly non-chat model IDs
-from crossing a chat-agent boundary even when an incompatible agent was persisted
-before discovery filtering was introduced.
+Provider catalogs mix endpoint-only models with models served through an
+OpenAI-compatible chat transport. Transport compatibility is not the same as
+fitness for an ordinary thinker, worker, verifier, or synthesizer role: audio
+and policy-classification models can use chat transport, while embedding,
+reranking, transcription, moderation-endpoint, image-generation, realtime, and
+speech-only models cannot.
 """
 
 from __future__ import annotations
@@ -12,15 +13,13 @@ from __future__ import annotations
 import re
 
 _MODEL_TOKEN_RE = re.compile(r"[a-z0-9]+")
-_NON_CHAT_EXACT_TOKENS = frozenset(
+_TRANSPORT_INCOMPATIBLE_EXACT_TOKENS = frozenset(
     {
-        "audio",
         "bge",
         "e5",
         "embed",
         "embedding",
         "embeddings",
-        "guard",
         "gte",
         "image",
         "images",
@@ -28,7 +27,6 @@ _NON_CHAT_EXACT_TOKENS = frozenset(
         "realtime",
         "rerank",
         "reranker",
-        "safety",
         "sora",
         "speech",
         "transcribe",
@@ -37,7 +35,7 @@ _NON_CHAT_EXACT_TOKENS = frozenset(
         "whisper",
     }
 )
-_NON_CHAT_TOKEN_PREFIXES = (
+_TRANSPORT_INCOMPATIBLE_PREFIXES = (
     "embed",
     "moderat",
     "rerank",
@@ -46,20 +44,45 @@ _NON_CHAT_TOKEN_PREFIXES = (
 
 
 def is_chat_compatible_model_id(model_id: str) -> bool:
-    """Return whether a model identifier is eligible for a chat-agent pool.
+    """Return whether an identifier can use the ordinary chat transport.
 
-    The classifier intentionally rejects only identifiers that clearly advertise
-    a non-chat endpoint family. Unknown identifiers remain eligible until an
-    authenticated capability registry can prove more specific endpoint support.
+    The classifier rejects only identifiers that clearly advertise an endpoint
+    family incompatible with chat messages. Audio-capable and safety-classifier
+    models remain transport-compatible because providers serve some of them over
+    ``/chat/completions``.
     """
-    if type(model_id) is not str:
-        return False
-    tokens = tuple(_MODEL_TOKEN_RE.findall(model_id.casefold()))
+    tokens = _model_tokens(model_id)
     if not tokens:
         return False
     for token in tokens:
-        if token in _NON_CHAT_EXACT_TOKENS:
+        if token in _TRANSPORT_INCOMPATIBLE_EXACT_TOKENS:
             return False
-        if token.startswith(_NON_CHAT_TOKEN_PREFIXES):
+        if token.startswith(_TRANSPORT_INCOMPATIBLE_PREFIXES):
             return False
     return True
+
+
+def _model_tokens(model_id: str) -> tuple[str, ...]:
+    """Normalize one provider-prefixed model identifier into lowercase tokens."""
+    if type(model_id) is not str:
+        return ()
+    return tuple(_MODEL_TOKEN_RE.findall(model_id.casefold()))
+
+
+def is_general_chat_agent_model_id(model_id: str) -> bool:
+    """Return whether a chat model may enter ordinary orchestration roles.
+
+    Explicit guard and safety models can use chat transport but are specialized
+    policy classifiers, not general answer synthesizers. This negative role gate
+    does not infer reasoning, coding, vision, or verification capabilities.
+    """
+    tokens = _model_tokens(model_id)
+    if not tokens or not is_chat_compatible_model_id(model_id):
+        return False
+    return not any(
+        token == "safety"
+        or token == "guard"
+        or token.startswith("nemoguard")
+        or token.endswith("guard")
+        for token in tokens
+    )

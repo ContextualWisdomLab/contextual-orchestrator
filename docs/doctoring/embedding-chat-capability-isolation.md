@@ -28,9 +28,10 @@ input rather than chat messages.
 The first incident fix closed discovery and price-routing boundaries, but further
 root-cause tracing showed an already-persisted incompatible `ModelAgent` could still
 survive that filter. The runtime ranking path, generated workflow assignment,
-cross-agent failover, and direct `ModelClient.chat()` path previously trusted the
-persisted model identifier. That stale-state path is sufficient to reproduce the
-same unsupported Azure chat operation after a process restart or durable bootstrap.
+cross-agent failover, readiness probe, streaming path, and direct
+`ModelClient.chat()` path previously trusted the persisted model identifier. That
+stale-state path is sufficient to reproduce the same unsupported Azure chat
+operation after a process restart or durable bootstrap.
 
 OpenAI documents `text-embedding-3-large` under the embeddings endpoint, separately
 from models supported by chat completions. Microsoft likewise demonstrates it with
@@ -41,28 +42,37 @@ operation; it cannot make an embedding deployment execute a chat operation.
 
 ## Decision
 
-Chat capability is a **shared runtime invariant**, not only a discovery filter.
+Chat transport compatibility and general agent-role eligibility are separate
+shared runtime invariants. A provider may expose an audio-capable model or a
+policy classifier through Chat Completions while that model remains unsuitable
+for ordinary thinker, worker, verifier, or synthesizer work.
 
 1. Normalize provider prefixes and common separators in model identifiers.
-2. Reject identifiers that clearly advertise embedding, reranking, transcription,
-   moderation/safety, image, audio/speech, realtime, or known embedding-family
-   transport semantics.
-3. Apply the guard while parsing both OpenAI-compatible and Bytez catalogs.
-4. Re-check the invariant before converting a discovery record to `ModelAgent`.
-5. Re-check the invariant before writing chat pricing or running price-based chat
-   selection.
-6. Remove stale non-chat agents from thinker, worker, verifier, and synthesizer
+2. At the transport boundary, reject identifiers that clearly advertise embedding,
+   reranking, transcription, moderation-endpoint, image-generation, realtime, or
+   speech-only semantics.
+3. Keep provider-documented audio and policy-classifier models transport-compatible
+   when they are served through Chat Completions.
+4. At discovery and ordinary orchestration-role boundaries, additionally exclude
+   explicit guard, safety, and NemoGuard policy classifiers.
+5. Apply the general-role guard while parsing both OpenAI-compatible and Bytez
+   catalogs and before converting, pricing, or cost-selecting a discovery record.
+6. Remove stale ineligible agents from thinker, worker, verifier, and synthesizer
    ranking even if a durable configuration still contains them.
-7. Reselect a generated workflow step that explicitly names a stale non-chat agent.
-8. Remove non-chat agents from cross-agent failover candidates.
-9. Reject a non-chat model at `ModelClient.chat()` before mock or network transport.
-10. Leave unknown identifiers eligible without fabricating reasoning, tool, vision,
+7. Reselect a generated workflow step that explicitly names a stale ineligible
+   agent and omit such agents from planner inventory.
+8. Remove ineligible agents from cross-agent failover candidates.
+9. Apply the transport guard at `ModelClient.chat()`, `stream_chat()`, and
+   readiness probing before mock or network transport.
+10. Fail closed when no general chat agent remains.
+11. Leave unknown identifiers eligible without fabricating reasoning, tool, vision,
     or verification capabilities from their names.
 
 This is deliberately a conservative negative filter. A future capability registry
 may replace name-based exclusion with authenticated provider metadata, measured
 endpoint probes, and separate endpoint-specific pools. Until that evidence exists,
-a clearly non-chat model fails closed at every chat boundary.
+a clearly incompatible model fails closed at transport boundaries and a clearly
+specialized policy model fails closed at general-role boundaries.
 
 ## Rejected response
 
@@ -93,8 +103,10 @@ and provider/separator aliases. It verifies:
 - fail-closed behavior when the persisted pool contains only non-chat agents;
 - generated-plan reassignment away from a stale embedding agent;
 - exclusion from cross-agent failover;
-- direct `ModelClient.chat()` rejection before transport;
-- idempotent runtime-guard installation.
+- direct and streaming `ModelClient` rejection before transport;
+- readiness failure with a stable non-chat code before provider access;
+- planner inventory and generated-plan isolation;
+- distinction between chat-served audio/policy models and general agent roles.
 
 ## References
 
@@ -108,3 +120,6 @@ https://learn.microsoft.com/en-us/azure/developer/ai/how-to/switching-endpoints
 OpenAI. (n.d.). *Data controls in the OpenAI platform: Default usage policies by
 endpoint*. Retrieved August 20, 2026, from
 https://platform.openai.com/docs/models/default-usage-policies-by-endpoint
+
+OpenAI. (n.d.). *GPT-audio model*. Retrieved August 20, 2026, from
+https://developers.openai.com/api/docs/models/gpt-audio

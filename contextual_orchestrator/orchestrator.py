@@ -31,7 +31,10 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
-from .chat_capability import is_chat_compatible_model_id
+from .chat_capability import (
+    is_chat_compatible_model_id,
+    is_general_chat_agent_model_id,
+)
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 
@@ -2450,7 +2453,7 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
-            if is_chat_compatible_model_id(agent.model)
+            if is_general_chat_agent_model_id(agent.model)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -2492,8 +2495,8 @@ class TaskOrchestrator:
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
             assigned = known_agents.get(agent_id)
-            if assigned is None or not is_chat_compatible_model_id(assigned.model):
-                # Unknown or stale non-chat assignments are reselected honestly.
+            if assigned is None or not is_general_chat_agent_model_id(assigned.model):
+                # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
             steps.append(WorkflowStep(index, role, agent_id, subtask, access))
         if steps[-1].role not in {"synthesizer", "worker"}:
@@ -2534,7 +2537,7 @@ class TaskOrchestrator:
                 key=lambda agent: self._score_agent(agent, role, lowered),
                 reverse=True,
             )
-            if is_chat_compatible_model_id(agent.model)
+            if is_general_chat_agent_model_id(agent.model)
         ]
 
     def _select_agent(self, text: str, role: str) -> ModelAgent:
@@ -2577,7 +2580,7 @@ class TaskOrchestrator:
         ordered = [
             agent
             for agent in [primary] + [agent for agent in ranked if agent.id != primary.id]
-            if is_chat_compatible_model_id(agent.model)
+            if is_general_chat_agent_model_id(agent.model)
         ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]

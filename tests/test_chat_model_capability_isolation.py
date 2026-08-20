@@ -12,6 +12,9 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.chat_capability import (  # noqa: E402
+    is_chat_compatible_model_id,
+)
 from contextual_orchestrator.credentials import (  # noqa: E402
     InMemoryCredentialBackend,
     register_credential,
@@ -24,7 +27,6 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     ProviderModelSource,
     agent_from_discovered,
     discover_provider_models,
-    is_chat_compatible_model_id,
     refresh_price_book,
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
@@ -106,6 +108,8 @@ def test_embedding_deployments_never_enter_chat_agent_discovery() -> None:
             {"id": "gpt-4o-mini-transcribe"},
             {"id": "text-moderation-latest"},
             {"id": "company/reranker-v2"},
+            {"id": "nvidia/llama-3.1-nemotron-safety-guard-8b-v3"},
+            {"id": "gpt-audio"},
             {"id": "gpt-5.2"},
             {"id": "qwen/qwen3-235b-a22b-instruct"},
         ]
@@ -118,6 +122,7 @@ def test_embedding_deployments_never_enter_chat_agent_discovery() -> None:
         discovered = discover_provider_models(source)
 
     assert [model.model_id for model in discovered] == [
+        "gpt-audio",
         "gpt-5.2",
         "qwen/qwen3-235b-a22b-instruct",
     ]
@@ -173,7 +178,7 @@ def test_bytez_chat_catalog_still_rejects_non_chat_identifiers() -> None:
 
 def test_non_chat_discovery_cannot_be_converted_to_agent() -> None:
     """Keep manually constructed discovery rows from bypassing the parser filter."""
-    with pytest.raises(ValueError, match="non-chat model"):
+    with pytest.raises(ValueError, match="general chat agent"):
         agent_from_discovered(_model("azure/text-embedding-3-large"))
 
 

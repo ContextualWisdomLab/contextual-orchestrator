@@ -27,7 +27,7 @@ from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
 from .batch_routing import cheapest_upstream
-from .chat_capability import is_chat_compatible_model_id
+from .chat_capability import is_general_chat_agent_model_id
 from .credentials import get_credential
 from .orchestrator import ModelAgent
 
@@ -146,7 +146,7 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
         if not isinstance(row, dict):
             continue
         model_id = row.get("id")
-        if not is_chat_compatible_model_id(model_id):
+        if not is_general_chat_agent_model_id(model_id):
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         discovered.append(
@@ -171,7 +171,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
         if not isinstance(row, dict):
             continue
         model_id = row.get("modelId")
-        if not is_chat_compatible_model_id(model_id):
+        if not is_general_chat_agent_model_id(model_id):
             continue
         discovered.append(
             DiscoveredModel(
@@ -240,9 +240,9 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
-    """Build a disabled chat ModelAgent or reject a non-chat discovery record."""
-    if not is_chat_compatible_model_id(discovered.model_id):
-        raise ValueError("non-chat model cannot be converted into a chat agent")
+    """Build a disabled general chat agent or reject an ineligible record."""
+    if not is_general_chat_agent_model_id(discovered.model_id):
+        raise ValueError("model is not eligible for a general chat agent")
     return ModelAgent(
         id=agent_id_for(discovered),
         model=discovered.model_id,
@@ -268,7 +268,7 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 
     written = 0
     for model in discovered:
-        if not is_chat_compatible_model_id(model.model_id):
+        if not is_general_chat_agent_model_id(model.model_id):
             continue
         if model.prompt_price_per_1k is None and model.completion_price_per_1k is None:
             continue
@@ -299,7 +299,7 @@ def select_cheapest_discovered_agent(
     "auto-pick something free to try," but callers doing real cost comparison
     should refresh pricing for every candidate they care about first.
     """
-    eligible = [model for model in discovered if is_chat_compatible_model_id(model.model_id)]
+    eligible = [model for model in discovered if is_general_chat_agent_model_id(model.model_id)]
     if not eligible:
         return None
     candidates = [{"provider": model.provider_name, "model": model.model_id} for model in eligible]
@@ -318,7 +318,7 @@ def select_top_n_cheapest_discovered_agents(
     """Return the ``limit`` cheapest chat-compatible models in ascending cost."""
     if limit <= 0:
         return []
-    eligible = [model for model in discovered if is_chat_compatible_model_id(model.model_id)]
+    eligible = [model for model in discovered if is_general_chat_agent_model_id(model.model_id)]
     if not eligible:
         return []
 
