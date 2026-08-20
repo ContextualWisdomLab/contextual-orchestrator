@@ -167,7 +167,6 @@ class _FastMLSIJudgeAdapter:
         response = self.orchestrator.proxy_completion({
             "model": agent.model,
             "messages": messages,
-            "temperature": self.orchestrator.client.temperature,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
         })
@@ -846,7 +845,6 @@ class ModelClient:
                 payload: dict[str, Any] = {
                     "model": agent.model,
                     "messages": [{"role": "user", "content": "Reply with exactly OK."}],
-                    "temperature": 0.0,
                     "stream": False,
                     "max_tokens": 1,
                 }
