@@ -18,8 +18,6 @@ CREATE TABLE IF NOT EXISTS provider_model (
     provider_account_id text NOT NULL
         REFERENCES provider_account(provider_account_id) ON DELETE CASCADE,
     model_name text NOT NULL,
-    chat_base_url text NOT NULL,
-    auth_scheme text NOT NULL,
     prompt_price_per_1k numeric(20, 8),
     completion_price_per_1k numeric(20, 8),
     currency_code text NOT NULL,

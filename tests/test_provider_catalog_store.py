@@ -62,6 +62,11 @@ def test_schema_is_normalized_and_contains_no_secret_value_column() -> None:
     assert "api_key" not in lowered
     assert "secret_value" not in lowered
     assert "encrypted_value" not in lowered
+    model_table = lowered.split(
+        "create table if not exists provider_model (", 1
+    )[1].split(");", 1)[0]
+    assert "chat_base_url" not in model_table
+    assert "auth_scheme" not in model_table
 
 
 def test_primary_and_secondary_nim_accounts_have_distinct_ids() -> None:
@@ -109,10 +114,11 @@ def test_success_replaces_current_rows_and_failure_keeps_last_known_good() -> No
     ]
     assert store.serving_tags(source, "model-a") == ("discovered", "chat")
 
-    store.record_failure(source, error_code="provider_timeout")
+    store.record_failure(source, error_code="provider_timeout: secret-token")
     assert [model.model_id for model in store.serving_models(source)] == [
         "model-a"
     ]
+    assert store.refresh_evidence()[-1].error_code == "unknown_error"
 
     store.record_success(
         source,
@@ -197,13 +203,13 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     assert "INSERT INTO model_serving_tag" in success_sql
     assert connections[-1].commits >= 1
 
-    store.record_failure(source, error_code="provider_timeout")
+    store.record_failure(source, error_code="provider_timeout: secret-token")
     failure_sql = "\n".join(
         statement for statement, _params in connections[-1].cursor_object.calls
     )
     assert "UPDATE provider_model SET enabled_flag = false" not in failure_sql
     assert "INSERT INTO catalog_refresh_run" in failure_sql
-    assert store.refresh_evidence()[-1].error_code == "provider_timeout"
+    assert store.refresh_evidence()[-1].error_code == "unknown_error"
 
 
 def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
@@ -238,5 +244,6 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
         )
     ]
     query, params = connection.cursor_object.calls[-1]
+    assert "JOIN provider_account AS pa" in query
     assert "serving_eligible_flag = true" in query
     assert params == (provider_account_id(source),)

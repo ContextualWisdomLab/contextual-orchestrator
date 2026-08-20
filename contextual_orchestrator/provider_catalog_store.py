@@ -41,8 +41,6 @@ CREATE TABLE IF NOT EXISTS provider_model (
     provider_account_id text NOT NULL
         REFERENCES provider_account(provider_account_id) ON DELETE CASCADE,
     model_name text NOT NULL,
-    chat_base_url text NOT NULL,
-    auth_scheme text NOT NULL,
     prompt_price_per_1k numeric(20, 8),
     completion_price_per_1k numeric(20, 8),
     currency_code text NOT NULL,
@@ -139,6 +137,9 @@ class ProviderCatalogStore(Protocol):
 
 _SLUG_RE = re.compile(r"[^a-z0-9]+")
 _CURRENCY_RE = re.compile(r"^[A-Z]{3}$")
+_ALLOWED_REFRESH_ERROR_CODES = frozenset(
+    {"provider_discovery_error", "empty_provider_catalog", "unknown_error"}
+)
 
 
 def provider_account_id(source: ProviderModelSource) -> str:
@@ -185,6 +186,14 @@ def _normalize_currency(value: object) -> str:
         return "USD"
     normalized = value.strip().upper()
     return normalized if _CURRENCY_RE.fullmatch(normalized) else "USD"
+
+
+def _normalize_error_code(value: object) -> str:
+    """Return one approved secret-free provider refresh failure code."""
+    if not isinstance(value, str):
+        return "unknown_error"
+    normalized = value.strip().casefold()
+    return normalized if normalized in _ALLOWED_REFRESH_ERROR_CODES else "unknown_error"
 
 
 def _normalize_tags(tags: Sequence[str]) -> tuple[str, ...]:
@@ -302,11 +311,7 @@ class InMemoryProviderCatalogStore:
         """Record a stable failure without mutating last-known-good models."""
         account_id = provider_account_id(source)
         started_at = _now()
-        stable_code = (
-            error_code.strip().casefold()
-            if isinstance(error_code, str) and error_code.strip()
-            else "unknown_error"
-        )
+        stable_code = _normalize_error_code(error_code)
         with self._lock:
             self._accounts[account_id] = source
             self._refreshes.append(
@@ -453,16 +458,13 @@ class PostgresProviderCatalogStore:
                     cursor.execute(
                         "INSERT INTO provider_model ("
                         "provider_model_id, provider_account_id, model_name, "
-                        "chat_base_url, auth_scheme, prompt_price_per_1k, "
-                        "completion_price_per_1k, currency_code, "
+                        "prompt_price_per_1k, completion_price_per_1k, currency_code, "
                         "serving_eligible_flag, enabled_flag, first_seen_at, "
                         "last_seen_at"
-                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s, "
+                        ") VALUES (%s, %s, %s, %s, %s, %s, %s, "
                         "true, %s, %s) "
                         "ON CONFLICT (provider_model_id) DO UPDATE SET "
                         "model_name = EXCLUDED.model_name, "
-                        "chat_base_url = EXCLUDED.chat_base_url, "
-                        "auth_scheme = EXCLUDED.auth_scheme, "
                         "prompt_price_per_1k = EXCLUDED.prompt_price_per_1k, "
                         "completion_price_per_1k = EXCLUDED.completion_price_per_1k, "
                         "currency_code = EXCLUDED.currency_code, "
@@ -472,8 +474,6 @@ class PostgresProviderCatalogStore:
                             model_row_id,
                             account_id,
                             model_name,
-                            model.chat_base_url,
-                            model.auth_scheme,
                             model.prompt_price_per_1k,
                             model.completion_price_per_1k,
                             model.currency_code,
@@ -533,11 +533,7 @@ class PostgresProviderCatalogStore:
     ) -> None:
         """Record a PostgreSQL failure without disabling prior models."""
         started_at = _now()
-        stable_code = (
-            error_code.strip().casefold()
-            if isinstance(error_code, str) and error_code.strip()
-            else "unknown_error"
-        )
+        stable_code = _normalize_error_code(error_code)
         with self._connect() as connection:
             self._ensure_schema(connection)
             with connection.cursor() as cursor:
@@ -583,11 +579,13 @@ class PostgresProviderCatalogStore:
             self._ensure_schema(connection)
             with connection.cursor() as cursor:
                 cursor.execute(
-                    "SELECT model_name, chat_base_url, auth_scheme, "
-                    "prompt_price_per_1k, completion_price_per_1k, currency_code "
-                    "FROM provider_model WHERE provider_account_id = %s "
-                    "AND enabled_flag = true AND serving_eligible_flag = true "
-                    "ORDER BY model_name",
+                    "SELECT pm.model_name, pa.chat_base_url, pa.auth_scheme, "
+                    "pm.prompt_price_per_1k, pm.completion_price_per_1k, "
+                    "pm.currency_code FROM provider_model AS pm "
+                    "JOIN provider_account AS pa ON pa.provider_account_id = pm.provider_account_id "
+                    "WHERE pm.provider_account_id = %s "
+                    "AND pm.enabled_flag = true AND pm.serving_eligible_flag = true "
+                    "ORDER BY pm.model_name",
                     (account_id,),
                 )
                 rows = cursor.fetchall()

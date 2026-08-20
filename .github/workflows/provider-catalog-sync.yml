@@ -19,15 +19,6 @@ jobs:
     runs-on: ubuntu-latest
     environment: production
     timeout-minutes: 15
-    env:
-      CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
-      CONTEXTUAL_ORCHESTRATOR_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
-      CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
-      NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
-      NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
-      BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
-      OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
-      OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
     steps:
       - name: Checkout protected default branch
         uses: actions/checkout@9c091bb21b7c1c1d1991bb908d89e4e9dddfe3e0 # actions/checkout@v7
@@ -39,20 +30,24 @@ jobs:
         with:
           python-version: "3.12"
 
-      - name: Require durable database bootstrap configuration
-        shell: bash
-        run: |
-          set -euo pipefail
-          test -n "${CONTEXTUAL_ORCHESTRATOR_KV_DSN}"
-          test -n "${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE}"
-
       - name: Install hash-pinned runtime dependencies
         run: python -m pip install --disable-pip-version-check --no-input --require-hashes -r requirements.lock
 
       - name: Register credentials and refresh normalized model catalog
         shell: bash
+        env:
+          CONTEXTUAL_ORCHESTRATOR_KV_BACKEND: postgres
+          CONTEXTUAL_ORCHESTRATOR_KV_DSN: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_DSN }}
+          CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE: ${{ secrets.CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE }}
+          NVIDIA_NIM_API_KEY: ${{ secrets.NVIDIA_NIM_API_KEY }}
+          NVIDIA_NIM_API_KEY_SUB: ${{ secrets.NVIDIA_NIM_API_KEY_SUB }}
+          BYTEZ_API_KEY: ${{ secrets.BYTEZ_API_KEY }}
+          OPENROUTER_API_KEY: ${{ secrets.OPENROUTER_API_KEY }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
         run: |
           set -euo pipefail
+          test -n "${CONTEXTUAL_ORCHESTRATOR_KV_DSN}"
+          test -n "${CONTEXTUAL_ORCHESTRATOR_KV_PASSPHRASE}"
           python -m contextual_orchestrator.provider_catalog_bootstrap --model-limit 24 > provider-bootstrap-report.json
           python - <<'PY'
           import json
@@ -87,11 +82,6 @@ jobs:
               'providers_with_errors': report['providers_with_errors'],
           }, sort_keys=True))
           PY
-
-      - name: Verify report contains no exact provider secret
-        shell: bash
-        run: |
-          set -euo pipefail
           python - <<'PY'
           import os
           from pathlib import Path
