@@ -696,6 +696,10 @@ class SqlLedgerStore:
             raise ValueError("paramstyle must be qmark or pyformat")
         self._conn = connection
         self._paramstyle = paramstyle
+        if self._paramstyle == "qmark":
+            # sqlite3 keeps foreign-key enforcement per connection and defaults
+            # it off. Set it before schema work can open a transaction.
+            self._conn.execute("PRAGMA foreign_keys = ON")
         self._create_schema()
         self._seed_dimension_catalog()
 
@@ -773,6 +777,7 @@ class SqlLedgerStore:
         # at the temporary legacy name.
         for statement in statements[:2]:
             cur.execute(statement)
+        self._seed_dimension_catalog_in_transaction(cur)
         columns = self._table_columns("llm_usage_records")
         if not columns:
             for statement in statements[2:]:
@@ -789,6 +794,11 @@ class SqlLedgerStore:
 
     def _seed_dimension_catalog(self) -> None:
         cur = self._conn.cursor()
+        self._seed_dimension_catalog_in_transaction(cur)
+        self._conn.commit()
+
+    def _seed_dimension_catalog_in_transaction(self, cur: Any) -> None:
+        """Seed dimension parents without committing an outer schema transaction."""
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
             cur.execute(
                 _DIMENSION_SELECT_SQL[self._paramstyle],
@@ -799,7 +809,6 @@ class SqlLedgerStore:
                     _DIMENSION_INSERT_SQL[self._paramstyle],
                     (name, label, order),
                 )
-        self._conn.commit()
 
     def append(self, record: UsageRecord) -> None:
         """Insert a usage record row."""

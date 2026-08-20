@@ -308,6 +308,22 @@ def test_sql_ledger_stores_descriptive_attribution_in_normalized_tables() -> Non
     assert store.query()[0]["upstream_api"] == "openai"
 
 
+def test_sql_ledger_enables_foreign_keys_and_cascades_attribution_rows() -> None:
+    """Keep relational attribution rows attached to their usage fact."""
+    connection = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    ledger = _priced_ledger(store=store)
+    ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=1, completion_tokens=1)
+    usage_record_id = store.query()[0]["usage_record_id"]
+
+    assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
+    connection.execute("DELETE FROM llm_usage_records WHERE usage_record_id = ?", (usage_record_id,))
+    assert connection.execute(
+        "SELECT COUNT(*) FROM usage_record_attributions WHERE usage_record_id = ?",
+        (usage_record_id,),
+    ).fetchone() == (0,)
+
+
 def test_sql_ledger_migrates_flattened_usage_rows() -> None:
     """Migrate legacy fact rows without changing the query contract."""
     connection = sqlite3.connect(":memory:")

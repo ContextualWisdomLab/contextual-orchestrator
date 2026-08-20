@@ -19,17 +19,22 @@ copies each fact and its relational dimensions, and drops the temporary table
 only after all rows are inserted. A failed or ambiguous migration raises
 without publishing a partial ledger.
 
+SQLite connections enable foreign-key enforcement before schema work begins,
+and the dimension catalog is seeded inside the migration transaction before
+child rows are inserted. Deleting a usage fact therefore cascades its
+attribution links without weakening migration integrity.
+
 SQLite uses `PRAGMA table_info`; PostgreSQL uses `information_schema.columns`
 from the first metadata query. The driver branch is deliberate because a
 failed SQLite probe would abort a PostgreSQL transaction before fallback.
 
 ## Verification
 
-The cost-ledger and dependent HTTP/router suites passed 34 tests, and the
-current PostgreSQL-style metadata regression plus the full repository suite
-passed 1448 tests. The normalized storage and legacy migration tests are
-included in `tests/test_cost_ledger.py`; Ruff, compileall, and `git diff
---check` passed.
+The focused cost-ledger, router, agent-pool, persistence, and naming suites
+passed 48 tests; the full repository suite passed 1449 tests in 549.55 seconds.
+The normalized storage, migration, foreign-key cascade, and PostgreSQL-style
+metadata tests are included in `tests/test_cost_ledger.py`; compileall and
+`git diff --check` passed.
 
 ## References (APA 7)
 
