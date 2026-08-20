@@ -88,11 +88,40 @@ def test_internal_chat_omits_unrequested_temperature(monkeypatch) -> None:
 
     monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
 
-    def capture_payload(_agent, payload, _destination):
+    def capture_payload(_agent, payload, _destination=None, *, timeout=None):
+        del timeout
         captured.update(payload)
         return "OK"
 
-    monkeypatch.setattr(client, "_send_with_retry", capture_payload)
+    monkeypatch.setattr(client, "_send", capture_payload)
 
     assert client.chat(agent, [{"role": "user", "content": "Synthesize."}]) == "OK"
     assert "temperature" not in captured
+
+
+def test_internal_chat_preserves_explicit_temperature(monkeypatch) -> None:
+    """An explicit caller sampling control remains an honest provider passthrough."""
+    client = ModelClient()
+    agent = ModelAgent(
+        id="worker",
+        model="provider/model",
+        base_url="https://gateway.example.com",
+        credential_key="",
+    )
+    captured: dict[str, object] = {}
+
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
+
+    def capture_payload(_agent, payload, _destination=None, *, timeout=None):
+        del timeout
+        captured.update(payload)
+        return "OK"
+
+    monkeypatch.setattr(client, "_send", capture_payload)
+
+    assert client.chat(
+        agent,
+        [{"role": "user", "content": "Sample."}],
+        temperature=0.2,
+    ) == "OK"
+    assert captured["temperature"] == 0.2
