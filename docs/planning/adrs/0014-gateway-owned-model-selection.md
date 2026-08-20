@@ -58,14 +58,19 @@ because the provider response shape is richer.
 - `json_object`, `json_schema`, and Responses text JSON formats force the
   conduct workflow. The final synthesis receives the output contract and the
   gateway validates the resulting JSON locally before returning it.
-- Tool-loop requests are not proxied to one agent. Until a multi-agent tool
-  execution contract exists, they return a named `422` rather than claiming an
-  orchestrated result.
+- Tool-loop requests are explicitly passed to one selected worker agent. The
+  gateway preserves the provider's full tool-call response and the client owns
+  execution of the returned function calls; they do not claim a multi-agent
+  synthesis trace. Streaming tool loops are rejected until the gateway has a
+  provider-shape-preserving streaming relay. Clients must opt in with the
+  `X-Contextual-Orchestrator-Tool-Loop: v1` header; ordinary tool requests stay
+  fail-closed until that contract is explicitly selected.
 
 ## Consequences
 
 - Provider model selection remains centralized and can change with the registry
   without an application rebuild.
 - Structured output retains the multi-agent trace and cannot bypass synthesis.
-- Tool callers must wait for a future multi-agent tool protocol; no silent
-  single-agent fallback is permitted.
+- Tool callers use an explicit single-agent passthrough contract. The gateway
+  remains the model-selection boundary, while tool execution stays with the
+  authenticated client and never becomes an implicit multi-agent fallback.
