@@ -146,12 +146,7 @@ class RequestError(Exception):
 
 @dataclass
 class SecurityConfig:
-    """Runtime safety controls for the stdlib HTTP server.
-
-    The built-in admin tokens are process-scoped operator credentials. Deployments
-    that use an external bearer verifier must also provide ``resource_authorizer``
-    before object-backed admin records can be read.
-    """
+    """Runtime safety controls for the stdlib HTTP server."""
 
     auth_token: str = ""
     admin_token: str = ""
@@ -166,11 +161,6 @@ class SecurityConfig:
     # relying-party adapter). The core deliberately does not decode JWTs with
     # an unsafe hand-rolled parser or own Keycloak admin credentials.
     bearer_verifier: Callable[[str, str], bool] | None = None
-    # Called after scope authorization for object-backed admin reads. Arguments
-    # are token, scope, resource type, resource id, and client address. The
-    # deployment owns tenant/subject/resource policy; the gateway has no tenant
-    # registry of its own.
-    resource_authorizer: Callable[[str, str, str, str, str], bool] | None = None
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -214,34 +204,6 @@ class SecurityConfig:
             valid = bool(expected) and secrets.compare_digest(token, expected)
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
-
-    def authorize_resource(
-        self,
-        headers: Any,
-        scope: str,
-        resource_type: str,
-        resource_id: str,
-        client_address: str,
-    ) -> None:
-        """Enforce object policy after the request's scope has been authorized."""
-        if self.resource_authorizer is None:
-            if self.bearer_verifier is not None:
-                raise RequestError(
-                    403,
-                    "resource_authorization_required",
-                    "object resource authorization is required for external bearer deployments",
-                )
-            return
-        raw = headers.get("authorization", "")
-        token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
-        try:
-            allowed = bool(
-                self.resource_authorizer(token, scope, resource_type, resource_id, client_address)
-            )
-        except Exception:  # noqa: BLE001 - policy adapter failure is an access denial
-            allowed = False
-        if not allowed:
-            raise RequestError(403, "forbidden", "resource access is forbidden")
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
@@ -4754,9 +4716,6 @@ def build_server(
                     return
                 if path.startswith("/api/v1/workflow_runs/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
-                    security.authorize_resource(
-                        self.headers, "admin", "workflow_run", workflow_run_id, self.client_address[0]
-                    )
                     try:
                         self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.expose_trace_by_default))
                         return
@@ -4765,9 +4724,6 @@ def build_server(
                         return
                 if path.startswith("/api/v1/access_reports/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
-                    security.authorize_resource(
-                        self.headers, "admin", "access_report", workflow_run_id, self.client_address[0]
-                    )
                     try:
                         orchestrator.record_analytics_event(
                             "access_report_viewed",
@@ -4785,9 +4741,6 @@ def build_server(
                         return
                 if path.startswith("/api/v1/evaluation_runs/"):
                     evaluation_run_id = path.rsplit("/", 1)[-1]
-                    security.authorize_resource(
-                        self.headers, "admin", "evaluation_run", evaluation_run_id, self.client_address[0]
-                    )
                     runs = getattr(orchestrator, "_evaluation_runs", {})
                     if evaluation_run_id in runs:
                         self._send(_response_payload(runs[evaluation_run_id], security.expose_trace_by_default))
