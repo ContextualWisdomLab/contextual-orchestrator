@@ -112,6 +112,15 @@ class PostgresCredentialBackend:
         self._passphrase = passphrase
         self._ensured = False
 
+    @property
+    def connection_dsn(self) -> str:
+        """Return the bootstrap DSN for a colocated metadata store.
+
+        Callers must treat this as connection material: never include it in logs,
+        reports, traces, or exceptions. Provider API keys remain inaccessible.
+        """
+        return self._dsn
+
     @classmethod
     def from_env(cls) -> "PostgresCredentialBackend":
         """Build the backend from bootstrap transport env vars (the only allowed env use).
