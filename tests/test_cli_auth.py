@@ -137,6 +137,18 @@ def test_server_concurrency_is_explicit_and_bounded() -> None:
     assert serve.call_args.kwargs["security"].max_concurrent_runs == 16
 
 
+def test_local_http_session_cookie_requires_explicit_opt_in() -> None:
+    with (
+        patch.object(sys, "argv", ["contextual-orchestrator", "--serve", "--auth-token", "token", "--insecure-admin-session-cookie"]),
+        patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
+        patch("contextual_orchestrator.__main__.ModelClient"),
+        patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        main()
+    assert serve.call_args.kwargs["security"].admin_session_secure_cookie is False
+
+
 def test_sampling_temperature_uses_descriptive_name_and_legacy_alias() -> None:
     for option in ("--sampling-temperature", "--temperature"):
         with (
