@@ -4464,7 +4464,7 @@ class TaskOrchestrator:
         release_authority_blockers = release["release_authorization"]["blockers"]
         product_blocked_count = release["release_summary"]["product_blocked_count"]
         blocked_count = (
-            product_blocked_count + len(release_authority_blockers)
+            max(1, product_blocked_count + len(concrete_blockers) + len(release_authority_blockers))
             if release_blocked
             else len(concrete_blockers)
         )
