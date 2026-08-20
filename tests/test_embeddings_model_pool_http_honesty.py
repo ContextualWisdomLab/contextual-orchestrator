@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.server import SecurityConfig, build_server
 
-_TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"  # noqa: S105
+_TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"
 
 
 def build() -> TaskOrchestrator:
@@ -57,6 +57,50 @@ def _server_without_embedding():
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     return server, thread, server.server_address[1]
+
+
+def test_select_capability_agent_normalizes_and_rejects_empty_capability() -> None:
+    """Capability selection normalizes names and rejects an empty capability."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("embedding_agent", "mock-planner", tags=("embedding",))]
+    )
+    assert orchestrator.select_capability_agent("  EMBEDDING ").id == "embedding_agent"
+    try:
+        orchestrator.select_capability_agent(" ")
+    except ValueError as exc:
+        assert str(exc) == "capability must be a non-empty string"
+    else:
+        raise AssertionError("empty capability must fail closed")
+
+
+def test_select_capability_agent_skips_disabled_and_excluded_agents() -> None:
+    """Capability selection skips disabled and provider-excluded candidates."""
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent("disabled_embedding", "disabled", tags=("embedding",), disabled=True),
+            ModelAgent(
+                "excluded_embedding",
+                "excluded",
+                tags=("embedding",),
+                provider_exclusions=("embedding",),
+            ),
+            ModelAgent("eligible_embedding", "eligible", tags=("embedding",)),
+        ]
+    )
+    assert orchestrator.select_capability_agent("embedding").id == "eligible_embedding"
+
+    unavailable = TaskOrchestrator(
+        [
+            ModelAgent("disabled_embedding", "disabled", tags=("embedding",), disabled=True),
+            ModelAgent("reasoning_agent", "reasoning", tags=("reasoning",)),
+        ]
+    )
+    try:
+        unavailable.select_capability_agent("embedding")
+    except RuntimeError as exc:
+        assert str(exc) == "no enabled agent available for capability=embedding"
+    else:
+        raise AssertionError("an unavailable capability must fail closed")
 
 
 def test_http_embeddings_rejects_model_outside_agent_pool() -> None:
