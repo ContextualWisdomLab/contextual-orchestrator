@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import json
+import math
 import secrets
+import socket
 import struct
 import threading
 import time
@@ -155,6 +157,7 @@ class SecurityConfig:
     allow_public_bind: bool = False
     expose_trace_by_default: bool = False
     max_body_bytes: int = 64 * 1024
+    request_read_timeout_seconds: float = 10.0
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
@@ -171,6 +174,15 @@ class SecurityConfig:
             raise ValueError("single auth_token cannot be combined with split tokens")
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
+            raise ValueError("max_body_bytes must be a positive integer")
+        if (
+            isinstance(self.request_read_timeout_seconds, bool)
+            or not isinstance(self.request_read_timeout_seconds, (int, float))
+            or not math.isfinite(float(self.request_read_timeout_seconds))
+            or not 0.1 <= float(self.request_read_timeout_seconds) <= 120.0
+        ):
+            raise ValueError("request_read_timeout_seconds must be between 0.1 and 120 seconds")
         if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -243,6 +255,8 @@ class SecurityConfig:
             "rate_limit_requests": self.rate_limit_requests,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "max_body_bytes": self.max_body_bytes,
+            "request_read_timeout_seconds": self.request_read_timeout_seconds,
         }
 
 
@@ -297,6 +311,50 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RequestError(400, "invalid_json", "request body must be a JSON object")
     return value
+
+
+def _header_values(headers: Any, field_name: str) -> list[str]:
+    """Return all raw values for one case-insensitive HTTP header field."""
+    raw_items = getattr(headers, "raw_items", None)
+    if callable(raw_items):
+        return [value for name, value in raw_items() if name.casefold() == field_name.casefold()]
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        return list(get_all(field_name, []))
+    value = headers.get(field_name)
+    return [] if value is None else [value]
+
+
+def _parse_request_framing(headers: Any, max_body_bytes: int) -> int:
+    """Validate fixed-length JSON framing before consuming any request bytes.
+
+    The server deliberately does not implement a chunked decoder. Requiring one
+    unambiguous ASCII decimal ``Content-Length`` prevents negative lengths,
+    duplicate disagreement, transfer-coding ambiguity, and unbounded reads from
+    reaching ``BufferedReader.read``.
+    """
+    transfer_encoding = _header_values(headers, "Transfer-Encoding")
+    content_lengths = _header_values(headers, "Content-Length")
+    if transfer_encoding:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "transfer-encoded request bodies are unsupported",
+        )
+    if not content_lengths:
+        raise RequestError(411, "length_required", "content-length is required")
+    if len(content_lengths) != 1:
+        raise RequestError(400, "invalid_request_framing", "duplicate content-length is unsupported")
+    raw_length = content_lengths[0]
+    if not raw_length or raw_length != raw_length.strip() or not raw_length.isascii() or not raw_length.isdigit():
+        raise RequestError(400, "invalid_request_framing", "content-length must be an ASCII decimal integer")
+    try:
+        body_size = int(raw_length, 10)
+    except (ValueError, TypeError):
+        raise RequestError(400, "invalid_request_framing", "content-length is invalid") from None
+    if body_size > max_body_bytes:
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    return body_size
 
 
 
@@ -5850,13 +5908,39 @@ def build_server(
             return int(raw)
 
         def _read_json(self) -> dict[str, Any]:
+            """Read one bounded, fixed-length JSON body and close bad frames."""
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
-            body_size = int(self.headers.get("content-length", "0"))
-            if body_size > security.max_body_bytes:
-                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
-            raw = self.rfile.read(body_size)
-            return _coerce_json(raw) if raw else {}
+            try:
+                body_size = _parse_request_framing(self.headers, security.max_body_bytes)
+            except RequestError:
+                self.close_connection = True
+                raise
+            if body_size == 0:
+                return {}
+            connection = getattr(self, "connection", None)
+            previous_timeout = None
+            timeout_supported = all(
+                hasattr(connection, method) for method in ("gettimeout", "settimeout")
+            )
+            if timeout_supported:
+                previous_timeout = connection.gettimeout()
+                connection.settimeout(security.request_read_timeout_seconds)
+            try:
+                chunks = bytearray()
+                while len(chunks) < body_size:
+                    chunk = self.rfile.read(body_size - len(chunks))
+                    if not chunk:
+                        self.close_connection = True
+                        raise RequestError(400, "invalid_request_framing", "request body ended before content-length")
+                    chunks.extend(chunk)
+            except (TimeoutError, socket.timeout):
+                self.close_connection = True
+                raise RequestError(408, "request_read_timeout", "request body read timed out") from None
+            finally:
+                if timeout_supported:
+                    connection.settimeout(previous_timeout)
+            return _coerce_json(bytes(chunks))
 
         def log_message(self, format: str, *args: object) -> None:
             return
