@@ -59,7 +59,7 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
   temperature is not reasoning effort. Production route/conduct defaults stay
   locked until `production_default_change_allowed` passes a true-θ RMSE gate.
   The ablation emits θ̂ and RMSE(θ̂, θ); a rank constant is not an estimate.
-  Buyer next action: run `python tests/test_reasoning_effort_profile.py`
+  Buyer next action: run `python -m pytest -q tests/test_reasoning_effort_profile.py`
   and keep live defaults unchanged while that gate is false.
 
 The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses a deterministic capability-hint heuristic only for worker/role routing so the repo runs without training data, GPUs, or vendor credentials. It is never an answer-quality, verification, or accept/reject judgment: verifier decisions must use the structured model judge and fail closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).

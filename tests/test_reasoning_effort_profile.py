@@ -83,6 +83,7 @@ def test_default_catalog_binds_every_workflow_role() -> None:
         assert profile.profile_version == PROFILE_VERSION
         assert profile.max_calls >= 1
         assert profile.max_workflow_steps >= 1
+    assert TaskOrchestrator.ROLE_TAGS["judge"] == TaskOrchestrator.ROLE_TAGS["verifier"]
 
 
 def test_parse_rejects_missing_payload_and_blank_version() -> None:
@@ -97,6 +98,15 @@ def test_parse_rejects_missing_payload_and_blank_version() -> None:
     except EffortProfileError:
         return
     raise AssertionError("blank profile_version must fail closed")
+
+
+def test_parse_requires_a_json_object() -> None:
+    for raw in ([], [("reasoning_effort", "high")], "profile"):
+        try:
+            parse_reasoning_effort_profile(raw)  # type: ignore[arg-type]
+        except EffortProfileError:
+            continue
+        raise AssertionError(f"non-object profile was accepted: {raw!r}")
 
 
 def test_parse_rejects_fractional_seed() -> None:
@@ -453,6 +463,7 @@ if __name__ == "__main__":  # pragma: no cover
     test_parse_rejects_nan_infinity_and_boolean_numbers()
     test_reasoning_effort_is_not_a_temperature_proxy()
     test_parse_rejects_missing_payload_and_blank_version()
+    test_parse_requires_a_json_object()
     test_parse_rejects_fractional_seed()
     test_default_catalog_binds_every_workflow_role()
     test_catalog_snapshot_is_stable_and_replayable()
@@ -463,6 +474,12 @@ if __name__ == "__main__":  # pragma: no cover
     test_access_list_scope_changes_rmse()
     test_equal_budget_ablation_keeps_production_default_locked()
     test_production_gate_rejects_junk_and_estimated_status()
+    test_profile_validation_covers_numeric_bounds_and_fallbacks()
+    test_request_profile_handles_omission_and_wrong_type()
+    test_estimator_rejects_invalid_factors_and_budget_overflow()
+    test_snapshot_rejects_wrong_profile_type_and_release_gate_is_strict()
+    test_request_profile_separates_native_effort_and_sampling_controls()
+    test_request_profile_fails_closed_or_omits_when_support_is_unproven()
     test_opt_in_catalog_attaches_identical_snapshot_on_route_and_conduct()
     test_persisted_run_stream_and_batch_keep_snapshot()
     test_doctoring_cites_fugu_trinity_conductor_apa7()

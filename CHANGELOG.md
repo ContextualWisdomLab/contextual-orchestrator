@@ -17,7 +17,7 @@ and this project uses [Semantic Versioning](https://semver.org/spec/v2.0.0.html)
   true-θ RMSE ablation that emits θ̂ and RMSE(θ̂, θ). Sampling temperature
   is not reasoning effort. Production route/conduct defaults stay locked
   until `production_default_change_allowed` is true.
-  Next action: run `python tests/test_reasoning_effort_profile.py` and keep
+  Next action: run `python -m pytest -q tests/test_reasoning_effort_profile.py` and keep
   live defaults unchanged while the gate is false. Pass
   `role_effort_catalog=default_role_effort_catalog()` to attach the same
   `reasoning_effort_snapshot` on `complete`, `run`, `stream_route`, and
