@@ -2885,7 +2885,12 @@ class TaskOrchestrator:
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
     def _ranked_agents(
-        self, text: str, role: str, *, required_tags: tuple[str, ...] = ()
+        self,
+        text: str,
+        role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
+        require_chat_model: bool = True,
     ) -> list[ModelAgent]:
         """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
         lowered = text.lower()
@@ -2893,7 +2898,7 @@ class TaskOrchestrator:
             agent
             for agent in self.agents
             if all(tag in agent.tags for tag in required_tags)
-            and is_general_chat_agent_model_id(agent.model)
+            and (not require_chat_model or is_general_chat_agent_model_id(agent.model))
         ]
         return sorted(
             candidates,
@@ -2924,7 +2929,7 @@ class TaskOrchestrator:
             raise ValueError("capability must be a non-empty string")
         ranked = [
             agent
-            for agent in self._ranked_agents("", capability)
+            for agent in self._ranked_agents("", capability, require_chat_model=False)
             if not agent.disabled
             and capability in agent.tags
             and capability not in agent.provider_exclusions

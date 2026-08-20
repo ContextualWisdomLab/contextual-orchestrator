@@ -62,7 +62,7 @@ def _server_without_embedding():
 def test_select_capability_agent_normalizes_and_rejects_empty_capability() -> None:
     """Capability selection normalizes names and rejects an empty capability."""
     orchestrator = TaskOrchestrator(
-        [ModelAgent("embedding_agent", "mock-planner", tags=("embedding",))]
+        [ModelAgent("embedding_agent", "text-embedding-3-large", tags=("embedding",))]
     )
     assert orchestrator.select_capability_agent("  EMBEDDING ").id == "embedding_agent"
     try:
