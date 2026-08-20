@@ -5984,14 +5984,21 @@ def build_server(
             if timeout_supported:
                 previous_timeout = connection.gettimeout()
                 connection.settimeout(security.request_read_timeout_seconds)
+            read_deadline = time.monotonic() + security.request_read_timeout_seconds
             try:
                 chunks = bytearray()
                 while len(chunks) < body_size:
+                    if time.monotonic() >= read_deadline:
+                        self.close_connection = True
+                        raise RequestError(408, "request_read_timeout", "request body read timed out")
                     chunk = self.rfile.read(body_size - len(chunks))
                     if not chunk:
                         self.close_connection = True
                         raise RequestError(400, "invalid_request_framing", "request body ended before content-length")
                     chunks.extend(chunk)
+                    if time.monotonic() >= read_deadline:
+                        self.close_connection = True
+                        raise RequestError(408, "request_read_timeout", "request body read timed out")
             except (TimeoutError, socket.timeout):
                 self.close_connection = True
                 raise RequestError(408, "request_read_timeout", "request body read timed out") from None
