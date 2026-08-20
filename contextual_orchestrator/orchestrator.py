@@ -153,7 +153,13 @@ class _FastMLSIJudgeAdapter:
     def complete(self, messages: list[ChatMessage], mode: str | None = None) -> dict[str, Any]:
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
-        output, served_id, usage = self.orchestrator._invoke(self._agent(), messages, text=self.text, role="judge")
+        output, served_id, usage = self.orchestrator._invoke(
+            self._agent(),
+            messages,
+            text=self.text,
+            role="judge",
+            eligibility_role="verifier",
+        )
         return self._completion_payload(output, served_id, usage, self.mode if mode is None else mode)
 
     def complete_structured(
@@ -2638,7 +2644,13 @@ class TaskOrchestrator:
         return selected
 
     def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        eligibility_role: str | None = None,
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -2646,8 +2658,11 @@ class TaskOrchestrator:
         cross-agent failover plus a per-agent circuit breaker, and returns
         ``(output, served_agent_id, usage)`` — usage is the provider-reported token
         usage when available (else None), so spend analytics can prefer it.
+
+        ``eligibility_role`` keeps operator exclusions tied to the role used to
+        select the primary when the call's effort profile has a distinct name.
         """
-        candidates = self._failover_candidates(primary, text, role)
+        candidates = self._failover_candidates(primary, text, eligibility_role or role)
         last_error: Exception | None = None
         for agent in candidates:
             try:
