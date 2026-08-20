@@ -100,15 +100,20 @@ def test_commercial_gap_register_report_classifies_external_gaps_and_release_aut
 def test_commercial_gap_register_counts_product_release_blocker() -> None:
     """A blocked product artifact remains visible without an authority blocker."""
     orchestrator = build()
-    for product_blocked_count in (0, 1):
+    cases = (
+        (0, [], [], 1),
+        (1, [], [], 1),
+        (2, ["concrete-1", "concrete-2"], ["authority-1"], 3),
+    )
+    for product_blocked_count, concrete_blockers, authority_blockers, expected_blocked_count in cases:
         release = {
             "release_status": "commercial_release_blocked",
             "external_release_gaps": [],
-            "concrete_blockers": [],
+            "concrete_blockers": concrete_blockers,
             "release_summary": {"product_blocked_count": product_blocked_count},
             "release_authorization": {
                 "status": "release_authorized",
-                "blockers": [],
+                "blockers": authority_blockers,
             },
             "review_process_policy": {"is_blocker": False},
             "related_runtime_reports": {},
@@ -119,7 +124,7 @@ def test_commercial_gap_register_counts_product_release_blocker() -> None:
             report = orchestrator.commercial_gap_register_report()
 
         assert report["gap_register_status"] == "commercial_gap_register_blocked"
-        assert report["gap_summary"]["blocked_count"] == 1
+        assert report["gap_summary"]["blocked_count"] == expected_blocked_count
 
 
 def test_commercial_gap_register_endpoint_openapi_admin_and_docs_contract() -> None:
