@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 07:33, Asia/Seoul
+**As of:** 2026-08-21 07:38, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -128,12 +128,12 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 07:33 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 07:38 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ### External central workflow prerequisite
 
-At the refreshed snapshot, ContextualWisdomLab/.github PR [#1170](https://github.com/ContextualWisdomLab/.github/pull/1170) is open at exact head `595899d9b98ff0be6e9b42910907adfa643ad9a5`. It pins the current reviewed contextual-orchestrator gateway head `0071751782ae535721e71785c3037989d2d27b77`, keeps the existing `PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN` publication boundary, and routes the five provider bootstrap keys only to the loopback inference sidecar. Its full local suite is `1239 passed` with 16 subtests; hosted Checks are pending and the required independent approval is absent.
+At the refreshed snapshot, ContextualWisdomLab/.github PR [#1170](https://github.com/ContextualWisdomLab/.github/pull/1170) is open at exact head `e5e0093d420d6c027cfad7bb19ec3f8ea72a73d6`. It pins the current reviewed contextual-orchestrator gateway head `0071751782ae535721e71785c3037989d2d27b77`, keeps the existing `PR_REVIEW_MERGE_TOKEN`/`OPENCODE_APPROVE_TOKEN` publication boundary, and routes the five provider bootstrap keys only to the loopback inference sidecar. The earlier `1239 passed`/16-subtest local proof belonged to predecessor `595899d9b98ff0be6e9b42910907adfa643ad9a5` and does not transfer; current hosted Checks are queued and the required independent approval is absent.
 
 The scheduler's earlier dry-run decision for PR #787 was `review_dispatch` for its non-main base; #787, #779, and #778 are now merged into the #765 parent stack. The target repository currently exposes no `opencode-review.yml` workflow of its own and the central repository-dispatch queue remains asynchronous. Until #1170 reaches protected main, remaining stacked PR review may remain absent or use the prior central model path; this is an external integration dependency, not evidence that the stacked code is merge-ready.
 
