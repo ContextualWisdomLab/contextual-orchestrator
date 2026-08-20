@@ -50,15 +50,18 @@ def build() -> TaskOrchestrator:
     )
 
 
-def _post(port: int, payload: dict) -> tuple[int, dict]:
+def _post(port: int, payload: dict, *, tool_loop: bool = False) -> tuple[int, dict]:
+    headers = {
+        "content-type": "application/json",
+        "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+        "connection": "close",
+    }
+    if tool_loop:
+        headers["x-contextual-orchestrator-tool-loop"] = "v1"
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
         data=json.dumps(payload).encode("utf-8"),
-        headers={
-            "content-type": "application/json",
-            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
-            "connection": "close",
-        },
+        headers=headers,
         method="POST",
     )
     try:
@@ -147,7 +150,7 @@ def test_http_tools_passthrough_rejects_invalid_user_and_stream_options() -> Non
         thread.join(timeout=5)
 
 
-def test_http_tools_rejects_valid_tool_request_without_single_agent_fallback() -> None:
+def test_http_tools_rejects_valid_tool_request_without_explicit_loop_header() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -156,6 +159,24 @@ def test_http_tools_rejects_valid_tool_request_without_single_agent_fallback() -
         )
         assert status == 422, body
         assert body["error"]["code"] == "multi_agent_tools_unsupported"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_tools_preserves_valid_tool_request_with_explicit_loop_header() -> None:
+    """The opt-in contract preserves provider tool state for OpenCode."""
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            _base(temperature="0.7", top_p="0.95", max_tokens="64"),
+            tool_loop=True,
+        )
+        assert status == 200, body
+        assert body["echo"]["temperature"] == 0.7
+        assert body["echo"]["max_tokens"] == 64
+        assert body["echo"]["tools"] == _TOOLS
     finally:
         server.shutdown()
         thread.join(timeout=5)

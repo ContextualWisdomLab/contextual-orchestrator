@@ -61,6 +61,33 @@ def _safe_provider_probe_error_type(exc: Exception) -> str:
     return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
 
 
+def _temperature_capability_rejection(exc: Exception) -> bool:
+    """Recognize only explicit provider rejection of the optional temperature field."""
+    if not isinstance(exc, urllib.error.HTTPError) or exc.code not in {400, 422}:
+        return False
+    try:
+        body = exc.read()
+    except (OSError, ValueError):
+        body = b""
+    body_bytes = body if isinstance(body, bytes) else str(body).encode("utf-8")
+    replay = io.BytesIO(body_bytes)
+    exc.fp = exc.file = replay
+    exc.read = replay.read
+    detail = body_bytes.decode("utf-8", errors="replace")
+    detail = f"{exc} {detail}".lower()
+    return "temperature" in detail and any(
+        marker in detail
+        for marker in (
+            "unsupported",
+            "not supported",
+            "does not support",
+            "unknown parameter",
+            "unknown field",
+            "unrecognized",
+        )
+    )
+
+
 def _validate_provider_probe_timeout(timeout: float) -> float:
     """Validate the finite, bounded timeout used by explicit readiness probes."""
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
@@ -1018,18 +1045,34 @@ class ModelClient:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
+        active_payload = payload
+        temperature_negotiated = False
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
-            try:
-                return (
-                    self._send(agent, payload, destination)
-                    if timeout is None
-                    else self._send(agent, payload, destination, timeout=timeout)
-                )
-            except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
-                if attempt >= retry_limit or not is_transient_error(exc):
+            while True:
+                try:
+                    return (
+                        self._send(agent, active_payload, destination)
+                        if timeout is None
+                        else self._send(agent, active_payload, destination, timeout=timeout)
+                    )
+                except urllib.error.HTTPError as exc:
+                    if (
+                        not temperature_negotiated
+                        and "temperature" in active_payload
+                        and _temperature_capability_rejection(exc)
+                    ):
+                        active_payload = dict(active_payload)
+                        active_payload.pop("temperature", None)
+                        temperature_negotiated = True
+                        continue
+                    last_error = exc
                     break
-                self._sleep(self._backoff_delay(attempt))
+                except Exception as exc:  # noqa: BLE001 - classify then decide
+                    last_error = exc
+                    break
+            if attempt >= retry_limit or not is_transient_error(last_error):
+                break
+            self._sleep(self._backoff_delay(attempt))
         detail = f": {last_error}" if last_error else ""
         raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
 
@@ -1335,14 +1378,30 @@ class ModelClient:
         """Passthrough transport with the same transient-failure retry policy as _send."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
+        active_payload = payload
+        temperature_negotiated = False
         for attempt in range(retry_limit + 1):
-            try:
-                return self._send_raw(agent, endpoint, payload, destination)
-            except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
-                if attempt >= retry_limit or not is_transient_error(exc):
+            while True:
+                try:
+                    return self._send_raw(agent, endpoint, active_payload, destination)
+                except urllib.error.HTTPError as exc:
+                    if (
+                        not temperature_negotiated
+                        and "temperature" in active_payload
+                        and _temperature_capability_rejection(exc)
+                    ):
+                        active_payload = dict(active_payload)
+                        active_payload.pop("temperature", None)
+                        temperature_negotiated = True
+                        continue
+                    last_error = exc
                     break
-                self._sleep(self._backoff_delay(attempt))
+                except Exception as exc:  # noqa: BLE001 - classify then decide
+                    last_error = exc
+                    break
+            if attempt >= retry_limit or not is_transient_error(last_error):
+                break
+            self._sleep(self._backoff_delay(attempt))
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
 
     def _send_raw(
@@ -1819,6 +1878,7 @@ class TaskOrchestrator:
         "worker": ("coding", "implementation", "reasoning"),
         "verifier": ("verification", "security", "review", "debugging"),
         "synthesizer": ("writing", "reasoning", "planning"),
+        "embedding": ("embedding",),
     }
     DOMAIN_HINTS = {
         "coding": ("code", "bug", "debug", "implement", "repository", "test", "코드", "구현"),
@@ -2790,6 +2850,22 @@ class TaskOrchestrator:
         if role in selected.provider_exclusions:  # pragma: no cover
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
+
+    def select_capability_agent(self, capability: str) -> ModelAgent:
+        """Select an enabled agent carrying an explicit capability tag."""
+        capability = capability.strip().lower()
+        if not capability:
+            raise ValueError("capability must be a non-empty string")
+        ranked = [
+            agent
+            for agent in self._ranked_agents("", capability)
+            if not agent.disabled
+            and capability in agent.tags
+            and capability not in agent.provider_exclusions
+        ]
+        if not ranked:
+            raise RuntimeError(f"no enabled agent available for capability={capability}")
+        return ranked[0]
 
     def _invoke(
         self,

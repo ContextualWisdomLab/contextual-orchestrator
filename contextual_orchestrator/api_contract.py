@@ -111,7 +111,7 @@ OPENAPI_SPEC = {
         "/v1/embeddings": {
             "post": {
                 "operationId": "create_embedding",
-                "summary": "Create embeddings for semantic input",
+                "summary": "Create embeddings with optional orchestrator-owned model selection",
                 "security": [{"inference_bearer_auth": []}],
                 "requestBody": {
                     "required": True,
@@ -119,9 +119,12 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "required": ["model", "input"],
+                                "required": ["input"],
                                 "properties": {
-                                    "model": {"type": "string"},
+                                    "model": {
+                                        "type": "string",
+                                        "description": "Optional enabled embedding-capable pool model; omitted selects one.",
+                                    },
                                     "input": {
                                         "oneOf": [
                                             {"type": "string"},
@@ -136,6 +139,7 @@ OPENAPI_SPEC = {
                 "responses": {
                     "200": {"description": "Embedding response"},
                     "400": {"description": "Invalid request"},
+                    "503": {"description": "No enabled embedding-capable agent is available"},
                 },
             }
         },
@@ -587,9 +591,11 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
-                                "required": ["model"],
                                 "properties": {
-                                    "model": {"type": "string"},
+                                    "model": {
+                                        "type": "string",
+                                        "description": "Optional enabled embedding-capable pool model; omitted selects one.",
+                                    },
                                     "input": {
                                         "oneOf": [
                                             {"type": "string"},

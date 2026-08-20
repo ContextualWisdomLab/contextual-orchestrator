@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import json
+import math
 import secrets
+import socket
 import struct
 import threading
 import time
@@ -155,6 +157,7 @@ class SecurityConfig:
     allow_public_bind: bool = False
     expose_trace_by_default: bool = False
     max_body_bytes: int = 64 * 1024
+    request_read_timeout_seconds: float = 10.0
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
@@ -171,6 +174,15 @@ class SecurityConfig:
             raise ValueError("single auth_token cannot be combined with split tokens")
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
+            raise ValueError("max_body_bytes must be a positive integer")
+        if (
+            isinstance(self.request_read_timeout_seconds, bool)
+            or not isinstance(self.request_read_timeout_seconds, (int, float))
+            or not math.isfinite(float(self.request_read_timeout_seconds))
+            or not 0.1 <= float(self.request_read_timeout_seconds) <= 120.0
+        ):
+            raise ValueError("request_read_timeout_seconds must be between 0.1 and 120 seconds")
         if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -243,6 +255,8 @@ class SecurityConfig:
             "rate_limit_requests": self.rate_limit_requests,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "max_body_bytes": self.max_body_bytes,
+            "request_read_timeout_seconds": self.request_read_timeout_seconds,
         }
 
 
@@ -297,6 +311,50 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RequestError(400, "invalid_json", "request body must be a JSON object")
     return value
+
+
+def _header_values(headers: Any, field_name: str) -> list[str]:
+    """Return all raw values for one case-insensitive HTTP header field."""
+    raw_items = getattr(headers, "raw_items", None)
+    if callable(raw_items):
+        return [value for name, value in raw_items() if name.casefold() == field_name.casefold()]
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        return list(get_all(field_name, []))
+    value = headers.get(field_name)
+    return [] if value is None else [value]
+
+
+def _parse_request_framing(headers: Any, max_body_bytes: int) -> int:
+    """Validate fixed-length JSON framing before consuming any request bytes.
+
+    The server deliberately does not implement a chunked decoder. Requiring one
+    unambiguous ASCII decimal ``Content-Length`` prevents negative lengths,
+    duplicate disagreement, transfer-coding ambiguity, and unbounded reads from
+    reaching ``BufferedReader.read``.
+    """
+    transfer_encoding = _header_values(headers, "Transfer-Encoding")
+    content_lengths = _header_values(headers, "Content-Length")
+    if transfer_encoding:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "transfer-encoded request bodies are unsupported",
+        )
+    if not content_lengths:
+        raise RequestError(411, "length_required", "content-length is required")
+    if len(content_lengths) != 1:
+        raise RequestError(400, "invalid_request_framing", "duplicate content-length is unsupported")
+    raw_length = content_lengths[0]
+    if not raw_length or raw_length != raw_length.strip() or not raw_length.isascii() or not raw_length.isdigit():
+        raise RequestError(400, "invalid_request_framing", "content-length must be an ASCII decimal integer")
+    try:
+        body_size = int(raw_length, 10)
+    except (ValueError, TypeError):
+        raise RequestError(400, "invalid_request_framing", "content-length is invalid") from None
+    if body_size > max_body_bytes:
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    return body_size
 
 
 
@@ -1826,7 +1884,9 @@ def _validate_mode(mode: Any) -> str:
 
 
 
-def _require_pool_model(orchestrator: Any, model_name: str) -> None:
+def _require_pool_model(
+    orchestrator: Any, model_name: str, *, required_capability: str | None = None
+) -> None:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
@@ -1838,7 +1898,9 @@ def _require_pool_model(orchestrator: Any, model_name: str) -> None:
     for agent in agents:
         if getattr(agent, "disabled", False):
             continue
-        if getattr(agent, "model", None) == model_name:
+        if getattr(agent, "model", None) == model_name and (
+            required_capability is None or required_capability in getattr(agent, "tags", ())
+        ):
             return
     raise RequestError(
         400,
@@ -4323,12 +4385,27 @@ def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
     return value
 
 
-def _validate_embeddings_model(body: dict[str, Any]) -> str:
-    """OpenAI embeddings ``model`` — required non-empty string ≤256 chars.
+def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = None) -> str:
+    """Validate or auto-select an OpenAI embeddings model.
 
     Strip + write back (parity with chat/Completions/Responses) so padded
-    form/JS model names bind to the pool id on every surface.
+    form/JS model names bind to the pool id on every surface. An omitted model
+    is resolved by the orchestrator's explicit ``embedding`` capability pool;
+    no consumer-side sentinel model is accepted.
     """
+    if "model" not in body:
+        if orchestrator is None:
+            raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
+        try:
+            model = orchestrator.select_capability_agent("embedding").model
+        except (RuntimeError, ValueError) as exc:
+            raise RequestError(
+                503,
+                "embedding_unavailable",
+                "no enabled embedding-capable agent is available",
+            ) from exc
+        body["model"] = model
+        return model
     model = body.get("model")
     if model is None:
         raise RequestError(400, "invalid_model", "model is required")
@@ -5225,14 +5302,40 @@ def build_server(
                     frequency_penalty = sampling["frequency_penalty"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
-                    if tools_list or isinstance(tool_choice, dict) or (
+                    tool_passthrough = tools_list or isinstance(tool_choice, dict) or (
                         isinstance(tool_choice, str) and tool_choice not in {"none", "auto"}
-                    ):
+                    )
+                    tool_loop_header = self.headers.get(
+                        "x-contextual-orchestrator-tool-loop", ""
+                    ).strip().lower()
+                    if tool_passthrough and tool_loop_header == "v1":
+                        # OpenCode executes the returned function calls in its own
+                        # bounded tool loop. Preserve the full provider response;
+                        # multi-agent synthesis cannot safely merge tool state.
+                        if stream:
+                            raise RequestError(
+                                400,
+                                "invalid_stream",
+                                "tool-loop passthrough requires stream=false",
+                            )
+                        started_at = time.perf_counter()
+                        raw_response = self._run(lambda: orchestrator.proxy_completion(body))
+                        orchestrator.record_analytics_event(
+                            "chat_completion_tool_passthrough",
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(raw_response)
+                        return
+                    if tool_passthrough:
                         raise RequestError(
                             422,
                             "multi_agent_tools_unsupported",
-                            "tool execution cannot be represented by the multi-agent synthesis contract yet; "
-                            "a single-agent passthrough is intentionally not used",
+                            "tool execution requires the explicit v1 client-owned tool-loop contract",
                         )
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
@@ -5370,10 +5473,10 @@ def build_server(
                     # synchronously) and frames an OpenAI-shaped response so
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
-                    model_name = _validate_embeddings_model(body)
+                    model_name = _validate_embeddings_model(body, orchestrator)
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    _require_pool_model(orchestrator, model_name)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5459,16 +5562,8 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    # Require model — silent default to contextual-orchestrator was an
-                    # honesty gap for naruon/batch clients that omit the field.
-                    if "model" not in body:
-                        raise RequestError(
-                            400,
-                            "invalid_model",
-                            "model is required on /v1/batch/embeddings",
-                        )
-                    model_name = _validate_embeddings_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    model_name = _validate_embeddings_model(body, orchestrator)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -5643,12 +5738,32 @@ def build_server(
                         _validate_chat_tool_choice(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
+                    tool_loop_header = self.headers.get(
+                        "x-contextual-orchestrator-tool-loop", ""
+                    ).strip().lower()
+                    if tools_list and tool_loop_header == "v1":
+                        # The Responses client owns execution of the returned
+                        # function calls; the gateway preserves the full shape.
+                        started_at = time.perf_counter()
+                        raw_response = self._run(
+                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                        )
+                        orchestrator.record_analytics_event(
+                            "responses_tool_passthrough",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(raw_response)
+                        return
                     if tools_list:
                         raise RequestError(
                             422,
                             "multi_agent_tools_unsupported",
-                            "tool execution cannot be represented by the multi-agent synthesis contract yet; "
-                            "a single-agent passthrough is intentionally not used",
+                            "tool execution requires the explicit v1 client-owned tool-loop contract",
                         )
                     if "modalities" in body:
                         _validate_responses_modalities(body)
@@ -5850,13 +5965,46 @@ def build_server(
             return int(raw)
 
         def _read_json(self) -> dict[str, Any]:
+            """Read one bounded, fixed-length JSON body and close bad frames."""
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
-            body_size = int(self.headers.get("content-length", "0"))
-            if body_size > security.max_body_bytes:
-                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
-            raw = self.rfile.read(body_size)
-            return _coerce_json(raw) if raw else {}
+            try:
+                body_size = _parse_request_framing(self.headers, security.max_body_bytes)
+            except RequestError:
+                self.close_connection = True
+                raise
+            if body_size == 0:
+                return {}
+            connection = getattr(self, "connection", None)
+            previous_timeout = None
+            timeout_supported = all(
+                hasattr(connection, method) for method in ("gettimeout", "settimeout")
+            )
+            if timeout_supported:
+                previous_timeout = connection.gettimeout()
+                connection.settimeout(security.request_read_timeout_seconds)
+            read_deadline = time.monotonic() + security.request_read_timeout_seconds
+            try:
+                chunks = bytearray()
+                while len(chunks) < body_size:
+                    if time.monotonic() >= read_deadline:
+                        self.close_connection = True
+                        raise RequestError(408, "request_read_timeout", "request body read timed out")
+                    chunk = self.rfile.read(body_size - len(chunks))
+                    if not chunk:
+                        self.close_connection = True
+                        raise RequestError(400, "invalid_request_framing", "request body ended before content-length")
+                    chunks.extend(chunk)
+                    if time.monotonic() >= read_deadline:
+                        self.close_connection = True
+                        raise RequestError(408, "request_read_timeout", "request body read timed out")
+            except (TimeoutError, socket.timeout):
+                self.close_connection = True
+                raise RequestError(408, "request_read_timeout", "request body read timed out") from None
+            finally:
+                if timeout_supported:
+                    connection.settimeout(previous_timeout)
+            return _coerce_json(bytes(chunks))
 
         def log_message(self, format: str, *args: object) -> None:
             return
