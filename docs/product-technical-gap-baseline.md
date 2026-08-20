@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-20 22:45, Asia/Seoul
+**As of:** 2026-08-20 22:54, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -85,6 +85,7 @@ required workflows, and a normal merge.
 | [#783](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/783) | `6210b00899bd6aae068570b0f030a224e9cc55a3` | ready, stacked on [#776](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/776) | Review the total monotonic body deadline and exact-head framing regression; integrate after [#776](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/776) with all protected evidence. |
 | [#781](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/781) | `f3aaac3816e83b4dabd81a192dac858b722a9ed3` | ready, stacked on [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) | Review verified `trace` purpose scope, metadata-only pre-release audit, and generic fail-closed audit outage behavior before integrating after [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780); the parent stack advanced, so predecessor evidence is stale. |
 | [#787](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/787) | `a9bad374c3b65563a14b100076420a3631623bc3` | ready, stacked on [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) | Review explicit client-owned tool-loop opt-in, preserved 422 default, streaming rejection, and exact-head protected Checks after the [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) prerequisite integrates. |
+| [#788](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/788) | `d670601e61ca181a7b7134c7d0219f310334ff05` | ready, based on main | Review opaque admin-session TTL/revocation, same-origin cookie state changes, Secure-by-default deployment, and fresh exact-head security Checks before normal merge. |
 | [#789](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/789) | `f7153733ddb920d402a3b73efe529d30ed0f9a2f` | ready, based on main | Review optional embedding model selection, capability-constrained pool validation, OpenAPI parity, ADR 0012, and fresh exact-head protected Checks before normal merge. |
 | [#782](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/782) | `1e7ddb96256a9379b3d8d4bb39c70a646f302bed` | ready, based on main | Review owner-bound workflow/access/evaluation reads, split-token admin evidence visibility, migration fail-closed behavior, and exact-head protected Checks before merge. |
 | [#780](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/780) | `7c99b873c7583106dd1140439fd20cdbb885ef35` | ready, based on main | Review the minimal `/healthz` contract, authenticated `/readyz`, optional-dependency degradation, backend-identifier non-disclosure, and fresh exact-head hosted Checks before normal merge. |
@@ -111,7 +112,7 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-20 22:45 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-20 22:54 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ## 5. Open issue and product-gap queue
