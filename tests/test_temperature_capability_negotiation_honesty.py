@@ -34,6 +34,17 @@ def test_invalid_temperature_range_is_not_negotiated_as_missing_capability() -> 
     assert not _temperature_capability_rejection(error)
 
 
+def test_azure_default_only_temperature_is_negotiated() -> None:
+    """Azure's default-only diagnostic proves the optional field is unsupported."""
+    error = _http_error(
+        400,
+        "AzureException BadRequestError - Unsupported value: 'temperature' does not "
+        "support 0.2 with this model. Only the default (1) value is supported.",
+    )
+
+    assert _temperature_capability_rejection(error)
+
+
 def test_non_negotiated_error_body_remains_available_to_the_caller() -> None:
     """Capability inspection must not consume evidence from an unrelated 4xx."""
     expected = json.dumps(
