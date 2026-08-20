@@ -182,17 +182,26 @@ def evaluate_release_authorization(
     if reviewers is None:
         blockers.append("review_evidence_unavailable")
         reviewers = []
+    latest_reviewers: dict[str, Mapping[str, Any]] = {}
     for reviewer in reviewers:
         if not isinstance(reviewer, Mapping):
             blockers.append("review_evidence_invalid")
             continue
+        login = reviewer.get("login")
+        if not isinstance(login, str) or not login:
+            blockers.append("review_evidence_invalid")
+            continue
+        # GitHub returns review events in submission order. Keep one latest
+        # state per reviewer so repeated approvals cannot inflate the count
+        # and a later changes-requested event cannot be ignored.
+        latest_reviewers[login] = reviewer
+    for reviewer in latest_reviewers.values():
         qualifies = (
             reviewer.get("state") == "approved"
             and reviewer.get("head_sha") == protected_head_sha
             and reviewer.get("dismissed") is False
             and reviewer.get("is_author") is False
             and reviewer.get("association") in _APPROVED_ASSOCIATIONS
-            and isinstance(reviewer.get("login"), str)
             and reviewer.get("login") != author_login
         )
         if qualifies:

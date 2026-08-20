@@ -94,6 +94,20 @@ def test_author_only_or_dismissed_approval_blocks() -> None:
     assert result["review"]["independent_exact_head_approval_count"] == 0
 
 
+def test_latest_review_state_is_counted_once_per_reviewer() -> None:
+    """Repeated review events cannot inflate approval or hide a later rejection."""
+    evidence = authority()
+    evidence["review_policy"] = {**evidence["review_policy"], "required_independent_approval_count": 2}
+    evidence["reviewers"] = [
+        {"login": "reviewer", "association": "MEMBER", "state": "approved", "head_sha": HEAD, "dismissed": False, "is_author": False},
+        {"login": "reviewer", "association": "MEMBER", "state": "changes_requested", "head_sha": HEAD, "dismissed": False, "is_author": False},
+        {"login": "reviewer_two", "association": "MEMBER", "state": "approved", "head_sha": HEAD, "dismissed": False, "is_author": False},
+    ]
+    result = evaluate_release_authorization(evidence)
+    assert result["review"]["independent_exact_head_approval_count"] == 1
+    assert "independent_approval_missing" in result["blockers"]
+
+
 def test_unresolved_or_incomplete_findings_block() -> None:
     """An incomplete inventory or one unresolved finding blocks authorization."""
     evidence = authority()
