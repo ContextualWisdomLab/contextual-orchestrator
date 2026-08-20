@@ -1,4 +1,4 @@
-# ADR 0012: Optional sampling capability negotiation
+# ADR 0016: Optional sampling capability negotiation
 
 - Status: Accepted
 - Date: 2026-08-20
