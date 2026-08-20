@@ -14,6 +14,7 @@ registering a subset of the five supported keys still works. Stdlib only
 from __future__ import annotations
 
 import json
+import math
 import re
 import urllib.error
 import urllib.request
@@ -122,12 +123,15 @@ def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> 
 
 def _price_per_1k(value: Any) -> float | None:
     """OpenAI-compatible providers report USD price per single token; convert to per-1K."""
-    if value is None:
+    if value is None or isinstance(value, bool):
         return None
     try:
-        return float(value) * 1000
+        price = float(value)
     except (TypeError, ValueError):
         return None
+    if not math.isfinite(price) or price < 0:
+        return None
+    return price * 1000
 
 
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
@@ -253,21 +257,58 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
     """
     from .cost_ledger import PriceEntry
 
-    written = 0
+    claims: dict[tuple[str, str], list[tuple[float | None, float | None, str]]] = {}
     for model in discovered:
-        if model.prompt_price_per_1k is None and model.completion_price_per_1k is None:
+        identity = (model.provider_name, model.model_id)
+        claims.setdefault(identity, []).append(
+            (
+                model.prompt_price_per_1k,
+                model.completion_price_per_1k,
+                model.currency_code,
+            )
+        )
+
+    written = 0
+    for (provider_name, model_name), rows in claims.items():
+        if any(
+            not _is_valid_price_component(value)
+            for row in rows
+            for value in row[:2]
+        ) or len(set(rows)) != 1:
             continue
+        prompt_price, completion_price, currency_code = rows[0]
         price_book.set_price(
             PriceEntry(
-                provider_name=model.provider_name,
-                model_name=model.model_id,
-                prompt_price_per_1k=model.prompt_price_per_1k or 0.0,
-                completion_price_per_1k=model.completion_price_per_1k or 0.0,
-                currency_code=model.currency_code,
+                provider_name=provider_name,
+                model_name=model_name,
+                prompt_price_per_1k=prompt_price,
+                completion_price_per_1k=completion_price,
+                currency_code=currency_code,
             )
         )
         written += 1
     return written
+
+
+def _is_valid_price_component(value: Any) -> bool:
+    """Return whether one provider price is finite and non-negative."""
+    return (
+        value is not None
+        and not isinstance(value, bool)
+        and isinstance(value, (int, float))
+        and math.isfinite(value)
+        and value >= 0
+    )
+
+
+def _unique_discovered_models(
+    discovered: list[DiscoveredModel],
+) -> list[DiscoveredModel]:
+    """Keep one deterministic row per provider/model serving identity."""
+    unique: dict[tuple[str, str], DiscoveredModel] = {}
+    for model in discovered:
+        unique.setdefault((model.provider_name, model.model_id), model)
+    return list(unique.values())
 
 
 def _discovery_price_key(
@@ -276,7 +317,7 @@ def _discovery_price_key(
 ) -> tuple[int, float, str, str]:
     """Rank known prices first, then deterministically order unknown prices."""
     entry = price_book.get_price(model.provider_name, model.model_id)
-    if entry is None:
+    if entry is None or not _is_trustworthy_price_entry(entry, price_book):
         return (1, 0.0, model.provider_name, model.model_id)
     cost, _currency = price_book.compute_cost(
         model.provider_name,
@@ -285,6 +326,15 @@ def _discovery_price_key(
         1000,
     )
     return (0, cost, model.provider_name, model.model_id)
+
+
+def _is_trustworthy_price_entry(entry: Any, price_book: "PriceBook") -> bool:
+    """Accept only complete, finite prices in the book's comparison currency."""
+    return (
+        entry.currency_code == price_book.default_currency
+        and _is_valid_price_component(entry.prompt_price_per_1k)
+        and _is_valid_price_component(entry.completion_price_per_1k)
+    )
 
 
 def _provider_family(provider_name: str) -> str:
@@ -303,9 +353,10 @@ def select_cheapest_discovered_agent(
     sort first; when every candidate is unpriced, provider and model identifiers
     provide deterministic fallback ordering without inventing a monetary value.
     """
-    if not discovered:
+    unique = _unique_discovered_models(discovered)
+    if not unique:
         return None
-    return min(discovered, key=lambda model: _discovery_price_key(model, price_book))
+    return min(unique, key=lambda model: _discovery_price_key(model, price_book))
 
 
 def select_top_n_cheapest_discovered_agents(
@@ -314,6 +365,7 @@ def select_top_n_cheapest_discovered_agents(
     """Return up to ``limit`` candidates with known prices before unknown ones."""
     if limit <= 0 or not discovered:
         return []
+    discovered = _unique_discovered_models(discovered)
     return sorted(
         discovered,
         key=lambda model: _discovery_price_key(model, price_book),
@@ -335,6 +387,7 @@ def select_bootstrap_discovered_agents(
     """
     if limit <= 0 or not discovered:
         return []
+    discovered = _unique_discovered_models(discovered)
 
     ranked = sorted(
         discovered,
