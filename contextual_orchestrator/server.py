@@ -6,7 +6,9 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import json
+import math
 import secrets
+import socket
 import struct
 import threading
 import time
@@ -24,8 +26,10 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
     _new_chat_completion_id,
+    _chat_to_responses_payload,
     chat_completion_chunks,
     chat_completion_response,
+    _responses_to_chat_payload,
     text_completion_response,
     redact_value,
     sse_stream_body,
@@ -50,8 +54,8 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     # Assistants-style tool_resources — named unsupported (not unknown_fields).
     "tool_resources",
 }
-# Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
-PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
+# Tool calls still require provider-native loop semantics; structured JSON is
+# orchestrated through the conduct+synthesis path below instead of passthrough.
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
     "include_orchestration_trace", "stream", "attribution", "routing",
@@ -153,6 +157,7 @@ class SecurityConfig:
     allow_public_bind: bool = False
     expose_trace_by_default: bool = False
     max_body_bytes: int = 64 * 1024
+    request_read_timeout_seconds: float = 10.0
     rate_limit_requests: int = 60
     rate_limit_window_seconds: int = 60
     max_concurrent_runs: int = 8
@@ -169,6 +174,15 @@ class SecurityConfig:
             raise ValueError("single auth_token cannot be combined with split tokens")
         if (self.admin_token or self.inference_token) and not (self.admin_token and self.inference_token):
             raise ValueError("split token mode requires both admin_token and inference_token")
+        if type(self.max_body_bytes) is not int or self.max_body_bytes < 1:
+            raise ValueError("max_body_bytes must be a positive integer")
+        if (
+            isinstance(self.request_read_timeout_seconds, bool)
+            or not isinstance(self.request_read_timeout_seconds, (int, float))
+            or not math.isfinite(float(self.request_read_timeout_seconds))
+            or not 0.1 <= float(self.request_read_timeout_seconds) <= 120.0
+        ):
+            raise ValueError("request_read_timeout_seconds must be between 0.1 and 120 seconds")
         if type(self.max_concurrent_runs) is not int or not 1 <= self.max_concurrent_runs <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"max_concurrent_runs must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -241,6 +255,8 @@ class SecurityConfig:
             "rate_limit_requests": self.rate_limit_requests,
             "rate_limit_window_seconds": self.rate_limit_window_seconds,
             "max_concurrent_runs": self.max_concurrent_runs,
+            "max_body_bytes": self.max_body_bytes,
+            "request_read_timeout_seconds": self.request_read_timeout_seconds,
         }
 
 
@@ -295,6 +311,50 @@ def _coerce_json(payload: bytes) -> dict[str, Any]:
     if not isinstance(value, dict):
         raise RequestError(400, "invalid_json", "request body must be a JSON object")
     return value
+
+
+def _header_values(headers: Any, field_name: str) -> list[str]:
+    """Return all raw values for one case-insensitive HTTP header field."""
+    raw_items = getattr(headers, "raw_items", None)
+    if callable(raw_items):
+        return [value for name, value in raw_items() if name.casefold() == field_name.casefold()]
+    get_all = getattr(headers, "get_all", None)
+    if callable(get_all):
+        return list(get_all(field_name, []))
+    value = headers.get(field_name)
+    return [] if value is None else [value]
+
+
+def _parse_request_framing(headers: Any, max_body_bytes: int) -> int:
+    """Validate fixed-length JSON framing before consuming any request bytes.
+
+    The server deliberately does not implement a chunked decoder. Requiring one
+    unambiguous ASCII decimal ``Content-Length`` prevents negative lengths,
+    duplicate disagreement, transfer-coding ambiguity, and unbounded reads from
+    reaching ``BufferedReader.read``.
+    """
+    transfer_encoding = _header_values(headers, "Transfer-Encoding")
+    content_lengths = _header_values(headers, "Content-Length")
+    if transfer_encoding:
+        raise RequestError(
+            400,
+            "invalid_request_framing",
+            "transfer-encoded request bodies are unsupported",
+        )
+    if not content_lengths:
+        raise RequestError(411, "length_required", "content-length is required")
+    if len(content_lengths) != 1:
+        raise RequestError(400, "invalid_request_framing", "duplicate content-length is unsupported")
+    raw_length = content_lengths[0]
+    if not raw_length or raw_length != raw_length.strip() or not raw_length.isascii() or not raw_length.isdigit():
+        raise RequestError(400, "invalid_request_framing", "content-length must be an ASCII decimal integer")
+    try:
+        body_size = int(raw_length, 10)
+    except (ValueError, TypeError):
+        raise RequestError(400, "invalid_request_framing", "content-length is invalid") from None
+    if body_size > max_body_bytes:
+        raise RequestError(413, "request_too_large", "request body exceeds configured limit")
+    return body_size
 
 
 
@@ -829,6 +889,42 @@ def _validate_responses_parallel_tool_calls(body: dict[str, Any]) -> bool | None
     return value
 
 
+def _reject_responses_orchestration_controls(body: dict[str, Any]) -> None:
+    """Reject non-empty controls the multi-agent Responses path cannot apply."""
+    fields = (
+        "temperature",
+        "top_p",
+        "presence_penalty",
+        "frequency_penalty",
+        "seed",
+        "stop",
+        "logit_bias",
+        "logprobs",
+        "top_logprobs",
+    )
+    unsupported: list[str] = []
+    for field_name in fields:
+        if field_name not in body:
+            continue
+        value = body[field_name]
+        if value is None or (isinstance(value, str) and not value.strip()):
+            continue
+        if isinstance(value, (list, dict)) and not value:
+            continue
+        if field_name == "logprobs" and value in (False, 0):
+            continue
+        if field_name == "top_logprobs" and value == 0:
+            continue
+        unsupported.append(field_name)
+    if unsupported:
+        raise RequestError(
+            400,
+            "unsupported_responses_orchestration_controls",
+            "Responses orchestration cannot apply these provider controls",
+            {"fields": unsupported},
+        )
+
+
 def _validate_responses_seed(body: dict[str, Any]) -> int | None:
     """Responses ``seed`` — signed int64; valid values pass through to the provider.
 
@@ -1027,13 +1123,15 @@ def _validate_completions_top_p(body: dict[str, Any]) -> float | None:
     body["top_p"] = value
     return value
 
-def _validate_completions_model(body: dict[str, Any]) -> str:
+def _validate_completions_model(body: dict[str, Any], *, required: bool = True) -> str:
     """Legacy Completions ``model`` — required non-empty string (OpenAI parity).
 
     Incidental leading/trailing whitespace is stripped and written back so
     tools/response_format passthrough (``proxy_completion``) matches the same
     pool model id as the orchestration path. Form/JS SDKs often pad model names.
     """
+    if "model" not in body and not required:
+        return "contextual-orchestrator"
     if "model" not in body:
         raise RequestError(400, "invalid_model", "model is required")
     model = body.get("model")
@@ -1642,6 +1740,7 @@ def _validate_responses_text(body: dict[str, Any]) -> dict[str, Any] | None:
             "invalid_text",
             "text.format.schema must be an object",
         )
+    _validate_json_schema_definition(schema_body, "text.format.schema")
     if "description" in fmt:
         description_value = fmt.get("description")
         if description_value is None or (
@@ -1785,23 +1884,134 @@ def _validate_mode(mode: Any) -> str:
 
 
 
-def _require_pool_model(orchestrator: Any, model_name: str) -> None:
+def _require_pool_model(
+    orchestrator: Any, model_name: str, *, required_capability: str | None = None
+) -> None:
     """Fail closed when ``model_name`` is not served by any enabled agent.
 
     OpenAI clients treat ``model`` as the deployment they paid for. Silently
     answering with a different pool agent hides capacity/routing mismatches.
     """
+    if model_name == "contextual-orchestrator" and required_capability is None:
+        return
     agents = getattr(orchestrator, "agents", None) or []
     for agent in agents:
         if getattr(agent, "disabled", False):
             continue
-        if getattr(agent, "model", None) == model_name:
+        if getattr(agent, "model", None) == model_name and (
+            required_capability is None or required_capability in getattr(agent, "tags", ())
+        ):
             return
     raise RequestError(
         400,
         "invalid_model",
         f"model {model_name!r} is not available in the agent pool",
     )
+
+
+def _validate_json_schema_definition(
+    schema: Any,
+    path: str = "response_format.json_schema.schema",
+) -> None:
+    """Validate nested JSON Schema containers before evaluating a response."""
+    if not isinstance(schema, dict):
+        raise RequestError(400, "invalid_response_format", f"{path} must be an object")
+    properties = schema.get("properties")
+    if properties is not None:
+        if not isinstance(properties, dict):
+            raise RequestError(400, "invalid_response_format", f"{path}.properties must be an object")
+        for name, child in properties.items():
+            if not isinstance(name, str) or not isinstance(child, dict):
+                raise RequestError(
+                    400,
+                    "invalid_response_format",
+                    f"{path}.properties entries must map string names to objects",
+                )
+            _validate_json_schema_definition(child, f"{path}.properties.{name}")
+    required = schema.get("required")
+    if required is not None and (
+        not isinstance(required, list) or any(not isinstance(name, str) for name in required)
+    ):
+        raise RequestError(400, "invalid_response_format", f"{path}.required must be an array of strings")
+    items = schema.get("items")
+    if items is not None:
+        if not isinstance(items, dict):
+            raise RequestError(400, "invalid_response_format", f"{path}.items must be an object")
+        _validate_json_schema_definition(items, f"{path}.items")
+    any_of = schema.get("anyOf")
+    if any_of is not None:
+        if not isinstance(any_of, list) or any(not isinstance(option, dict) for option in any_of):
+            raise RequestError(400, "invalid_response_format", f"{path}.anyOf must be an array of objects")
+        for index, option in enumerate(any_of):
+            _validate_json_schema_definition(option, f"{path}.anyOf[{index}]")
+
+
+def _validate_json_schema_value(value: Any, schema: dict[str, Any], path: str = "$") -> None:
+    """Validate the bounded JSON Schema subset used by structured chat output."""
+    if not isinstance(schema, dict):
+        raise RequestError(502, "invalid_structured_output", "json_schema.schema must be an object")
+    if "enum" in schema and value not in schema["enum"]:
+        raise RequestError(502, "invalid_structured_output", f"{path} is outside the schema enum")
+    if "const" in schema and value != schema["const"]:
+        raise RequestError(502, "invalid_structured_output", f"{path} does not match the schema const")
+    if "anyOf" in schema and not any(
+        _json_schema_matches(value, option) for option in schema["anyOf"] if isinstance(option, dict)
+    ):
+        raise RequestError(502, "invalid_structured_output", f"{path} matches no anyOf branch")
+    expected = schema.get("type")
+    if expected == "object":
+        if not isinstance(value, dict):
+            raise RequestError(502, "invalid_structured_output", f"{path} must be an object")
+        properties = schema.get("properties", {})
+        required = schema.get("required", [])
+        missing = [name for name in required if name not in value]
+        if missing:
+            raise RequestError(502, "invalid_structured_output", f"{path} is missing {missing[0]!r}")
+        for name, child in properties.items():
+            if name in value and isinstance(child, dict):
+                _validate_json_schema_value(value[name], child, f"{path}.{name}")
+        if schema.get("additionalProperties") is False:
+            unknown = set(value) - set(properties)
+            if unknown:
+                raise RequestError(502, "invalid_structured_output", f"{path} has unknown property {sorted(unknown)[0]!r}")
+    elif expected == "array":
+        if not isinstance(value, list):
+            raise RequestError(502, "invalid_structured_output", f"{path} must be an array")
+        items = schema.get("items")
+        if isinstance(items, dict):
+            for index, item in enumerate(value):
+                _validate_json_schema_value(item, items, f"{path}[{index}]")
+    elif expected == "string" and not isinstance(value, str):
+        raise RequestError(502, "invalid_structured_output", f"{path} must be a string")
+    elif expected == "boolean" and not isinstance(value, bool):
+        raise RequestError(502, "invalid_structured_output", f"{path} must be a boolean")
+    elif expected == "integer" and (isinstance(value, bool) or not isinstance(value, int)):
+        raise RequestError(502, "invalid_structured_output", f"{path} must be an integer")
+    elif expected == "number" and (isinstance(value, bool) or not isinstance(value, (int, float))):
+        raise RequestError(502, "invalid_structured_output", f"{path} must be a number")
+
+
+def _json_schema_matches(value: Any, schema: dict[str, Any]) -> bool:
+    try:
+        _validate_json_schema_value(value, schema)
+    except RequestError:
+        return False
+    return True
+
+
+def _validate_structured_completion_answer(answer: Any, response_format: dict[str, Any]) -> None:
+    """Reject non-JSON synthesis instead of returning an unverified contract."""
+    if not isinstance(answer, str):
+        raise RequestError(502, "invalid_structured_output", "orchestrator returned no textual JSON")
+    try:
+        value = json.loads(answer)
+    except json.JSONDecodeError as exc:
+        raise RequestError(502, "invalid_structured_output", "orchestrator returned invalid JSON") from exc
+    if response_format.get("type") == "json_object" and not isinstance(value, dict):
+        raise RequestError(502, "invalid_structured_output", "json_object output must be an object")
+    if response_format.get("type") == "json_schema":
+        schema = ((response_format.get("json_schema") or {}).get("schema"))
+        _validate_json_schema_value(value, schema)
 
 
 
@@ -3067,10 +3277,11 @@ def _validate_responses_store(body: dict[str, Any]) -> bool | None:
 
 
 
-# OpenAI o-series reasoning_effort levels. Without an effort plane this gateway
-# treats known levels as default-effort no-ops (parity with verbosity low/medium/high).
+# OpenAI o-series reasoning_effort levels plus the orchestrator-owned policy
+# value. Without an effort plane this gateway treats accepted values as
+# default-effort no-ops (parity with verbosity low/medium/high).
 _OPENAI_REASONING_EFFORT_LEVELS = frozenset(
-    {"none", "minimal", "low", "medium", "high"}
+    {"auto", "none", "minimal", "low", "medium", "high"}
 )
 
 
@@ -3078,9 +3289,10 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     """Chat Completions ``reasoning_effort`` — known levels are default-effort no-ops.
 
     OpenAI o-series models accept ``reasoning_effort`` (none/minimal/low/medium/high).
-    This gateway never threads the knob into ``ModelClient`` on the orchestration
-    path. Known levels are accepted as default-effort no-ops (no effort plane) so
-    o-series SDK defaults (often ``medium``) do not 400; unknown values fail closed.
+    ``auto`` is an orchestrator policy value, not a provider model value. This
+    gateway never threads the knob into ``ModelClient`` on the orchestration
+    path. Accepted values are default-effort no-ops when no effort plane exists;
+    unknown values fail closed.
     Explicit JSON null or empty/whitespace string is treat-as-omit.
     """
     if "reasoning_effort" not in body:
@@ -3099,7 +3311,7 @@ def _validate_chat_reasoning_effort(body: dict[str, Any]) -> None:
     raise RequestError(
         400,
         "invalid_reasoning_effort",
-        "reasoning_effort must be one of none, minimal, low, medium, high "
+        "reasoning_effort must be one of auto, none, minimal, low, medium, high "
         "on /v1/chat/completions",
     )
 
@@ -3607,6 +3819,7 @@ def _validate_chat_response_format(body: dict[str, Any]) -> dict[str, Any] | Non
                 "invalid_response_format",
                 "response_format.json_schema.schema must be an object",
             )
+        _validate_json_schema_definition(schema_body)
         # Explicit JSON null / blank description is omit-equivalent: pop so
         # passthrough matches omit (parity with Responses text.format).
         if "description" in schema:
@@ -4038,7 +4251,7 @@ def _validate_chat_tool_choice(body: dict[str, Any]) -> str | dict[str, Any] | N
 
 
 
-def _validate_responses_model(body: dict[str, Any]) -> str:
+def _validate_responses_model(body: dict[str, Any], *, required: bool = True) -> str:
     """Responses API ``model`` — required non-empty string ≤256 chars.
 
     OpenAI requires model on Responses. Missing/empty/non-string values fail
@@ -4047,6 +4260,8 @@ def _validate_responses_model(body: dict[str, Any]) -> str:
     ``proxy_completion`` pool match sees the same id as form/JS padded names.
     """
     model = body.get("model")
+    if model is None and not required:
+        return "contextual-orchestrator"
     if model is None:
         raise RequestError(400, "invalid_model", "model is required on /v1/responses")
     if not isinstance(model, str) or not model.strip():
@@ -4089,8 +4304,9 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
     """Responses API ``reasoning`` — known effort levels are default-effort no-ops.
 
     OpenAI Responses accepts a ``reasoning`` object (effort/summary controls).
+    ``auto`` is an orchestrator policy value; provider calls do not receive it.
     This gateway proxies Responses but does not interpret or enforce reasoning
-    controls. Known ``effort`` levels (none/minimal/low/medium/high) with blank
+    controls. Known ``effort`` levels (auto/none/minimal/low/medium/high) with blank
     or omit ``summary`` are accepted as default-effort no-ops (chat
     ``reasoning_effort`` parity). Explicit JSON null, empty object, or empty
     string is treat-as-omit. Unknown effort/summary values fail closed.
@@ -4134,7 +4350,7 @@ def _validate_responses_reasoning(body: dict[str, Any]) -> None:
     raise RequestError(
         400,
         "invalid_reasoning",
-        "reasoning.effort must be one of none, minimal, low, medium, high "
+        "reasoning.effort must be one of auto, none, minimal, low, medium, high "
         "on /v1/responses",
     )
 
@@ -4169,12 +4385,27 @@ def _validate_batch_embeddings_endpoint(body: dict[str, Any]) -> str | None:
     return value
 
 
-def _validate_embeddings_model(body: dict[str, Any]) -> str:
-    """OpenAI embeddings ``model`` — required non-empty string ≤256 chars.
+def _validate_embeddings_model(body: dict[str, Any], orchestrator: Any | None = None) -> str:
+    """Validate or auto-select an OpenAI embeddings model.
 
     Strip + write back (parity with chat/Completions/Responses) so padded
-    form/JS model names bind to the pool id on every surface.
+    form/JS model names bind to the pool id on every surface. An omitted model
+    is resolved by the orchestrator's explicit ``embedding`` capability pool;
+    no consumer-side sentinel model is accepted.
     """
+    if "model" not in body:
+        if orchestrator is None:
+            raise RequestError(400, "invalid_model", "model is required outside an orchestrator request")
+        try:
+            model = orchestrator.select_capability_agent("embedding").model
+        except (RuntimeError, ValueError) as exc:
+            raise RequestError(
+                503,
+                "embedding_unavailable",
+                "no enabled embedding-capable agent is available",
+            ) from exc
+        body["model"] = model
+        return model
     model = body.get("model")
     if model is None:
         raise RequestError(400, "invalid_model", "model is required")
@@ -5024,8 +5255,7 @@ def build_server(
                         _validate_chat_response_format(body)
                     if "tools" in body:
                         _validate_chat_tools(body)
-                    if "tool_choice" in body:
-                        _validate_chat_tool_choice(body)
+                    tool_choice = _validate_chat_tool_choice(body) if "tool_choice" in body else None
                     if "parallel_tool_calls" in body:
                         # Always type-check. With tools, true/false both valid for
                         # provider passthrough; without tools, true fails closed.
@@ -5046,7 +5276,7 @@ def build_server(
                             body["parallel_tool_calls"] = ptc
                     # Strip+writeback model before tools/response_format passthrough so
                     # proxy_completion pool match sees the same id as form/JS padded names.
-                    _validate_completions_model(body)
+                    _validate_completions_model(body, required=False)
                     # Coerce stream early so stream_options fail-closed matches route path
                     # and tools/response_format passthrough cannot skip type checks.
                     stream = body.get("stream", False)
@@ -5072,18 +5302,26 @@ def build_server(
                     frequency_penalty = sampling["frequency_penalty"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
-                    if any(
-                        key in body and body.get(key) is not None
-                        for key in PASSTHROUGH_TRIGGER_KEYS
-                    ):
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
+                    tool_passthrough = tools_list or isinstance(tool_choice, dict) or (
+                        isinstance(tool_choice, str) and tool_choice not in {"none", "auto"}
+                    )
+                    tool_loop_header = self.headers.get(
+                        "x-contextual-orchestrator-tool-loop", ""
+                    ).strip().lower()
+                    if tool_passthrough and tool_loop_header == "v1":
+                        # OpenCode executes the returned function calls in its own
+                        # bounded tool loop. Preserve the full provider response;
+                        # multi-agent synthesis cannot safely merge tool state.
+                        if stream:
+                            raise RequestError(
+                                400,
+                                "invalid_stream",
+                                "tool-loop passthrough requires stream=false",
+                            )
                         started_at = time.perf_counter()
-                        proxied = self._run(
-                            lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
-                        )
+                        raw_response = self._run(lambda: orchestrator.proxy_completion(body))
                         orchestrator.record_analytics_event(
-                            "chat_completion_passthrough",
+                            "chat_completion_tool_passthrough",
                             {
                                 "endpoint_path": "/v1/chat/completions",
                                 "actor_scope": "inference",
@@ -5091,10 +5329,27 @@ def build_server(
                                 "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                             },
                         )
-                        self._send(proxied)
+                        self._send(raw_response)
                         return
+                    if tool_passthrough:
+                        raise RequestError(
+                            422,
+                            "multi_agent_tools_unsupported",
+                            "tool execution requires the explicit v1 client-owned tool-loop contract",
+                        )
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
+                    response_format = body.get("response_format")
+                    structured_response_format = (
+                        response_format
+                        if isinstance(response_format, dict)
+                        and response_format.get("type") in {"json_object", "json_schema"}
+                        else None
+                    )
+                    if structured_response_format is not None:
+                        # Structured output is a synthesis contract, not a
+                        # provider passthrough. Force the multi-agent workflow.
+                        mode = "conduct"
                     if "include_orchestration_trace" in body:
                         # Null/empty omit; bool, int 0/1, and "true"/"false"/"0"/"1"
                         # strings coerce (SDK form/query parity with stream/store).
@@ -5112,9 +5367,8 @@ def build_server(
                     # stream + stream_options already coerced/validated before passthrough.
                     attribution = _validate_attribution(body.get("attribution"))
                     routing = _validate_routing(body.get("routing"))
-                    # Require model — silent default to contextual-orchestrator hid
-                    # which deployment the buyer selected on the chat Completions path.
-                    model_name = _validate_completions_model(body)
+                    # Omitted model means contextual-orchestrator owns selection.
+                    model_name = _validate_completions_model(body, required=False)
                     _require_pool_model(orchestrator, model_name)
                     attribution = dict(attribution or {})
                     # OpenAI chat ``user`` → account when unset.
@@ -5169,6 +5423,7 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            response_format=structured_response_format,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5176,6 +5431,8 @@ def build_server(
                         model_client.default_top_p = previous_top_p
                         model_client.default_presence_penalty = previous_presence
                         model_client.default_frequency_penalty = previous_frequency
+                    if structured_response_format is not None and result.get("channel") != "batch":
+                        _validate_structured_completion_answer(result.get("answer"), structured_response_format)
                     # Latency-tolerant requests get dispatched to the batch backend.
                     if result.get("channel") == "batch":
                         orchestrator.record_analytics_event(
@@ -5216,10 +5473,10 @@ def build_server(
                     # synchronously) and frames an OpenAI-shaped response so
                     # SDKs that call /v1/embeddings work without the batch path.
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_KEYS)
-                    model_name = _validate_embeddings_model(body)
+                    model_name = _validate_embeddings_model(body, orchestrator)
                     # Same pool honesty as chat/Completions: do not silently serve
                     # a different embedding deployment than the client requested.
-                    _require_pool_model(orchestrator, model_name)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     encoding_format = _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     end_user_id = _validate_completions_user(body)
@@ -5305,16 +5562,8 @@ def build_server(
                 if path == "/v1/batch/embeddings":
                     _reject_unknown_keys(body, ALLOWED_EMBEDDINGS_BATCH_KEYS)
                     inputs = _validate_embeddings_inputs(body)
-                    # Require model — silent default to contextual-orchestrator was an
-                    # honesty gap for naruon/batch clients that omit the field.
-                    if "model" not in body:
-                        raise RequestError(
-                            400,
-                            "invalid_model",
-                            "model is required on /v1/batch/embeddings",
-                        )
-                    model_name = _validate_embeddings_model(body)
-                    _require_pool_model(orchestrator, model_name)
+                    model_name = _validate_embeddings_model(body, orchestrator)
+                    _require_pool_model(orchestrator, model_name, required_capability="embedding")
                     _validate_embeddings_encoding_format(body)
                     _validate_embeddings_dimensions(body)
                     # OpenAI ``user`` end-user id — same fail-closed shape as sync embeddings.
@@ -5386,12 +5635,13 @@ def build_server(
                     self._send(_response_payload(retrieved, include_trace=True))
                     return
                 if path == "/v1/responses":
-                    # The Responses API has no chat-completions verifier equivalent,
-                    # so every request is proxied to one agent verbatim.
+                    # Normalize Responses input to the same multi-agent workflow
+                    # used by Chat Completions; never silently proxy one agent.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.
-                    _validate_responses_model(body)
+                    model_name = _validate_responses_model(body, required=False)
+                    _require_pool_model(orchestrator, model_name)
                     _validate_responses_conversation_controls(body)
                     if "store" in body:
                         _validate_responses_store(body)
@@ -5488,6 +5738,15 @@ def build_server(
                         _validate_chat_tool_choice(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
+                    tool_loop_header = self.headers.get(
+                        "x-contextual-orchestrator-tool-loop", ""
+                    ).strip().lower()
+                    if tools_list and tool_loop_header != "v1":
+                        raise RequestError(
+                            422,
+                            "multi_agent_tools_unsupported",
+                            "tool execution requires the explicit v1 client-owned tool-loop contract",
+                        )
                     if "modalities" in body:
                         _validate_responses_modalities(body)
                     if "prediction" in body:
@@ -5532,8 +5791,8 @@ def build_server(
                             "invalid_input",
                             "input must be a non-empty string or non-empty array on /v1/responses",
                         )
-                    # stream=false / omit → non-SSE JSON response (honest no-stream path).
-                    # stream=true is not implemented for Responses passthrough.
+                    # stream=false / omit -> non-SSE JSON response (honest no-stream path).
+                    # stream=true is not implemented for the conducted Responses path.
                     # String/0-1 forms coerce via shared bool helper (parity with chat).
                     if "stream" in body:
                         stream = _coerce_optional_bool(
@@ -5547,12 +5806,76 @@ def build_server(
                                 "invalid_stream",
                                 "stream is not supported on /v1/responses",
                             )
+                    if tools_list and tool_loop_header == "v1":
+                        # Validate input and stream before passthrough so the
+                        # client-owned contract cannot silently downgrade a
+                        # requested stream or accept a missing input.
+                        started_at = time.perf_counter()
+                        raw_response = self._run(
+                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                        )
+                        orchestrator.record_analytics_event(
+                            "responses_tool_passthrough",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(raw_response)
+                        return
+                    response_contract: dict[str, Any] | None = None
+                    raw_response_format = body.get("response_format")
+                    if isinstance(raw_response_format, dict) and raw_response_format.get("type") in {
+                        "json_object",
+                        "json_schema",
+                    }:
+                        response_contract = raw_response_format
+                    text_config = body.get("text")
+                    text_format = text_config.get("format") if isinstance(text_config, dict) else None
+                    if isinstance(text_format, dict) and text_format.get("type") in {"json_object", "json_schema"}:
+                        if text_format["type"] == "json_object":
+                            response_contract = {"type": "json_object"}
+                        else:
+                            response_contract = {
+                                "type": "json_schema",
+                                "json_schema": {
+                                    key: text_format[key]
+                                    for key in ("name", "description", "schema", "strict")
+                                    if key in text_format
+                                },
+                            }
+                    _reject_responses_orchestration_controls(body)
+                    chat_payload = _responses_to_chat_payload(body)
+                    model_client = orchestrator.client
+                    previous_max_tokens = model_client.max_output_tokens
+                    if isinstance(body.get("max_output_tokens"), int):
+                        model_client.max_output_tokens = body["max_output_tokens"]
                     started_at = time.perf_counter()
-                    proxied = self._run(
-                        lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                    try:
+                        result = self._run(lambda: coordinator.complete(
+                            chat_payload["messages"],
+                            mode="conduct",
+                            attribution=_validate_attribution(body.get("attribution")),
+                            hints=body.get("routing"),
+                            model_name=model_name,
+                            workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            response_format=response_contract,
+                        ))
+                    finally:
+                        model_client.max_output_tokens = previous_max_tokens
+                    if response_contract is not None:
+                        _validate_structured_completion_answer(result.get("answer"), response_contract)
+                    chat_response = chat_completion_response(
+                        result,
+                        model=model_name,
+                        include_trace=security.expose_trace_by_default,
+                        usage=result.get("usage"),
                     )
+                    orchestrated = _chat_to_responses_payload(chat_response, body)
                     orchestrator.record_analytics_event(
-                        "responses_passthrough",
+                        "responses_orchestrated",
                         {
                             "endpoint_path": "/v1/responses",
                             "actor_scope": "inference",
@@ -5560,10 +5883,7 @@ def build_server(
                             "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
                         },
                     )
-                    if body.get("stream") is True:
-                        self._send_sse(responses_sse_body(proxied))
-                    else:
-                        self._send(proxied)
+                    self._send(orchestrated)
                     return
 
                 if path == "/admin/simulate":
@@ -5646,13 +5966,46 @@ def build_server(
             return int(raw)
 
         def _read_json(self) -> dict[str, Any]:
+            """Read one bounded, fixed-length JSON body and close bad frames."""
             if self.headers.get("content-type", "").split(";", 1)[0].strip().lower() != "application/json":
                 raise RequestError(415, "unsupported_media_type", "content-type must be application/json")
-            body_size = int(self.headers.get("content-length", "0"))
-            if body_size > security.max_body_bytes:
-                raise RequestError(413, "request_too_large", "request body exceeds configured limit")
-            raw = self.rfile.read(body_size)
-            return _coerce_json(raw) if raw else {}
+            try:
+                body_size = _parse_request_framing(self.headers, security.max_body_bytes)
+            except RequestError:
+                self.close_connection = True
+                raise
+            if body_size == 0:
+                return {}
+            connection = getattr(self, "connection", None)
+            previous_timeout = None
+            timeout_supported = all(
+                hasattr(connection, method) for method in ("gettimeout", "settimeout")
+            )
+            if timeout_supported:
+                previous_timeout = connection.gettimeout()
+                connection.settimeout(security.request_read_timeout_seconds)
+            read_deadline = time.monotonic() + security.request_read_timeout_seconds
+            try:
+                chunks = bytearray()
+                while len(chunks) < body_size:
+                    if time.monotonic() >= read_deadline:
+                        self.close_connection = True
+                        raise RequestError(408, "request_read_timeout", "request body read timed out")
+                    chunk = self.rfile.read(body_size - len(chunks))
+                    if not chunk:
+                        self.close_connection = True
+                        raise RequestError(400, "invalid_request_framing", "request body ended before content-length")
+                    chunks.extend(chunk)
+                    if len(chunks) < body_size and time.monotonic() >= read_deadline:
+                        self.close_connection = True
+                        raise RequestError(408, "request_read_timeout", "request body read timed out")
+            except (TimeoutError, socket.timeout):
+                self.close_connection = True
+                raise RequestError(408, "request_read_timeout", "request body read timed out") from None
+            finally:
+                if timeout_supported:
+                    connection.settimeout(previous_timeout)
+            return _coerce_json(bytes(chunks))
 
         def log_message(self, format: str, *args: object) -> None:
             return

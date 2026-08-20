@@ -155,8 +155,8 @@ def test_http_responses_keeps_legal_function_name() -> None:
                 "tools": [_function_tool(max_name)],
             },
         )
-        assert status == 200, body
-        assert _echo_function(body).get("name") == max_name
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -175,8 +175,8 @@ def test_http_chat_keeps_legal_function_name() -> None:
                 "tools": [_function_tool(legal_name)],
             },
         )
-        assert status == 200, body
-        assert _echo_function(body).get("name") == legal_name
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -1,4 +1,4 @@
-"""Explicit loopback mlx-lm transport without weakening remote egress rules."""
+"""Provider-neutral loopback gateway transport without weakening egress rules."""
 
 from __future__ import annotations
 
@@ -23,36 +23,24 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
 )
 
 
+@pytest.fixture(autouse=True)
+def _local_gateway_credentials():
+    with patch("contextual_orchestrator.orchestrator.get_credential", return_value="local-secret"):
+        yield
+
+
 def test_local_candidate_registry_keeps_all_discovered_entries() -> None:
     agents = load_agents(str(Path(__file__).resolve().parents[1] / "examples/agents.local.json"))
     orchestrator = TaskOrchestrator(agents)
 
     assert {agent.model for agent in orchestrator.candidates} >= {
         "contextual-orchestrator",
-        "mlx-community/gemma-4-31b-it-4bit",
-        "mlx-community/llama-3.2-3b-instruct-4bit",
-        "outlier-ai/deepseek-r1-distill-qwen-32b-mlx-4bit",
+        "gemma-4-e4b-it",
         "embeddinggemma",
     }
     assert all(not agent.disabled for agent in orchestrator.candidates)
     assert len(orchestrator.candidates) == len(orchestrator.agents)
-    verifier_exclusions = {
-        agent.model: agent.provider_exclusions
-        for agent in orchestrator.candidates
-        if agent.model in {
-            "mlx-community/llama-3.2-1b-instruct-4bit",
-            "mlx-community/gemma-4-31b-it-4bit",
-            "outlier-ai/deepseek-r1-distill-qwen-32b-mlx-4bit",
-        }
-    }
-    assert verifier_exclusions == {
-        "mlx-community/llama-3.2-1b-instruct-4bit": ("verifier",),
-        "mlx-community/gemma-4-31b-it-4bit": ("verifier",),
-        "outlier-ai/deepseek-r1-distill-qwen-32b-mlx-4bit": ("verifier",),
-    }
-    assert orchestrator._select_agent(
-        "Evaluate this answer for evidence and risk.", "verifier"
-    ).model == "mlx-community/gemma-4-e4b-it-4bit"
+    assert all(not agent.base_url.startswith("mlx://") for agent in orchestrator.candidates)
     assert any(
         agent.model == "contextual-orchestrator"
         and set(agent.provider_exclusions) == {"thinker", "worker", "verifier", "synthesizer"}
@@ -76,26 +64,9 @@ class _Response:
         return json.dumps(self.payload).encode("utf-8")
 
 
-def test_mlx_loopback_uses_http_without_a_credential() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
-    client = ModelClient(max_retries=0, temperature=0.0, chat_template_args={"enable_thinking": False})
-    seen = []
-
-    def open_provider(request, _destination=None):
-        seen.append(request)
-        return _Response({
-            "choices": [{"message": {"content": "local-ok"}}],
-            "usage": {"prompt_tokens": 2, "completion_tokens": 1, "total_tokens": 3},
-        })
-
-    with patch.object(client, "_open_provider", side_effect=open_provider):
-        assert client.chat(agent, [{"role": "user", "content": "ping"}]) == "local-ok"
-    assert seen[0].full_url == "http://127.0.0.1:8080/v1/chat/completions"
-    assert "Authorization" not in seen[0].headers
-    import json
-
-    assert json.loads(seen[0].data)["chat_template_kwargs"] == {"enable_thinking": False}
-    assert client.take_usage()["total_tokens"] == 3
+def test_local_gateway_requires_explicit_authentication() -> None:
+    with pytest.raises(ValueError, match="local_credential_key"):
+        ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1")
 
 
 def test_authenticated_local_gateway_uses_only_its_explicit_kv_credential() -> None:
@@ -109,7 +80,6 @@ def test_authenticated_local_gateway_uses_only_its_explicit_kv_credential() -> N
     client = ModelClient(
         max_retries=0,
         temperature=0.0,
-        chat_template_args={"enable_thinking": False},
     )
     seen = []
 
@@ -142,19 +112,14 @@ def test_authenticated_local_gateway_requires_its_kv_credential() -> None:
             ModelClient(max_retries=0).chat(agent, [{"role": "user", "content": "ping"}])
 
 
-def test_local_gateway_credential_cannot_be_attached_to_mlx_worker() -> None:
-    with pytest.raises(ValueError, match="local:// gateway"):
-        ModelAgent(
-            "local_agent",
-            "local-model",
-            base_url="mlx://127.0.0.1:8080/v1",
-            local_credential_key="LOCAL_GATEWAY_TOKEN",
-        )
+def test_direct_mlx_provider_scheme_is_rejected() -> None:
+    with pytest.raises(ValueError, match="direct mlx:// provider URLs are unsupported"):
+        ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
 
 
 def test_provider_probe_verifies_registry_then_uses_one_bounded_completion_without_retry() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
-    client = ModelClient(max_retries=2, local_max_retries=2, chat_template_args={"enable_thinking": False})
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
+    client = ModelClient(max_retries=2, local_max_retries=2)
     seen: list[tuple[object, float | None]] = []
 
     def open_provider(request, _destination=None, *, timeout=None):
@@ -180,12 +145,11 @@ def test_provider_probe_verifies_registry_then_uses_one_bounded_completion_witho
 
     payload = json.loads(seen[1][0].data)
     assert payload["max_tokens"] == 1
-    assert payload["temperature"] == 0.0
-    assert payload["chat_template_kwargs"] == {"enable_thinking": False}
+    assert "temperature" not in payload
 
 
 def test_provider_probe_rejects_a_local_model_registry_mismatch() -> None:
-    agent = ModelAgent("local_agent", "requested-model", base_url="mlx://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_agent", "requested-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     client = ModelClient(max_retries=0)
     with patch.object(
         client,
@@ -202,7 +166,7 @@ def test_provider_probe_rejects_a_local_model_registry_mismatch() -> None:
 
 
 def test_provider_probe_reports_timeout_without_retry() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     client = ModelClient(max_retries=2, local_max_retries=2)
     with patch.object(client, "_open_provider", side_effect=TimeoutError("probe timeout")) as open_provider:
         report = client.probe(agent, timeout=0.5)
@@ -215,7 +179,7 @@ def test_provider_probe_reports_timeout_without_retry() -> None:
 
 
 def test_provider_probe_does_not_serialize_provider_exception_text() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     client = ModelClient(max_retries=0)
     with patch.object(client, "_open_provider", side_effect=RuntimeError("provider-output-secret")):
         report = client.probe(agent, timeout=0.5)
@@ -281,8 +245,8 @@ def test_provider_readiness_refresh_serializes_concurrent_probes() -> None:
 def test_local_provider_serializes_model_switches_and_bounds_waiters() -> None:
     import threading
 
-    first_agent = ModelAgent("first_agent", "model-a", base_url="mlx://127.0.0.1:8080/v1")
-    second_agent = ModelAgent("second_agent", "model-b", base_url="mlx://127.0.0.1:8080/v1")
+    first_agent = ModelAgent("first_agent", "model-a", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
+    second_agent = ModelAgent("second_agent", "model-b", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     first_client = ModelClient(max_retries=0, timeout=1.0)
     second_client = ModelClient(max_retries=0, timeout=0.05)
     entered = threading.Event()
@@ -328,8 +292,8 @@ def test_local_provider_serializes_model_switches_and_bounds_waiters() -> None:
     assert isinstance(errors[0], TimeoutError)
 
 
-def test_reasoning_only_response_explains_local_template_fix() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+def test_reasoning_only_response_explains_missing_content() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     client = ModelClient(max_retries=0)
     with patch.object(
         client,
@@ -339,20 +303,20 @@ def test_reasoning_only_response_explains_local_template_fix() -> None:
         try:
             client.chat(agent, [{"role": "user", "content": "ping"}])
         except RuntimeError as exc:
-            assert "enable_thinking" in str(exc)
+            assert "assistant content" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("reasoning-only provider response must fail clearly")
 
 
 def test_response_without_content_or_reasoning_fails_clearly() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     with pytest.raises(RuntimeError, match="assistant content"):
         ModelClient()._response_content(agent, {"choices": [{"message": {}}]})
 
 
 def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
-    client = ModelClient(max_retries=0, chat_template_args={"enable_thinking": False})
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
+    client = ModelClient(max_retries=0)
     with patch.object(client, "_validate_provider", return_value=None), patch.object(
         client,
         "_send_raw_with_retry",
@@ -397,11 +361,10 @@ def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
         "type": "function",
         "function": {"name": "lookup", "parameters": {"type": "object"}},
     }]
-    assert forwarded["chat_template_kwargs"] == {"enable_thinking": False}
 
 
-def test_local_responses_passthrough_omits_empty_template_arguments() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+def test_local_responses_passthrough_has_no_provider_specific_fields() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     client = ModelClient()
     with patch.object(client, "_validate_provider", return_value=None), patch.object(
         client,
@@ -545,9 +508,10 @@ def test_local_responses_response_maps_reasoning_and_tool_calls() -> None:
 
 
 def test_local_provider_scheme_validation_rejects_remote_and_malformed_ports() -> None:
-    assert _is_local_provider_url("mlx://127.0.0.1:8080/v1")
+    assert _is_local_provider_url("local://127.0.0.1:8080/v1")
     assert not _is_local_provider_url("mlx://example.com:8080/v1")
-    assert not _is_local_provider_url("mlx://127.0.0.1:not-a-port/v1")
+    assert not _is_local_provider_url("mlx://127.0.0.1:8080/v1")
+    assert not _is_local_provider_url("local://127.0.0.1:not-a-port/v1")
 
 
 @pytest.mark.parametrize(
@@ -655,7 +619,7 @@ def test_validated_connect_binds_source_address() -> None:
 
 
 def test_local_provider_url_rejects_query_data_at_transport_boundary() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1?unsafe=1")
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1?unsafe=1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     with pytest.raises(RuntimeError, match="query data"):
         ModelClient()._provider_url(agent, "/chat/completions")
     with pytest.raises(RuntimeError, match="query data"):
@@ -670,7 +634,7 @@ def test_provider_url_rejects_non_http_scheme_at_builder_boundary() -> None:
 
 def test_provider_validation_rejects_non_loopback_and_remote_query_data() -> None:
     client = ModelClient()
-    local = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    local = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     with patch.object(client, "_resolve_addresses", return_value=[(socket.AF_INET, ("192.0.2.1", 8080))]):
         with pytest.raises(RuntimeError, match="non-loopback"):
             client._validate_provider(local)
@@ -755,7 +719,7 @@ def test_provider_transport_rejects_non_http_url_before_io() -> None:
 
 
 def test_local_batch_preserves_ids_and_usage() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     client = ModelClient(max_retries=0, local_concurrency=2)
     calls = []
 
@@ -776,7 +740,7 @@ def test_local_batch_preserves_ids_and_usage() -> None:
 
 
 def test_local_batch_default_uses_sequential_path() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_agent", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     client = ModelClient()
     with patch.object(client, "chat", side_effect=lambda _agent, messages, temperature=None: messages[0]["content"]):
         result = client.batch_chat(
@@ -791,17 +755,6 @@ def test_patch_agent_rejects_disabling_last_enabled_agent() -> None:
     orchestrator = TaskOrchestrator([ModelAgent("only_agent", "mock-only")])
     with pytest.raises(ValueError, match="last enabled"):
         orchestrator.patch_agent("default", "only_agent", {"status": "disabled"})
-
-
-def test_stream_chat_forwards_local_template_arguments() -> None:
-    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
-    client = ModelClient(chat_template_args={"enable_thinking": False})
-    with patch.object(client, "_validate_provider", return_value=None), patch.object(
-        client, "_stream_send", return_value=iter(("delta",))
-    ) as stream_send:
-        assert list(client.stream_chat(agent, [{"role": "user", "content": "ping"}])) == ["delta"]
-
-    assert stream_send.call_args.args[1]["chat_template_kwargs"] == {"enable_thinking": False}
 
 
 if __name__ == "__main__":

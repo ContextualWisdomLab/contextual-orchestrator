@@ -52,7 +52,7 @@ def _base_messages():
     return [{"role": "user", "content": "use a tool"}]
 
 
-def test_http_chat_accepts_valid_function_tools() -> None:
+def test_http_chat_rejects_valid_function_tools_without_single_agent_fallback() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -75,8 +75,8 @@ def test_http_chat_accepts_valid_function_tools() -> None:
                 ],
             },
         )
-        assert status == 200, body
-        assert "choices" in body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -231,15 +231,3 @@ def test_http_chat_accepts_tools_omitted() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
-
-
-if __name__ == "__main__":
-    test_http_chat_accepts_valid_function_tools()
-    test_http_chat_rejects_empty_tools_array()
-    test_http_chat_rejects_tool_type_not_function()
-    test_http_chat_rejects_tool_missing_function_name()
-    test_http_chat_rejects_tool_function_name_bad_charset()
-    test_http_chat_rejects_tool_sibling_unknown_fields()
-    test_http_chat_rejects_parameters_non_object()
-    test_http_chat_accepts_tools_omitted()
-    print("ok")

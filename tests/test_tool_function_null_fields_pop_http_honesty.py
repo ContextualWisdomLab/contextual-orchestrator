@@ -125,10 +125,8 @@ def test_http_chat_omits_tool_description_null() -> None:
                 ],
             },
         )
-        assert status == 200, body
-        function = _echo_function(body)
-        assert "description" not in function
-        assert function.get("parameters") == {"type": "object", "properties": {}}
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -154,9 +152,8 @@ def test_http_chat_omits_tool_parameters_null() -> None:
                 ],
             },
         )
-        assert status == 200, body
-        function = _echo_function(body)
-        assert "parameters" not in function
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -184,12 +181,8 @@ def test_http_chat_omits_tool_description_parameters_and_strict_null() -> None:
                 ],
             },
         )
-        assert status == 200, body
-        function = _echo_function(body)
-        assert "description" not in function
-        assert "parameters" not in function
-        assert "strict" not in function
-        assert function.get("name") == "lookup"
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -217,11 +210,8 @@ def test_http_responses_omits_tool_description_and_parameters_null() -> None:
                 ],
             },
         )
-        assert status == 200, body
-        function = _echo_function(body)
-        assert "description" not in function
-        assert "parameters" not in function
-        assert "strict" not in function
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -306,11 +296,8 @@ def test_http_chat_keeps_non_null_tool_fields() -> None:
                 ],
             },
         )
-        assert status == 200, body
-        function = _echo_function(body)
-        assert function.get("description") == "find things"
-        assert function.get("parameters") == {"type": "object", "properties": {}}
-        assert function.get("strict") is True
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

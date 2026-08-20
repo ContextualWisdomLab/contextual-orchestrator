@@ -9,6 +9,8 @@ import urllib.request
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -30,6 +32,24 @@ def build() -> TaskOrchestrator:
 def _post(port: int, payload: dict) -> tuple[int, dict]:
     request = urllib.request.Request(
         f"http://127.0.0.1:{port}/v1/chat/completions",
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "content-type": "application/json",
+            "authorization": f"Bearer {_TEST_AUTH_TOKEN}",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=10) as response:
+            return response.status, json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        return exc.code, json.loads(exc.read().decode("utf-8"))
+
+
+def _post_responses(port: int, payload: dict) -> tuple[int, dict]:
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{port}/v1/responses",
         data=json.dumps(payload).encode("utf-8"),
         headers={
             "content-type": "application/json",
@@ -136,6 +156,71 @@ def test_http_chat_omits_json_schema_null_optionals_on_response_format() -> None
         )
         assert status == 200, body
         assert "choices" in body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+@pytest.mark.parametrize(
+    "response_format",
+    [
+        {"type": "json_object"},
+        {
+            "type": "json_schema",
+            "json_schema": {
+                "name": "receipt_line",
+                "schema": {
+                    "type": "object",
+                    "properties": {"amount": {"type": "number"}},
+                },
+            },
+        },
+    ],
+)
+def test_http_chat_structured_output_keeps_multi_agent_workflow(response_format: dict) -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "structured workflow"}],
+                "response_format": response_format,
+            },
+        )
+        assert status == 200, body
+        assert body["orchestration"]["mode"] == "conduct"
+        assert body["orchestration"]["channel"] == "sync"
+        assert body["orchestration"]["workflow_run_id"]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_responses_json_schema_keeps_multi_agent_workflow() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post_responses(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "structured responses workflow",
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "receipt_line",
+                        "schema": {
+                            "type": "object",
+                            "properties": {"amount": {"type": "number"}},
+                        },
+                    }
+                },
+            },
+        )
+        assert status == 200, body
+        assert body["orchestration"]["mode"] == "conduct"
+        assert body["orchestration"]["channel"] == "sync"
+        assert body["orchestration"]["workflow_run_id"]
     finally:
         server.shutdown()
         thread.join(timeout=5)

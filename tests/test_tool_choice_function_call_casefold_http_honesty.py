@@ -93,7 +93,8 @@ def test_http_chat_accepts_tool_choice_required_padded_casefold_with_tools() -> 
                     "tool_choice": value,
                 },
             )
-            assert status == 200, (value, body)
+            assert status == 422, (value, body)
+            assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

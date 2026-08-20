@@ -48,7 +48,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_accepts_valid_temperature_and_top_p() -> None:
+def test_http_responses_rejects_unapplied_temperature_and_top_p() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -60,7 +60,8 @@ def test_http_responses_accepts_valid_temperature_and_top_p() -> None:
                 "top_p": 0.9,
             },
         )
-        assert status == 200, body
+        assert status == 400, body
+        assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -123,7 +124,7 @@ def test_http_responses_rejects_boolean_top_p() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_valid_temperature_and_top_p()
+    test_http_responses_rejects_unapplied_temperature_and_top_p()
     test_http_responses_rejects_out_of_range_temperature()
     test_http_responses_rejects_non_numeric_temperature()
     test_http_responses_rejects_out_of_range_top_p()

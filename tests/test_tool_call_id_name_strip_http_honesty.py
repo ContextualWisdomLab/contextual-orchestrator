@@ -120,12 +120,8 @@ def test_http_chat_accepts_padded_tools_and_tool_choice_names() -> None:
                 },
             },
         )
-        assert status == 200, body
-        echo = body.get("echo") or {}
-        tools = echo.get("tools") or []
-        if tools:
-            name = tools[0].get("function", {}).get("name")
-            assert name == "lookup_item", body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

@@ -493,10 +493,12 @@ class LocalEmbeddingBatchBackend:
         self,
         embedder: Optional[Callable[[str], List[float]]] = None,
         *,
+        batch_embedder: Optional[Callable[[List[EmbeddingBatchRequest]], List[List[float]]]] = None,
         token_counter: Any = None,
         dimension: int = _DEFAULT_EMBEDDING_DIMENSION,
     ) -> None:
         self._embedder = embedder or (lambda text: heuristic_embedding(text, dimension))
+        self._batch_embedder = batch_embedder
         self._token_counter = token_counter
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = {}
 
@@ -511,13 +513,20 @@ class LocalEmbeddingBatchBackend:
     ) -> BatchJob:
         """Embed every input in-process and stash the results under a job id."""
         job_id = f"localembed_{uuid.uuid4().hex}"
+        vectors = (
+            self._batch_embedder(requests)
+            if self._batch_embedder is not None
+            else [self._embedder(request.input_text) for request in requests]
+        )
+        if len(vectors) != len(requests):
+            raise RuntimeError("embedding provider returned an incomplete vector batch")
         items: List[EmbeddingBatchResultItem] = []
         for index, request in enumerate(requests):
             items.append(
                 EmbeddingBatchResultItem(
                     custom_id=request.custom_id,
                     index=index,
-                    embedding=list(self._embedder(request.input_text)),
+                    embedding=list(vectors[index]),
                     prompt_tokens=self._count_tokens(request.input_text, request.model),
                     model=request.model,
                 )

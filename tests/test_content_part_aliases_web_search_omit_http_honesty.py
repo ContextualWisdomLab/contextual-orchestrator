@@ -19,7 +19,7 @@ _TEST_AUTH_TOKEN = "content_part_aliases_web_search_omit_http_honesty_token"  # 
 
 def build() -> TaskOrchestrator:
     return TaskOrchestrator(
-        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing", "vision"))]
     )
 
 

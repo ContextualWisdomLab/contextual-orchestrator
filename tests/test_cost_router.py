@@ -113,6 +113,17 @@ def test_batch_completion_records_on_retrieve() -> None:
     assert records[0]["team_name"] == "beta"
 
 
+def test_structured_output_forces_sync_when_batch_is_selected() -> None:
+    coordinator = _coordinator()
+    result = coordinator.complete(
+        [{"role": "user", "content": "return one JSON object"}],
+        hints={"channel": "batch"},
+        response_format={"type": "json_object"},
+    )
+    assert result["channel"] == "sync"
+    assert result["routing_reason"].endswith("structured_output_forced_sync")
+
+
 def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:
     class _Client:
         local_concurrency = 3
