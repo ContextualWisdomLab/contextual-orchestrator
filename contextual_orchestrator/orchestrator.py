@@ -841,6 +841,53 @@ class ModelClient:
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_embeddings_with_retry(agent, payload, destination)
 
+    def fetch_json(
+        self,
+        agent: ModelAgent,
+        url: str,
+        *,
+        timeout: float | None = None,
+        max_bytes: int = 8 * 1024 * 1024,
+    ) -> Any:
+        """Fetch bounded provider JSON through validated, DNS-pinned transport."""
+        if type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive integer")
+        provider = urlparse(agent.base_url)
+        target = urlparse(url)
+        provider_port = provider.port or (443 if provider.scheme == "https" else 80)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        if (
+            target.scheme != provider.scheme
+            or target.hostname != provider.hostname
+            or target_port != provider_port
+            or target.username
+            or target.password
+            or target.fragment
+        ):
+            raise RuntimeError("provider JSON URL must share the validated agent origin")
+        destination = self._validate_provider(agent)
+        api_key = _provider_credential(agent)
+        credential_name = _provider_credential_name(agent)
+        if credential_name and not api_key:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
+            )
+        request = urllib.request.Request(
+            url,
+            headers={"authorization": f"{agent.auth_scheme} {api_key}"} if api_key else {},
+            method="GET",
+        )
+        opened = (
+            self._open_provider(request, destination)
+            if timeout is None
+            else self._open_provider(request, destination, timeout=timeout)
+        )
+        with opened as response:
+            body = response.read(max_bytes + 1)
+        if len(body) > max_bytes:
+            raise ValueError("provider JSON response exceeds the maximum size")
+        return json.loads(body.decode("utf-8"))
+
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
 

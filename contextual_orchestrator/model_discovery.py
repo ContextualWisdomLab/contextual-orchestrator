@@ -16,7 +16,6 @@ from __future__ import annotations
 import json
 import re
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
@@ -108,7 +107,6 @@ class ProviderDiscoveryError(RuntimeError):
 def _fetch_json(
     url: str,
     *,
-    api_key: str,
     auth_scheme: str,
     timeout: float,
     credential_name: str,
@@ -134,17 +132,7 @@ def _fetch_json(
         auth_scheme=auth_scheme,
     )
     client = ModelClient()
-    destination = client._validate_provider(agent)
-    request = urllib.request.Request(
-        url,
-        headers={"authorization": f"{auth_scheme} {api_key}"},
-        method="GET",
-    )
-    with client._open_provider(request, destination, timeout=timeout) as response:
-        body = response.read(8 * 1024 * 1024 + 1)
-    if len(body) > 8 * 1024 * 1024:
-        raise ValueError("model discovery response exceeds the maximum size")
-    return json.loads(body.decode("utf-8"))
+    return client.fetch_json(agent, url, timeout=timeout)
 
 
 def _price_per_1k(value: Any) -> float | None:
@@ -217,7 +205,6 @@ def discover_provider_models(
     try:
         payload = _fetch_json(
             url,
-            api_key=api_key,
             auth_scheme=source.auth_scheme,
             timeout=timeout,
             credential_name=source.credential_name,
