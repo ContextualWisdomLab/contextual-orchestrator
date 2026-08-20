@@ -98,6 +98,7 @@ Checks below are a snapshot, not approval. `queued` and `in_progress` are not
 required workflows, and a normal merge.
 
 | PR | Exact head at snapshot | State / base | Evidence boundary and next action |
+|---:|---|---|---|
 | [#793](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/793) | `3651a8181d0844a8daa196a73aff401fd34e78da` | ready, based on main | Request-framing repair rejects ambiguous/unbounded Content-Length before integer conversion and closes the connection after framing failure. Exact-head local proof is focused `31 passed` and full `1443 passed`; hosted Checks are pending and independent approval remains required. |
 | [#792](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/792) | `236a28b3f73380aaa39aa7b19a2bc475c2cbdf6f` | ready, based on main | Documentation-only release gap closure: adds the canonical SemVer changelog and explicitly keeps `0.1.0` unreleased until protected main, required Checks, independent review, and release artifacts are verified. Normal merge still requires the protected gate. |
 | [#790](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/790) | `0071751782ae535721e71785c3037989d2d27b77` | ready, based on main | Latest exact head keeps the gateway auth token outside the provider-key bootstrap gate. Exact-head review-gateway/model-discovery/API/security proof is `55 passed` with Ruff/diff clean; hosted Checks and independent approval remain required. |
