@@ -60,7 +60,12 @@ class ProviderCatalogSnapshot:
 
 @dataclass(frozen=True)
 class ProviderCatalogBootstrapReport:
-    """Secret-free evidence for one durable provider-catalog bootstrap."""
+    """Secret-free evidence for one durable provider-catalog bootstrap.
+
+    ``registered_credentials`` contains the credential names that remain in the
+    credential registry after provider-isolated rollback has completed. It is
+    therefore safe for a workflow to use as durable-registration evidence.
+    """
 
     registered_credentials: tuple[str, ...]
     restored_credentials: tuple[str, ...]
@@ -312,9 +317,12 @@ def bootstrap_provider_catalog_runtime(
             if agents_db
             else ()
         )
+        durable_registered_credentials = tuple(
+            name for name in registered if get_credential(name) is not None
+        )
 
         return ProviderCatalogBootstrapReport(
-            registered_credentials=registered,
+            registered_credentials=durable_registered_credentials,
             restored_credentials=tuple(restored_credentials),
             live_discovered_model_count=snapshot.live_model_count,
             catalog_model_count=len(snapshot.models),

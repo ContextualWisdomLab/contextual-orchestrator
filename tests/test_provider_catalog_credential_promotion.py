@@ -139,6 +139,38 @@ def test_failed_first_promotion_cannot_activate_lkg_without_a_prior_credential()
     assert get_credential(source.credential_name) is None
 
 
+def test_report_excludes_first_promotion_credential_removed_by_rollback() -> None:
+    """Durable-registration evidence cannot claim a deleted first candidate key."""
+    openai = _source()
+    openrouter = ProviderModelSource(
+        provider_name="openrouter",
+        credential_name="OPENROUTER_API_KEY",
+        list_url="https://openrouter.example/v1/models",
+        chat_base_url="https://openrouter.example/v1",
+    )
+    live = _model(openrouter, "router-live")
+
+    report = bootstrap_provider_catalog_runtime(
+        environ={
+            openai.credential_name: "first-invalid-secret",
+            openrouter.credential_name: "working-router-secret",
+        },
+        require_all_credentials=False,
+        catalog_store=InMemoryProviderCatalogStore(),
+        sources=(openai, openrouter),
+        discovery=lambda _sources: (
+            [live],
+            [ProviderDiscoveryError(openai.provider_name, "temporary discovery failure")],
+        ),
+        model_limit=1,
+    )
+
+    assert report.restored_credentials == (openai.credential_name,)
+    assert report.registered_credentials == (openrouter.credential_name,)
+    assert get_credential(openai.credential_name) is None
+    assert get_credential(openrouter.credential_name) == "working-router-secret"
+
+
 def test_successful_refresh_promotes_the_candidate_credential() -> None:
     """A validated non-empty catalog commits the new provider credential."""
     source = _source()
