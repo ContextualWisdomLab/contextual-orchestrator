@@ -13,6 +13,9 @@ def test_admin_surface_exists_for_enterprise_operations() -> None:
     assert "Agent Pool" in ADMIN_HTML
     assert "Orchestration Policy" in ADMIN_HTML
     assert "Audit &amp; Compliance" in ADMIN_HTML
+    assert '<span class="chip amber">Proposed</span> Preserve PII; use purpose authorization and field encryption' in ADMIN_HTML
+    assert "PII-001" in ADMIN_HTML
+    assert "Mask email, phone" not in ADMIN_HTML
     assert "/admin/simulate" in ADMIN_HTML
     assert "ADMIN_TRANSLATIONS" not in ADMIN_HTML
     assert "source_basis_text" in ADMIN_HTML
