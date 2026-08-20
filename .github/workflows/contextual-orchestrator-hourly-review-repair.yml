@@ -3,7 +3,6 @@ name: Contextual Orchestrator Hourly Review Repair
 on:
   schedule:
     - cron: "07 * * * *"
-  workflow_dispatch:
 
 permissions:
   contents: read
@@ -15,6 +14,9 @@ concurrency:
 jobs:
   dispatch-central-review-loop:
     name: Dispatch protected central review loop
+    permissions:
+      contents: read
+      id-token: write
     uses: ContextualWisdomLab/.github/.github/workflows/pr-review-fix-scheduler.yml@main
     with:
       target_repository: ContextualWisdomLab/contextual-orchestrator
@@ -24,4 +26,6 @@ jobs:
       retry_hours: "1"
       resolve_unreviewed_conflicts: true
       autofix_workflow: pr-review-autofix.yml
-    secrets: inherit
+    secrets:
+      PR_REVIEW_MERGE_TOKEN: ${{ secrets.PR_REVIEW_MERGE_TOKEN }}
+      OPENCODE_APPROVE_TOKEN: ${{ secrets.OPENCODE_APPROVE_TOKEN }}
