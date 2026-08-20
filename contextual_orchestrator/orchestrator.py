@@ -258,11 +258,14 @@ class ModelAgent:
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
-        if urlparse(self.base_url).scheme == "mlx":
+        scheme = urlparse(self.base_url).scheme
+        if scheme == "mlx":
             raise ValueError("direct mlx:// provider URLs are unsupported; use the gateway")
         if type(self.local_credential_key) is not str:
             raise TypeError("local_credential_key must be a string")
-        if self.local_credential_key and urlparse(self.base_url).scheme != "local":
+        if scheme == "local" and not self.local_credential_key:
+            raise ValueError("local:// gateway URLs require local_credential_key")
+        if self.local_credential_key and scheme != "local":
             raise ValueError("local_credential_key requires a local:// gateway URL")
         if not self.auth_scheme or type(self.auth_scheme) is not str:
             raise ValueError("auth_scheme must be a non-empty string")
@@ -1223,6 +1226,12 @@ class ModelClient:
         # never a silent os.getenv fallback. (Legacy api_key_env, if set, is used
         # only as the credential NAME; see ModelAgent.credential_name.)
         if _is_local_provider_url(agent.base_url):
+            credential_name = _provider_credential_name(agent)
+            if not credential_name or get_credential(credential_name) is None:
+                raise NotConfigured(
+                    f"{agent.id} requires a resolvable local gateway credential "
+                    f"'{credential_name or '<missing>'}' in the KV"
+                )
             parsed = urlparse(agent.base_url)
             if parsed.username or parsed.password or parsed.query or parsed.fragment:
                 raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")

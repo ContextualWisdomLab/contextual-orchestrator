@@ -4,6 +4,7 @@
       "id": "contextual_orchestrator",
       "model": "contextual-orchestrator",
       "base_url": "local://127.0.0.1:18000/v1",
+      "local_credential_key": "LOCAL_GATEWAY_TOKEN",
       "provider_name": "contextual-orchestrator",
       "tags": ["orchestration", "planning", "reasoning", "verification", "writing"],
       "priority": 5,
@@ -13,6 +14,7 @@
       "id": "llama_cpp_embeddinggemma",
       "model": "embeddinggemma",
       "base_url": "local://127.0.0.1:8082/v1",
+      "local_credential_key": "LOCAL_GATEWAY_TOKEN",
       "provider_name": "llama.cpp",
       "tags": ["embedding"],
       "priority": 0
@@ -21,6 +23,7 @@
       "id": "lmstudio_gemma_4_e4b_it",
       "model": "gemma-4-e4b-it",
       "base_url": "local://127.0.0.1:1234/v1",
+      "local_credential_key": "LOCAL_GATEWAY_TOKEN",
       "provider_name": "lm-studio",
       "tags": ["reasoning", "coding", "writing"],
       "priority": 0
@@ -29,6 +32,7 @@
       "id": "lmstudio_embeddinggemma",
       "model": "embeddinggemma",
       "base_url": "local://127.0.0.1:1234/v1",
+      "local_credential_key": "LOCAL_GATEWAY_TOKEN",
       "provider_name": "lm-studio",
       "tags": ["embedding"],
       "priority": 0

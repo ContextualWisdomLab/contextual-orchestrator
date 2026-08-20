@@ -78,7 +78,7 @@ def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -
             raise urllib.error.URLError("local server is busy")
 
     client = LocalDownClient()
-    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     try:
         client._send_with_retry(agent, {"model": agent.model})
     except RuntimeError:
@@ -101,7 +101,7 @@ def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
             return "recovered"
 
     client = LocalFlakyClient()
-    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
     assert client.attempts == 2
 
@@ -119,7 +119,7 @@ def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
             return "recovered"
 
     client = LocalFlakyClient()
-    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
     assert client.attempts == 3
 
@@ -137,7 +137,7 @@ def test_local_passthrough_retry_budget_is_not_capped_by_remote_retry_default() 
             return {"ok": True}
 
     client = LocalRawFlakyClient()
-    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     assert client._send_raw_with_retry(agent, "chat/completions", {}) == {"ok": True}
     assert client.attempts == 3
 

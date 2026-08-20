@@ -66,7 +66,7 @@ Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints.
 }
 ```
 
-For a local OpenAI-compatible gateway, use the explicit `local://` loopback scheme and, when required, name its separate KV credential. Provider-specific runtime settings stay behind that gateway:
+For a local OpenAI-compatible gateway, use the explicit `local://` loopback scheme and name its separate KV credential. Provider-specific runtime settings stay behind that gateway:
 
 ```json
 {

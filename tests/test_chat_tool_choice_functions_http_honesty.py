@@ -1,4 +1,4 @@
-"""Chat tools honesty: functions/function_call rejected; tool_choice required/named requires tools; auto/none without tools are no-ops."""
+"""Chat tools honesty: unsupported legacy and multi-agent tool surfaces fail closed."""
 
 from __future__ import annotations
 
@@ -89,8 +89,8 @@ def test_http_chat_rejects_functions_legacy_surface() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_function_call_auto_without_functions_as_omit() -> None:
-    """function_call none/auto without functions is an omit-equivalent no-op."""
+def test_http_chat_rejects_function_call_auto_without_functions_migration() -> None:
+    """Legacy function_call is rejected even when it does not name a function."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -101,7 +101,8 @@ def test_http_chat_accepts_function_call_auto_without_functions_as_omit() -> Non
                 "function_call": "auto",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -125,8 +126,8 @@ def test_http_chat_rejects_function_call_named_without_tools_migration() -> None
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_tool_choice_auto_without_tools_as_omit() -> None:
-    """tool_choice auto/none without tools is an omit-equivalent no-op."""
+def test_http_chat_rejects_tool_choice_auto_without_tools_migration() -> None:
+    """Chat tool choice cannot be represented by the multi-agent contract."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -137,13 +138,14 @@ def test_http_chat_accepts_tool_choice_auto_without_tools_as_omit() -> None:
                 "tool_choice": "auto",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_tools_with_tool_choice_passthrough_ok() -> None:
+def test_http_chat_rejects_tools_with_tool_choice_passthrough() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -155,8 +157,8 @@ def test_http_chat_tools_with_tool_choice_passthrough_ok() -> None:
                 "tool_choice": "auto",
             },
         )
-        assert status == 200, body
-        assert "choices" in body or "id" in body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -164,8 +166,8 @@ def test_http_chat_tools_with_tool_choice_passthrough_ok() -> None:
 
 if __name__ == "__main__":
     test_http_chat_rejects_functions_legacy_surface()
-    test_http_chat_accepts_function_call_auto_without_functions_as_omit()
+    test_http_chat_rejects_function_call_auto_without_functions_migration()
     test_http_chat_rejects_function_call_named_without_tools_migration()
-    test_http_chat_accepts_tool_choice_auto_without_tools_as_omit()
-    test_http_chat_tools_with_tool_choice_passthrough_ok()
+    test_http_chat_rejects_tool_choice_auto_without_tools_migration()
+    test_http_chat_rejects_tools_with_tool_choice_passthrough()
     print("ok")
