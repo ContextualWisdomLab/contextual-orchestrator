@@ -3,18 +3,18 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.server import SecurityConfig, build_server  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.server import SecurityConfig, build_server
 
-_TEST_AUTH_TOKEN = "embeddings_encoding_format_http_honesty_token"  # noqa: S105
+_TEST_AUTH_TOKEN = "embeddings_encoding_format_http_honesty_token"
 
 
 def build() -> TaskOrchestrator:
