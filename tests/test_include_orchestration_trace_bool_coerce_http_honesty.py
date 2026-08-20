@@ -52,7 +52,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_chat_accepts_include_orchestration_trace_string_true_false() -> None:
+def test_http_chat_rejects_include_orchestration_trace_strings() -> None:
     server, thread, port = _server()
     try:
         for val in ("true", "false", "TRUE", " False ", "1", "0"):
@@ -64,14 +64,14 @@ def test_http_chat_accepts_include_orchestration_trace_string_true_false() -> No
                     "include_orchestration_trace": val,
                 },
             )
-            assert status == 200, (val, body)
-            assert "choices" in body
+            assert status == 400, (val, body)
+            assert body["error"]["code"] == "invalid_include_orchestration_trace"
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_include_orchestration_trace_int_0_1() -> None:
+def test_http_chat_rejects_include_orchestration_trace_integers() -> None:
     server, thread, port = _server()
     try:
         for val in (0, 1):
@@ -83,8 +83,8 @@ def test_http_chat_accepts_include_orchestration_trace_int_0_1() -> None:
                     "include_orchestration_trace": val,
                 },
             )
-            assert status == 200, (val, body)
-            assert "choices" in body
+            assert status == 400, (val, body)
+            assert body["error"]["code"] == "invalid_include_orchestration_trace"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -146,8 +146,8 @@ def test_http_chat_accepts_attribution_all_null_values_as_empty_object() -> None
 
 
 if __name__ == "__main__":
-    test_http_chat_accepts_include_orchestration_trace_string_true_false()
-    test_http_chat_accepts_include_orchestration_trace_int_0_1()
+    test_http_chat_rejects_include_orchestration_trace_strings()
+    test_http_chat_rejects_include_orchestration_trace_integers()
     test_http_chat_still_rejects_include_orchestration_trace_yes()
     test_http_chat_accepts_attribution_null_empty_value_omit()
     test_http_chat_accepts_attribution_all_null_values_as_empty_object()
