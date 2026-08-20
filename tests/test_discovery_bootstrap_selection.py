@@ -100,6 +100,24 @@ def test_partial_provider_price_is_unknown_instead_of_fabricating_a_free_compone
     assert select_cheapest_discovered_agent([partial, complete], price_book) is complete
 
 
+def test_persisted_price_row_missing_one_component_remains_unknown() -> None:
+    """KV corruption must not silently manufacture a zero-priced component."""
+    store = InMemoryConfigStore()
+    store.set(
+        "llm_price_entries",
+        "partial_vendor:partial-model",
+        {
+            "provider_name": "partial_vendor",
+            "model_name": "partial-model",
+            "prompt_price_per_1k": 0.001,
+            "currency_code": "USD",
+        },
+    )
+    price_book = PriceBook(store)
+
+    assert price_book.get_price("partial_vendor", "partial-model") is None
+
+
 def test_invalid_catalog_prices_are_unknown_not_trusted_cost_evidence() -> None:
     """Reject negative, non-finite, and boolean provider price values."""
     assert model_discovery._price_per_1k("-0.000001") is None
