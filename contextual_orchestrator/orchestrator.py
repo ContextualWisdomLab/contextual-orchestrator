@@ -1497,19 +1497,172 @@ def load_agents(path: str) -> list[ModelAgent]:  # pragma: no cover
 
 
 class _AgentPoolStore:
-    """Durable agent-pool (model group) storage: operator changes survive restarts.
+    """Durable, normalized agent-pool storage used across process restarts.
 
-    ponytail: one sqlite table keyed by agent id, JSON payloads, thread-safe. The
-    seed agents file stays the bootstrap; stored rows overlay it at startup.
+    Agent scalar attributes live in ``agent_pool``. Ordered tags and provider
+    exclusions live in child tables, so a database row never hides a second
+    unqueryable JSON document. Legacy ``agent_pool(agent_id, payload)`` files
+    migrate transactionally on first open; malformed or ambiguous data fails
+    closed without discarding the old table.
     """
+
+    _AGENT_TABLE_NAME = "agent_pool"
+    _TAG_TABLE_NAME = "agent_pool_tags"
+    _EXCLUSION_TABLE_NAME = "agent_pool_provider_exclusions"
+    _LEGACY_TABLE_NAME = "agent_pool_legacy_payloads"
+    _AGENT_COLUMNS = frozenset(
+        {
+            "agent_id",
+            "model_name",
+            "base_url",
+            "api_key_env",
+            "credential_key",
+            "priority",
+            "disabled",
+            "provider_name",
+            "local_credential_key",
+            "auth_scheme",
+        }
+    )
+
+    @staticmethod
+    def _table_exists(conn: sqlite3.Connection, table_name: str) -> bool:
+        """Return whether the exact application-owned SQLite table exists."""
+        row = conn.execute(
+            "SELECT 1 FROM sqlite_master WHERE type = 'table' AND name = ?",
+            (table_name,),
+        ).fetchone()
+        return row is not None
+
+    @classmethod
+    def _create_normalized_schema(cls, conn: sqlite3.Connection) -> None:
+        """Create the 3NF parent and ordered child tables if absent."""
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_pool (
+                agent_id TEXT PRIMARY KEY,
+                model_name TEXT NOT NULL,
+                base_url TEXT NOT NULL,
+                api_key_env TEXT NOT NULL,
+                credential_key TEXT NOT NULL,
+                priority INTEGER NOT NULL,
+                disabled INTEGER NOT NULL,
+                provider_name TEXT NOT NULL,
+                local_credential_key TEXT NOT NULL,
+                auth_scheme TEXT NOT NULL,
+                CONSTRAINT agent_pool_disabled_flag_check CHECK (disabled IN (0, 1))
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_pool_tags (
+                agent_id TEXT NOT NULL,
+                tag_position INTEGER NOT NULL,
+                tag_name TEXT NOT NULL,
+                CONSTRAINT agent_pool_tags_primary_key PRIMARY KEY (agent_id, tag_position),
+                CONSTRAINT agent_pool_tags_agent_foreign_key
+                    FOREIGN KEY (agent_id) REFERENCES agent_pool(agent_id) ON DELETE CASCADE
+            )
+            """
+        )
+        conn.execute(
+            """
+            CREATE TABLE IF NOT EXISTS agent_pool_provider_exclusions (
+                agent_id TEXT NOT NULL,
+                exclusion_position INTEGER NOT NULL,
+                provider_name TEXT NOT NULL,
+                CONSTRAINT agent_pool_provider_exclusions_primary_key
+                    PRIMARY KEY (agent_id, exclusion_position),
+                CONSTRAINT agent_pool_provider_exclusions_agent_foreign_key
+                    FOREIGN KEY (agent_id) REFERENCES agent_pool(agent_id) ON DELETE CASCADE
+            )
+            """
+        )
+
+    @classmethod
+    def _insert_agent(cls, conn: sqlite3.Connection, agent: "ModelAgent") -> None:
+        """Insert one agent and its ordered multi-valued attributes."""
+        config = agent.to_config()
+        conn.execute(
+            """
+            INSERT INTO agent_pool (
+                agent_id, model_name, base_url, api_key_env, credential_key,
+                priority, disabled, provider_name, local_credential_key, auth_scheme
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                config["id"],
+                config["model"],
+                config["base_url"],
+                config["api_key_env"],
+                config["credential_key"],
+                config["priority"],
+                int(config["disabled"]),
+                config["provider_name"],
+                config["local_credential_key"],
+                config["auth_scheme"],
+            ),
+        )
+        conn.executemany(
+            "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) VALUES (?, ?, ?)",
+            [(agent.id, position, tag) for position, tag in enumerate(agent.tags)],
+        )
+        conn.executemany(
+            """
+            INSERT INTO agent_pool_provider_exclusions
+                (agent_id, exclusion_position, provider_name)
+            VALUES (?, ?, ?)
+            """,
+            [
+                (agent.id, position, provider)
+                for position, provider in enumerate(agent.provider_exclusions)
+            ],
+        )
+
+    @classmethod
+    def _initialize_schema(cls, conn: sqlite3.Connection) -> None:
+        """Create or transactionally migrate the agent-pool schema."""
+        conn.execute("PRAGMA foreign_keys = ON")
+        agent_exists = cls._table_exists(conn, cls._AGENT_TABLE_NAME)
+        tag_exists = cls._table_exists(conn, cls._TAG_TABLE_NAME)
+        exclusion_exists = cls._table_exists(conn, cls._EXCLUSION_TABLE_NAME)
+        if not agent_exists:
+            if tag_exists or exclusion_exists:
+                raise RuntimeError("agent-pool child tables exist without agent_pool")
+            cls._create_normalized_schema(conn)
+            return
+
+        columns = {row[1] for row in conn.execute("PRAGMA table_info(agent_pool)")}
+        if "payload" in columns:
+            if tag_exists or exclusion_exists:
+                raise RuntimeError("legacy agent_pool conflicts with normalized child tables")
+            conn.execute("ALTER TABLE agent_pool RENAME TO agent_pool_legacy_payloads")
+            cls._create_normalized_schema(conn)
+            rows = conn.execute(
+                "SELECT payload FROM agent_pool_legacy_payloads ORDER BY agent_id"
+            ).fetchall()
+            for (payload,) in rows:
+                cls._insert_agent(conn, ModelAgent.from_dict(json.loads(payload)))
+            conn.execute("DROP TABLE agent_pool_legacy_payloads")
+            return
+
+        if not cls._AGENT_COLUMNS.issubset(columns):
+            missing = ", ".join(sorted(cls._AGENT_COLUMNS - columns))
+            raise RuntimeError(f"unsupported agent_pool schema; missing columns: {missing}")
+        cls._create_normalized_schema(conn)
 
     def __init__(self, path: str) -> None:
         self._lock = threading.Lock()
         self._path = path
         conn = sqlite3.connect(self._path)
         try:
-            conn.execute("CREATE TABLE IF NOT EXISTS agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)")
+            conn.execute("BEGIN")
+            self._initialize_schema(conn)
             conn.commit()
+        except Exception:
+            conn.rollback()
+            raise
         finally:
             conn.close()
 
@@ -1517,10 +1670,51 @@ class _AgentPoolStore:
         with self._lock:
             conn = sqlite3.connect(self._path)
             try:
+                config = agent.to_config()
                 conn.execute(
-                    "INSERT OR REPLACE INTO agent_pool (agent_id, payload) VALUES (?, ?)",
-                    (agent.id, json.dumps(agent.to_config(), ensure_ascii=False)),
+                    """
+                    UPDATE agent_pool SET
+                        model_name = ?, base_url = ?, api_key_env = ?, credential_key = ?,
+                        priority = ?, disabled = ?, provider_name = ?,
+                        local_credential_key = ?, auth_scheme = ?
+                    WHERE agent_id = ?
+                    """,
+                    (
+                        config["model"],
+                        config["base_url"],
+                        config["api_key_env"],
+                        config["credential_key"],
+                        config["priority"],
+                        int(config["disabled"]),
+                        config["provider_name"],
+                        config["local_credential_key"],
+                        config["auth_scheme"],
+                        agent.id,
+                    ),
                 )
+                if conn.execute("SELECT changes()").fetchone()[0] == 0:
+                    self._insert_agent(conn, agent)
+                else:
+                    conn.execute("DELETE FROM agent_pool_tags WHERE agent_id = ?", (agent.id,))
+                    conn.execute(
+                        "DELETE FROM agent_pool_provider_exclusions WHERE agent_id = ?",
+                        (agent.id,),
+                    )
+                    conn.executemany(
+                        "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) VALUES (?, ?, ?)",
+                        [(agent.id, position, tag) for position, tag in enumerate(agent.tags)],
+                    )
+                    conn.executemany(
+                        """
+                        INSERT INTO agent_pool_provider_exclusions
+                            (agent_id, exclusion_position, provider_name)
+                        VALUES (?, ?, ?)
+                        """,
+                        [
+                            (agent.id, position, provider)
+                            for position, provider in enumerate(agent.provider_exclusions)
+                        ],
+                    )
                 conn.commit()
             finally:
                 conn.close()
@@ -1529,10 +1723,46 @@ class _AgentPoolStore:
         with self._lock:
             conn = sqlite3.connect(self._path)
             try:
-                rows = conn.execute("SELECT payload FROM agent_pool ORDER BY agent_id").fetchall()
+                rows = conn.execute(
+                    """
+                    SELECT agent_id, model_name, base_url, api_key_env, credential_key,
+                           priority, disabled, provider_name, local_credential_key, auth_scheme
+                    FROM agent_pool ORDER BY agent_id
+                    """
+                ).fetchall()
+                tags = conn.execute(
+                    "SELECT agent_id, tag_position, tag_name FROM agent_pool_tags "
+                    "ORDER BY agent_id, tag_position"
+                ).fetchall()
+                exclusions = conn.execute(
+                    "SELECT agent_id, exclusion_position, provider_name "
+                    "FROM agent_pool_provider_exclusions ORDER BY agent_id, exclusion_position"
+                ).fetchall()
             finally:
                 conn.close()
-        return [ModelAgent.from_dict(json.loads(row[0])) for row in rows]
+        tags_by_agent: dict[str, list[str]] = {}
+        for agent_id, _position, tag_name in tags:
+            tags_by_agent.setdefault(agent_id, []).append(tag_name)
+        exclusions_by_agent: dict[str, list[str]] = {}
+        for agent_id, _position, provider_name in exclusions:
+            exclusions_by_agent.setdefault(agent_id, []).append(provider_name)
+        return [
+            ModelAgent(
+                id=row[0],
+                model=row[1],
+                base_url=row[2],
+                api_key_env=row[3],
+                credential_key=row[4],
+                tags=tuple(tags_by_agent.get(row[0], ())),
+                priority=row[5],
+                disabled=bool(row[6]),
+                provider_name=row[7],
+                provider_exclusions=tuple(exclusions_by_agent.get(row[0], ())),
+                local_credential_key=row[8],
+                auth_scheme=row[9],
+            )
+            for row in rows
+        ]
 
     def close(self) -> None:
         """Compatibility no-op: agent-pool operations use short-lived sqlite handles."""
