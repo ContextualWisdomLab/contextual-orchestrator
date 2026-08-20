@@ -5225,14 +5225,40 @@ def build_server(
                     frequency_penalty = sampling["frequency_penalty"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
                     # defaults) — do not force single-agent passthrough for null-only keys.
-                    if tools_list or isinstance(tool_choice, dict) or (
+                    tool_passthrough = tools_list or isinstance(tool_choice, dict) or (
                         isinstance(tool_choice, str) and tool_choice not in {"none", "auto"}
-                    ):
+                    )
+                    tool_loop_header = self.headers.get(
+                        "x-contextual-orchestrator-tool-loop", ""
+                    ).strip().lower()
+                    if tool_passthrough and tool_loop_header == "v1":
+                        # OpenCode executes the returned function calls in its own
+                        # bounded tool loop. Preserve the full provider response;
+                        # multi-agent synthesis cannot safely merge tool state.
+                        if stream:
+                            raise RequestError(
+                                400,
+                                "invalid_stream",
+                                "tool-loop passthrough requires stream=false",
+                            )
+                        started_at = time.perf_counter()
+                        raw_response = self._run(lambda: orchestrator.proxy_completion(body))
+                        orchestrator.record_analytics_event(
+                            "chat_completion_tool_passthrough",
+                            {
+                                "endpoint_path": "/v1/chat/completions",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(raw_response)
+                        return
+                    if tool_passthrough:
                         raise RequestError(
                             422,
                             "multi_agent_tools_unsupported",
-                            "tool execution cannot be represented by the multi-agent synthesis contract yet; "
-                            "a single-agent passthrough is intentionally not used",
+                            "tool execution requires the explicit v1 client-owned tool-loop contract",
                         )
                     messages = _validate_messages(body.get("messages"))
                     mode = _validate_mode(body.get("orchestration") or body.get("orchestration_mode") or body.get("mode") or "auto")
@@ -5643,12 +5669,32 @@ def build_server(
                         _validate_chat_tool_choice(body)
                     if "response_format" in body:
                         _validate_chat_response_format(body)
+                    tool_loop_header = self.headers.get(
+                        "x-contextual-orchestrator-tool-loop", ""
+                    ).strip().lower()
+                    if tools_list and tool_loop_header == "v1":
+                        # The Responses client owns execution of the returned
+                        # function calls; the gateway preserves the full shape.
+                        started_at = time.perf_counter()
+                        raw_response = self._run(
+                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                        )
+                        orchestrator.record_analytics_event(
+                            "responses_tool_passthrough",
+                            {
+                                "endpoint_path": "/v1/responses",
+                                "actor_scope": "inference",
+                                "status_code": 200,
+                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                            },
+                        )
+                        self._send(raw_response)
+                        return
                     if tools_list:
                         raise RequestError(
                             422,
                             "multi_agent_tools_unsupported",
-                            "tool execution cannot be represented by the multi-agent synthesis contract yet; "
-                            "a single-agent passthrough is intentionally not used",
+                            "tool execution requires the explicit v1 client-owned tool-loop contract",
                         )
                     if "modalities" in body:
                         _validate_responses_modalities(body)
