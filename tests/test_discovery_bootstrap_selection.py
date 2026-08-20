@@ -109,6 +109,65 @@ def test_invalid_catalog_prices_are_unknown_not_trusted_cost_evidence() -> None:
     assert model_discovery._price_per_1k("0") == 0.0
 
 
+def test_huge_price_values_remain_unknown_without_crashing_discovery_or_ranking() -> None:
+    """Unbounded JSON or KV integers must not terminate bootstrap selection."""
+    huge_price = 10**10000
+    assert model_discovery._price_per_1k(huge_price) is None
+
+    price_book = PriceBook(InMemoryConfigStore())
+    huge = _model("huge_vendor", "huge-model")
+    valid = _model("openrouter", "valid-model")
+    _set_price(price_book, huge, huge_price)
+    _set_price(price_book, valid, 1.0)
+
+    assert select_cheapest_discovered_agent([huge, valid], price_book) is valid
+
+
+def test_malformed_price_book_row_is_unknown_instead_of_crashing_selection() -> None:
+    """A corrupt persisted price row must not take down the serving bootstrap."""
+    store = InMemoryConfigStore()
+    store.set(
+        "llm_price_entries",
+        "broken_vendor:broken-model",
+        {
+            "provider_name": "broken_vendor",
+            "model_name": "broken-model",
+            "prompt_price_per_1k": "not-a-number",
+            "completion_price_per_1k": 0.001,
+            "currency_code": "USD",
+        },
+    )
+    price_book = PriceBook(store)
+    broken = _model("broken_vendor", "broken-model")
+    valid = _model("openrouter", "valid-model")
+    _set_price(price_book, valid, 1.0)
+
+    assert select_cheapest_discovered_agent([broken, valid], price_book) is valid
+
+
+def test_refresh_counts_only_complete_prices_in_the_comparison_currency() -> None:
+    """Cross-currency evidence is unknown until an explicit conversion exists."""
+    price_book = PriceBook(InMemoryConfigStore(), default_currency="USD")
+    usd = _priced_model(
+        "openrouter",
+        "usd-model",
+        prompt_price_per_1k=1.0,
+        completion_price_per_1k=1.0,
+        currency_code="USD",
+    )
+    eur = _priced_model(
+        "eur_vendor",
+        "eur-model",
+        prompt_price_per_1k=0.001,
+        completion_price_per_1k=0.001,
+        currency_code="EUR",
+    )
+
+    assert refresh_price_book([eur, usd], price_book) == 1
+    assert price_book.get_price("eur_vendor", "eur-model") is None
+    assert price_book.get_price("openrouter", "usd-model") is not None
+
+
 def test_invalid_or_cross_currency_price_rows_do_not_outrank_comparable_usd_cost() -> None:
     """Only finite non-negative prices in the configured currency are comparable."""
     price_book = PriceBook(InMemoryConfigStore(), default_currency="USD")
