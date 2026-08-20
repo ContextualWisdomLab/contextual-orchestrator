@@ -16,8 +16,9 @@ into separate products.
 Figma Code Connect is not used for discovery, metadata, code generation, or
 artifact creation.
 
-Review process is not a blocker. Reviewer delay, review bot delay, queued model
-review, and pending checks without concrete failure remain non-blocking.
+Product evidence remains inspectable, but the release-authority gate is
+fail-closed for missing, stale, queued, synthetic, or predecessor-head
+governance evidence.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 the repository as one deployable product until a second product, independent
@@ -45,7 +46,7 @@ necessary.
   `commercial_gap_register_open`, or `commercial_gap_register_blocked`;
 - `measurement_status`: `local_commercial_gap_register`;
 - `gap_summary`: total gap count, production gap count, buyer-specific gap
-  count, blocked count, and `review_process_is_blocker=false`;
+  count, blocked count, and release-authority blocker count;
 - `gap_items`: owner/action rows with `gap_name`, `gap_type`, `gap_status`,
   `owner`, `reviewer`, `sources`, `source_evidence_type`, `current_evidence`,
   `required_input`, and `is_blocker`;

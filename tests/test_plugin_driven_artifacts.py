@@ -670,7 +670,7 @@ def test_commercial_release_candidate_defines_buyer_release_package() -> None:
         "Commercial Release Candidate",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "Product evidence and release authorization are separate",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Release Inputs",
         "Runtime Shape",
@@ -688,6 +688,8 @@ def test_commercial_release_candidate_defines_buyer_release_package() -> None:
         "local_commercial_release_candidate",
         "release_artifacts",
         "external_release_gaps",
+        "release_authorization",
+        "release_authority_collector",
     ]:
         assert expected_text in release
 
@@ -709,7 +711,7 @@ def test_commercial_gap_register_defines_external_gap_actions() -> None:
         "Commercial Gap Register",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "Review process is not a blocker",
+        "release-authority gate is",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Gap Inputs",
         "Runtime Shape",

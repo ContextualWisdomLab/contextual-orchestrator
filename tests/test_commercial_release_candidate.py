@@ -79,13 +79,16 @@ def test_commercial_release_candidate_report_packages_ship_candidate() -> None:
     )
     artifacts = artifact_by_name(report)
 
-    assert report["release_status"] == "commercial_release_ready_with_warnings"
+    assert report["release_status"] == "commercial_release_blocked"
+    assert report["product_evidence_status"] == "commercial_release_ready_with_warnings"
     assert report["target_contract_value_krw"] == TARGET_CONTRACT_VALUE_KRW
     assert report["measurement_status"] == "local_commercial_release_candidate"
     assert "not a valuation guarantee" in report["source_note"]
-    assert report["release_summary"]["blocked_count"] == 0
+    assert report["release_summary"]["blocked_count"] == 1
+    assert report["release_summary"]["product_blocked_count"] == 0
     assert report["release_summary"]["warning_count"] == 2
-    assert report["release_summary"]["review_process_is_blocker"] is False
+    assert report["release_summary"]["release_authority_blocker_count"] == 1
+    assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
     assert report["concrete_blockers"] == []
     assert report["external_release_gaps"][0]["evidence_type"] == "proposed_until_production"
     assert report["external_release_gaps"][1]["evidence_type"] == "proposed_until_buyer_specific"
@@ -123,7 +126,7 @@ def test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract()
     assert "/api/v1/commercial_release_candidates/latest" in release_doc
     assert "KRW 2B Commercial Release Candidate" in release_doc
     assert "Figma Code Connect is not used" in release_doc
-    assert "Review process is not a blocker" in release_doc
+    assert "Product evidence and release authorization are separate" in release_doc
     assert "Do not create a separate library, Git submodule, or extracted package now" in release_doc
 
     server = build_server(
@@ -151,11 +154,7 @@ def test_commercial_release_candidate_endpoint_openapi_admin_and_docs_contract()
     assert unauth_status == 401
     assert unauth_body["error"]["code"] == "unauthorized"
     assert release_status == 200
-    assert release["release_status"] in {
-        "commercial_release_ready",
-        "commercial_release_ready_with_warnings",
-        "commercial_release_blocked",
-    }
+    assert release["release_status"] == "commercial_release_blocked"
     assert release["measurement_status"] == "local_commercial_release_candidate"
     assert "release_artifacts" in release
 

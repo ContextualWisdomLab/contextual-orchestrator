@@ -1,0 +1,101 @@
+"""Tests for the read-only GitHub authority snapshot collector."""
+
+from __future__ import annotations
+
+import importlib.util
+from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
+
+
+_MODULE_PATH = Path(__file__).resolve().parents[1] / "scripts/ci/release_authority_snapshot.py"
+_SPEC = importlib.util.spec_from_file_location("release_authority_snapshot", _MODULE_PATH)
+assert _SPEC and _SPEC.loader
+collector = importlib.util.module_from_spec(_SPEC)
+_SPEC.loader.exec_module(collector)
+
+
+def test_normalizers_and_missing_findings_are_fail_closed(tmp_path: Path) -> None:
+    """Normalize API rows and make omitted governance findings blocking."""
+    assert collector._check_rows([{"name": "Tests", "status": "COMPLETED", "conclusion": "SUCCESS", "head_sha": "a" * 40}, "bad"]) == [
+        {"name": "Tests", "status": "completed", "conclusion": "success", "head_sha": "a" * 40, "synthetic_merge": False}
+    ]
+    assert collector._review_rows(
+        [{"user": {"login": "reviewer"}, "author_association": "MEMBER", "state": "APPROVED", "commit_id": "a" * 40}],
+        head_sha="a" * 40,
+        author_login="author",
+    )[0]["state"] == "approved"
+    assert collector._read_findings(None)["complete"] is False
+    findings = tmp_path / "findings.json"
+    findings.write_text('{"complete": true}', encoding="utf-8")
+    assert collector._read_findings(str(findings))["complete"] is True
+
+
+def test_invalid_findings_and_gh_output_are_safe(monkeypatch: pytest.MonkeyPatch, tmp_path: Path) -> None:
+    """Never echo subprocess output or accept malformed inventory files."""
+    bad = tmp_path / "bad.json"
+    bad.write_text("not-json", encoding="utf-8")
+    with pytest.raises(RuntimeError, match="findings_inventory_invalid"):
+        collector._read_findings(str(bad))
+
+    monkeypatch.setattr(
+        collector.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=1, stdout="secret-token", stderr="private"),
+    )
+    with pytest.raises(RuntimeError, match="github_authority_query_failed"):
+        collector._gh_json("owner/repo", "repos/owner/repo/pulls/1")
+
+    monkeypatch.setattr(
+        collector.subprocess,
+        "run",
+        lambda *args, **kwargs: SimpleNamespace(returncode=0, stdout="[]", stderr=""),
+    )
+    assert collector._gh_json("owner/repo", "repos/owner/repo/rulesets") == []
+
+
+def test_collect_authority_binds_current_pull_head(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The collector binds checks and reviews to the current contributor SHA."""
+    head = "a" * 40
+    responses = {
+        "pulls/7": {"head": {"sha": head}, "base": {"ref": "main"}, "user": {"login": "author"}},
+        "check-runs": {"check_runs": [{"name": "Tests", "status": "COMPLETED", "conclusion": "SUCCESS", "head_sha": head}]},
+        "rulesets": [{"id": 1}],
+        "reviews": [{"user": {"login": "reviewer"}, "author_association": "MEMBER", "state": "APPROVED", "commit_id": head}],
+    }
+
+    def fake_api(repository: str, endpoint: str):
+        if endpoint.endswith("/reviews"):
+            return responses["reviews"]
+        if "check-runs" in endpoint:
+            return responses["check-runs"]
+        if "rulesets" in endpoint:
+            return responses["rulesets"]
+        if "pulls/7" in endpoint:
+            return responses["pulls/7"]
+        raise AssertionError(endpoint)
+
+    monkeypatch.setattr(collector, "_gh_json", fake_api)
+    snapshot = collector.collect_authority("owner/repo", 7, ["Tests"], {"complete": True}, expected_head_sha=head)
+    assert snapshot["head_is_current"] is True
+    assert snapshot["protected_head_sha"] == head
+    assert snapshot["checks"][0]["conclusion"] == "success"
+    assert snapshot["reviewers"][0]["state"] == "approved"
+
+
+def test_collect_authority_rejects_malformed_pull_response(monkeypatch: pytest.MonkeyPatch) -> None:
+    """Malformed GitHub responses stop collection before evidence is emitted."""
+    monkeypatch.setattr(collector, "_gh_json", lambda repository, endpoint: [])
+    with pytest.raises(RuntimeError, match="pull_request_response_invalid"):
+        collector.collect_authority("owner/repo", 7, [], {})
+
+
+def test_main_reports_collection_errors_and_success(monkeypatch: pytest.MonkeyPatch, capsys: pytest.CaptureFixture[str]) -> None:
+    """The CLI returns a nonzero code for collection failure and JSON on success."""
+    monkeypatch.setattr(collector, "collect_authority", lambda *args, **kwargs: {"authorized": False})
+    assert collector.main(["--repo", "owner/repo", "--pr", "7"]) == 0
+    assert '"authorized": false' in capsys.readouterr().out
+    monkeypatch.setattr(collector, "collect_authority", lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError("blocked")))
+    assert collector.main(["--repo", "owner/repo", "--pr", "7"]) == 2
+    assert "blocked" in capsys.readouterr().err
