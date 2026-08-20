@@ -322,13 +322,17 @@ def classify_tool_failure(
     """
     if not isinstance(idempotent, bool):
         raise TypeError("idempotent must be a boolean")
-    if isinstance(error, ToolExecutionError):
-        observed_kind = error.kind
-        if error.outcome_unknown:
+    structured_error = next(
+        (item for item in _exception_chain(error) if isinstance(item, ToolExecutionError)),
+        None,
+    )
+    if structured_error is not None:
+        observed_kind = structured_error.kind
+        if structured_error.outcome_unknown:
             kind = ToolFailureKind.AMBIGUOUS_OUTCOME
         else:
-            kind = error.kind
-        effective_idempotent = error.idempotent
+            kind = structured_error.kind
+        effective_idempotent = structured_error.idempotent
     else:
         kind = _classify_unstructured(error)
         observed_kind = kind
