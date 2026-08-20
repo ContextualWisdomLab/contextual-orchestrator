@@ -1,14 +1,14 @@
 """Durable bootstrap for the organization provider credential inventory.
 
-GitHub Actions or another trusted deployment process may expose the fixed provider
-secret inventory to this one-shot module. Values are validated as a complete set,
-written to the configured credential KV, and then model discovery runs exclusively
-through the KV-backed runtime seam. Runtime provider calls never read these provider
-API keys from ``os.environ``.
+A trusted deployment process may expose the fixed provider-secret inventory to
+this one-shot module. Values are validated as a complete set, written to the
+configured credential KV, and then model discovery runs exclusively through the
+KV-backed runtime seam. Runtime provider calls never read provider API keys from
+``os.environ``.
 
-The bootstrap is deliberately package-owned rather than workflow-owned so the same
-transaction and validation contract is reusable from Kubernetes Jobs, local release
-scripts, and GitHub Actions.
+Bootstrap establishes a conservative serving candidate set. It does not infer
+reasoning, coding, vision, or other provider capabilities from model names;
+capability negotiation remains an explicit runtime/catalog responsibility.
 """
 
 from __future__ import annotations
@@ -74,38 +74,12 @@ _NON_CHAT_TOKEN_PREFIXES = (
     "rerank",
     "transcrib",
 )
-_REASONING_MARKERS = (
-    "claude",
-    "deepseek",
-    "gemma",
-    "gpt",
-    "kimi",
-    "llama",
-    "mistral",
-    "mixtral",
-    "nemotron",
-    "o1",
-    "o3",
-    "o4",
-    "phi",
-    "qwen",
-    "r1",
-    "reason",
-)
-_CODING_MARKERS = (
-    "code",
-    "coder",
-    "codex",
-    "deepseek",
-    "devstral",
-    "qwen",
-)
-_VISION_MARKERS = (
-    "4o",
-    "multimodal",
-    "omni",
-    "vision",
-    "vl",
+_GENERIC_SERVING_TAGS = (
+    "discovered",
+    "chat",
+    "worker",
+    "writing",
+    "synthesizer",
 )
 
 
@@ -143,11 +117,7 @@ class ProviderBootstrapReport:
 def collect_provider_credentials(
     environ: Mapping[str, str], *, require_all: bool = True
 ) -> dict[str, str]:
-    """Collect the fixed secret inventory from a trusted bootstrap environment.
-
-    Values are stripped before registration so mounted secrets ending in a newline
-    remain usable. No credential value is included in an exception or report.
-    """
+    """Collect and normalize the fixed secret inventory from trusted bootstrap input."""
     values: dict[str, str] = {}
     missing: list[str] = []
     for name in PROVIDER_CREDENTIAL_NAMES:
@@ -167,12 +137,10 @@ def collect_provider_credentials(
     return values
 
 
-def register_provider_credentials_atomically(credentials: Mapping[str, str]) -> tuple[str, ...]:
-    """Register a validated credential batch with one commit where supported.
-
-    The package's built-in memory and PostgreSQL backends are handled atomically.
-    Unknown custom backends are rejected instead of risking a partial multi-key write.
-    """
+def register_provider_credentials_atomically(
+    credentials: Mapping[str, str],
+) -> tuple[str, ...]:
+    """Register a validated credential batch with one commit where supported."""
     if not credentials:
         raise ProviderBootstrapError("provider bootstrap received an empty credential batch")
     unknown = sorted(set(credentials) - set(PROVIDER_CREDENTIAL_NAMES))
@@ -180,18 +148,17 @@ def register_provider_credentials_atomically(credentials: Mapping[str, str]) -> 
         raise ProviderBootstrapError("provider bootstrap rejected unknown credential names")
     for name, value in credentials.items():
         if not isinstance(value, str) or not value.strip():
-            raise ProviderBootstrapError(f"provider bootstrap rejected an empty value for {name}")
+            raise ProviderBootstrapError(
+                f"provider bootstrap rejected an empty value for {name}"
+            )
 
     backend = get_backend()
     normalized = {name: value.strip() for name, value in credentials.items()}
     if isinstance(backend, InMemoryCredentialBackend):
-        # These fields are package-private implementation state. Keeping the update
-        # under the backend's existing lock gives the dev/test backend the same
-        # all-or-nothing visibility contract as PostgreSQL.
         with backend._lock:  # noqa: SLF001 - package-internal atomic batch operation
             backend._store.update(normalized)  # noqa: SLF001
     elif isinstance(backend, PostgresCredentialBackend):
-        with backend._connect() as connection:  # noqa: SLF001 - package-internal transaction
+        with backend._connect() as connection:  # noqa: SLF001 - package transaction
             backend._ensure_schema(connection)  # noqa: SLF001
             with connection.cursor() as cursor:
                 for name, value in normalized.items():
@@ -212,17 +179,18 @@ def register_provider_credentials_atomically(credentials: Mapping[str, str]) -> 
 
 
 def _model_tokens(model_id: str) -> tuple[str, ...]:
-    """Return conservative lower-case tokens used for capability classification."""
-    return tuple(token for token in re.split(r"[^a-z0-9]+", model_id.casefold()) if token)
+    """Return conservative tokens used only to exclude obvious non-chat transports."""
+    return tuple(
+        token for token in re.split(r"[^a-z0-9]+", model_id.casefold()) if token
+    )
 
 
 def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
-    """Exclude catalog rows whose advertised identifier is clearly non-chat.
+    """Exclude catalog identifiers that clearly describe non-chat transports.
 
-    OpenAI-compatible ``/models`` responses often omit an explicit task field and
-    may mix embeddings, rerankers, speech, image generation, moderation, or realtime
-    transports with chat models. Such rows must never be activated in the ordinary
-    chat worker pool merely because they were inexpensive or appeared first.
+    This is a negative compatibility filter, not positive capability inference.
+    Models that survive receive only generic chat-serving tags until an explicit
+    provider/catalog capability record or measured evidence is available.
     """
     tokens = _model_tokens(model.model_id)
     for token in tokens:
@@ -233,20 +201,14 @@ def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
     return bool(tokens)
 
 
-def capability_tags_for_discovered(model: DiscoveredModel) -> tuple[str, ...]:
-    """Infer conservative role tags from a chat candidate's public model identifier."""
-    identifier = model.model_id.casefold()
-    tags = ["discovered", "chat", "worker", "writing", "synthesizer"]
-    if any(marker in identifier for marker in _REASONING_MARKERS):
-        tags.extend(("reasoning", "thinker", "verification", "verifier"))
-    if any(marker in identifier for marker in _CODING_MARKERS):
-        tags.append("coding")
-    if any(marker in identifier for marker in _VISION_MARKERS):
-        tags.append("vision")
-    return tuple(dict.fromkeys(tags))
+def serving_tags_for_discovered(_model: DiscoveredModel) -> tuple[str, ...]:
+    """Return capability-neutral tags safe for any compatible chat candidate."""
+    return _GENERIC_SERVING_TAGS
 
 
-def _known_cost_sort_key(model: DiscoveredModel) -> tuple[int, float, str, str]:
+def _known_cost_sort_key(
+    model: DiscoveredModel,
+) -> tuple[int, float, str, str]:
     """Sort known-price models before unknown-price models without inventing free cost."""
     prices = (model.prompt_price_per_1k, model.completion_price_per_1k)
     known = [price for price in prices if price is not None]
@@ -258,14 +220,7 @@ def _known_cost_sort_key(model: DiscoveredModel) -> tuple[int, float, str, str]:
 def select_provider_diverse_models(
     discovered: Sequence[DiscoveredModel], *, limit: int
 ) -> list[DiscoveredModel]:
-    """Choose a bounded chat pool while preserving provider/account diversity.
-
-    Clearly non-chat model identifiers are excluded first. The first pass then
-    selects the best known-cost candidate from every discovered provider account.
-    Remaining slots are filled by the same honest cost ordering. Unknown price is
-    never coerced to zero. Model quality decisions remain the responsibility of the
-    ordinary orchestrator routing policy after bootstrap.
-    """
+    """Choose a bounded compatible pool while preserving provider diversity."""
     if limit < 1:
         raise ValueError("provider bootstrap model limit must be positive")
     unique: dict[tuple[str, str, str], DiscoveredModel] = {}
@@ -283,7 +238,10 @@ def select_provider_diverse_models(
         seen_providers.add(model.provider_name)
         if len(selected) >= limit:
             return selected
-    selected_keys = {(item.provider_name, item.credential_name, item.model_id) for item in selected}
+    selected_keys = {
+        (item.provider_name, item.credential_name, item.model_id)
+        for item in selected
+    }
     for model in ordered:
         key = (model.provider_name, model.credential_name, model.model_id)
         if key in selected_keys:
@@ -295,11 +253,11 @@ def select_provider_diverse_models(
 
 
 def _active_agent_from_discovered(model: DiscoveredModel) -> ModelAgent:
-    """Convert one selected chat model into an enabled, role-tagged agent."""
+    """Convert one selected chat model into an enabled capability-neutral agent."""
     return replace(
         agent_from_discovered(model),
         disabled=False,
-        tags=capability_tags_for_discovered(model),
+        tags=serving_tags_for_discovered(model),
     )
 
 
@@ -316,9 +274,6 @@ def _synchronize_durable_agent_pool(
     selected_ids = {agent.id for agent in agents}
     bootstrap.sync_discovered_agents(agents)
 
-    # Retire the synthetic constructor seed and any previously discovered model
-    # that is absent from the current bounded selection. Manual operator-managed
-    # agents are preserved.
     for candidate in list(bootstrap.candidates):
         if candidate.id in selected_ids:
             continue
@@ -329,9 +284,13 @@ def _synchronize_durable_agent_pool(
     for agent in agents:
         bootstrap.patch_agent("default", agent.id, {"status": "active"})
 
-    enabled = tuple(sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids))
+    enabled = tuple(
+        sorted(agent.id for agent in bootstrap.agents if agent.id in selected_ids)
+    )
     if set(enabled) != selected_ids:
-        raise ProviderBootstrapError("provider bootstrap could not activate the selected agent pool")
+        raise ProviderBootstrapError(
+            "provider bootstrap could not activate the selected agent pool"
+        )
     return enabled
 
 
@@ -343,23 +302,35 @@ def bootstrap_provider_runtime(
     model_limit: int = 16,
 ) -> ProviderBootstrapReport:
     """Register trusted secrets, discover chat models, and optionally activate a pool."""
-    credentials = collect_provider_credentials(environ, require_all=require_all_credentials)
+    credentials = collect_provider_credentials(
+        environ, require_all=require_all_credentials
+    )
     registered = register_provider_credentials_atomically(credentials)
     discovered, errors = discover_all_models()
     if not discovered:
-        raise ProviderBootstrapError("provider bootstrap discovered no usable models")
+        raise ProviderBootstrapError(
+            "provider bootstrap discovered no usable models"
+        )
 
     eligible = [model for model in discovered if is_chat_serving_candidate(model)]
     if not eligible:
-        raise ProviderBootstrapError("provider bootstrap discovered no chat-capable models")
+        raise ProviderBootstrapError(
+            "provider bootstrap discovered no chat-capable models"
+        )
 
     price_book = PriceBook(InMemoryConfigStore())
     priced_count = refresh_price_book(discovered, price_book)
     selected = select_provider_diverse_models(eligible, limit=model_limit)
     if not selected:
-        raise ProviderBootstrapError("provider bootstrap selected no chat-capable models")
+        raise ProviderBootstrapError(
+            "provider bootstrap selected no chat-capable models"
+        )
     selected_ids = tuple(agent_id_for(model) for model in selected)
-    enabled_ids = _synchronize_durable_agent_pool(agents_db, selected) if agents_db else ()
+    enabled_ids = (
+        _synchronize_durable_agent_pool(agents_db, selected)
+        if agents_db
+        else ()
+    )
 
     return ProviderBootstrapReport(
         registered_credentials=registered,
@@ -368,7 +339,9 @@ def bootstrap_provider_runtime(
         selected_agent_ids=selected_ids,
         enabled_agent_ids=enabled_ids,
         durable_agent_pool=bool(agents_db),
-        providers_with_errors=tuple(sorted({error.provider_name for error in errors})),
+        providers_with_errors=tuple(
+            sorted({error.provider_name for error in errors})
+        ),
         priced_model_count=priced_count,
     )
 
@@ -398,5 +371,5 @@ def main(argv: Sequence[str] | None = None) -> None:
     print(json.dumps(report.as_dict(), ensure_ascii=False, sort_keys=True))
 
 
-if __name__ == "__main__":  # pragma: no cover - exercised through subprocess/CLI tests
+if __name__ == "__main__":  # pragma: no cover - subprocess/CLI coverage
     main()
