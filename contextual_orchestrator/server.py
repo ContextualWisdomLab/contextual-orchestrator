@@ -4349,7 +4349,12 @@ def _readiness_payload(orchestrator: Any, coordinator: Any) -> tuple[dict[str, A
     ):
         try:
             backend = getattr(coordinator, backend_name)
-            checks[check_name] = {"status": "ready", "backend": backend.name}
+            # Backend identifiers may contain URLs, tenant names, or deployment
+            # secrets. Readiness exposes only a server-controlled status.
+            backend_id = getattr(backend, "name", None)
+            checks[check_name] = {
+                "status": "ready" if isinstance(backend_id, str) and backend_id else "degraded"
+            }
         except Exception:  # noqa: BLE001 - optional outage is safe to report generically
             checks[check_name] = {"status": "degraded"}
 
