@@ -4543,7 +4543,10 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        """Serve liveness, admin, inference, and contract HTTP routes."""
+
         def do_GET(self) -> None:  # noqa: N802
+            """Handle read-only API, admin, health, and OpenAPI requests."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -4898,6 +4901,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            """Handle authenticated agent-pool updates."""
             try:
                 self._authorize("admin", state_changing=True)
                 path = urllib.parse.urlparse(self.path).path
@@ -4921,6 +4925,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            """Handle session logout and authenticated agent removal."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/admin/session":
@@ -4950,6 +4955,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            """Handle session establishment and inference or admin mutations."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 if path == "/admin/session":
@@ -5810,6 +5816,7 @@ def build_server(
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
+            """Suppress default access-log output; structured callers own logging."""
             return
 
         def _send_error(
