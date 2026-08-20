@@ -13,7 +13,6 @@ import time
 from typing import Any, Iterator
 import urllib.error
 
-from . import orchestrator as _runtime
 from .orchestrator import (
     ModelAgent,
     ModelClient,
@@ -63,55 +62,6 @@ def _is_adaptive_failover_error(error: BaseException) -> bool:
     return False
 
 
-def _model_client_proxy_send_once(
-    client: ModelClient,
-    agent: ModelAgent,
-    endpoint: str,
-    payload: dict[str, Any],
-) -> dict[str, Any]:
-    """Preserve built-in passthrough semantics while removing same-agent retries.
-
-    The ordinary :meth:`ModelClient.proxy_send` path owns local-provider model
-    switching, bounded concurrency, and the provider-neutral Responses adapter.
-    A one-shot candidate attempt must retain those semantics while replacing only
-    ``_send_raw_with_retry`` with exactly one ``_send_raw`` call.
-    """
-    if agent.base_url.startswith("mock://"):
-        return client._mock_raw(agent, endpoint, payload)
-
-    destination = client._validate_provider(agent)  # pragma: no cover - live egress
-    normalized_endpoint = endpoint.strip("/")
-    if normalized_endpoint == "responses" and _runtime._is_local_provider_url(
-        agent.base_url
-    ):
-        chat_payload = _runtime._responses_to_chat_payload(payload)
-        chat_payload.setdefault("max_tokens", client.max_output_tokens)
-        if (
-            _runtime._is_direct_mlx_provider_url(agent.base_url)
-            and client.chat_template_args
-        ):
-            chat_payload["chat_template_kwargs"] = client.chat_template_args
-        with _runtime._local_provider_slot(
-            agent,
-            client.local_concurrency,
-            client.timeout,
-        ):
-            chat_response = client._send_raw(
-                agent,
-                "chat/completions",
-                chat_payload,
-                destination,
-            )
-        return _runtime._chat_to_responses_payload(chat_response, payload)
-
-    with _runtime._local_provider_slot(
-        agent,
-        client.local_concurrency,
-        client.timeout,
-    ):
-        return client._send_raw(agent, endpoint, payload, destination)
-
-
 def _proxy_send_once(
     client: Any,
     agent: ModelAgent,
@@ -123,7 +73,7 @@ def _proxy_send_once(
     if callable(one_shot):
         return one_shot(agent, endpoint, payload)
     if isinstance(client, ModelClient):
-        return _model_client_proxy_send_once(client, agent, endpoint, payload)
+        return client.proxy_send_once(agent, endpoint, payload)
     return client.proxy_send(agent, endpoint, payload)
 
 
