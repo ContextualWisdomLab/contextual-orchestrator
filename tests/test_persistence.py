@@ -12,11 +12,13 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import _StateStore  # noqa: E402
+import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
 
 
 def _orch(state_db: str | None = None) -> TaskOrchestrator:
@@ -152,6 +154,91 @@ def test_store_rejects_ambiguous_dual_persistence_tables() -> None:
             assert "both legacy and current" in str(exc)
         else:  # pragma: no cover
             raise AssertionError("ambiguous persistence schema must fail closed")
+
+
+def test_store_closes_connection_when_rejecting_ambiguous_schema() -> None:
+    """A fail-closed dual-schema rejection must not leak its SQLite handle."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "ambiguous-closed.db")
+        connection = sqlite3.connect(db)
+        for table in ("records", "orchestration_records"):
+            connection.execute(
+                f"CREATE TABLE {table} (seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
+            )
+        connection.commit()
+        connection.close()
+
+        real_connect = sqlite3.connect
+        tracked: list[object] = []
+
+        class TrackingConnection:
+            """Track closure while forwarding SQLite operations to a real handle."""
+
+            def __init__(self, wrapped: sqlite3.Connection) -> None:
+                self.wrapped = wrapped
+                self.closed = False
+
+            def close(self) -> None:
+                self.closed = True
+                self.wrapped.close()
+
+            def __getattr__(self, name: str) -> object:
+                return getattr(self.wrapped, name)
+
+        def connect(*args: object, **kwargs: object) -> TrackingConnection:
+            wrapper = TrackingConnection(real_connect(*args, **kwargs))
+            tracked.append(wrapper)
+            return wrapper
+
+        with patch.object(orchestrator_module.sqlite3, "connect", side_effect=connect):
+            try:
+                _StateStore(db)
+            except RuntimeError as exc:
+                assert "both legacy and current" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("ambiguous persistence schema must fail closed")
+
+        assert len(tracked) == 1
+        assert tracked[0].closed  # type: ignore[union-attr]
+
+
+def test_store_rolls_back_partial_legacy_migration() -> None:
+    """A failed index creation must not leave a half-renamed state database."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "legacy-rollback.db")
+        connection = sqlite3.connect(db)
+        connection.execute(
+            "CREATE TABLE records (seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
+        )
+        connection.execute("CREATE INDEX records_kind_seq ON records(kind, seq)")
+        connection.commit()
+        connection.close()
+
+        with patch.object(
+            _StateStore,
+            "_CREATE_RECORDS_KIND_SEQ_INDEX_SQL",
+            "CREATE INDEX broken_index ON orchestration_records(missing_column)",
+        ):
+            try:
+                _StateStore(db)
+            except sqlite3.OperationalError as exc:
+                assert "no such column" in str(exc)
+            else:  # pragma: no cover
+                raise AssertionError("broken migration must fail closed")
+
+        connection = sqlite3.connect(db)
+        try:
+            names = {
+                row[0]
+                for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type IN ('table', 'index')"
+                ).fetchall()
+            }
+            assert "records" in names
+            assert "orchestration_records" not in names
+            assert "records_kind_seq" in names
+        finally:
+            connection.close()
 
 
 def test_stream_reload_respects_deque_maxlen() -> None:

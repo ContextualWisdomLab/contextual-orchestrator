@@ -1569,11 +1569,13 @@ class _StateStore:
         self._lock = threading.Lock()
         self._conn = sqlite3.connect(path, check_same_thread=False)
         try:
+            self._conn.execute("BEGIN IMMEDIATE")
             self._migrate_legacy_table()
             self._conn.execute(self._CREATE_RECORDS_SQL)
             self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
             self._conn.commit()
         except Exception:
+            self._conn.rollback()
             self._conn.close()
             raise
 
