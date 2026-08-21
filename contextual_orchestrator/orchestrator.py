@@ -1164,6 +1164,13 @@ class ModelClient:
                     agent, "chat/completions", chat_payload, destination
                 )
             return _chat_to_responses_payload(chat_response, payload)
+        if _is_local_provider_url(agent.base_url):
+            local_payload = dict(payload)
+            local_payload.setdefault("max_tokens", self.max_output_tokens)
+            if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
+                local_payload.setdefault("chat_template_kwargs", self.chat_template_args)
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                return self._send_raw_with_retry(agent, endpoint, local_payload, destination)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             return self._send_raw_with_retry(agent, endpoint, payload, destination)
 

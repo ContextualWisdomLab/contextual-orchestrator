@@ -413,6 +413,29 @@ def test_local_responses_passthrough_omits_empty_template_arguments() -> None:
     assert "chat_template_kwargs" not in send.call_args.args[2]
 
 
+def test_local_chat_passthrough_applies_bounded_controls_for_final_synthesis() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_output_tokens=321, chat_template_args={"enable_thinking": False})
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client,
+        "_send_raw_with_retry",
+        return_value={"choices": [{"message": {"content": "OK"}}]},
+    ) as send:
+        client.proxy_send(
+            agent,
+            "chat/completions",
+            {
+                "model": "local-model",
+                "messages": [{"role": "user", "content": "final synthesis"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+
+    forwarded = send.call_args.args[2]
+    assert forwarded["max_tokens"] == 321
+    assert forwarded["chat_template_kwargs"] == {"enable_thinking": False}
+
+
 def test_local_responses_adapter_preserves_supported_items_and_controls() -> None:
     payload = _responses_to_chat_payload(
         {
