@@ -675,6 +675,12 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     if "max_output_tokens" in request and "max_tokens" not in payload:
         payload["max_tokens"] = request["max_output_tokens"]
 
+    response_format = _responses_text_format_to_chat_response_format(request.get("text"))
+    if response_format is None and isinstance(request.get("response_format"), dict):
+        response_format = request["response_format"]
+    if response_format is not None:
+        payload["response_format"] = response_format
+
     tools: list[dict[str, Any]] = []
     raw_tools = request.get("tools")
     for tool in raw_tools if isinstance(raw_tools, list) else []:

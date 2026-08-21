@@ -511,6 +511,34 @@ def test_local_responses_adapter_preserves_supported_items_and_controls() -> Non
     assert payload["tool_choice"] == {"type": "function", "function": {"name": "lookup"}}
 
 
+def test_local_responses_adapter_preserves_json_schema_contract() -> None:
+    payload = _responses_to_chat_payload(
+        {
+            "model": "local-model",
+            "input": "extract the region",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "region_result",
+                    "description": "A bounded region result",
+                    "schema": {"type": "object", "properties": {"label": {"type": "string"}}},
+                    "strict": True,
+                }
+            },
+        }
+    )
+
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "region_result",
+            "description": "A bounded region result",
+            "schema": {"type": "object", "properties": {"label": {"type": "string"}}},
+            "strict": True,
+        },
+    }
+
+
 def test_local_responses_adapter_rejects_non_string_input() -> None:
     with pytest.raises(ValueError, match="string or item list"):
         _responses_to_chat_payload({"input": {"unexpected": "mapping"}})
