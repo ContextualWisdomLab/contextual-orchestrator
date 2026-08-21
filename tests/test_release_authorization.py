@@ -76,6 +76,21 @@ def test_missing_authority_preserves_fail_closed_boundary() -> None:
     assert result["blockers"] == ["authority_evidence_unavailable"]
 
 
+def test_zero_required_approvals_cannot_authorize_release() -> None:
+    """A zero-review policy remains blocked instead of becoming an open gate."""
+    evidence = authority()
+    evidence["review_policy"] = {
+        **evidence["review_policy"],
+        "required_independent_approval_count": 0,
+    }
+    evidence["reviewers"] = []
+
+    result = evaluate_release_authorization(evidence)
+
+    assert result["authorized"] is False
+    assert {"review_policy_invalid", "independent_approval_missing"}.issubset(result["blockers"])
+
+
 def test_queued_stale_and_synthetic_check_evidence_blocks() -> None:
     """Queued, stale, or synthetic evidence never counts as a passing check."""
     evidence = authority()

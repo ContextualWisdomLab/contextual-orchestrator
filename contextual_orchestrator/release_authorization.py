@@ -161,21 +161,19 @@ def evaluate_release_authorization(
 
     review_policy = authority.get("review_policy")
     reviewers = _as_list(authority.get("reviewers"))
-    required_approval_count = 0
+    required_approval_count = 1
     independent_approval_count = 0
     author_login: Any = None
     if not isinstance(review_policy, Mapping):
         blockers.append("review_policy_unavailable")
     else:
-        if "required_independent_approval_count" not in review_policy:
-            blockers.append("review_policy_invalid")
-            required_approval_count = 0
-        else:
-            required_approval_count = review_policy.get("required_independent_approval_count")
+        required_approval_count = review_policy.get("required_independent_approval_count")
         author_login = review_policy.get("author_login")
-        if type(required_approval_count) is not int or required_approval_count < 0 or type(author_login) is not str:
+        if type(required_approval_count) is not int or required_approval_count < 1 or type(author_login) is not str:
             blockers.append("review_policy_invalid")
-            required_approval_count = 0
+            # A malformed or zero-review policy must never turn the release
+            # gate into an approval-free authorization path.
+            required_approval_count = 1
         if review_policy.get("head_sha") != protected_head_sha:
             blockers.append("review_head_mismatch")
     if reviewers is None:

@@ -2882,13 +2882,20 @@ class TaskOrchestrator:
         if self._store is not None:
             self._store.save("analytics", None, event)
 
-    def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
+    def spend_analytics(
+        self,
+        price_per_million: dict[str, float] | None = None,
+        owner_id: str | None = None,
+    ) -> dict[str, Any]:
         """Estimated token and cost spend per model, aggregated from workflow runs.
 
         Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
         usage. Cost is computed only for models with an operator-supplied price; models without
         one are reported under ``unpriced_models`` with a null cost. This is the honest local
         floor for spend observability, not a billing system.
+
+        When ``owner_id`` is supplied, only workflow runs owned by that principal contribute
+        to the returned totals, model buckets, and budget view.
         """
         prices = {**self.price_per_million, **(price_per_million or {})}
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -2898,7 +2905,12 @@ class TaskOrchestrator:
         reported_prompt_tokens = 0
         any_reported_prompt = False
 
-        for run in self._workflow_runs.values():
+        runs = (
+            run
+            for run in self._workflow_runs.values()
+            if owner_id is None or run.get("owner_id") == owner_id
+        )
+        for run in runs:
             total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
             for step in run["trace"]:
                 model = model_by_agent.get(step.get("agent_id"), "unknown")
@@ -2956,7 +2968,10 @@ class TaskOrchestrator:
             ),
             "pricing_configured": bool(prices),
             "totals": {
-                "run_count": len(self._workflow_runs),
+                "run_count": sum(
+                    owner_id is None or run.get("owner_id") == owner_id
+                    for run in self._workflow_runs.values()
+                ),
                 "estimated_output_tokens": total_output_tokens,
                 "estimated_prompt_tokens": total_prompt_tokens,
                 "reported_prompt_tokens": reported_prompt_tokens,
@@ -9121,7 +9136,7 @@ class TaskOrchestrator:
                 )
             ],
             "recent_audit_events": self.list_recent_audit_events(),
-            "spend": self.spend_analytics(),
+            "spend": self.spend_analytics(owner_id=owner_id),
         }
 
     def _shorten_run(self, run: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
