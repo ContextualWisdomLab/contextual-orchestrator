@@ -234,6 +234,16 @@ New or newly relevant queue items were checked after the root rows above.
 | [#809](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/809) | head `756d2a76bb91c0c65aac6c15bbab8270dd0ea479`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 21 success, 8 skipped, 2 neutral check-runs, approvals `0`. Despite terminal checks, the required approval gate is absent; `WAIT_AND_REMEDIATE`. |
 | [#806](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/806) | head `10b87361cff4f4ed5a5d0dd17baee3e840f53b01`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 21 success, 8 skipped, 2 neutral check-runs, approvals `0`. Despite terminal checks, the required approval gate is absent; `WAIT_AND_REMEDIATE`. |
 
+### Live exact-head continuation — 2026-08-22 01:48 KST
+
+The bounded documentation/test PRs were independently reviewed at their
+current heads. Hosted terminal success does not replace the required approval.
+
+| PR | Current exact identity | Local and live evidence | Decision |
+|---:|---|---|---|
+| [#806](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/806) | head `10b87361cff4f4ed5a5d0dd17baee3e840f53b01`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | One-file test-only diff; exact focused tests `8 passed`, compileall and diff-check passed. Hosted: 21 success, 8 skipped, 2 neutral; approvals `0`. | `WAIT_AND_REMEDIATE` |
+| [#809](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/809) | head `756d2a76bb91c0c65aac6c15bbab8270dd0ea479`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Two-file public-docstring diff; exact interrogate `100.0%`, compileall and diff-check passed. Hosted: 21 success, 8 skipped, 2 neutral; approvals `0`. | `WAIT_AND_REMEDIATE` |
+
 All links and full commit SHAs in the initial snapshot reflect the remote state
 observed at 2026-08-21 15:36 Asia/Seoul; they are evidence pointers, not
 standing approval.
