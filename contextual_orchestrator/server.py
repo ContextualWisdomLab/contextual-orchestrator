@@ -4419,7 +4419,10 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        """Handle authenticated orchestration, administration, and health routes."""
+
         def do_GET(self) -> None:  # noqa: N802
+            """Dispatch GET requests after applying the route's authorization scope."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -4769,6 +4772,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            """Apply an authenticated agent-pool worker update."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4792,6 +4796,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            """Delete an authenticated agent-pool worker resource."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4812,6 +4817,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            """Dispatch authenticated completion, agent, and simulation writes."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
@@ -5655,6 +5661,7 @@ def build_server(
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
+            """Suppress default request logging to keep service output structured."""
             return
 
         def _send_error(
