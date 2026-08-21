@@ -436,6 +436,27 @@ def test_local_chat_passthrough_applies_bounded_controls_for_final_synthesis() -
     assert forwarded["chat_template_kwargs"] == {"enable_thinking": False}
 
 
+def test_local_chat_passthrough_preserves_explicit_max_tokens() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_output_tokens=321)
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client,
+        "_send_raw_with_retry",
+        return_value={"choices": [{"message": {"content": "OK"}}]},
+    ) as send:
+        client.proxy_send(
+            agent,
+            "chat/completions",
+            {
+                "model": "local-model",
+                "messages": [{"role": "user", "content": "final synthesis"}],
+                "max_tokens": 64,
+            },
+        )
+
+    assert send.call_args.args[2]["max_tokens"] == 64
+
+
 def test_local_responses_adapter_preserves_supported_items_and_controls() -> None:
     payload = _responses_to_chat_payload(
         {

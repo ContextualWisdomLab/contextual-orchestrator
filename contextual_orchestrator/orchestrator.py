@@ -1824,6 +1824,7 @@ class TaskOrchestrator:
         produce the requested provider shape. This preserves provider features
         without silently downgrading the request to a single-agent workflow.
         """
+        self._raise_if_spend_budget_exceeded()
         if endpoint.strip("/") == "responses" or any(
             key in body and body.get(key) is not None
             for key in ("response_format", "tools", "tool_choice", "functions", "function_call")
@@ -1911,6 +1912,7 @@ class TaskOrchestrator:
                 response_format = _responses_text_format_to_chat_response_format(body.get("text"))
             if response_format is not None:
                 upstream["response_format"] = response_format
+        self._raise_if_spend_budget_exceeded()
         raw = self.client.proxy_send(final_agent, "chat/completions", upstream)
         orchestration = {
             "workflow_run_id": f"run_{uuid.uuid4().hex}",
@@ -2018,10 +2020,7 @@ class TaskOrchestrator:
 
     def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
-        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-            budget = self.budget_status()
-            if budget["exceeded"]:
-                raise BudgetExceededError("spend budget exceeded", detail=budget)
+        self._raise_if_spend_budget_exceeded()
         result = self.complete(messages, mode=mode)
         prompt = self._latest_user_text(messages)
         record = {
@@ -2079,10 +2078,7 @@ class TaskOrchestrator:
         ``route_once``; results are persisted as normal route runs (with provider usage
         when reported) so spend analytics and the admin console see them unchanged.
         """
-        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-            budget = self.budget_status()
-            if budget["exceeded"]:
-                raise BudgetExceededError("spend budget exceeded", detail=budget)
+        self._raise_if_spend_budget_exceeded()
         selected = [(prompt, self._select_agent(prompt, "worker")) for prompt in prompts]
         agents_by_id = {agent.id: agent for _, agent in selected}
         requests_by_agent: dict[str, dict[str, list[ChatMessage]]] = {}
@@ -3068,6 +3064,14 @@ class TaskOrchestrator:
     def budget_status(self) -> dict[str, Any]:
         """Current spend-budget state (limits, spent, remaining, exceeded)."""
         return self.spend_analytics()["budget"]
+
+    def _raise_if_spend_budget_exceeded(self) -> None:
+        """Stop a new workflow or provider call after an operator spend cap is reached."""
+        if self.budget_max_output_tokens is None and self.budget_max_cost_usd is None:
+            return
+        budget = self.budget_status()
+        if budget["exceeded"]:
+            raise BudgetExceededError("spend budget exceeded", detail=budget)
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""

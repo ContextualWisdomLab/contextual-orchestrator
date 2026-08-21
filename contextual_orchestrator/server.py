@@ -5386,8 +5386,8 @@ def build_server(
                     self._send(_response_payload(retrieved, include_trace=True))
                     return
                 if path == "/v1/responses":
-                    # The Responses API has no chat-completions verifier equivalent,
-                    # so every request is proxied to one agent verbatim.
+                    # Every Responses request enters the conduct-based multi-agent
+                    # workflow and is shaped by the selected synthesizer.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.

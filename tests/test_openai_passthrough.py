@@ -8,16 +8,18 @@ import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
+from unittest.mock import patch
 
 import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator.orchestrator import BudgetExceededError  # noqa: E402
 from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
 
 
-def _build() -> TaskOrchestrator:
+def _build(*, budget_max_output_tokens: int | None = None) -> TaskOrchestrator:
     return TaskOrchestrator(
         agents=[
             ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
@@ -25,7 +27,8 @@ def _build() -> TaskOrchestrator:
             ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation")),
             ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "review")),
             ModelAgent("disabled_candidate", "disabled-model", disabled=True),
-        ]
+        ],
+        budget_max_output_tokens=budget_max_output_tokens,
     )
 
 
@@ -100,6 +103,38 @@ def test_proxy_completion_rejects_disabled_and_malformed_requested_models() -> N
                 "model": requested_model,
                 "messages": [{"role": "user", "content": "call a tool"}],
             })
+
+
+def test_proxy_completion_blocks_before_structured_workflow_when_budget_is_exceeded() -> None:
+    with pytest.raises(BudgetExceededError, match="spend budget exceeded"):
+        _build(budget_max_output_tokens=0).proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "extract JSON"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+
+def test_structured_provider_completion_rechecks_budget_before_final_provider_call() -> None:
+    orch = _build()
+    orch.budget_max_output_tokens = 1
+    budget_states = iter(({"exceeded": False}, {"exceeded": True}))
+    with patch.object(orch, "budget_status", side_effect=lambda: next(budget_states)), patch.object(
+        orch,
+        "conduct",
+        return_value={"trace": [{"id": "worker", "role": "worker", "output": "verified"}]},
+    ), patch.object(orch.client, "proxy_send") as send:
+        with pytest.raises(BudgetExceededError, match="spend budget exceeded"):
+            orch.proxy_completion(
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "extract JSON"}],
+                    "response_format": {"type": "json_object"},
+                }
+            )
+
+    send.assert_not_called()
 
 
 def test_proxy_completion_responses_endpoint_returns_response_object() -> None:
