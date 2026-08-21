@@ -41,13 +41,7 @@ def test_healthz_is_unauthenticated_liveness() -> None:
     assert status == 200
     assert body["status"] == "ok"
     assert body["service"] == "contextual-orchestrator"
-    assert body["agent_count"] == 1
-    assert body["enabled_agent_count"] == 1
-    assert body["candidate_count"] == 2
-    assert body["provider_readiness"] == "unprobed"
-    assert body["batch_backend"]
-    assert body["embedding_batch_backend"]
-    assert body["usage_record_count"] == 0
+    assert set(body) == {"status", "service"}
 
 
 def test_provider_readiness_refresh_is_authenticated_and_explicit() -> None:

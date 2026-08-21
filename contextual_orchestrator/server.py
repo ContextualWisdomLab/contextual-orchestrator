@@ -4478,17 +4478,11 @@ def build_server(
                     self._send(OPENAPI_SPEC)
                     return
                 if path == "/healthz":
-                    # Unauthenticated liveness probe for containers/orchestrators.
+                    # Unauthenticated liveness must not disclose worker topology,
+                    # provider readiness, backend names, or usage volume.
                     self._send({
                         "status": "ok",
                         "service": "contextual-orchestrator",
-                        "agent_count": len(orchestrator.agents),
-                        "candidate_count": len(orchestrator.candidates),
-                        "enabled_agent_count": len(orchestrator.agents),
-                        "batch_backend": coordinator.batch_backend.name,
-                        "embedding_batch_backend": coordinator.embedding_batch_backend.name,
-                        "provider_readiness": "unprobed",
-                        "usage_record_count": len(coordinator.ledger.records()),
                     })
                     return
                 if path == "/v1/models" or path.startswith("/v1/models/"):
