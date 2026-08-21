@@ -43,6 +43,24 @@ def test_workflow_and_access_reads_are_owner_bound() -> None:
     assert orchestrator.count_workflow_runs(owner_id="owner_b") == 0
 
 
+def test_workflow_run_count_matches_the_bounded_list_window() -> None:
+    """Do not advertise evicted runs that no page can retrieve."""
+    orchestrator = _orchestrator()
+    retained_run_limit = orchestrator._run_order.maxlen
+    assert retained_run_limit is not None
+
+    for index in range(retained_run_limit + 1):
+        orchestrator.run(
+            [{"role": "user", "content": f"bounded run {index}"}],
+            owner_id="evicted_owner" if index == 0 else "retained_owner",
+        )
+
+    assert orchestrator.count_workflow_runs() == len(
+        orchestrator.list_recent_runs(page_size=retained_run_limit)
+    )
+    assert orchestrator.count_workflow_runs(owner_id="evicted_owner") == 0
+
+
 def test_evaluation_runs_carry_owner_boundary() -> None:
     """Keep replay results within the principal that created them."""
     orchestrator = _orchestrator()

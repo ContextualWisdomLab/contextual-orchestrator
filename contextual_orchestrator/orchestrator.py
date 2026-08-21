@@ -2852,10 +2852,10 @@ class TaskOrchestrator:
         return [self._workflow_runs[run_id] for run_id in run_ids]
 
     def count_workflow_runs(self, owner_id: str | None = None) -> int:
-        """Count only workflow runs visible to the requested owner."""
+        """Count listable workflow runs visible to the requested owner."""
         return sum(
-            owner_id is None or record.get("owner_id") == owner_id
-            for record in self._workflow_runs.values()
+            owner_id is None or self._workflow_runs[run_id].get("owner_id") == owner_id
+            for run_id in self._run_order
         )
 
     def list_recent_audit_events(
