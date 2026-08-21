@@ -292,6 +292,24 @@ The preceding rows are historical snapshots. The latest normal-path evidence is:
 
 At the current observation, no D1–D5 emergency deadlock is established for these central PRs. Organization ruleset `18156473` (`CWL Central required workflows`) is active for normal repositories, has no bypass actors, and requires two approvals, last-push approval, thread resolution, and the listed central workflows. It explicitly excludes the `.github` repository; `.github` instead exposes repository ruleset `17921150` with zero required approvals and an `OrganizationAdmin` always-bypass actor. That bypass is not used: the maintainer procedure still requires independent substantive review, exact-head evidence, terminal Checks, and a final refetch. The queued runs above are only minutes old at this observation, so D2's six-hour/two-observation threshold is not met.
 
+### Central queue live refresh — 2026-08-22 06:00 KST
+
+The queue is progressing, but no terminal merge gate has been fabricated or
+reused. On [.github#1198](https://github.com/ContextualWisdomLab/.github/pull/1198),
+`required-workflow-bootstrap` is successful at run `32524224916` while the
+exact-head `coverage-source-tree` job `96907640903` remains queued; the
+newer `scan-pr-queue` failure shown by the PR rollup is a cancelled
+predecessor run, while the current required scan is successful. On
+[.github#1209](https://github.com/ContextualWisdomLab/.github/pull/1209),
+OSV, dependency review, Noema, and the security jobs are successful, but the
+required bootstrap job `96905669545` and CodeQL jobs remain pending. The
+contextual #818 refresh created replacement current-head runs after cancelling
+the prior duplicate event runs; the cancelled `opencode-review` and
+`coverage-evidence` entries have no job steps or source log and are not source
+failure evidence. Contextual #773 has current scheduler and Noema success but
+OpenCode/Strix remain queued. These observations are all below D2's six-hour
+and two-observation threshold; decisions remain `WAIT_AND_REMEDIATE`.
+
 ### Contextual live-head refresh — 2026-08-22
 
 The older contextual PR rows above are historical unless their SHA matches this table:
