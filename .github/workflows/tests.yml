@@ -29,10 +29,12 @@ jobs:
           python-version: "3.12"
 
       - name: Install test dependencies
-        # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Reuses the
-        # property-test lockfile (pytest + hypothesis), which covers the full
-        # suite's requirements: the package itself is stdlib-only.
-        run: python -m pip install --require-hashes -r fuzz/requirements-property.txt
+        # Hash-pinned per OpenSSF Scorecard Pinned-Dependencies. Install the
+        # runtime lock before the property-test lock so optional integrations
+        # such as OpenTelemetry are exercised instead of silently disabled.
+        run: |
+          python -m pip install --require-hashes -r requirements.lock
+          python -m pip install --require-hashes -r fuzz/requirements-property.txt
 
       - name: Run full test suite
         run: python -m pytest -q
