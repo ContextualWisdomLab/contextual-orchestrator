@@ -31,9 +31,10 @@ DISCOVERY_TIMEOUT_SECONDS = 15.0
 
 
 def _provider_discovery_error_code(exc: Exception) -> str:
-    """Map provider failures to stable codes without retaining provider response text."""
+    """Map provider failures to stable diagnostics without copying exception text."""
     if isinstance(exc, urllib.error.HTTPError):
-        return f"http_status_{exc.code}"
+        status = exc.code if type(exc.code) is int else "unknown"
+        return f"http_status_{status}"
     if isinstance(exc, TimeoutError):
         return "timeout"
     if isinstance(exc, urllib.error.URLError):

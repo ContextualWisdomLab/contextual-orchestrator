@@ -92,7 +92,7 @@ class BudgetExceededError(RuntimeError):
 
 
 class ProviderResponseError(RuntimeError):
-    """Raised for a provider response that cannot become a safe completion."""
+    """A package-owned, safe explanation for a structurally invalid provider response."""
 
 
 def estimate_tokens(text: str) -> int:
@@ -955,6 +955,8 @@ class ModelClient:
                 )
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
+                if isinstance(exc, ProviderResponseError):
+                    raise
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))

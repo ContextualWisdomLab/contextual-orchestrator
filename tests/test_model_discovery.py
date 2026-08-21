@@ -190,6 +190,7 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert len(errors) == 1
     assert errors[0].provider_name == "openai"
     assert errors[0].error_code == "transport_error"
+    assert str(errors[0]) == "model discovery failed for provider 'openai': transport_error"
     assert "connection refused" not in str(errors[0])
     assert errors[0].__cause__ is None
 

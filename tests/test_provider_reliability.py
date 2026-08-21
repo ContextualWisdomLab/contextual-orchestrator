@@ -276,8 +276,44 @@ def test_provider_request_hides_raw_error_text_and_cause() -> None:
     except RuntimeError as error:
         assert "provider-secret-response" not in str(error)
         assert error.__cause__ is None
+def test_provider_retry_error_does_not_expose_raw_exception_text() -> None:
+    class LeakyProviderClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            raise RuntimeError("provider-response-secret")
+
+    client = LeakyProviderClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1", api_key_env="X")
+    try:
+        client._send_with_retry(agent, {"model": agent.model})
+    except RuntimeError as exc:
+        assert str(exc) == "provider worker_agent request failed"
+        assert "provider-response-secret" not in str(exc)
+        assert exc.__cause__ is None
     else:  # pragma: no cover
         raise AssertionError("a failed provider request must raise")
+
+
+def test_provider_passthrough_error_does_not_expose_raw_exception_text() -> None:
+    class LeakyProviderClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            raise RuntimeError("passthrough-response-secret")
+
+    client = LeakyProviderClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1", api_key_env="X")
+    try:
+        client._send_raw_with_retry(agent, "responses", {})
+    except RuntimeError as exc:
+        assert str(exc) == "provider worker_agent passthrough request failed"
+        assert "passthrough-response-secret" not in str(exc)
+        assert exc.__cause__ is None
+    else:  # pragma: no cover
+        raise AssertionError("a failed passthrough request must raise")
 
 
 class _AgentDownClient(ModelClient):
