@@ -79,26 +79,59 @@ def test_spend_empty_when_no_runs() -> None:
     assert report["totals"]["estimated_output_tokens"] == 0
 
 
-def test_http_spend_endpoint_returns_report() -> None:
-    token = "spend_token"
+def test_http_spend_endpoint_returns_only_authenticated_owner() -> None:
+    """Distinct verified bearers must not see each other's spend aggregates."""
+    tokens = {"owner-a", "owner-b"}
+    security = SecurityConfig(
+        bearer_verifier=lambda token, scope: token in tokens and scope == "admin"
+    )
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))])
-    orchestrator.run([{"role": "user", "content": "seed a run"}])
-    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    owner_a = security.principal_id({"authorization": "Bearer owner-a"})
+    owner_b = security.principal_id({"authorization": "Bearer owner-b"})
+    orchestrator.run([{"role": "user", "content": "owner a run"}], owner_id=owner_a)
+    orchestrator.run([{"role": "user", "content": "owner b first run"}], owner_id=owner_b)
+    orchestrator.run([{"role": "user", "content": "owner b second run"}], owner_id=owner_b)
+    server = build_server(orchestrator, port=0, security=security)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     port = server.server_address[1]
-    request = urllib.request.Request(
-        f"http://127.0.0.1:{port}/api/v1/spend_analytics/latest",
-        headers={"authorization": f"Bearer {token}", "connection": "close"},
-    )
-    try:
+
+    def report(token: str) -> tuple[int, dict[str, object]]:
+        request = urllib.request.Request(
+            f"http://127.0.0.1:{port}/api/v1/spend_analytics/latest",
+            headers={"authorization": f"Bearer {token}", "connection": "close"},
+        )
         with urllib.request.urlopen(request, timeout=5) as response:
-            status, body = response.status, json.loads(response.read().decode("utf-8"))
+            return response.status, json.loads(response.read().decode("utf-8"))
+
+    try:
+        owner_a_status, owner_a_body = report("owner-a")
+        owner_b_status, owner_b_body = report("owner-b")
     finally:
         server.shutdown()
-    assert status == 200
-    assert body["measurement_status"] == "local_runtime_estimate"
-    assert body["totals"]["run_count"] == 1
+        thread.join(timeout=5)
+
+    assert owner_a_status == owner_b_status == 200
+    assert owner_a_body["measurement_status"] == "local_runtime_estimate"
+    assert owner_a_body["totals"]["run_count"] == 1
+    assert owner_b_body["totals"]["run_count"] == 2
+    assert "owner-a" not in json.dumps(owner_a_body)
+    assert "owner-b" not in json.dumps(owner_b_body)
+
+
+def test_owner_spend_report_keeps_process_budget_global() -> None:
+    """Owner filtering must not make a shared budget appear unexhausted."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "priced-model", tags=("reasoning",))],
+        budget_max_output_tokens=1000,
+    )
+    orchestrator.run([{"role": "user", "content": "owner a spend"}], owner_id="owner_a")
+    orchestrator.run([{"role": "user", "content": "owner b spend"}], owner_id="owner_b")
+
+    global_budget = orchestrator.spend_analytics()["budget"]
+    owner_budget = orchestrator.spend_analytics(owner_id="owner_a")["budget"]
+
+    assert owner_budget == global_budget
 
 
 if __name__ == "__main__":

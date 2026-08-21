@@ -33,6 +33,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .release_authorization import evaluate_release_authorization
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -1855,7 +1856,12 @@ class TaskOrchestrator:
         text = self._latest_user_text(messages)
         return mode == "route" or (mode == "auto" and not self._needs_workflow(text))
 
-    def stream_route(self, messages: list[ChatMessage], workflow_run_id: str | None = None):
+    def stream_route(
+        self,
+        messages: list[ChatMessage],
+        workflow_run_id: str | None = None,
+        owner_id: str | None = None,
+    ):
         """Stream a single worker's content deltas as they arrive, then persist the run.
 
         True streaming for the route path. ponytail: no cross-agent failover here — bytes
@@ -1882,6 +1888,8 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
         }
+        if owner_id is not None:
+            record["owner_id"] = owner_id
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         self._append_audit_event(
@@ -1898,7 +1906,13 @@ class TaskOrchestrator:
         payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        owner_id: str | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
         if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
             budget = self.budget_status()
@@ -1917,6 +1931,8 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
         }
+        if owner_id is not None:
+            record["owner_id"] = owner_id
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         if self._store is not None:
@@ -2025,14 +2041,18 @@ class TaskOrchestrator:
             records.append(record)
         return records
 
-    def run_evaluation(self, prompts: list[str], mode: str = "auto") -> dict[str, Any]:
+    def run_evaluation(
+        self, prompts: list[str], mode: str = "auto", owner_id: str | None = None
+    ) -> dict[str, Any]:
         """Replay prompts through the runtime and persist an evaluation record."""
         if not prompts:  # pragma: no cover
             raise ValueError("evaluation requires at least one prompt")
         workflow_run_ids: list[str] = []
         results: list[dict[str, Any]] = []
         for prompt in prompts:
-            record = self.run([{"role": "user", "content": prompt}], mode=mode)
+            record = self.run(
+                [{"role": "user", "content": prompt}], mode=mode, owner_id=owner_id
+            )
             workflow_run_ids.append(record["workflow_run_id"])
             results.append({
                 "workflow_run_id": record["workflow_run_id"],
@@ -2049,6 +2069,8 @@ class TaskOrchestrator:
             "results": results,
             "success_count": len([r for r in results if r["answer"]]),
         }
+        if owner_id is not None:
+            evaluation["owner_id"] = owner_id
         self._evaluation_runs[evaluation_run_id] = evaluation
         if self._store is not None:
             self._store.save("evaluation_run", evaluation_run_id, evaluation)
@@ -2142,15 +2164,22 @@ class TaskOrchestrator:
             ),
         }
 
-    def get_workflow_run(self, workflow_run_id: str) -> dict[str, Any]:
+    def get_workflow_run(
+        self, workflow_run_id: str, owner_id: str | None = None
+    ) -> dict[str, Any]:
         """Return a persisted workflow run by identifier."""
         if workflow_run_id not in self._workflow_runs:  # pragma: no cover
             raise KeyError(workflow_run_id)
-        return self._workflow_runs[workflow_run_id]
+        record = self._workflow_runs[workflow_run_id]
+        if owner_id is not None and record.get("owner_id") != owner_id:
+            raise KeyError(workflow_run_id)
+        return record
 
-    def get_access_report(self, workflow_run_id: str) -> dict[str, Any]:
+    def get_access_report(
+        self, workflow_run_id: str, owner_id: str | None = None
+    ) -> dict[str, Any]:
         """Return per-step visibility and accessed output evidence for a run."""
-        run = self.get_workflow_run(workflow_run_id)
+        run = self.get_workflow_run(workflow_run_id, owner_id=owner_id)
         access_report = []
         for step in run["trace"]:
             access_report.append({
@@ -2804,14 +2833,30 @@ class TaskOrchestrator:
                 return item
         raise KeyError(model_id)
 
-    def list_recent_runs(self, page_number: int = 1, page_size: int = 10) -> list[dict[str, Any]]:
+    def list_recent_runs(
+        self,
+        page_number: int = 1,
+        page_size: int = 10,
+        owner_id: str | None = None,
+    ) -> list[dict[str, Any]]:
         """Return a paginated list of recent workflow run records."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        run_ids = list(self._run_order)[start:end]
+        run_ids = [
+            run_id
+            for run_id in self._run_order
+            if owner_id is None or self._workflow_runs[run_id].get("owner_id") == owner_id
+        ][start:end]
         return [self._workflow_runs[run_id] for run_id in run_ids]
+
+    def count_workflow_runs(self, owner_id: str | None = None) -> int:
+        """Count only workflow runs visible to the requested owner."""
+        return sum(
+            owner_id is None or record.get("owner_id") == owner_id
+            for record in self._workflow_runs.values()
+        )
 
     def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
         """Return recent audit events in newest-first order."""
@@ -2837,13 +2882,21 @@ class TaskOrchestrator:
         if self._store is not None:
             self._store.save("analytics", None, event)
 
-    def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
+    def spend_analytics(
+        self,
+        price_per_million: dict[str, float] | None = None,
+        owner_id: str | None = None,
+    ) -> dict[str, Any]:
         """Estimated token and cost spend per model, aggregated from workflow runs.
 
         Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
         usage. Cost is computed only for models with an operator-supplied price; models without
         one are reported under ``unpriced_models`` with a null cost. This is the honest local
         floor for spend observability, not a billing system.
+
+        When ``owner_id`` is supplied, only workflow runs owned by that principal contribute
+        to the returned totals and model buckets. Budget caps are process-wide and enforced
+        globally, so the budget view remains global even in an owner-scoped report.
         """
         prices = {**self.price_per_million, **(price_per_million or {})}
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -2853,7 +2906,12 @@ class TaskOrchestrator:
         reported_prompt_tokens = 0
         any_reported_prompt = False
 
-        for run in self._workflow_runs.values():
+        runs = (
+            run
+            for run in self._workflow_runs.values()
+            if owner_id is None or run.get("owner_id") == owner_id
+        )
+        for run in runs:
             total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
             for step in run["trace"]:
                 model = model_by_agent.get(step.get("agent_id"), "unknown")
@@ -2903,6 +2961,15 @@ class TaskOrchestrator:
                 "estimated_cost_usd": cost,
             })
 
+        budget = self._budget_block(
+            total_output_tokens,
+            round(total_cost, 6) if prices else None,
+        )
+        if owner_id is not None:
+            # The cap is shared by the process; do not report a principal-local
+            # remainder that disagrees with the enforcement path in run().
+            budget = self.spend_analytics(price_per_million=price_per_million)["budget"]
+
         return {
             "measurement_status": "local_runtime_estimate",
             "source_note": (
@@ -2911,7 +2978,10 @@ class TaskOrchestrator:
             ),
             "pricing_configured": bool(prices),
             "totals": {
-                "run_count": len(self._workflow_runs),
+                "run_count": sum(
+                    owner_id is None or run.get("owner_id") == owner_id
+                    for run in self._workflow_runs.values()
+                ),
                 "estimated_output_tokens": total_output_tokens,
                 "estimated_prompt_tokens": total_prompt_tokens,
                 "reported_prompt_tokens": reported_prompt_tokens,
@@ -2921,7 +2991,7 @@ class TaskOrchestrator:
             },
             "by_model": rows,
             "unpriced_models": unpriced,
-            "budget": self._budget_block(total_output_tokens, round(total_cost, 6) if prices else None),
+            "budget": budget,
         }
 
     def _budget_block(self, spent_tokens: int, spent_cost: float | None) -> dict[str, Any]:
@@ -4147,8 +4217,9 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Return the local buyer-facing commercial release-candidate manifest."""
+        """Return product evidence separately from protected release authority."""
         acceptance = self.commercial_acceptance_check_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
@@ -4162,6 +4233,7 @@ class TaskOrchestrator:
         concrete_blockers = acceptance["concrete_blockers"]
         acceptance_blocked = acceptance["acceptance_status"] == "commercial_acceptance_blocked"
         runtime_state = "blocked" if acceptance_blocked or concrete_blockers else "ready"
+        release_authorization = evaluate_release_authorization(release_authority)
         release_artifacts = [
             self._buyer_evidence_item(
                 "commercial_acceptance_check",
@@ -4317,8 +4389,18 @@ class TaskOrchestrator:
                 ["docs/commercial_saleability_decision.md", "docs/commercial_release_candidate.md"],
                 "repository_artifact",
                 "ready",
-                "Reviewer delay, review bot delay, queued model review, and pending checks without concrete failure are not blockers.",
-                "Block only on concrete security, API contract, document, or product defects.",
+                "Product evidence remains inspectable while protected release authority is evaluated separately.",
+                "Supply a fresh protected-main authority snapshot before authorizing release.",
+            ),
+            self._buyer_evidence_item(
+                "release_authority_collector",
+                "Protected-head authority collector",
+                "Release owner",
+                ["scripts/ci/release_authority_snapshot.py", "docs/doctoring/release-authorization.md"],
+                "repository_artifact",
+                "ready" if has_file("scripts/ci/release_authority_snapshot.py") else "blocked",
+                "Read-only gh API collector binds checks and reviews to the exact pull-request head without emitting secrets.",
+                "Run the collector with the exact candidate SHA and attach its JSON snapshot to release review.",
             ),
             self._buyer_evidence_item(
                 "packaging_decision",
@@ -4345,9 +4427,17 @@ class TaskOrchestrator:
             for item in acceptance["follow_up_items"]
         ]
         summary = self._buyer_manifest_summary(release_artifacts + external_release_gaps)
-        blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
+        product_blocked_count = summary["by_completion_state"]["blocked"] + len(concrete_blockers)
         warning_count = summary["by_completion_state"]["warning"]
-        if blocked_count:
+        product_evidence_status = (
+            "commercial_release_blocked"
+            if product_blocked_count
+            else "commercial_release_ready_with_warnings"
+            if acceptance["follow_up_items"]
+            else "commercial_release_ready"
+        )
+        release_blocked_count = product_blocked_count + len(release_authorization["blockers"])
+        if release_blocked_count:
             release_status = "commercial_release_blocked"
         elif warning_count:
             release_status = "commercial_release_ready_with_warnings"
@@ -4356,6 +4446,8 @@ class TaskOrchestrator:
 
         return {
             "release_status": release_status,
+            "product_evidence_status": product_evidence_status,
+            "release_authorization": release_authorization,
             "target_contract_value_krw": target_contract_value_krw,
             "target_contract_value_display": f"KRW {target_contract_value_krw:,}",
             "measurement_status": "local_commercial_release_candidate",
@@ -4368,9 +4460,10 @@ class TaskOrchestrator:
             ),
             "release_summary": {
                 "artifact_count": len(release_artifacts),
-                "blocked_count": blocked_count,
+                "blocked_count": release_blocked_count,
+                "product_blocked_count": product_blocked_count,
                 "warning_count": warning_count,
-                "review_process_is_blocker": acceptance["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authorization["blockers"]),
             },
             "release_artifacts": release_artifacts,
             "external_release_gaps": external_release_gaps,
@@ -4409,12 +4502,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return an owner/action register for commercial release-candidate gaps."""
         release = self.commercial_release_candidate_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         concrete_blockers = release["concrete_blockers"]
         release_blocked = release["release_status"] == "commercial_release_blocked"
@@ -4443,7 +4538,13 @@ class TaskOrchestrator:
                 "is_blocker": False,
             })
 
-        blocked_count = len(concrete_blockers) + (1 if release_blocked else 0)
+        release_authority_blockers = release["release_authorization"]["blockers"]
+        product_blocked_count = release["release_summary"]["product_blocked_count"]
+        blocked_count = (
+            max(1, product_blocked_count + len(release_authority_blockers))
+            if release_blocked
+            else len(concrete_blockers)
+        )
         if blocked_count:
             gap_register_status = "commercial_gap_register_blocked"
         elif gap_items:
@@ -4468,10 +4569,11 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "blocked_count": blocked_count,
-                "review_process_is_blocker": release["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "gap_items": gap_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release["release_authorization"],
             "gap_status_rules": [
                 {
                     "gap_status": "production_input_required",
@@ -4489,6 +4591,7 @@ class TaskOrchestrator:
             "review_process_policy": release["review_process_policy"],
             "related_runtime_reports": {
                 "commercial_release_status": release["release_status"],
+                "release_authorization_status": release["release_authorization"]["status"],
                 **release["related_runtime_reports"],
             },
             "library_split_decision": release["library_split_decision"],
@@ -4506,12 +4609,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a procurement/legal readiness gate over commercial evidence."""
         gap_register = self.commercial_gap_register_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -4522,6 +4627,8 @@ class TaskOrchestrator:
         production_gap = gap_by_status.get("production_input_required")
         buyer_gap = gap_by_status.get("buyer_input_required")
         concrete_blockers = gap_register["concrete_blockers"]
+        release_authorization = gap_register["release_authorization"]
+        release_authority_blockers = release_authorization["blockers"]
         procurement_items = [
             {
                 "item_name": "license_and_rights",
@@ -4667,9 +4774,11 @@ class TaskOrchestrator:
                 "production_gap_count": production_gap_count,
                 "buyer_specific_gap_count": buyer_specific_gap_count,
                 "review_process_is_blocker": gap_register["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "procurement_items": procurement_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "procurement_status_rules": [
                 {
                     "procurement_status": "commercial_procurement_ready",
@@ -4704,12 +4813,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a contract-readiness gate over procurement evidence."""
         procurement = self.commercial_procurement_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -4723,6 +4834,8 @@ class TaskOrchestrator:
         buyer_item = procurement_by_name["buyer_legal_roi_procurement_input"]
         packaging_item = procurement_by_name["packaging_decision"]
         concrete_blockers = procurement["concrete_blockers"]
+        release_authorization = procurement["release_authorization"]
+        release_authority_blockers = release_authorization["blockers"]
         support_slo_gap_count = 1 if support_item["completion_state"] == "warning" else 0
         buyer_order_form_gap_count = 1 if buyer_item["completion_state"] == "warning" else 0
         contract_items = [
@@ -4870,9 +4983,11 @@ class TaskOrchestrator:
                 "support_slo_gap_count": support_slo_gap_count,
                 "buyer_order_form_gap_count": buyer_order_form_gap_count,
                 "review_process_is_blocker": procurement["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authority_blockers),
             },
             "contract_items": contract_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "contract_status_rules": [
                 {
                     "contract_status": "commercial_contract_ready",
@@ -9014,7 +9129,7 @@ class TaskOrchestrator:
             },
         }
 
-    def admin_state(self) -> dict[str, Any]:
+    def admin_state(self, owner_id: str | None = None) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.candidates))
         return {
@@ -9024,9 +9139,14 @@ class TaskOrchestrator:
                 "roles": list(self.ROLE_TAGS),
                 "complex_hints": list(self.COMPLEX_HINTS),
             },
-            "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
+            "recent_workflow_runs": [
+                self._shorten_run(run)
+                for run in self.list_recent_runs(
+                    page_size=max(1, len(self._run_order)), owner_id=owner_id
+                )
+            ],
             "recent_audit_events": self.list_recent_audit_events(),
-            "spend": self.spend_analytics(),
+            "spend": self.spend_analytics(owner_id=owner_id),
         }
 
     def _shorten_run(self, run: dict[str, Any]) -> dict[str, Any]:  # pragma: no cover
