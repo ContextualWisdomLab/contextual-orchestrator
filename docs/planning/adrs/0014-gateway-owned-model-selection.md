@@ -56,8 +56,11 @@ because the provider response shape is richer.
   HTTPS `/models` endpoint. Embedding-only registry rows are excluded from the
   chat pool. Consumers provide only the gateway URL and credential.
 - `json_object`, `json_schema`, and Responses text JSON formats force the
-  conduct workflow. The final synthesis receives the output contract and the
-  gateway validates the resulting JSON locally before returning it.
+  conduct workflow. The final synthesis receives the original provider-native
+  output contract, and the gateway independently validates the resulting JSON
+  locally before returning it. A Chat request therefore keeps
+  `response_format`, while a Responses request keeps `text.format`, at the
+  final provider boundary.
 - Tool-loop requests are explicitly passed to one selected worker agent. The
   gateway preserves the provider's full tool-call response and the client owns
   execution of the returned function calls; they do not claim a multi-agent

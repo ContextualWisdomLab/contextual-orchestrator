@@ -709,23 +709,35 @@ def _serve() -> tuple[object, int, str]:
 
 
 def test_http_chat_completions_orchestrates_json_object_instead_of_passthrough() -> None:
-    server, port, token = _serve()
-    url = f"http://127.0.0.1:{port}/v1/chat/completions"
-    try:
-        status, body = _post(
-            url,
-            {
-                "model": "mock-planner",
-                "messages": [{"role": "user", "content": "give me JSON"}],
-                "response_format": {"type": "json_object"},
-            },
-            token,
-        )
-    finally:
-        server.shutdown()
+    orch = _build()
+    provider_calls: list[tuple[str, dict]] = []
+    original_proxy_send = orch.client.proxy_send
+
+    def observe_provider_call(agent, endpoint: str, payload: dict) -> dict:
+        provider_calls.append((endpoint, dict(payload)))
+        return original_proxy_send(agent, endpoint, payload)
+
+    with patch.object(orch.client, "proxy_send", side_effect=observe_provider_call):
+        token = "structured_http_token"  # noqa: S105 - synthetic HTTP fixture credential
+        server = build_server(orch, port=0, security=SecurityConfig(auth_token=token))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            status, body = _post(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "give me JSON"}],
+                    "response_format": {"type": "json_object"},
+                },
+                token,
+            )
+        finally:
+            server.shutdown()
     assert status == 200
     assert body["object"] == "chat.completion"
     assert json.loads(body["choices"][0]["message"]["content"]) == {}
+    assert provider_calls[-1][0] == "chat/completions"
+    assert provider_calls[-1][1]["response_format"] == {"type": "json_object"}
 
 
 def test_http_chat_completions_omits_model_for_orchestrator_selection() -> None:
@@ -788,14 +800,36 @@ def test_http_structured_workflow_applies_sampling_and_records_orchestration() -
 
 
 def test_http_responses_endpoint_passes_through() -> None:
-    server, port, token = _serve()
-    url = f"http://127.0.0.1:{port}/v1/responses"
-    try:
-        status, body = _post(url, {"model": "mock-planner", "input": "hello"}, token)
-    finally:
-        server.shutdown()
+    orch = _build()
+    provider_calls: list[tuple[str, dict]] = []
+    original_proxy_send = orch.client.proxy_send
+
+    def observe_provider_call(agent, endpoint: str, payload: dict) -> dict:
+        provider_calls.append((endpoint, dict(payload)))
+        return original_proxy_send(agent, endpoint, payload)
+
+    request_body = {
+        "model": "mock-planner",
+        "input": "hello",
+        "text": {"format": {"type": "json_object"}},
+    }
+    with patch.object(orch.client, "proxy_send", side_effect=observe_provider_call):
+        token = "responses_http_token"  # noqa: S105 - synthetic HTTP fixture credential
+        server = build_server(orch, port=0, security=SecurityConfig(auth_token=token))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            status, body = _post(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/responses",
+                request_body,
+                token,
+            )
+        finally:
+            server.shutdown()
     assert status == 200
     assert body["object"] == "response"
+    assert provider_calls[-1][0] == "responses"
+    assert provider_calls[-1][1]["input"] == "hello"
+    assert provider_calls[-1][1]["text"] == request_body["text"]
 
 
 def test_http_models_endpoint_lists_configured_models() -> None:

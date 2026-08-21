@@ -5405,6 +5405,9 @@ def build_server(
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             response_format=structured_response_format,
+                            provider_request=(
+                                body if structured_response_format is not None else None
+                            ),
                         ))
                     if structured_response_format is not None and result.get("channel") != "batch":
                         _validate_structured_completion_answer(result.get("answer"), structured_response_format)
@@ -5835,20 +5838,20 @@ def build_server(
                             chat_payload["messages"],
                             mode="conduct",
                             attribution=_validate_attribution(body.get("attribution")),
-                            hints=body.get("routing"),
+                            hints=_validate_routing(body.get("routing")),
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             response_format=response_contract,
+                            provider_request=body,
+                            provider_endpoint="responses",
                         ))
                     if response_contract is not None:
                         _validate_structured_completion_answer(result.get("answer"), response_contract)
-                    chat_response = chat_completion_response(
-                        result,
-                        model=model_name,
-                        include_trace=security.expose_trace_by_default,
-                        usage=result.get("usage"),
-                    )
-                    orchestrated = _chat_to_responses_payload(chat_response, body)
+                    provider_response = result.get("provider_response")
+                    if not isinstance(provider_response, dict):
+                        raise RuntimeError("Responses completion omitted provider response")
+                    orchestrated = dict(provider_response)
+                    orchestrated["model"] = model_name
                     orchestrator.record_analytics_event(
                         "responses_orchestrated",
                         {

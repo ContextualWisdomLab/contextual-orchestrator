@@ -1518,6 +1518,17 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
+        response_format = payload.get("response_format")
+        text_config = payload.get("text")
+        text_format = text_config.get("format") if isinstance(text_config, dict) else None
+        structured_json = (
+            isinstance(response_format, dict)
+            and response_format.get("type") in {"json_object", "json_schema"}
+        ) or (
+            isinstance(text_format, dict)
+            and text_format.get("type") in {"json_object", "json_schema"}
+        )
+        mock_text = "{}" if structured_json else f"[{agent.id}] responses-mock"
         echoed = {
             key: payload[key]
             for key in (
@@ -1557,7 +1568,7 @@ class ModelClient:
                     {
                         "type": "message",
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
+                        "content": [{"type": "output_text", "text": mock_text}],
                     }
                 ],
                 "echo": echoed,
@@ -1569,7 +1580,10 @@ class ModelClient:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": f"[{agent.id}] chat-mock"},
+                    "message": {
+                        "role": "assistant",
+                        "content": "{}" if structured_json else f"[{agent.id}] chat-mock",
+                    },
                     "finish_reason": "stop",
                 }
             ],
@@ -2318,6 +2332,7 @@ class TaskOrchestrator:
                     if isinstance(item, dict) and item.get("type") == "message"
                 ]
                 synthesis_output = "".join(part for part in output_parts if part)
+            raw.setdefault("output_text", synthesis_output)
         else:
             # Keep the caller's complete message sequence and first-message position
             # unchanged. Add guidance to an existing system/user turn so no system
