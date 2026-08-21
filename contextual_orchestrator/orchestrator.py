@@ -2658,8 +2658,6 @@ class TaskOrchestrator:
                 self._record_success(agent.id)
                 usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
                 return output, agent.id, usage
-        if isinstance(last_error, ProviderResponseError):
-            raise last_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _record_tool_fallback(
