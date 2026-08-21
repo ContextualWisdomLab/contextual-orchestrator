@@ -223,6 +223,17 @@ None of these states establishes a D1-D5 deadlock: current heads have generated
 checks or are awaiting normal approvals, and the active ruleset exposes no
 bypass actor.
 
+### Queue triage continuation — 2026-08-22 01:45 KST
+
+New or newly relevant queue items were checked after the root rows above.
+
+| PR | Current exact identity | Live evidence and dependency decision |
+|---:|---|---|
+| [#817](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/817) | head `8235d32839148c133ec046d6d16b944ff558c452`, base branch `fix/agent-pool-boundary-current` at `71895c7f1f1d63a55e5f67d75dbd8408f8e608f9` | Open, non-Draft, mechanically clean, 37 files (`+2389/-129`), but no check-runs and no formal approval. It is downstream of the still-unmerged #804 root and remains `WAIT_AND_REMEDIATE`; no downstream merge was attempted. |
+| [#818](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/818) | head `16243eefb62fcecad3758c644ba8a57278419a34`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 9 skipped and 13 queued check-runs, approvals `0`. New OTEL/main feature remains `WAIT_AND_REMEDIATE`. |
+| [#809](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/809) | head `756d2a76bb91c0c65aac6c15bbab8270dd0ea479`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 21 success, 8 skipped, 2 neutral check-runs, approvals `0`. Despite terminal checks, the required approval gate is absent; `WAIT_AND_REMEDIATE`. |
+| [#806](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/806) | head `10b87361cff4f4ed5a5d0dd17baee3e840f53b01`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 21 success, 8 skipped, 2 neutral check-runs, approvals `0`. Despite terminal checks, the required approval gate is absent; `WAIT_AND_REMEDIATE`. |
+
 All links and full commit SHAs in the initial snapshot reflect the remote state
 observed at 2026-08-21 15:36 Asia/Seoul; they are evidence pointers, not
 standing approval.
