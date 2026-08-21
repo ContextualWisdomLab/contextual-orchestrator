@@ -19,9 +19,11 @@ available through a public gateway error or an exception cause.
    provider response or exception text.
 3. Exhausted failover raises the stable failover message without chaining the
    last provider exception.
-4. Package-owned reasoning-only response guidance remains visible because it is
+4. Structurally invalid provider responses fail closed before cross-provider
+   failover or circuit-breaker accounting; they are not transport failures.
+5. Package-owned reasoning-only response guidance remains visible because it is
    deterministic local remediation, not provider output.
-5. Provider diagnostics may be counted by allowlisted type/code in internal
+6. Provider diagnostics may be counted by allowlisted type/code in internal
    telemetry, but raw bodies, exception text, credentials, and prompts are not
    persisted or returned.
 

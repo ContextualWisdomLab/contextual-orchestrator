@@ -2630,6 +2630,10 @@ class TaskOrchestrator:
         agent/tool-runtime failures: missing tools move to a compatible agent,
         explicitly idempotent transient calls retry the same agent, and ambiguous
         side effects or policy/permission/argument errors fail closed.
+
+        Structurally invalid provider responses (``ProviderResponseError``) are
+        package-owned boundary errors, not transport failures: they re-raise
+        before another provider is tried or circuit-breaker state changes.
         """
         candidates = self._failover_candidates(primary, text, role)
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)

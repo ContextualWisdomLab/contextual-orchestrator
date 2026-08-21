@@ -350,7 +350,7 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
 
 
-def test_structural_provider_response_stops_before_tool_failover() -> None:
+def test_structural_provider_response_stops_before_failover_or_circuit_update() -> None:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
         ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
@@ -375,7 +375,7 @@ def test_structural_provider_response_stops_before_tool_failover() -> None:
             agents[0], [{"role": "user", "content": "route this"}], text="route this", role="worker"
         )
     except ProviderResponseError as exc:
-        assert "did not contain assistant content" in str(exc)
+        assert str(exc) == "provider primary_worker response did not contain assistant content"
     else:  # pragma: no cover
         raise AssertionError("a structurally invalid provider response must fail closed")
 
