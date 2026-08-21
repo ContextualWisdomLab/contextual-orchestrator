@@ -2115,6 +2115,15 @@ class TaskOrchestrator:
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
+        self._workflow_run_lock = threading.Lock()
+        self._archived_spend: dict[str, Any] = {
+            "run_count": 0,
+            "estimated_prompt_tokens": 0,
+            "reported_prompt_tokens": 0,
+            "any_reported_prompt": False,
+            "total_output_tokens": 0,
+            "by_model": {},
+        }
         # Per-agent circuit breaker: consecutive failures trip an agent "open"
         # so a persistently failing provider is skipped until it cools down.
         self._circuit: dict[str, dict[str, float]] = {}
@@ -2187,8 +2196,7 @@ class TaskOrchestrator:
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
-            self._workflow_runs[record["workflow_run_id"]] = record
-            self._run_order.appendleft(record["workflow_run_id"])
+            self._remember_workflow_run(record)
         for evaluation in self._store.load("evaluation_run"):
             self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
         for event in self._store.load("analytics", self._analytics_events.maxlen):
@@ -2552,17 +2560,7 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
         }
-        self._workflow_runs[record["workflow_run_id"]] = record
-        self._run_order.appendleft(record["workflow_run_id"])
-        self._append_audit_event(
-            "workflow_run_created",
-            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
-        )
-        self.record_analytics_event(
-            "workflow_run_created",
-            {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
-             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
-        )
+        self._persist_workflow_run(record)
 
     def _cache_key(
         self,
@@ -2606,8 +2604,7 @@ class TaskOrchestrator:
 
     def _persist_workflow_run(self, record: dict[str, Any]) -> None:
         """Persist one completed workflow and its compact audit/analytics evidence."""
-        self._workflow_runs[record["workflow_run_id"]] = record
-        self._run_order.appendleft(record["workflow_run_id"])
+        self._remember_workflow_run(record)
         if self._store is not None:
             self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
@@ -2640,6 +2637,22 @@ class TaskOrchestrator:
                     "duration_ms": step.get("latency_ms"),
                 },
             )
+
+    def _remember_workflow_run(self, record: dict[str, Any]) -> None:
+        """Retain recent raw evidence and compact spend for evicted runs."""
+        run_id = record["workflow_run_id"]
+        with self._workflow_run_lock:
+            if run_id in self._workflow_runs:
+                try:
+                    self._run_order.remove(run_id)
+                except ValueError:  # pragma: no cover - defensive state repair
+                    pass
+            elif self._run_order.maxlen and len(self._run_order) >= self._run_order.maxlen:
+                evicted_id = self._run_order[-1]
+                evicted = self._workflow_runs.pop(evicted_id)
+                self._accumulate_run_spend(self._archived_spend, evicted)
+            self._workflow_runs[run_id] = record
+            self._run_order.appendleft(run_id)
 
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
@@ -2694,19 +2707,7 @@ class TaskOrchestrator:
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
             }
-            self._workflow_runs[record["workflow_run_id"]] = record
-            self._run_order.appendleft(record["workflow_run_id"])
-            if self._store is not None:
-                self._store.save("workflow_run", record["workflow_run_id"], record)
-            self._append_audit_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
-            )
-            self.record_analytics_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
-                 "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
-            )
+            self._persist_workflow_run(record)
             records.append(record)
         return records
 
@@ -2829,9 +2830,10 @@ class TaskOrchestrator:
 
     def get_workflow_run(self, workflow_run_id: str) -> dict[str, Any]:
         """Return a persisted workflow run by identifier."""
-        if workflow_run_id not in self._workflow_runs:  # pragma: no cover
-            raise KeyError(workflow_run_id)
-        return self._workflow_runs[workflow_run_id]
+        with self._workflow_run_lock:
+            if workflow_run_id not in self._workflow_runs:  # pragma: no cover
+                raise KeyError(workflow_run_id)
+            return self._workflow_runs[workflow_run_id]
 
     def get_access_report(self, workflow_run_id: str) -> dict[str, Any]:
         """Return per-step visibility and accessed output evidence for a run."""
@@ -3599,8 +3601,9 @@ class TaskOrchestrator:
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        run_ids = list(self._run_order)[start:end]
-        return [self._workflow_runs[run_id] for run_id in run_ids]
+        with self._workflow_run_lock:
+            run_ids = list(self._run_order)[start:end]
+            return [self._workflow_runs[run_id] for run_id in run_ids]
 
     def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
         """Return recent audit events in newest-first order."""
@@ -3626,6 +3629,49 @@ class TaskOrchestrator:
         if self._store is not None:
             self._store.save("analytics", None, event)
 
+    def _accumulate_run_spend(self, stats: dict[str, Any], run: dict[str, Any]) -> None:
+        """Add one run to compact, provider-aware spend statistics."""
+        stats["run_count"] += 1
+        stats["estimated_prompt_tokens"] += estimate_tokens(run.get("prompt_text", ""))
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        metered_steps = list(run["trace"])
+        verification = run.get("verification")
+        if isinstance(verification, dict) and isinstance(verification.get("judge_usage"), dict):
+            metered_steps.append({
+                "agent_id": verification.get("judge_agent_id", "unknown"),
+                "output": "",
+                "usage": verification["judge_usage"],
+            })
+        for step in metered_steps:
+            model = model_by_agent.get(
+                step.get("served_agent_id") or step.get("agent_id"), "unknown"
+            )
+            estimated = estimate_tokens(step.get("output", ""))
+            usage = step.get("usage")
+            reported_prompt = (
+                usage.get("prompt_tokens", usage.get("input_tokens"))
+                if isinstance(usage, dict)
+                else None
+            )
+            if type(reported_prompt) is int and reported_prompt >= 0:
+                stats["reported_prompt_tokens"] += reported_prompt
+                stats["any_reported_prompt"] = True
+            effective, is_reported = _step_output_token_count(step)
+            bucket = stats["by_model"].setdefault(
+                model,
+                {
+                    "estimated_output_tokens": 0,
+                    "output_tokens": 0,
+                    "step_count": 0,
+                    "reported_steps": 0,
+                },
+            )
+            bucket["estimated_output_tokens"] += estimated
+            bucket["output_tokens"] += effective
+            bucket["step_count"] += 1
+            bucket["reported_steps"] += int(is_reported)
+            stats["total_output_tokens"] += effective
+
     def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
         """Token and cost spend per model, aggregated from workflow runs.
 
@@ -3636,40 +3682,13 @@ class TaskOrchestrator:
         observability, not a billing system.
         """
         prices = {**self.price_per_million, **(price_per_million or {})}
-        model_by_agent = {agent.id: agent.model for agent in self.agents}
-        by_model: dict[str, dict[str, Any]] = {}
-        total_output_tokens = 0
-        total_prompt_tokens = 0
-        reported_prompt_tokens = 0
-        any_reported_prompt = False
-
-        for run in self._workflow_runs.values():
-            total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
-            metered_steps = list(run["trace"])
-            verification = run.get("verification")
-            if isinstance(verification, dict) and isinstance(verification.get("judge_usage"), dict):
-                metered_steps.append({
-                    "agent_id": verification.get("judge_agent_id", "unknown"),
-                    "output": "",
-                    "usage": verification["judge_usage"],
-                })
-            for step in metered_steps:
-                model = model_by_agent.get(step.get("agent_id"), "unknown")
-                estimated = estimate_tokens(step.get("output", ""))
-                usage = step.get("usage")
-                reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
-                if type(reported_prompt) is int and reported_prompt >= 0:
-                    reported_prompt_tokens += reported_prompt
-                    any_reported_prompt = True
-                effective, is_reported = _step_output_token_count(step)
-                bucket = by_model.setdefault(
-                    model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
-                )
-                bucket["estimated_output_tokens"] += estimated
-                bucket["output_tokens"] += effective
-                bucket["step_count"] += 1
-                bucket["reported_steps"] += 1 if is_reported else 0
-                total_output_tokens += effective
+        with self._workflow_run_lock:
+            stats = copy.deepcopy(self._archived_spend)
+            recent_runs = list(self._workflow_runs.values())
+        for run in recent_runs:
+            self._accumulate_run_spend(stats, run)
+        by_model = stats["by_model"]
+        total_output_tokens = stats["total_output_tokens"]
 
         rows: list[dict[str, Any]] = []
         unpriced: list[str] = []
@@ -3705,11 +3724,13 @@ class TaskOrchestrator:
             ),
             "pricing_configured": bool(prices),
             "totals": {
-                "run_count": len(self._workflow_runs),
+                "run_count": stats["run_count"],
                 "estimated_output_tokens": total_output_tokens,
-                "estimated_prompt_tokens": total_prompt_tokens,
-                "reported_prompt_tokens": reported_prompt_tokens,
-                "prompt_tokens_source": "reported" if any_reported_prompt else "estimated",
+                "estimated_prompt_tokens": stats["estimated_prompt_tokens"],
+                "reported_prompt_tokens": stats["reported_prompt_tokens"],
+                "prompt_tokens_source": (
+                    "reported" if stats["any_reported_prompt"] else "estimated"
+                ),
                 "estimated_cost_usd": round(total_cost, 6) if prices else None,
                 "currency": "USD",
             },

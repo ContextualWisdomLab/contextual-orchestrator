@@ -76,6 +76,11 @@ because the provider response shape is richer.
   valid provider usage increment `unmetered_provider_call_count`; if no workflow
   call reports usage, the existing request-level estimate remains the explicit
   compatibility fallback.
+- Raw in-memory workflow records share the existing bounded recent-run capacity.
+  Evicted records contribute to a compact per-model spend accumulator, so budget
+  enforcement and spend totals remain cumulative without retaining every prompt,
+  answer, or trace in process memory. A configured durable state store remains
+  the long-term run-evidence boundary.
 
 ## Consequences
 
@@ -87,6 +92,8 @@ because the provider response shape is richer.
 - A response never sums monetary amounts across currencies; mixed-currency
   workflows expose `currency_code=MIXED` and a null aggregate amount while the
   individual ledger records retain their original amounts and currencies.
+- High-volume passthrough traffic cannot grow raw workflow memory without bound,
+  while evicted usage still contributes to buyer-visible spend and budget gates.
 - Tool callers use an explicit single-agent passthrough contract. The gateway
   remains the model-selection boundary, while tool execution stays with the
   authenticated client and never becomes an implicit multi-agent fallback.
