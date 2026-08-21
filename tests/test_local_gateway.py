@@ -545,6 +545,19 @@ def test_provider_transport_rejects_invalid_port_and_resolution_failures() -> No
             client._resolve_addresses("empty.example", 443)
 
 
+@pytest.mark.parametrize(
+    "userinfo_url",
+    [
+        "https://@provider.example/v1/chat/completions",
+        "https://:secret@provider.example/v1/chat/completions",
+    ],
+)
+def test_provider_transport_rejects_empty_userinfo(userinfo_url: str) -> None:
+    """The low-level transport must reject empty userinfo before opening a socket."""
+    with pytest.raises(RuntimeError, match="without userinfo"):
+        ModelClient()._open_provider(urllib.request.Request(userinfo_url))
+
+
 def test_https_provider_uses_verifying_connection_and_resolved_destination() -> None:
     class FakeResponse:
         status = 200

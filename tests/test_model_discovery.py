@@ -27,6 +27,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _fetch_json,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -185,6 +186,26 @@ def test_fetch_json_rejects_cross_origin_before_provider_transport() -> None:
         client.fetch_json(agent, "https://attacker.example/v1/models")
     validate_provider.assert_not_called()
     open_provider.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "userinfo_url",
+    [
+        "https://@api.openai.com/v1/models",
+        "https://:secret@api.openai.com/v1/models",
+    ],
+)
+def test_model_discovery_rejects_empty_userinfo_before_provider_transport(userinfo_url: str) -> None:
+    """Empty URL userinfo is still credential syntax and must not reach transport."""
+    with patch.object(ModelClient, "fetch_json") as fetch_json:
+        with pytest.raises(ValueError, match="credentials or a fragment"):
+            _fetch_json(
+                userinfo_url,
+                auth_scheme="Bearer",
+                timeout=1.0,
+                credential_name="OPENAI_API_KEY",
+            )
+    fetch_json.assert_not_called()
 
 
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
