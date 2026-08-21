@@ -119,6 +119,27 @@ def test_batch_run_full_flow_over_http() -> None:
         assert b'name="purpose"' in provider.uploaded_jsonl
 
 
+def test_batch_run_omits_an_unset_temperature() -> None:
+    """Do not invent a sampling field in the uploaded provider JSONL."""
+    with _FakeBatchProvider() as provider:
+        agent = ModelAgent(
+            "worker_agent",
+            "reasoning-model",
+            base_url=provider.base_url,
+            api_key_env="UNSET_KEY_ENV",
+        )
+
+        _client()._batch_run(
+            agent,
+            REQUESTS,
+            temperature=None,
+            poll_interval=0.01,
+            poll_timeout=30,
+        )
+
+        assert b'"temperature"' not in provider.uploaded_jsonl
+
+
 def test_batch_terminal_failure_raises() -> None:
     with _FakeBatchProvider(fail_status="failed") as provider:
         agent = ModelAgent("worker_agent", "gpt-x", base_url=provider.base_url, api_key_env="UNSET_KEY_ENV")
