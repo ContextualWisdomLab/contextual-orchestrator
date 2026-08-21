@@ -50,6 +50,10 @@ def test_field_encryption_round_trip_and_key_formats() -> None:
     assert not is_encrypted_detail(detail)
 
 
+def test_encryptor_repr_does_not_expose_key() -> None:
+    assert KEY_BYTES.decode("ascii") not in repr(PiiFieldEncryptor("test", KEY_BYTES))
+
+
 def test_empty_field_set_and_plain_decrypt_are_copy_operations() -> None:
     encryptor = PiiFieldEncryptor.from_secret("k", KEY_BYTES.decode("ascii"))
     detail = {"email": "alice@example.com"}

@@ -36,6 +36,7 @@ from .credentials import NotConfigured, get_credential
 from .pii_protection import (
     DEFAULT_PII_KEY_NAME,
     ENCRYPTED_FIELDS_KEY,
+    PiiFieldEncryptor,
     is_encrypted_detail,
     load_pii_encryptor,
 )
@@ -1712,6 +1713,7 @@ class TaskOrchestrator:
         if not isinstance(pii_key_name, str) or not pii_key_name:
             raise ValueError("pii_key_name must be a non-empty string")
         self._pii_key_name = pii_key_name
+        self._pii_encryptors: dict[str, PiiFieldEncryptor] = {}
         self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
@@ -2723,7 +2725,11 @@ class TaskOrchestrator:
         fields = tuple(pii_fields)
         if not fields:
             return detail
-        return load_pii_encryptor(self._pii_key_name).encrypt_fields(detail, fields)
+        encryptor = self._pii_encryptors.get(self._pii_key_name)
+        if encryptor is None:
+            encryptor = load_pii_encryptor(self._pii_key_name)
+            self._pii_encryptors[self._pii_key_name] = encryptor
+        return encryptor.encrypt_fields(detail, fields)
 
     def _append_audit_event(
         self,

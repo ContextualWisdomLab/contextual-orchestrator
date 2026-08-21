@@ -7,7 +7,7 @@ import binascii
 import json
 import os
 from collections.abc import Iterable
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from cryptography.exceptions import InvalidTag
@@ -91,7 +91,7 @@ class PiiFieldEncryptor:
     """Encrypt and decrypt explicitly declared event fields with AES-GCM."""
 
     key_name: str
-    key: bytes
+    key: bytes = field(repr=False)
 
     @classmethod
     def from_secret(cls, key_name: str, secret: str) -> PiiFieldEncryptor:

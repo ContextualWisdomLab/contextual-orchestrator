@@ -41,10 +41,11 @@ route-owned purposes:
 | `admin` | `operator_read` | Aggregate/operator endpoints |
 | `admin` | `audit_replay` | Admin state and workflow/access/evaluation traces |
 
-Every authorization result is recorded without client IPs, tokens, or raw
-content. The route chooses the purpose; a caller cannot escalate by declaring a
-different purpose in request data. Invalid role-purpose combinations fail
-closed.
+Denied authorization results and successful raw-PII replay decisions are
+recorded without client IPs, tokens, or raw content. Routine successful
+inference/operator traffic keeps using the existing analytics path. The route
+chooses the purpose; a caller cannot escalate by declaring a different purpose
+in request data. Invalid role-purpose combinations fail closed.
 
 Callers that place personal data in audit or analytics details must declare the
 top-level fields through `pii_fields`. Those fields are encrypted with

@@ -5645,6 +5645,7 @@ def build_server(
             return "operator_read"
 
         def _authorize(self, scope: str, *, purpose: str | None = None) -> None:
+            """Authorize the request and audit denials or sensitive replay access."""
             effective_purpose = purpose or DEFAULT_PURPOSE_BY_SCOPE.get(scope, "")
             try:
                 security.check_rate_limit(self.client_address[0])
@@ -5652,19 +5653,30 @@ def build_server(
                     self.headers, scope, self.client_address[0], purpose=purpose
                 )
             except RequestError as exc:
-                orchestrator.record_authorization_decision(
-                    scope=scope,
-                    purpose=effective_purpose,
-                    allowed=False,
-                    reason=exc.code,
-                )
+                try:
+                    orchestrator.record_authorization_decision(
+                        scope=scope,
+                        purpose=effective_purpose,
+                        allowed=False,
+                        reason=exc.code,
+                    )
+                except Exception:
+                    pass
                 raise
-            orchestrator.record_authorization_decision(
-                scope=scope,
-                purpose=effective_purpose,
-                allowed=True,
-                reason="authorized",
-            )
+            if effective_purpose == "audit_replay":
+                try:
+                    orchestrator.record_authorization_decision(
+                        scope=scope,
+                        purpose=effective_purpose,
+                        allowed=True,
+                        reason="authorized",
+                    )
+                except Exception as exc:
+                    raise RequestError(
+                        503,
+                        "authorization_audit_unavailable",
+                        "authorization audit unavailable",
+                    ) from exc
             self._authorized_role = scope
             self._authorized_purpose = effective_purpose
 
