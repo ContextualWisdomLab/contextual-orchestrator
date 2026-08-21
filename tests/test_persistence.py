@@ -99,6 +99,18 @@ def test_store_treats_kind_key_and_limit_as_sql_parameters() -> None:
         store.close()
 
 
+def test_durable_audit_retention_is_bounded() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        limit = store._STREAM_LIMITS["audit"]
+        for index in range(limit + 3):
+            store.save("audit", None, {"index": index})
+
+        assert len(store.load("audit")) == limit
+        assert store.load("audit", 1) == [{"index": limit + 2}]
+        store.close()
+
+
 def test_stream_reload_respects_deque_maxlen() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "state.db")

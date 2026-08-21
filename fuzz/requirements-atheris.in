@@ -3,3 +3,4 @@
 # coverage-evidence image; 3.0.0 is no longer available to that image.
 pip
 atheris==3.1.0
+cryptography>=43.0

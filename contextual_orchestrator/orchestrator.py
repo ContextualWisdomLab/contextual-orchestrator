@@ -1549,13 +1549,14 @@ class _StateStore:
     """Minimal write-through sqlite persistence for orchestrator runtime state.
 
     ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
-    upsert by key; stream kinds (analytics, audit) append. Stream rows grow unbounded
-    on disk while the in-memory deques stay capped — add pruning if db size matters.
+    upsert by key; stream kinds append. Durable audit rows use the same bounded
+    retention as the in-memory audit deque so denial traffic cannot grow the DB forever.
     Runtime values (kind, key, payload, limit) are always bound through SQLite
     placeholders so persisted prompts and identifiers cannot become SQL syntax.
     """
 
     _KEYED = {"workflow_run", "evaluation_run"}
+    _STREAM_LIMITS = {"audit": 256}
     _CREATE_RECORDS_SQL = (
         "CREATE TABLE IF NOT EXISTS records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
@@ -1563,6 +1564,10 @@ class _StateStore:
     _CREATE_RECORDS_KIND_SEQ_INDEX_SQL = "CREATE INDEX IF NOT EXISTS records_kind_seq ON records(kind, seq)"
     _DELETE_KEYED_SQL = "DELETE FROM records WHERE kind = ? AND key = ?"
     _INSERT_SQL = "INSERT INTO records (kind, key, payload) VALUES (?, ?, ?)"
+    _PRUNE_STREAM_SQL = (
+        "DELETE FROM records WHERE kind = ? AND seq NOT IN ("
+        "SELECT seq FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?)"
+    )
     _SELECT_ALL_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq"
     _SELECT_LIMIT_SQL = "SELECT payload FROM records WHERE kind = ? ORDER BY seq DESC LIMIT ?"
 
@@ -1579,6 +1584,9 @@ class _StateStore:
             if kind in self._KEYED:
                 self._conn.execute(self._DELETE_KEYED_SQL, (kind, key))
             self._conn.execute(self._INSERT_SQL, (kind, key, blob))
+            if kind in self._STREAM_LIMITS:
+                limit = self._STREAM_LIMITS[kind]
+                self._conn.execute(self._PRUNE_STREAM_SQL, (kind, kind, limit))
             self._conn.commit()
 
     def load(self, kind: str, limit: int | None = None) -> list[dict[str, Any]]:
