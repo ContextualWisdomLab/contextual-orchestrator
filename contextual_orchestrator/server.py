@@ -4811,7 +4811,7 @@ def build_server(
             except (ValueError, TypeError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
-                self._send_error(404, "resource_not_found", str(exc))
+                self._send_error(404, "agent_not_found", str(exc))
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
@@ -4831,7 +4831,7 @@ def build_server(
             except (ValueError, TypeError) as exc:
                 self._send_error(400, "invalid_request", str(exc))
             except KeyError as exc:
-                self._send_error(404, "resource_not_found", str(exc))
+                self._send_error(404, "agent_not_found", str(exc))
             except Exception:
                 self._send_error(500, "internal_error", "internal server error")
 
