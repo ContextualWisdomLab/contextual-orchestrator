@@ -320,12 +320,21 @@ def test_plain_proxy_completion_accounts_a_tool_only_response() -> None:
 
 def test_structured_provider_completion_rechecks_budget_before_final_provider_call() -> None:
     orch = _build()
-    orch.budget_max_output_tokens = 1
-    budget_states = iter(({"exceeded": False}, {"exceeded": True}))
-    with patch.object(orch, "budget_status", side_effect=lambda: next(budget_states)), patch.object(
+    orch.budget_max_cost_usd = 1.0
+    orch.price_per_million = {"mock-planner": 1_000_000.0}
+    with patch.object(
         orch,
         "conduct",
-        return_value={"trace": [{"id": "worker", "role": "worker", "output": "verified"}]},
+        return_value={
+            "trace": [
+                {
+                    "id": "worker",
+                    "role": "worker",
+                    "agent_id": "planner_agent",
+                    "output": "verified",
+                }
+            ]
+        },
     ), patch.object(orch.client, "proxy_send") as send:
         with pytest.raises(BudgetExceededError, match="spend budget exceeded"):
             orch.proxy_completion(
@@ -337,6 +346,23 @@ def test_structured_provider_completion_rechecks_budget_before_final_provider_ca
             )
 
     send.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "additional_spend",
+    [
+        {"additional_output_tokens": True},
+        {"additional_output_tokens": -1},
+        {"additional_cost_usd": True},
+        {"additional_cost_usd": float("inf")},
+        {"additional_cost_usd": -0.01},
+    ],
+)
+def test_in_flight_budget_rejects_invalid_usage(
+    additional_spend: dict[str, int | float | bool],
+) -> None:
+    with pytest.raises(ValueError, match="must be a non-negative"):
+        _build()._raise_if_spend_budget_exceeded(**additional_spend)
 
 
 def test_structured_provider_completion_persists_final_synthesis_run() -> None:
@@ -358,7 +384,7 @@ def test_structured_provider_completion_persists_final_synthesis_run() -> None:
 
 
 def test_orchestrated_responses_usage_counts_toward_spend_budget() -> None:
-    orch = _build(budget_max_output_tokens=5)
+    orch = _build(budget_max_output_tokens=100)
     raw = {
         "object": "response",
         "output_text": "{}",

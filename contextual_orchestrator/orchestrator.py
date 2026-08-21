@@ -117,6 +117,17 @@ def estimate_tokens(text: str) -> int:
     return (len(text) + 3) // 4 if text else 0
 
 
+def _step_output_token_count(step: dict[str, Any]) -> tuple[int, bool]:
+    """Return effective output tokens and whether they were provider-reported."""
+    usage = step.get("usage")
+    reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    if type(reported) is not int or reported < 0:
+        reported = usage.get("output_tokens") if isinstance(usage, dict) else None
+    if type(reported) is int and reported >= 0:
+        return reported, True
+    return estimate_tokens(step.get("output", "")), False
+
+
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
     "commercial_report_cache",
     default=None,
@@ -2305,6 +2316,16 @@ class TaskOrchestrator:
             raise RuntimeError(f"requested model {disabled_model!r} is disabled")
 
         workflow = self.conduct(messages, preserve_messages=True, judge=False)
+        in_flight_output_tokens = 0
+        in_flight_cost_usd = 0.0
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        for row in workflow["trace"]:
+            output_tokens, _reported = _step_output_token_count(row)
+            in_flight_output_tokens += output_tokens
+            model = model_by_agent.get(row.get("served_agent_id") or row.get("agent_id"))
+            price = self.price_per_million.get(model) if model is not None else None
+            if price is not None:
+                in_flight_cost_usd += output_tokens / 1_000_000 * price
         evidence = "\n\n".join(
             f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
             for row in workflow["trace"]
@@ -2332,7 +2353,10 @@ class TaskOrchestrator:
             )
             upstream["model"] = final_agent.model
             upstream["stream"] = False
-            self._raise_if_spend_budget_exceeded()
+            self._raise_if_spend_budget_exceeded(
+                additional_output_tokens=in_flight_output_tokens,
+                additional_cost_usd=round(in_flight_cost_usd, 6),
+            )
             synthesis_started = time.perf_counter()
             raw = self.client.proxy_send(final_agent, "responses", upstream)
             synthesis_output = raw.get("output_text")
@@ -2378,7 +2402,10 @@ class TaskOrchestrator:
             upstream["model"] = final_agent.model
             upstream["messages"] = synthesis_messages
             upstream["stream"] = False
-            self._raise_if_spend_budget_exceeded()
+            self._raise_if_spend_budget_exceeded(
+                additional_output_tokens=in_flight_output_tokens,
+                additional_cost_usd=round(in_flight_cost_usd, 6),
+            )
             synthesis_started = time.perf_counter()
             raw = self.client.proxy_send(final_agent, "chat/completions", upstream)
             synthesis_output = ""
@@ -3575,12 +3602,13 @@ class TaskOrchestrator:
             self._store.save("analytics", None, event)
 
     def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
-        """Estimated token and cost spend per model, aggregated from workflow runs.
+        """Token and cost spend per model, aggregated from workflow runs.
 
-        Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
-        usage. Cost is computed only for models with an operator-supplied price; models without
-        one are reported under ``unpriced_models`` with a null cost. This is the honest local
-        floor for spend observability, not a billing system.
+        Provider-reported usage is preferred; runtime output text provides a
+        deterministic estimate only when usage is unavailable. Cost is computed
+        only for models with an operator-supplied price, and unpriced models are
+        reported explicitly. This is the honest local floor for spend
+        observability, not a billing system.
         """
         prices = {**self.price_per_million, **(price_per_million or {})}
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -3597,14 +3625,10 @@ class TaskOrchestrator:
                 estimated = estimate_tokens(step.get("output", ""))
                 usage = step.get("usage")
                 reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
-                if isinstance(reported_prompt, int):
+                if type(reported_prompt) is int and reported_prompt >= 0:
                     reported_prompt_tokens += reported_prompt
                     any_reported_prompt = True
-                reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
-                if isinstance(reported, int):
-                    effective, is_reported = reported, True
-                else:
-                    effective, is_reported = estimated, False
+                effective, is_reported = _step_output_token_count(step)
                 bucket = by_model.setdefault(
                     model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
                 )
@@ -3686,11 +3710,33 @@ class TaskOrchestrator:
         """Current spend-budget state (limits, spent, remaining, exceeded)."""
         return self.spend_analytics()["budget"]
 
-    def _raise_if_spend_budget_exceeded(self) -> None:
-        """Stop a new workflow or provider call after an operator spend cap is reached."""
+    def _raise_if_spend_budget_exceeded(
+        self,
+        *,
+        additional_output_tokens: int = 0,
+        additional_cost_usd: float = 0.0,
+    ) -> None:
+        """Stop a provider call when persisted plus in-flight spend reaches a cap."""
+        if type(additional_output_tokens) is not int or additional_output_tokens < 0:
+            raise ValueError("additional_output_tokens must be a non-negative integer")
+        if (
+            isinstance(additional_cost_usd, bool)
+            or not isinstance(additional_cost_usd, (int, float))
+            or not math.isfinite(float(additional_cost_usd))
+            or additional_cost_usd < 0
+        ):
+            raise ValueError("additional_cost_usd must be a non-negative finite number")
         if self.budget_max_output_tokens is None and self.budget_max_cost_usd is None:
             return
         budget = self.budget_status()
+        if additional_output_tokens or additional_cost_usd:
+            spent_cost = budget["spent_cost_usd"]
+            if spent_cost is not None:
+                spent_cost = round(spent_cost + additional_cost_usd, 6)
+            budget = self._budget_block(
+                budget["spent_output_tokens"] + additional_output_tokens,
+                spent_cost,
+            )
         if budget["exceeded"]:
             raise BudgetExceededError("spend budget exceeded", detail=budget)
 
