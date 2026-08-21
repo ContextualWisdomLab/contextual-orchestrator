@@ -27,6 +27,7 @@ from .orchestrator import (
     TaskOrchestrator,
     _new_chat_completion_id,
     _chat_to_responses_payload,
+    _responses_usage,
     chat_completion_chunks,
     chat_completion_response,
     _responses_to_chat_payload,
@@ -5853,7 +5854,7 @@ def build_server(
                     orchestrated = dict(provider_response)
                     orchestrated["model"] = model_name
                     if "usage" not in orchestrated and isinstance(result.get("usage"), dict):
-                        orchestrated["usage"] = result["usage"]
+                        orchestrated["usage"] = _responses_usage(result["usage"])
                     orchestrator.record_analytics_event(
                         "responses_orchestrated",
                         {
