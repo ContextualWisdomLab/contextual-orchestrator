@@ -22,7 +22,7 @@ from .model_discovery import (
     agent_from_discovered,
     discover_all_models,
     refresh_price_book,
-    select_top_n_cheapest_discovered_agents,
+    select_bootstrap_discovered_agents,
 )
 from .orchestrator import ModelClient, TaskOrchestrator
 from .server import SecurityConfig, serve
@@ -86,7 +86,7 @@ def build_review_orchestrator(
         raise NotConfigured("review gateway discovered no general chat models")
     price_book = PriceBook(InMemoryConfigStore())
     refresh_price_book(chat_discovered, price_book)
-    selected = select_top_n_cheapest_discovered_agents(chat_discovered, price_book, max_agents)
+    selected = select_bootstrap_discovered_agents(chat_discovered, price_book, max_agents)
     if not selected:
         raise NotConfigured("review gateway selected no provider models")
 

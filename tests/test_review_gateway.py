@@ -80,6 +80,26 @@ def test_build_review_orchestrator_routes_to_cheapest_selected_agent(monkeypatch
     assert orchestrator._select_agent("review this change", "worker").model == "cheap_review"
 
 
+def test_build_review_orchestrator_keeps_provider_diverse_failover(monkeypatch):
+    """The gateway uses independent provider families before duplicate providers."""
+    discovered = [
+        _discovered("openrouter", "cheap_first", "OPENROUTER_API_KEY", 0.01),
+        _discovered("openrouter", "cheap_second", "OPENROUTER_API_KEY", 0.02),
+        _discovered("openai", "independent_review", "OPENAI_API_KEY", 1.0),
+    ]
+    monkeypatch.setattr(review_gateway, "discover_all_models", lambda: (discovered, []))
+
+    orchestrator = review_gateway.build_review_orchestrator(
+        {"OPENAI_API_KEY": "openai-secret", "OPENROUTER_API_KEY": "router-secret"},
+        max_agents=2,
+    )
+
+    assert [agent.model for agent in orchestrator.agents] == [
+        "cheap_first",
+        "independent_review",
+    ]
+
+
 def test_build_review_orchestrator_excludes_endpoint_only_models(monkeypatch):
     """Embedding and image catalog rows never enter the review-agent pool."""
     discovered = [
@@ -157,7 +177,7 @@ def test_build_review_orchestrator_fails_closed_when_selection_is_empty(monkeypa
         "discover_all_models",
         lambda: ([_discovered("openai", "gpt-review", "OPENAI_API_KEY", 0.01)], []),
     )
-    monkeypatch.setattr(review_gateway, "select_top_n_cheapest_discovered_agents", lambda *args: [])
+    monkeypatch.setattr(review_gateway, "select_bootstrap_discovered_agents", lambda *args: [])
 
     with pytest.raises(NotConfigured, match="selected no provider models"):
         review_gateway.build_review_orchestrator({"OPENAI_API_KEY": "openai-secret"})
