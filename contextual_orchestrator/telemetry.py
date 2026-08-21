@@ -142,8 +142,8 @@ def configure_telemetry(
     if config is None:
         _LOGGER.debug("OpenTelemetry is not configured without a KV store")
         return
-    _CONFIGURED = True
     if str(_config_value(config, "sdk_disabled", "")).lower() == "true":
+        _CONFIGURED = True
         return
     endpoint = str(_config_value(config, "exporter_otlp_endpoint", "")).strip()
     if trace is None or not endpoint:
@@ -173,6 +173,7 @@ def configure_telemetry(
         )
     )
     trace.set_tracer_provider(provider)
+    _CONFIGURED = True
 
 
 @contextmanager

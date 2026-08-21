@@ -144,6 +144,16 @@ def test_configure_telemetry_handles_missing_and_disabled_kv(monkeypatch):
     assert telemetry_module._CONFIGURED is True
 
 
+def test_empty_endpoint_does_not_block_later_collector_configuration(monkeypatch):
+    """A partial bootstrap remains retryable until an OTLP endpoint is usable."""
+    monkeypatch.setattr(telemetry_module, "_CONFIGURED", False)
+    empty = SimpleNamespace(get=lambda category, key, default=None: default)
+
+    telemetry_module.configure_telemetry(config=empty)
+
+    assert telemetry_module._CONFIGURED is False
+
+
 def test_configure_telemetry_wires_kv_values_to_otlp(monkeypatch):
     """The exporter receives only normalized values read from the injected KV."""
     import opentelemetry.exporter.otlp.proto.http.trace_exporter as exporter_module
