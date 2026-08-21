@@ -33,7 +33,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
-from .telemetry import traced
+from .telemetry import inject_trace_context, traced
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -1147,6 +1147,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1176,6 +1177,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/embeddings"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1353,6 +1355,7 @@ class ModelClient:
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1447,6 +1450,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),

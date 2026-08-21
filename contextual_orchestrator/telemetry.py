@@ -13,12 +13,14 @@ try:
     from opentelemetry.context import attach as _otel_attach
     from opentelemetry.context import detach as _otel_detach
     from opentelemetry.propagate import extract as _otel_extract
+    from opentelemetry.propagate import inject as _otel_inject
     from opentelemetry.trace import SpanKind, Status, StatusCode
 except ImportError:  # pragma: no cover - dependency is declared by the project
     trace = None  # type: ignore[assignment]
     _otel_attach = None
     _otel_detach = None
     _otel_extract = None
+    _otel_inject = None
     SpanKind = None  # type: ignore[assignment,misc]
     Status = None  # type: ignore[assignment,misc]
     StatusCode = None  # type: ignore[assignment,misc]
@@ -98,6 +100,12 @@ def detach_trace_context(token: Any) -> None:
     """Detach an inbound W3C trace context after one HTTP request."""
     if token is not None and _otel_detach is not None:
         _otel_detach(token)
+
+
+def inject_trace_context(headers: dict[str, str]) -> None:
+    """Inject the active W3C trace context into one provider request."""
+    if _otel_inject is not None:
+        _otel_inject(headers)
 
 
 def _safe_attributes(

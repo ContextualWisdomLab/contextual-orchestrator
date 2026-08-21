@@ -39,6 +39,25 @@ def test_trace_context_is_a_noop_without_the_optional_api(monkeypatch):
     monkeypatch.setattr(telemetry_module, "_otel_extract", None)
     monkeypatch.setattr(telemetry_module, "_otel_attach", None)
     monkeypatch.setattr(telemetry_module, "_otel_detach", None)
+    monkeypatch.setattr(telemetry_module, "_otel_inject", None)
 
     assert telemetry_module.attach_trace_context({"traceparent": "ignored"}) is None
     telemetry_module.detach_trace_context(object())
+    telemetry_module.inject_trace_context({})
+
+
+def test_inject_trace_context_delegates_to_w3c_propagator(monkeypatch):
+    """Provider transport headers receive only the active W3C propagation fields."""
+    carrier = {"content-type": "application/json"}
+    monkeypatch.setattr(
+        telemetry_module,
+        "_otel_inject",
+        lambda value: value.__setitem__("traceparent", "00-trace-span-01"),
+    )
+
+    telemetry_module.inject_trace_context(carrier)
+
+    assert carrier == {
+        "content-type": "application/json",
+        "traceparent": "00-trace-span-01",
+    }
