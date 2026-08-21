@@ -53,6 +53,53 @@ def test_transient_classification_matches_status_and_network_errors() -> None:
     assert is_transient_error(urllib.error.URLError("dns"))
     assert is_transient_error(TimeoutError("read timeout"))
     assert is_transient_error(socket.timeout("slow"))
+
+
+def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> None:
+    class StoppedProviderClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=3, retry_backoff=0.0)
+            self.chat_calls = 0
+            self.raw_calls = 0
+
+        def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+            del agent
+            return
+
+        def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+            del agent, payload, destination, timeout
+            self.chat_calls += 1
+            raise _stopped_http_error()
+
+        def _send_raw(self, agent, endpoint, payload, destination=None):  # type: ignore[override]
+            del agent, endpoint, payload, destination
+            self.raw_calls += 1
+            raise _stopped_http_error()
+
+    client = StoppedProviderClient()
+    agent = ModelAgent(
+        "provider_worker",
+        "provider-model",
+        base_url="https://provider.example/v1",
+        api_key_env="",
+        credential_key="",
+    )
+
+    try:
+        client.chat(agent, [{"role": "user", "content": "send"}])
+    except ToolFallbackStoppedError as exc:
+        assert exc.decision.kind.value == "ambiguous_outcome"
+    else:  # pragma: no cover
+        raise AssertionError("provider tool stop must fail closed")
+    try:
+        client.proxy_send(agent, "chat/completions", {"model": agent.model, "messages": []})
+    except ToolFallbackStoppedError:
+        pass
+    else:  # pragma: no cover
+        raise AssertionError("raw provider tool stop must fail closed")
+
+    assert client.chat_calls == 1
+    assert client.raw_calls == 1
     assert is_transient_error(ssl.SSLEOFError("peer closed TLS stream"))
     assert is_transient_error(ssl.SSLSyscallError("SSL_ERROR_SYSCALL"))
     assert not is_transient_error(ssl.SSLCertVerificationError("certificate verify failed"))

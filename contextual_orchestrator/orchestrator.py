@@ -2624,9 +2624,7 @@ class TaskOrchestrator:
                 try:
                     output = self.client.chat(agent, messages)
                 except Exception as exc:
-                    if isinstance(exc, ToolFallbackStoppedError):
-                        raise
-                    if isinstance(exc, ProviderResponseError):
+                    if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
                     last_error = exc
                     decision = classify_tool_failure(exc)

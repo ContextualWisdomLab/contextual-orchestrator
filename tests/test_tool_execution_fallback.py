@@ -763,6 +763,7 @@ def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
     assert body["error"]["code"] == "tool_execution_stopped"
     assert body["error"]["detail"]["failure_kind"] == "ambiguous_outcome"
     assert client.calls == ["primary_worker"]
+    assert "provider.example" not in json.dumps(body)
 
 
 def test_provider_http_tool_stop_preserves_streaming_sse_contract() -> None:
