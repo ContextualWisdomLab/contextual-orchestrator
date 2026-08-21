@@ -872,7 +872,13 @@ class ModelClient:
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
-                    content = self._send(agent, payload, destination, timeout=probe_timeout)
+                    content = self._send(
+                        agent,
+                        payload,
+                        destination,
+                        timeout=probe_timeout,
+                        allow_empty_content=True,
+                    )
                 usage = self.take_usage()
             if not content.strip():
                 failure_code = "provider_empty_probe_response"
@@ -935,6 +941,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
         *,
         timeout: float | None = None,
+        allow_empty_content: bool = False,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
         api_key = _provider_credential(agent)
@@ -957,10 +964,15 @@ class ModelClient:
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
-        return self._response_content(agent, data)
+        return self._response_content(agent, data, allow_empty_content=allow_empty_content)
 
     @staticmethod
-    def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
+    def _response_content(
+        agent: ModelAgent,
+        data: dict[str, Any],
+        *,
+        allow_empty_content: bool = False,
+    ) -> str:
         """Extract text and explain provider responses that contain reasoning only."""
         choices = data.get("choices")
         message = choices[0].get("message") if isinstance(choices, list) and choices else None
@@ -968,6 +980,8 @@ class ModelClient:
         if isinstance(content, str) and content.strip():
             return content
         if isinstance(content, str):
+            if allow_empty_content:
+                return content
             raise ProviderResponseError(f"provider {agent.id} returned empty assistant content")
         if isinstance(message, dict) and message.get("reasoning"):
             raise ProviderResponseError(
