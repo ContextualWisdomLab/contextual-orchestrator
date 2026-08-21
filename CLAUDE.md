@@ -71,7 +71,7 @@ CI gates: `.github/workflows/security.yml` (CodeQL + pip-audit on `requirements.
 
 ## What this is
 
-A stdlib-Python lab implementing a single OpenAI-compatible API that routes, delegates, verifies, and synthesizes work across a configurable pool of model agents — plus the org's cost-review and sync-vs-batch routing hub. Runtime dependencies are the Python standard library only (Hypothesis is the sole listed dependency, for the property tests); FastAPI/SQLAlchemy/psycopg exist as *optional* extras for the hardened production target, not the current runtime.
+A stdlib-Python lab implementing a single OpenAI-compatible API that routes, delegates, verifies, and synthesizes work across a configurable pool of model agents — plus the org's cost-review and sync-vs-batch routing hub. The core runtime uses the Python standard library plus the selected `cryptography` dependency for field-level PII protection; Hypothesis is used for property tests, while FastAPI/SQLAlchemy/psycopg exist as *optional* extras for the hardened production target.
 
 ## Architecture
 
