@@ -30,6 +30,8 @@ available through a public gateway error or an exception cause.
    streaming error without retry or failover. A stream may already have emitted
    bytes, so replaying it would duplicate output; the provider exception and
    response body remain inside the gateway.
+8. Package-owned parse and identifier errors are raised outside provider-error
+   handlers so neither `__cause__` nor implicit `__context__` exposes raw input.
 
 ## Consequences
 
@@ -41,10 +43,10 @@ responses have a wider audience than provider credentials and request data.
 
 ## Verification
 
-`tests/test_model_discovery.py`, `tests/test_provider_reliability.py`, and
-`tests/test_model_judge.py` assert that provider response text is absent from
-public messages and causes, while the full suite must remain green before
-merge.
+`tests/test_model_discovery.py`, `tests/test_provider_reliability.py`,
+`tests/test_model_judge.py`, and `tests/test_batch_optimizer.py` assert that
+provider response text is absent from public messages, causes, and contexts,
+while the full suite must remain green before merge.
 
 ## References
 

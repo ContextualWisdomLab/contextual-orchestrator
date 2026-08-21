@@ -465,6 +465,7 @@ def test_model_judge_parser_hides_raw_provider_response() -> None:
 
     assert raw_provider_response not in str(error.value)
     assert error.value.__cause__ is None
+    assert error.value.__context__ is None
 
 
 def test_missing_fast_mlsirm_does_not_use_a_direct_judge_fallback() -> None:

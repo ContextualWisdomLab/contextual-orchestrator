@@ -139,6 +139,7 @@ def test_batch_route_hides_malformed_provider_identifier() -> None:
 
     assert "provider-secret" not in str(error.value)
     assert error.value.__cause__ is None
+    assert error.value.__context__ is None
 
 
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
