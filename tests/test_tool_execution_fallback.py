@@ -305,6 +305,7 @@ def test_non_idempotent_ambiguous_failure_stops_without_backup_or_secret_leak() 
     assert raised.value.decision.kind is ToolFailureKind.AMBIGUOUS_OUTCOME
     assert raised.value.agent_id == "primary_worker"
     assert "super-secret-value" not in str(raised.value)
+    assert raised.value.__cause__ is None
     assert client.calls == ["primary_worker"]
     event_detail = orchestrator.list_recent_audit_events()[0]["event_detail"]
     assert event_detail["failure_kind"] == "ambiguous_outcome"

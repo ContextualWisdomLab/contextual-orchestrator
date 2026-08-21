@@ -2603,7 +2603,7 @@ class TaskOrchestrator:
                     if decision.circuit_failure:
                         self._record_failure(agent.id)
                     if action is ToolFallbackAction.FAIL_CLOSED:
-                        raise ToolFallbackStoppedError(agent.id, decision) from exc
+                        raise ToolFallbackStoppedError(agent.id, decision) from None
                     break
                 self._record_success(agent.id)
                 usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None

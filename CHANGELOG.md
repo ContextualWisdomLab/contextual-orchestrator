@@ -20,4 +20,4 @@ All notable changes to this project are documented in this file.
 ### Security
 
 - Ambiguous non-idempotent outcomes, invalid arguments, permission denial, and policy denial fail closed.
-- Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials.
+- Fallback errors and audit events do not copy provider exception text, tool arguments, outputs, or credentials; fail-closed exceptions also sever the original cause chain so later traceback logging cannot recover them.
