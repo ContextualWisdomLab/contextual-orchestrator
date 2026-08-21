@@ -2310,7 +2310,25 @@ class TaskOrchestrator:
             disabled_model = requested_model if requested_model is not None else final_agent.model
             raise RuntimeError(f"requested model {disabled_model!r} is disabled")
 
-        workflow = self.conduct(messages, preserve_messages=True, judge=False)
+        workflow = self.conduct(messages, preserve_messages=True, judge=True)
+        in_flight_output_tokens = sum(
+            (
+                step.get("usage", {}).get("completion_tokens")
+                if isinstance(step.get("usage"), dict)
+                and type(step["usage"].get("completion_tokens")) is int
+                and step["usage"]["completion_tokens"] >= 0
+                else estimate_tokens(step.get("output", ""))
+            )
+            for step in workflow["trace"]
+        )
+        verification_usage = workflow.get("verification", {}).get("judge_usage", {})
+        if isinstance(verification_usage, dict):
+            judge_output_tokens = verification_usage.get("completion_tokens")
+            if type(judge_output_tokens) is int and judge_output_tokens >= 0:
+                in_flight_output_tokens += judge_output_tokens
+        self._raise_if_spend_budget_exceeded(
+            additional_output_tokens=in_flight_output_tokens
+        )
         evidence = "\n\n".join(
             f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
             for row in workflow["trace"]
@@ -2330,6 +2348,8 @@ class TaskOrchestrator:
                 for key, value in body.items()
                 if key not in self._ORCHESTRATION_ONLY_KEYS and key != "model"
             }
+            upstream.pop("max_tokens", None)
+            upstream.pop("max_completion_tokens", None)
             original_instructions = _responses_text(body.get("instructions")).strip()
             upstream["instructions"] = (
                 f"{original_instructions}\n\n{guidance}"
@@ -3692,11 +3712,21 @@ class TaskOrchestrator:
         """Current spend-budget state (limits, spent, remaining, exceeded)."""
         return self.spend_analytics()["budget"]
 
-    def _raise_if_spend_budget_exceeded(self) -> None:
+    def _raise_if_spend_budget_exceeded(self, *, additional_output_tokens: int = 0) -> None:
         """Stop a new workflow or provider call after an operator spend cap is reached."""
         if self.budget_max_output_tokens is None and self.budget_max_cost_usd is None:
             return
         budget = self.budget_status()
+        if additional_output_tokens > 0 and budget.get("max_output_tokens") is not None:
+            budget = dict(budget)
+            budget["spent_output_tokens"] = budget.get("spent_output_tokens", 0) + additional_output_tokens
+            budget["remaining_output_tokens"] = max(
+                0,
+                budget["max_output_tokens"] - budget["spent_output_tokens"],
+            )
+            budget["exceeded"] = budget["exceeded"] or (
+                budget["spent_output_tokens"] >= budget["max_output_tokens"]
+            )
         if budget["exceeded"]:
             raise BudgetExceededError("spend budget exceeded", detail=budget)
 
