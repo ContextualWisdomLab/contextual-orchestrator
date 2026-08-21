@@ -295,22 +295,23 @@ def test_fast_mlsirm_adapter_keeps_structured_completion_to_one_provider_call() 
             "choices": [{"message": {"content": '{"meets_threshold":true,"rationale":"ok"}'}}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
         },
-    ) as proxy:
+    ) as proxy_send:
         completion = adapter.complete_structured(
             [{"role": "user", "content": "judge"}],
             mode="conduct",
             response_format=response_format,
         )
 
-    proxy.assert_called_once_with(
-        orchestrator.candidates[0],
+    proxy_send.assert_called_once_with(
+        orchestrator._agent("general_agent"),
         "chat/completions",
         {
             "model": "model-x",
             "messages": [{"role": "user", "content": "judge"}],
             "max_tokens": orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        }
+            "stream": False,
+        },
     )
     assert completion["answer"] == '{"meets_threshold":true,"rationale":"ok"}'
     assert completion["mode"] == "conduct"

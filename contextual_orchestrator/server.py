@@ -5655,14 +5655,10 @@ def build_server(
                     if "stream_options" in body:
                         _validate_responses_stream_options(body)
                     # Sampling knobs: type/range fail-closed before provider passthrough.
-                    if "temperature" in body:
-                        _validate_completions_temperature(body)
-                    if "top_p" in body:
-                        _validate_completions_top_p(body)
-                    if "presence_penalty" in body:
-                        _validate_completions_presence_penalty(body)
-                    if "frequency_penalty" in body:
-                        _validate_completions_frequency_penalty(body)
+                    _validate_completions_temperature(body)
+                    _validate_completions_top_p(body)
+                    _validate_completions_presence_penalty(body)
+                    _validate_completions_frequency_penalty(body)
                     if "n" in body:
                         _validate_responses_n(body)
                     if "seed" in body:
@@ -5673,12 +5669,9 @@ def build_server(
                         _validate_responses_logit_bias(body)
                     if "logprobs" in body or "top_logprobs" in body:
                         _validate_responses_logprobs(body)
-                    if "max_tokens" in body:
-                        _validate_completions_max_tokens(body)
-                    if "max_completion_tokens" in body:
-                        _validate_chat_max_completion_tokens(body)
-                    if "max_output_tokens" in body:
-                        _validate_responses_max_output_tokens(body)
+                    responses_max_tokens = _validate_completions_max_tokens(body)
+                    responses_max_completion_tokens = _validate_chat_max_completion_tokens(body)
+                    responses_max_output_tokens = _validate_responses_max_output_tokens(body)
                     if "max_tool_calls" in body:
                         _validate_responses_max_tool_calls(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
@@ -5856,8 +5849,15 @@ def build_server(
                     chat_payload = _responses_to_chat_payload(body)
                     model_client = orchestrator.client
                     previous_max_tokens = model_client.max_output_tokens
-                    if isinstance(body.get("max_output_tokens"), int):
-                        model_client.max_output_tokens = body["max_output_tokens"]
+                    response_max_tokens = (
+                        responses_max_tokens
+                        if responses_max_tokens is not None
+                        else responses_max_completion_tokens
+                        if responses_max_completion_tokens is not None
+                        else responses_max_output_tokens
+                    )
+                    if response_max_tokens is not None:
+                        model_client.max_output_tokens = response_max_tokens
                     started_at = time.perf_counter()
                     try:
                         result = self._run(lambda: coordinator.complete(

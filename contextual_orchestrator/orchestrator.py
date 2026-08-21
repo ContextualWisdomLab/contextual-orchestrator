@@ -191,11 +191,13 @@ class _FastMLSIJudgeAdapter:
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
+        self.orchestrator._raise_if_spend_budget_exceeded()
         payload = {
             "model": agent.model,
             "messages": messages,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
+            "stream": False,
         }
         if self.orchestrator.client.temperature is not None:
             payload["temperature"] = self.orchestrator.client.temperature
@@ -1393,7 +1395,7 @@ class ModelClient:
                     agent, "chat/completions", chat_payload, destination
                 )
             return _chat_to_responses_payload(chat_response, payload)
-        if _is_local_provider_url(agent.base_url):
+        if _is_local_provider_url(agent.base_url) and endpoint.strip("/") == "chat/completions":
             local_payload = dict(payload)
             local_payload.setdefault("max_tokens", self.max_output_tokens)
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
@@ -2128,7 +2130,44 @@ class TaskOrchestrator:
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
-        return self.client.proxy_send(agent, endpoint, upstream)
+        passthrough_started = time.perf_counter()
+        raw = self.client.proxy_send(agent, endpoint, upstream)
+        passthrough_output = ""
+        try:
+            passthrough_output = ModelClient._response_content(agent, raw)
+        except RuntimeError:
+            # Tool-call-only responses are billable even without assistant text.
+            pass
+        passthrough_step = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "subtask": "Provider passthrough",
+            "access": [],
+            "latency_ms": round((time.perf_counter() - passthrough_started) * 1000, 2),
+            "output": passthrough_output,
+        }
+        usage = raw.get("usage")
+        if isinstance(usage, dict):
+            passthrough_step["usage"] = usage
+        self._persist_workflow_run(
+            {
+                "workflow_run_id": f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": text,
+                "answer": passthrough_output,
+                "trace": [passthrough_step],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {
+                    "accepted": True,
+                    "reason": "single provider passthrough",
+                    "verifier_output": "",
+                },
+            }
+        )
+        return raw
 
     def _orchestrated_provider_completion(
         self, body: dict[str, Any], *, endpoint: str
@@ -2162,22 +2201,34 @@ class TaskOrchestrator:
             f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
             for row in workflow["trace"]
         )
-        # Preserve the caller's message order for tool and structured-output
-        # contracts.  Synthesis remains multi-agent; its private guidance is
-        # appended rather than prepended over an assistant tool call.
-        synthesis_messages: list[ChatMessage] = [
-            *messages,
-            {
-                "role": "system",
-                "content": (
-                    "You are the final synthesizer in a multi-agent workflow. "
-                    "Use the original request and verified workflow evidence. "
-                    "Return only the requested provider response; do not mention "
-                    "the workflow or invent evidence."
-                ),
-            },
-            {"role": "user", "content": f"Verified workflow evidence:\n{evidence}"},
-        ]
+        guidance = (
+            "You are the final synthesizer in a multi-agent workflow. "
+            "Use the original request and verified workflow evidence. "
+            "Return only the requested provider response; do not mention "
+            "the workflow or invent evidence.\n\n"
+            f"Verified workflow evidence:\n{evidence}"
+        )
+        # Keep the caller's complete message sequence and first-message position
+        # unchanged. Add guidance to an existing system/user turn so no system
+        # or evidence message is inserted after an assistant tool call.
+        synthesis_messages = copy.deepcopy(messages)
+        guidance_index = next(
+            (index for index, message in enumerate(synthesis_messages) if message.get("role") == "user"),
+            0 if synthesis_messages and synthesis_messages[0].get("role") == "system" else None,
+        )
+        if guidance_index is not None:
+            original_content = synthesis_messages[guidance_index].get("content")
+            if isinstance(original_content, str):
+                synthesis_messages[guidance_index]["content"] = f"{original_content}\n\n{guidance}"
+            elif isinstance(original_content, list):
+                synthesis_messages[guidance_index]["content"] = [
+                    *original_content,
+                    {"type": "text", "text": guidance},
+                ]
+            else:
+                synthesis_messages[guidance_index]["content"] = guidance
+        else:
+            synthesis_messages.insert(0, {"role": "system", "content": guidance})
         upstream = {
             key: value
             for key, value in chat_body.items()
@@ -2195,9 +2246,43 @@ class TaskOrchestrator:
             if response_format is not None:
                 upstream["response_format"] = response_format
         self._raise_if_spend_budget_exceeded()
+        synthesis_started = time.perf_counter()
         raw = self.client.proxy_send(final_agent, "chat/completions", upstream)
+        synthesis_output = ""
+        try:
+            synthesis_output = ModelClient._response_content(final_agent, raw)
+        except RuntimeError:
+            # Tool-call-only provider responses are valid structured output but
+            # have no assistant text to use as the workflow answer.
+            pass
+        synthesis_step = {
+            "id": len(workflow["trace"]),
+            "role": "synthesizer",
+            "agent_id": final_agent.id,
+            "subtask": "Provider-facing structured synthesis",
+            "access": [step["id"] for step in workflow["trace"]],
+            "latency_ms": round((time.perf_counter() - synthesis_started) * 1000, 2),
+            "output": synthesis_output,
+        }
+        usage = raw.get("usage")
+        if isinstance(usage, dict):
+            synthesis_step["usage"] = usage
+        trace = [*workflow["trace"], synthesis_step]
+        workflow_run_id = f"run_{uuid.uuid4().hex}"
+        record = {
+            "workflow_run_id": workflow_run_id,
+            "created_at": int(time.time()),
+            "mode": "conduct",
+            "policy_mode": "conduct",
+            "prompt_text": task,
+            "answer": synthesis_output,
+            "trace": trace,
+            "policy_snapshot": self.policy.as_dict(),
+            "verification": workflow.get("verification"),
+        }
+        self._persist_workflow_run(record)
         orchestration = {
-            "workflow_run_id": f"run_{uuid.uuid4().hex}",
+            "workflow_run_id": workflow_run_id,
             "mode": "conduct",
             "agent_count": len(workflow["trace"]),
             "plan_source": workflow.get("plan_source"),
@@ -2347,6 +2432,11 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
         }
+        self._persist_workflow_run(record)
+        return record
+
+    def _persist_workflow_run(self, record: dict[str, Any]) -> None:
+        """Persist one completed workflow and its compact audit/analytics evidence."""
         self._workflow_runs[record["workflow_run_id"]] = record
         self._run_order.appendleft(record["workflow_run_id"])
         if self._store is not None:
@@ -2381,7 +2471,6 @@ class TaskOrchestrator:
                     "duration_ms": step.get("latency_ms"),
                 },
             )
-        return record
 
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
@@ -2826,13 +2915,20 @@ class TaskOrchestrator:
                 },
             ]
             if preserve_messages:
-                step_messages.extend(messages)
-            step_messages.append(
-                {
-                    "role": "user",
-                    "content": user_content,
-                },
-            )
+                step_messages[0]["content"] += (
+                    f"\n\nOriginal task:\n{task}\n\n"
+                    f"Accessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
+                )
+                # Preserve the caller's tool-call history byte-for-byte after
+                # the workflow instruction; do not insert a user turn into it.
+                step_messages.extend(copy.deepcopy(messages))
+            else:
+                step_messages.append(
+                    {
+                        "role": "user",
+                        "content": user_content,
+                    }
+                )
             if output_contract is not None and step.id == steps[-1].id:
                 step_messages[0]["content"] += (
                     "\nThe final answer must contain only one JSON value. "
