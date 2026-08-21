@@ -9,8 +9,9 @@ decision-makers:
 
 ## Decision
 
-Treat workflow runs, access reports, and evaluation runs as owner-scoped
-objects. At the authenticated HTTP boundary, derive a non-secret SHA-256 key
+Treat workflow runs, access reports, evaluation runs, and workflow-derived
+spend analytics as owner-scoped objects. At the authenticated HTTP boundary,
+derive a non-secret SHA-256 key
 from the authenticated deployment principal, attach it to newly persisted
 records, and require the same key for list and detail reads. Static split
 admin/inference credentials are normalized to one deployment principal so the
@@ -28,6 +29,8 @@ policy.
 
 - A bearer cannot use a guessed workflow identifier to read another owner's
   trace or access report.
+- The authenticated spend endpoint aggregates only runs owned by its bearer;
+  the local library API may still omit an owner to request process-wide totals.
 - The stored digest is an authorization lookup key, not a user identity and is
   never rendered in public payloads.
 - Shared static credentials represent one deployment principal; multi-principal
@@ -41,7 +44,8 @@ policy.
 
 Owner mismatch, list filtering, evaluation ownership, digest stability, and
 response redaction are covered by
-`tests/test_workflow_run_object_authorization.py`.
+`tests/test_workflow_run_object_authorization.py`. External-bearer spend
+isolation is covered by `tests/test_spend_analytics.py`.
 
 ## References
 

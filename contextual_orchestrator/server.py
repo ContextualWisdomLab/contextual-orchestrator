@@ -4563,7 +4563,7 @@ def build_server(
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
                     return
                 if path == "/api/v1/spend_analytics/latest":
-                    self._send(orchestrator.spend_analytics())
+                    self._send(orchestrator.spend_analytics(owner_id=self._principal_id))
                     return
                 if path == "/api/v1/sales_readiness/latest":
                     self._send(orchestrator.sales_readiness_report(
