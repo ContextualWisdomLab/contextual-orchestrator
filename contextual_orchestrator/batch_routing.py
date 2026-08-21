@@ -26,6 +26,7 @@ import json
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
@@ -253,8 +254,13 @@ class LocalBatchBackend:
         if self.max_concurrency == 1 or len(requests) <= 1:
             items = [run(request) for request in requests]
         else:
+            def run_with_context(item: tuple[Any, BatchRequest]) -> BatchResultItem:
+                context, request = item
+                return context.run(run, request)
+
+            contexts_and_requests = [(copy_context(), request) for request in requests]
             with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(requests))) as pool:
-                items = list(pool.map(run, requests))
+                items = list(pool.map(run_with_context, contexts_and_requests))
         self._results[job_id] = items
         return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
 
