@@ -141,6 +141,21 @@ def test_http_responses_tool_loop_requires_input() -> None:
         thread.join(timeout=5)
 
 
+def test_http_responses_tool_loop_rejects_scalar_input() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {"model": "mock-planner", "input": 7, "tools": _valid_tools()},
+            tool_loop=True,
+        )
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_input"
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_responses_accepts_empty_tools_array_as_noop() -> None:
     """SDKs often send tools: [] when no tools are configured — honest no-op."""
     server, thread, port = _server()
@@ -235,6 +250,9 @@ def test_http_responses_rejects_named_tool_choice_not_in_tools() -> None:
 
 if __name__ == "__main__":
     test_http_responses_rejects_tools_without_explicit_loop_header()
+    test_http_responses_preserves_tools_with_explicit_loop_header()
+    test_http_responses_tool_loop_rejects_stream_true()
+    test_http_responses_tool_loop_requires_input()
     test_http_responses_accepts_empty_tools_array_as_noop()
     test_http_responses_rejects_tool_without_function_type()
     test_http_responses_accepts_tool_choice_auto_without_tools_as_omit()

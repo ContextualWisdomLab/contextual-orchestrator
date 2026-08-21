@@ -8,9 +8,11 @@ from io import StringIO
 from pathlib import Path
 from unittest.mock import patch
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator.__main__ import _resolve_auth_token, main
+from contextual_orchestrator.__main__ import _request_read_timeout, _resolve_auth_token, main
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     set_backend,
@@ -75,8 +77,8 @@ def test_key_only_split_tokens_select_split_mode() -> None:
             main()
         security = serve.call_args.kwargs["security"]
         assert security.auth_token == ""
-        assert security.admin_token == "admin-from-kv"
-        assert security.inference_token == "inference-from-kv"
+        assert security.admin_token == "admin-from-kv"  # noqa: S105
+        assert security.inference_token == "inference-from-kv"  # noqa: S105
     finally:
         set_backend(None)
 
@@ -98,6 +100,10 @@ def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
         (["--local-concurrency", "65"], "1..64"),
         (["--max-concurrent-runs", "0"], "positive integer"),
         (["--max-concurrent-runs", "65"], "1..64"),
+        (["--request-read-timeout-seconds", "0"], "0.1..120"),
+        (["--request-read-timeout-seconds", "121"], "0.1..120"),
+        (["--request-read-timeout-seconds", "inf"], "0.1..120"),
+        (["--request-read-timeout-seconds", "not-a-number"], "0.1..120"),
     )
 
     for options, expected_message in invalid_options:
@@ -117,6 +123,26 @@ def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
                 assert expected_message in stderr.getvalue()
             else:  # pragma: no cover
                 raise AssertionError("invalid local provider option was accepted")
+
+    assert _request_read_timeout("0.1") == 0.1
+
+
+def test_serve_rejects_empty_resolved_auth_configuration() -> None:
+    stderr = StringIO()
+    with (
+        patch.object(sys, "argv", ["contextual-orchestrator", "--serve"]),
+        patch.object(sys, "stderr", stderr),
+        patch("contextual_orchestrator.__main__._resolve_auth_token", return_value=""),
+        patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
+        patch("contextual_orchestrator.__main__.ModelClient"),
+        patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.serve") as serve,
+    ):
+        with pytest.raises(SystemExit) as captured:
+            main()
+    assert captured.value.code == 2
+    assert "requires a KV auth credential" in stderr.getvalue()
+    serve.assert_not_called()
 
 
 def test_server_concurrency_is_explicit_and_bounded() -> None:

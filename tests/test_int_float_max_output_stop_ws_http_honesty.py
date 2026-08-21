@@ -233,7 +233,7 @@ def test_http_responses_rejects_unapplied_whole_float_seed() -> None:
                 "seed": 7.0,
             },
         )
-        assert status == 400, body
+        assert status == 422, body
         assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()

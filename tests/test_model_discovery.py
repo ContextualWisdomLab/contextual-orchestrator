@@ -206,6 +206,25 @@ def test_model_discovery_rejects_empty_userinfo_and_fragment(url: str) -> None:
         )
 
 
+def test_model_discovery_rejects_invalid_port_and_preserves_nondefault_port() -> None:
+    with pytest.raises(ValueError, match="invalid port"):
+        _fetch_json(
+            "https://api.openai.com:not-a-port/v1/models",
+            auth_scheme="Bearer",
+            timeout=1.0,
+            credential_name="",
+        )
+
+    with patch.object(ModelClient, "fetch_json", return_value={}) as fetch_json:
+        _fetch_json(
+            "https://api.openai.com:8443/v1/models",
+            auth_scheme="Bearer",
+            timeout=1.0,
+            credential_name="",
+        )
+    assert fetch_json.call_args.args[0].base_url == "https://api.openai.com:8443"
+
+
 def test_fetch_json_rejects_empty_userinfo_and_fragment_before_transport() -> None:
     register_credential("OPENAI_API_KEY", "openai-secret")
     agent = ModelAgent(

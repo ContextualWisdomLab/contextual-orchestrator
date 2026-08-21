@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
 
-_TEST_AUTH_TOKEN = "embeddings_encoding_format_http_honesty_token"
+_TEST_AUTH_TOKEN = "embeddings_encoding_format_http_honesty_token"  # noqa: S105
 
 
 def build() -> TaskOrchestrator:

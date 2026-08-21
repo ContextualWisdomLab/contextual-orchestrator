@@ -84,7 +84,10 @@ def _handler(headers: Message, body: bytes | object, *, timeout: float = 1.0):
     server = build_server(
         TaskOrchestrator([ModelAgent("general_agent", "mock-generalist")]),
         port=0,
-        security=SecurityConfig(auth_token="test_token", request_read_timeout_seconds=timeout),
+        security=SecurityConfig(
+            auth_token="test_token",  # noqa: S106
+            request_read_timeout_seconds=timeout,
+        ),
     )
     handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
     handler.headers = headers
@@ -108,6 +111,18 @@ def test_missing_length_and_transfer_encoding_fail_closed() -> None:
     assert missing.value.status == 411
     with pytest.raises(RequestError, match="transfer-encoded"):
         _parse_request_framing(_headers("1", transfer_encoding="chunked"), 64)
+
+
+def test_request_reader_rejects_non_json_media_type() -> None:
+    headers = _headers("2")
+    headers.replace_header("content-type", "text/plain")
+    server, handler = _handler(headers, b"{}")
+    try:
+        with pytest.raises(RequestError) as captured:
+            handler._read_json()
+        assert captured.value.status == 415
+    finally:
+        server.server_close()
 
 
 def test_header_value_fallbacks_and_integer_overflow_are_safe() -> None:
@@ -202,3 +217,7 @@ def test_security_readiness_exposes_bounded_request_controls() -> None:
     profile = SecurityConfig(max_body_bytes=128, request_read_timeout_seconds=2.0).readiness_profile()
     assert profile["max_body_bytes"] == 128
     assert profile["request_read_timeout_seconds"] == 2.0
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))

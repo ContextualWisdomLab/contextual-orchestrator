@@ -175,8 +175,20 @@ def test_http_tools_preserves_valid_tool_request_with_explicit_loop_header() -> 
         )
         assert status == 200, body
         assert body["echo"]["temperature"] == 0.7
+        assert body["echo"]["top_p"] == 0.95
         assert body["echo"]["max_tokens"] == 64
         assert body["echo"]["tools"] == _TOOLS
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
+def test_http_tool_loop_rejects_streaming() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(port, _base(stream=True), tool_loop=True)
+        assert status == 400, body
+        assert body["error"]["code"] == "invalid_stream"
     finally:
         server.shutdown()
         thread.join(timeout=5)

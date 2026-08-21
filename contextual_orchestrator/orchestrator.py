@@ -1203,8 +1203,6 @@ class ModelClient:
             if ordered[index] is not None:
                 raise RuntimeError("provider embeddings response contained a duplicate index")
             ordered[index] = [float(value) for value in vector]
-        if any(vector is None for vector in ordered):
-            raise RuntimeError("provider embeddings response omitted a vector")
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
@@ -1472,6 +1470,7 @@ class ModelClient:
                 "tools",
                 "tool_choice",
                 "temperature",
+                "top_p",
                 "max_tokens",
                 "instructions",
                 "metadata",

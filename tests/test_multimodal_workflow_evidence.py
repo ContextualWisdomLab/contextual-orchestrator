@@ -157,6 +157,6 @@ def test_responses_image_detail_is_normalized_or_rejected() -> None:
         "type": "image_url",
         "image_url": {"url": "https://example.invalid/synthetic.png"},
     }
-    request["input"][0]["content"][0]["detail"] = "pixel-perfect"
+    request["input"][0]["content"][0]["image_url"]["detail"] = "pixel-perfect"
     with pytest.raises(ValueError, match="detail"):
         _responses_to_chat_payload(request)
