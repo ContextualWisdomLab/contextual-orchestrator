@@ -5852,6 +5852,8 @@ def build_server(
                         raise RuntimeError("Responses completion omitted provider response")
                     orchestrated = dict(provider_response)
                     orchestrated["model"] = model_name
+                    if "usage" not in orchestrated and isinstance(result.get("usage"), dict):
+                        orchestrated["usage"] = result["usage"]
                     orchestrator.record_analytics_event(
                         "responses_orchestrated",
                         {
