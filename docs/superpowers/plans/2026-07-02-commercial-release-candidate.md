@@ -11,7 +11,7 @@
 ## Global Constraints
 
 - Figma Code Connect is not used.
-- Review process is not a blocker; only concrete security, API contract, document, or product defects block release.
+- Product evidence remains inspectable, but release authorization is blocked until exact-head protected governance evidence passes.
 - Do not create a separate library, Git submodule, or extracted package now.
 - KRW 2,000,000,000 is a buyer due-diligence target, not a valuation guarantee or purchase commitment.
 - Keep Korean and English admin copy in parity.
@@ -38,11 +38,13 @@ report = orchestrator.commercial_release_candidate_report(
     locale_bundles=ADMIN_TRANSLATIONS,
     security_profile={"auth_mode": "split_token", "allow_public_bind": False},
 )
-assert report["release_status"] == "commercial_release_ready_with_warnings"
+assert report["release_status"] == "commercial_release_blocked"
+assert report["product_evidence_status"] == "commercial_release_ready_with_warnings"
 assert report["measurement_status"] == "local_commercial_release_candidate"
-assert report["release_summary"]["blocked_count"] == 0
+assert report["release_summary"]["blocked_count"] == 1
 assert report["release_summary"]["warning_count"] == 2
-assert report["release_summary"]["review_process_is_blocker"] is False
+assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
+assert "release_authority_collector" in {item["item_name"] for item in report["release_artifacts"]}
 assert report["library_split_decision"]["decision"] == "keep_single_product"
 ```
 
@@ -58,7 +60,7 @@ Expected: failure because `commercial_release_candidate_report` is not defined.
 
 - [ ] **Step 3: Implement the report**
 
-Add `commercial_release_candidate_report(...)` to `contextual_orchestrator/orchestrator.py`. Reuse `_buyer_evidence_item(...)` and `_buyer_manifest_summary(...)`. Return `release_status`, `measurement_status`, `release_summary`, `release_artifacts`, `external_release_gaps`, `concrete_blockers`, `review_process_policy`, `related_runtime_reports`, `library_split_decision`, `plugin_traceability`, and `release_links`.
+Add `commercial_release_candidate_report(...)` to `contextual_orchestrator/orchestrator.py`. Reuse `_buyer_evidence_item(...)` and `_buyer_manifest_summary(...)`. Return `release_status`, `product_evidence_status`, `release_authorization`, `measurement_status`, `release_summary`, `release_artifacts` (including the `release_authority_collector` record), `external_release_gaps`, `concrete_blockers`, `review_process_policy`, `related_runtime_reports`, `library_split_decision`, `plugin_traceability`, and `release_links`.
 
 - [ ] **Step 4: Run the focused report test**
 
@@ -120,7 +122,7 @@ blocked/warning counts in the readiness summary.
 
 Create `docs/commercial_release_candidate.md` with the stable phrases:
 `Commercial Release Candidate`, `KRW 2B Commercial Release Candidate`,
-`Figma Code Connect is not used`, `Review process is not a blocker`,
+`Figma Code Connect is not used`, `Product evidence and release authorization are separate`,
 `Do not create a separate library, Git submodule, or extracted package now`,
 `Release Inputs`, `Runtime Shape`, `Release Status Rules`,
 `/api/v1/commercial_release_candidates/latest`, and

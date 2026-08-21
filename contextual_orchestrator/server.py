@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field
+from collections.abc import Mapping
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
+import hashlib
 import json
 import secrets
 import struct
@@ -203,6 +205,21 @@ class SecurityConfig:
             valid = bool(expected) and secrets.compare_digest(token, expected)
         if not valid:
             raise RequestError(401, "unauthorized", "bearer token is invalid for this scope")
+
+    def principal_id(self, headers: Any) -> str:
+        """Return a stable non-secret owner key for the authenticated deployment principal."""
+        raw = headers.get("authorization", "")
+        token = raw.split(" ", 1)[1].strip() if raw.lower().startswith("bearer ") else ""
+        if not token:
+            raise RequestError(401, "unauthorized", "bearer token is required")
+        if self.bearer_verifier is None:
+            if self.admin_token and self.inference_token:
+                principal_material = f"split:{self.admin_token}\x00{self.inference_token}"
+            else:
+                principal_material = f"single:{self.auth_token}"
+        else:
+            principal_material = f"bearer:{token}"
+        return hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
 
     def check_rate_limit(self, key: str) -> None:
         """Apply a simple per-client fixed-window request budget."""
@@ -4315,9 +4332,23 @@ def _strip_trace(payload: Any) -> Any:
 
 def _response_payload(payload: dict[str, Any], include_trace: bool) -> dict[str, Any]:
     safe_payload = redact_value(payload)
+    safe_payload = _strip_internal_fields(safe_payload)
     if include_trace:
         return safe_payload
     return _strip_trace(safe_payload)
+
+
+def _strip_internal_fields(value: Any) -> Any:
+    """Remove server-only ownership metadata from every public response shape."""
+    if isinstance(value, list):
+        return [_strip_internal_fields(item) for item in value]
+    if isinstance(value, dict):
+        return {
+            key: _strip_internal_fields(item)
+            for key, item in value.items()
+            if key != "owner_id"
+        }
+    return value
 
 
 def responses_sse_body(response: dict[str, Any]) -> str:
@@ -4402,6 +4433,7 @@ def build_server(
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
     coordinator: CostRoutingCoordinator | None = None,
+    release_authority: Mapping[str, Any] | None = None,
 ) -> ThreadingHTTPServer:
     """Build, but do not start, the orchestration HTTP server.
 
@@ -4419,7 +4451,10 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        """Serve authenticated API routes and unauthenticated health metadata."""
+
         def do_GET(self) -> None:  # noqa: N802
+            """Dispatch GET requests through the route authorization boundary."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -4502,7 +4537,7 @@ def build_server(
                     self._send_text(ADMIN_HTML, "text/html; charset=utf-8")
                     return
                 if path == "/admin/state":
-                    state = orchestrator.admin_state()
+                    state = orchestrator.admin_state(owner_id=self._principal_id)
                     state["document_viewer"] = (
                         {"provider": "clearfolio", "url": clearfolio_url} if clearfolio_url else None
                     )
@@ -4531,7 +4566,7 @@ def build_server(
                     self._send(orchestrator.analytics_snapshot(locale_bundles=ADMIN_TRANSLATIONS))
                     return
                 if path == "/api/v1/spend_analytics/latest":
-                    self._send(orchestrator.spend_analytics())
+                    self._send(orchestrator.spend_analytics(owner_id=self._principal_id))
                     return
                 if path == "/api/v1/sales_readiness/latest":
                     self._send(orchestrator.sales_readiness_report(
@@ -4579,24 +4614,28 @@ def build_server(
                     self._send(orchestrator.commercial_release_candidate_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_gap_registers/latest":
                     self._send(orchestrator.commercial_gap_register_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_procurement_readiness/latest":
                     self._send(orchestrator.commercial_procurement_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_contract_readiness/latest":
                     self._send(orchestrator.commercial_contract_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_onboarding_readiness/latest":
@@ -4686,8 +4725,12 @@ def build_server(
                 if path == "/api/v1/workflow_runs":
                     page_number, page_size = self._parse_paging(query, default_size=20, max_size=200)
                     self._send(_response_payload({
-                        "items": orchestrator.list_recent_runs(page_number=page_number, page_size=page_size),
-                        "total_count": len(getattr(orchestrator, "_workflow_runs", {})),
+                        "items": orchestrator.list_recent_runs(
+                            page_number=page_number,
+                            page_size=page_size,
+                            owner_id=self._principal_id,
+                        ),
+                        "total_count": orchestrator.count_workflow_runs(owner_id=self._principal_id),
                         "page_number": page_number,
                         "page_size": page_size,
                     }, security.expose_trace_by_default))
@@ -4695,7 +4738,7 @@ def build_server(
                 if path.startswith("/api/v1/workflow_runs/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
-                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id), security.expose_trace_by_default))
+                        self._send(_response_payload(orchestrator.get_workflow_run(workflow_run_id, owner_id=self._principal_id), security.expose_trace_by_default))
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -4703,6 +4746,9 @@ def build_server(
                 if path.startswith("/api/v1/access_reports/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
+                        access_report = orchestrator.get_access_report(
+                            workflow_run_id, owner_id=self._principal_id
+                        )
                         orchestrator.record_analytics_event(
                             "access_report_viewed",
                             {
@@ -4712,7 +4758,11 @@ def build_server(
                                 "status_code": 200,
                             },
                         )
-                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id), security.expose_trace_by_default))
+                        self._send(
+                            _response_payload(
+                                access_report, security.expose_trace_by_default
+                            )
+                        )
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")
@@ -4720,7 +4770,7 @@ def build_server(
                 if path.startswith("/api/v1/evaluation_runs/"):
                     evaluation_run_id = path.rsplit("/", 1)[-1]
                     runs = getattr(orchestrator, "_evaluation_runs", {})
-                    if evaluation_run_id in runs:
+                    if evaluation_run_id in runs and runs[evaluation_run_id].get("owner_id") == self._principal_id:
                         self._send(_response_payload(runs[evaluation_run_id], security.expose_trace_by_default))
                         return
                     self._send_error(404, "evaluation_run_not_found", f"evaluation_run {evaluation_run_id} not found")
@@ -4730,6 +4780,9 @@ def build_server(
                     if len(segments) == 6 and segments[:3] == ["api", "v1", "agent_pools"] and segments[4] == "worker_agents":
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
+                        if agent_pool_id != "default":
+                            self._send_error(404, "agent_not_found", f"agent {worker_agent_id} not found")
+                            return
                         try:
                             payload = orchestrator._agent_to_admin_payload(
                                 orchestrator._agent_in_pool(agent_pool_id, worker_agent_id)
@@ -4771,6 +4824,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            """Dispatch the supported authenticated PATCH management routes."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4794,6 +4848,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            """Dispatch the supported authenticated DELETE management routes."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -4814,6 +4869,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            """Dispatch the supported authenticated POST inference routes."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
@@ -4913,6 +4969,7 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            owner_id=self._principal_id,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5171,6 +5228,7 @@ def build_server(
                             hints=routing,
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
+                            owner_id=self._principal_id,
                         ))
                     finally:
                         model_client.max_output_tokens = previous_max_tokens
@@ -5575,7 +5633,13 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt must be a string")
                     mode = _validate_mode(body.get("mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
+                    result = self._run(
+                        lambda: orchestrator.run(
+                            [{"role": "user", "content": prompt}],
+                            mode=mode,
+                            owner_id=self._principal_id,
+                        )
+                    )
                     self._send(_response_payload(result, include_trace))
                     return
                 if path == "/api/v1/workflow_runs":
@@ -5585,7 +5649,13 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompt_text is required")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    result = self._run(lambda: orchestrator.run([{"role": "user", "content": prompt}], mode=mode))
+                    result = self._run(
+                        lambda: orchestrator.run(
+                            [{"role": "user", "content": prompt}],
+                            mode=mode,
+                            owner_id=self._principal_id,
+                        )
+                    )
                     self._send(_response_payload(result, include_trace), 201)
                     return
                 if path == "/api/v1/evaluation_runs":
@@ -5597,7 +5667,13 @@ def build_server(
                         raise RequestError(400, "invalid_request", "prompts must be a non-empty array")
                     mode = _validate_mode(body.get("run_mode", "auto"))
                     include_trace = bool(body.get("include_orchestration_trace", security.expose_trace_by_default))
-                    evaluation_run = self._run(lambda: orchestrator.run_evaluation([str(item) for item in prompts], mode=mode))
+                    evaluation_run = self._run(
+                        lambda: orchestrator.run_evaluation(
+                            [str(item) for item in prompts],
+                            mode=mode,
+                            owner_id=self._principal_id,
+                        )
+                    )
                     self._send(_response_payload(evaluation_run, include_trace), 201)
                     return
                 self._send_error(404, "route_not_found", "not found")
@@ -5615,6 +5691,7 @@ def build_server(
         def _authorize(self, scope: str) -> None:
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
+            self._principal_id = security.principal_id(self.headers)
 
         def _run(self, callback: Any) -> dict[str, Any]:
             security.acquire_run_slot()
@@ -5657,6 +5734,7 @@ def build_server(
             return _coerce_json(raw) if raw else {}
 
         def log_message(self, format: str, *args: object) -> None:
+            """Write compact request logs without exposing authorization headers."""
             return
 
         def _send_error(
@@ -5730,7 +5808,11 @@ def build_server(
                 self._begin_sse()
                 self._write_sse(frame({"role": "assistant"}))
                 try:
-                    for delta in orchestrator.stream_route(messages, workflow_run_id=run_id):
+                    for delta in orchestrator.stream_route(
+                        messages,
+                        workflow_run_id=run_id,
+                        owner_id=self._principal_id,
+                    ):
                         self._write_sse(frame({"content": delta}))
                     self._write_sse(frame({}, finish="stop"))
                 except Exception:  # noqa: BLE001 - headers already sent; surface as a terminal error frame
@@ -5754,8 +5836,16 @@ def serve(
     port: int = 8000,
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
+    release_authority: Mapping[str, Any] | None = None,
 ) -> None:
-    """Serve the admin console and resource-oriented orchestration API."""
-    server = build_server(orchestrator, host=host, port=port, security=security, clearfolio_url=clearfolio_url)
+    """Serve the API with an optional persisted release-authority snapshot."""
+    server = build_server(
+        orchestrator,
+        host=host,
+        port=port,
+        security=security,
+        clearfolio_url=clearfolio_url,
+        release_authority=release_authority,
+    )
     print(f"listening on http://{host}:{port}")
     server.serve_forever()

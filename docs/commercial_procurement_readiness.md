@@ -17,8 +17,11 @@ TRINITY, and Conductor into separate products.
 Figma Code Connect is not used for discovery, metadata, code generation, or
 artifact creation.
 
-Review process is not a blocker. Reviewer delay, review bot delay, queued model
-review, and pending checks without concrete failure remain non-blocking.
+The release-authority result is a separate blocker. Reviewer delay, review bot
+delay, queued model review, and pending checks remain non-blocking for product
+evidence, but a missing or blocked exact-head authority snapshot keeps
+release authorization blocked while the procurement packet remains inspectable.
+Review process is not a blocker for product evidence.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 the repository as one deployable product until a second product, independent
@@ -43,6 +46,8 @@ necessary.
 - `procurement_status`: `commercial_procurement_ready`,
   `commercial_procurement_ready_with_warnings`, or
   `commercial_procurement_blocked`;
+- `release_authorization`: the upstream fail-closed protected-head result,
+  separate from local procurement packet status;
 - `measurement_status`: `local_commercial_procurement_readiness`;
 - `procurement_summary`: ready, warning, blocked, production-gap,
   buyer-specific-gap, and review-process counts;
