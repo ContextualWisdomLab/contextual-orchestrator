@@ -10,9 +10,12 @@ from __future__ import annotations
 import json
 from pathlib import Path
 import sys
+import tempfile
 import threading
 import urllib.error
 import urllib.request
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -73,6 +76,54 @@ def test_cost_budget_blocks() -> None:
     except BudgetExceededError:
         raised = True
     assert raised
+
+
+def test_unpersisted_provider_usage_remains_in_the_budget_ledger() -> None:
+    agent = ModelAgent("general_agent", "priced-model", tags=("reasoning",))
+    orchestrator = TaskOrchestrator(
+        [agent],
+        price_per_million={"priced-model": 1_000_000.0},
+        budget_max_cost_usd=1.0,
+    )
+
+    orchestrator._record_in_flight_provider_usage(
+        agent,
+        {"completion_tokens": 1},
+        "",
+    )
+
+    with pytest.raises(BudgetExceededError, match="spend budget exceeded"):
+        orchestrator._raise_if_spend_budget_exceeded()
+
+    assert orchestrator.budget_status()["spent_cost_usd"] == 1.0
+
+
+def test_provider_budget_meter_survives_restart() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        state_db = str(Path(directory) / "state.db")
+        first = TaskOrchestrator(
+            [_agent()],
+            state_db=state_db,
+            budget_max_output_tokens=2,
+        )
+        first._record_in_flight_provider_usage(
+            _agent(),
+            {"completion_tokens": 2},
+            "",
+        )
+        first.close()
+
+        second = TaskOrchestrator(
+            [_agent()],
+            state_db=state_db,
+            budget_max_output_tokens=2,
+        )
+        try:
+            assert second.budget_status()["spent_output_tokens"] == 2
+            with pytest.raises(BudgetExceededError, match="spend budget exceeded"):
+                second._raise_if_spend_budget_exceeded()
+        finally:
+            second.close()
 
 
 def test_http_over_budget_returns_429() -> None:

@@ -81,6 +81,11 @@ because the provider response shape is richer.
   enforcement and spend totals remain cumulative without retaining every prompt,
   answer, or trace in process memory. A configured durable state store remains
   the long-term run-evidence boundary.
+- Every completed provider call adds reported output usage (or the bounded
+  estimate when unavailable) to a synchronized process budget ledger before the
+  next planner, worker, verifier, judge, or synthesizer call. Failed workflows
+  therefore retain consumed spend even when no completed run can be persisted;
+  the configured state store checkpoints this compact meter across restarts.
 
 ## Consequences
 

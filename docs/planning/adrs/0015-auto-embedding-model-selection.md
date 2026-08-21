@@ -61,6 +61,10 @@ guess, or consumer-side fallback.
    cannot override either server-resolved identity. The standalone in-process
    backend remains a local test/development path; a configured provider path
    uses its injected embeddings backend and the resolved model.
+6. The default batch backend resolves the current agent pool at submission time.
+   Runtime additions, disablement, and priority changes are therefore visible to
+   new jobs; every submitted job retains the backend instance that created it for
+   deterministic polling and retrieval.
 
 ## Contract and acceptance evidence
 

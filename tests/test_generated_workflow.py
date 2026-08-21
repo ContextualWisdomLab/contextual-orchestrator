@@ -18,7 +18,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 import contextual_orchestrator.orchestrator as orchestrator_module  # noqa: E402
-from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
+from contextual_orchestrator.orchestrator import BudgetExceededError, ModelClient  # noqa: E402
 
 
 PLAN = {
@@ -94,6 +94,19 @@ def test_invalid_plan_falls_back_to_template() -> None:
     result = orchestrator.conduct([{"role": "user", "content": "solve the hard problem"}])
     assert result["plan_source"] == "template_fallback"
     assert len(result["trace"]) == 4  # fixed thinker/worker/verifier/synthesizer template
+
+
+def test_generated_planner_budget_exhaustion_does_not_fallback() -> None:
+    orchestrator, _ = _orch(json.dumps(PLAN))
+    budget_error = BudgetExceededError("spend budget exceeded")
+    with patch.object(orchestrator, "_plan", side_effect=AssertionError("budget must not fall back")):
+        with patch.object(orchestrator, "_raise_if_spend_budget_exceeded", side_effect=budget_error):
+            try:
+                orchestrator.conduct([{"role": "user", "content": "solve the hard problem"}])
+            except BudgetExceededError as exc:
+                assert exc is budget_error
+            else:  # pragma: no cover
+                raise AssertionError("budget exhaustion must stop generated planning")
 
 
 def test_default_template_unchanged() -> None:

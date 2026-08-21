@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import http.client
 import io
 import json
 import socket
@@ -60,6 +61,29 @@ def test_non_negotiated_error_body_remains_available_to_the_caller() -> None:
 
     assert not _temperature_capability_rejection(error)
     assert error.read() == expected
+
+
+def test_incomplete_error_body_preserves_partial_capability_evidence() -> None:
+    """A truncated diagnostic must not replace the provider's original HTTP error."""
+    partial = b"Unsupported value: temperature does not support 0.2 with this model"
+
+    class _IncompleteBody:
+        def read(self) -> bytes:
+            raise http.client.IncompleteRead(partial)
+
+        def close(self) -> None:
+            pass
+
+    error = urllib.error.HTTPError(
+        "https://provider.example/v1/chat/completions",
+        400,
+        "provider error",
+        {},
+        _IncompleteBody(),
+    )
+
+    assert _temperature_capability_rejection(error)
+    assert error.read() == partial
 
 
 class _Response:

@@ -651,9 +651,17 @@ def test_local_responses_response_maps_reasoning_and_tool_calls() -> None:
 
 def test_local_provider_scheme_validation_rejects_remote_and_malformed_ports() -> None:
     assert _is_local_provider_url("local://127.0.0.1:8080/v1")
+    assert not _is_local_provider_url("local://host.docker.internal:8080/v1")
     assert not _is_local_provider_url("mlx://example.com:8080/v1")
     assert not _is_local_provider_url("mlx://127.0.0.1:8080/v1")
     assert not _is_local_provider_url("local://127.0.0.1:not-a-port/v1")
+    with pytest.raises(ValueError, match="explicit loopback endpoint"):
+        ModelAgent(
+            "docker_host_agent",
+            "local-model",
+            base_url="local://host.docker.internal:8080/v1",
+            local_credential_key="LOCAL_GATEWAY_TOKEN",
+        )
 
 
 @pytest.mark.parametrize(
