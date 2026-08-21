@@ -5831,7 +5831,7 @@ def build_server(
                             chat_payload["messages"],
                             mode="conduct",
                             attribution=_validate_attribution(body.get("attribution")),
-                            hints=body.get("routing"),
+                            hints=_validate_routing(body.get("routing")),
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             response_format=response_contract,

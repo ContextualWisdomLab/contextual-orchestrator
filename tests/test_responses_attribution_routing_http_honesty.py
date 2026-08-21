@@ -122,6 +122,24 @@ def test_http_responses_rejects_routing_latency_tolerant_true() -> None:
         thread.join(timeout=5)
 
 
+def test_http_responses_rejects_routing_unknown_key() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "routing junk",
+                "routing": {"channel": "sync", "region": "us-east"},
+            },
+        )
+        assert status == 400, body
+        assert "invalid_routing" in json.dumps(body)
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_responses_rejects_attribution_unknown_dimension() -> None:
     server, thread, port = _server()
     try:
