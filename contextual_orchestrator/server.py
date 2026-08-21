@@ -5079,17 +5079,44 @@ def build_server(
                         # response_format / tools are finalized after the conducted
                         # workflow so the provider response shape remains intact.
                         started_at = time.perf_counter()
-                        proxied = self._run(
-                            lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
+                        model_client = orchestrator.client
+                        previous_max_tokens = model_client.max_output_tokens
+                        previous_temperature = model_client.default_temperature
+                        previous_top_p = model_client.default_top_p
+                        previous_presence = model_client.default_presence_penalty
+                        previous_frequency = model_client.default_frequency_penalty
+                        if max_tokens is not None:
+                            model_client.max_output_tokens = max_tokens
+                        if temperature is not None:
+                            model_client.default_temperature = temperature
+                        if top_p is not None:
+                            model_client.default_top_p = top_p
+                        if presence_penalty is not None:
+                            model_client.default_presence_penalty = presence_penalty
+                        if frequency_penalty is not None:
+                            model_client.default_frequency_penalty = frequency_penalty
+                        try:
+                            proxied = self._run(
+                                lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
+                            )
+                        finally:
+                            model_client.max_output_tokens = previous_max_tokens
+                            model_client.default_temperature = previous_temperature
+                            model_client.default_top_p = previous_top_p
+                            model_client.default_presence_penalty = previous_presence
+                            model_client.default_frequency_penalty = previous_frequency
+                        event_detail = {
+                            "endpoint_path": "/v1/chat/completions",
+                            "actor_scope": "inference",
+                            "status_code": 200,
+                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                        }
+                        orchestrator.record_analytics_event(
+                            "chat_completion_orchestrated_provider", event_detail
                         )
                         orchestrator.record_analytics_event(
-                            "chat_completion_orchestrated_provider",
-                            {
-                                "endpoint_path": "/v1/chat/completions",
-                                "actor_scope": "inference",
-                                "status_code": 200,
-                                "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                            },
+                            "chat_completion_passthrough",
+                            {**event_detail, "event_alias_for": "chat_completion_orchestrated_provider"},
                         )
                         self._send(proxied)
                         return
@@ -5403,14 +5430,10 @@ def build_server(
                     if "stream_options" in body:
                         _validate_responses_stream_options(body)
                     # Sampling knobs: type/range fail-closed before provider passthrough.
-                    if "temperature" in body:
-                        _validate_completions_temperature(body)
-                    if "top_p" in body:
-                        _validate_completions_top_p(body)
-                    if "presence_penalty" in body:
-                        _validate_completions_presence_penalty(body)
-                    if "frequency_penalty" in body:
-                        _validate_completions_frequency_penalty(body)
+                    responses_temperature = _validate_completions_temperature(body)
+                    responses_top_p = _validate_completions_top_p(body)
+                    responses_presence_penalty = _validate_completions_presence_penalty(body)
+                    responses_frequency_penalty = _validate_completions_frequency_penalty(body)
                     if "n" in body:
                         _validate_responses_n(body)
                     if "seed" in body:
@@ -5421,12 +5444,9 @@ def build_server(
                         _validate_responses_logit_bias(body)
                     if "logprobs" in body or "top_logprobs" in body:
                         _validate_responses_logprobs(body)
-                    if "max_tokens" in body:
-                        _validate_completions_max_tokens(body)
-                    if "max_completion_tokens" in body:
-                        _validate_chat_max_completion_tokens(body)
-                    if "max_output_tokens" in body:
-                        _validate_responses_max_output_tokens(body)
+                    responses_max_tokens = _validate_completions_max_tokens(body)
+                    responses_max_completion_tokens = _validate_chat_max_completion_tokens(body)
+                    responses_max_output_tokens = _validate_responses_max_output_tokens(body)
                     if "max_tool_calls" in body:
                         _validate_responses_max_tool_calls(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
@@ -5548,17 +5568,51 @@ def build_server(
                                 "stream is not supported on /v1/responses",
                             )
                     started_at = time.perf_counter()
-                    proxied = self._run(
-                        lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                    model_client = orchestrator.client
+                    previous_max_tokens = model_client.max_output_tokens
+                    previous_temperature = model_client.default_temperature
+                    previous_top_p = model_client.default_top_p
+                    previous_presence = model_client.default_presence_penalty
+                    previous_frequency = model_client.default_frequency_penalty
+                    response_max_tokens = (
+                        responses_max_tokens
+                        if responses_max_tokens is not None
+                        else responses_max_completion_tokens
+                        if responses_max_completion_tokens is not None
+                        else responses_max_output_tokens
+                    )
+                    if response_max_tokens is not None:
+                        model_client.max_output_tokens = response_max_tokens
+                    if responses_temperature is not None:
+                        model_client.default_temperature = responses_temperature
+                    if responses_top_p is not None:
+                        model_client.default_top_p = responses_top_p
+                    if responses_presence_penalty is not None:
+                        model_client.default_presence_penalty = responses_presence_penalty
+                    if responses_frequency_penalty is not None:
+                        model_client.default_frequency_penalty = responses_frequency_penalty
+                    try:
+                        proxied = self._run(
+                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                        )
+                    finally:
+                        model_client.max_output_tokens = previous_max_tokens
+                        model_client.default_temperature = previous_temperature
+                        model_client.default_top_p = previous_top_p
+                        model_client.default_presence_penalty = previous_presence
+                        model_client.default_frequency_penalty = previous_frequency
+                    event_detail = {
+                        "endpoint_path": "/v1/responses",
+                        "actor_scope": "inference",
+                        "status_code": 200,
+                        "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
+                    }
+                    orchestrator.record_analytics_event(
+                        "responses_orchestrated_provider", event_detail
                     )
                     orchestrator.record_analytics_event(
-                        "responses_orchestrated_provider",
-                        {
-                            "endpoint_path": "/v1/responses",
-                            "actor_scope": "inference",
-                            "status_code": 200,
-                            "duration_ms": round((time.perf_counter() - started_at) * 1000, 2),
-                        },
+                        "responses_passthrough",
+                        {**event_detail, "event_alias_for": "responses_orchestrated_provider"},
                     )
                     if body.get("stream") is True:
                         self._send_sse(responses_sse_body(proxied))

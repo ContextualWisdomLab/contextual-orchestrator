@@ -15,7 +15,10 @@ import pytest
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.orchestrator import BudgetExceededError  # noqa: E402
+from contextual_orchestrator.orchestrator import (  # noqa: E402
+    BudgetExceededError,
+    _FastMLSIJudgeAdapter,
+)
 from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
 
 
@@ -137,6 +140,86 @@ def test_structured_provider_completion_rechecks_budget_before_final_provider_ca
     send.assert_not_called()
 
 
+def test_structured_provider_completion_persists_final_synthesis_run() -> None:
+    orch = _build()
+    result = orch.proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [{"role": "user", "content": "extract JSON"}],
+            "response_format": {"type": "json_object"},
+        }
+    )
+
+    run_id = result["orchestration"]["workflow_run_id"]
+    run = orch.get_workflow_run(run_id)
+    assert run["trace"][-1]["role"] == "synthesizer"
+    assert run["trace"][-1]["subtask"] == "Provider-facing structured synthesis"
+    assert len(run["trace"]) == 5
+    assert orch.spend_analytics()["totals"]["run_count"] == 1
+
+
+def test_fast_mlsirm_structured_judge_uses_one_direct_provider_call() -> None:
+    orch = _build()
+    adapter = _FastMLSIJudgeAdapter(orch, text="judge", judge="reviewer_agent")
+    provider_response = {
+        "choices": [{"message": {"role": "assistant", "content": '{"decision":"pass"}'}}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+    }
+    with patch.object(orch, "proxy_completion", side_effect=AssertionError("judge must not recurse")), patch.object(
+        orch.client, "proxy_send", return_value=provider_response
+    ) as send:
+        result = adapter.complete_structured(
+            [{"role": "user", "content": "judge this"}],
+            response_format={"type": "json_object"},
+        )
+
+    send.assert_called_once()
+    assert result["answer"] == '{"decision":"pass"}'
+    assert send.call_args.args[1] == "chat/completions"
+    assert send.call_args.args[2]["response_format"] == {"type": "json_object"}
+
+
+def test_structured_synthesis_preserves_tool_call_adjacency() -> None:
+    orch = _build()
+    intermediate_messages: list[list[dict]] = []
+    original_chat = orch.client.chat
+
+    def observe_chat(agent, messages, temperature=None, top_p=None):
+        del temperature, top_p
+        intermediate_messages.append(messages)
+        return original_chat(agent, messages)
+
+    with patch.object(orch.client, "chat", side_effect=observe_chat):
+        result = orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [
+                    {"role": "user", "content": "look up the value"},
+                    {
+                        "role": "assistant",
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call_1",
+                                "type": "function",
+                                "function": {"name": "lookup", "arguments": "{}"},
+                            }
+                        ],
+                    },
+                    {"role": "tool", "tool_call_id": "call_1", "content": "42"},
+                ],
+                "tools": [{"type": "function", "function": {"name": "lookup", "parameters": {}}}],
+            }
+        )
+
+    final_messages = result["echo"]["messages"]
+    assert final_messages[0]["role"] == "user"
+    assert final_messages[1]["role"] == "assistant"
+    assert final_messages[2]["role"] == "tool"
+    assert final_messages[1]["tool_calls"][0]["id"] == final_messages[2]["tool_call_id"]
+    assert intermediate_messages and all(messages[-1]["role"] == "tool" for messages in intermediate_messages)
+
+
 def test_proxy_completion_responses_endpoint_returns_response_object() -> None:
     orch = _build()
     result = orch.proxy_completion(
@@ -242,6 +325,43 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
     assert status == 200  # previously rejected 400 'unknown_fields'
     assert body["object"] == "chat.completion"
     assert body["echo"]["response_format"] == {"type": "json_object"}
+
+
+def test_http_structured_workflow_applies_sampling_to_intermediate_steps_and_keeps_alias() -> None:
+    orch = _build()
+    seen_sampling: list[tuple[float, int]] = []
+    original_chat = orch.client.chat
+
+    def observe_chat(agent, messages, temperature=None, top_p=None):
+        del top_p
+        seen_sampling.append((orch.client.default_temperature, orch.client.max_output_tokens))
+        return original_chat(agent, messages, temperature=temperature)
+
+    with patch.object(orch.client, "chat", side_effect=observe_chat):
+        token = "passthrough_sampling_token"
+        server = build_server(orch, port=0, security=SecurityConfig(auth_token=token))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        try:
+            status, body = _post(
+                f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "give me JSON"}],
+                    "response_format": {"type": "json_object"},
+                    "temperature": 0.7,
+                    "max_tokens": 17,
+                },
+                token,
+            )
+        finally:
+            server.shutdown()
+
+    assert status == 200, body
+    assert seen_sampling and all(item == (0.7, 17) for item in seen_sampling)
+    assert orch.client.default_temperature == 0.2
+    event_names = {event["event_name"] for event in orch._analytics_events}
+    assert "chat_completion_orchestrated_provider" in event_names
+    assert "chat_completion_passthrough" in event_names
 
 
 def test_http_responses_endpoint_passes_through() -> None:

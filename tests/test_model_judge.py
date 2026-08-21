@@ -276,7 +276,7 @@ def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
     assert completion["mode"] == "conduct"
 
 
-def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> None:
+def test_fast_mlsirm_adapter_routes_structured_completion_to_one_provider_call() -> None:
     orchestrator, _ = _orch("unused")
     adapter = orchestrator_module._FastMLSIJudgeAdapter(
         orchestrator,
@@ -289,27 +289,30 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
         "json_schema": {"name": "judge", "strict": True, "schema": {"type": "object"}},
     }
     with patch.object(
-        orchestrator,
-        "proxy_completion",
+        orchestrator.client,
+        "proxy_send",
         return_value={
             "choices": [{"message": {"content": '{"meets_threshold":true,"rationale":"ok"}'}}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
         },
-    ) as proxy:
+    ) as proxy_send:
         completion = adapter.complete_structured(
             [{"role": "user", "content": "judge"}],
             mode="conduct",
             response_format=response_format,
         )
 
-    proxy.assert_called_once_with(
+    proxy_send.assert_called_once_with(
+        orchestrator._agent("general_agent"),
+        "chat/completions",
         {
             "model": "model-x",
             "messages": [{"role": "user", "content": "judge"}],
             "temperature": orchestrator.client.temperature,
             "max_tokens": orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        }
+            "stream": False,
+        },
     )
     assert completion["answer"] == '{"meets_threshold":true,"rationale":"ok"}'
     assert completion["mode"] == "conduct"
