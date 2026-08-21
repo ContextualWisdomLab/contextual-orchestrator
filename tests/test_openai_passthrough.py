@@ -365,6 +365,70 @@ def test_in_flight_budget_rejects_invalid_usage(
         _build()._raise_if_spend_budget_exceeded(**additional_spend)
 
 
+def test_structured_provider_completion_counts_in_flight_usage_before_synthesis() -> None:
+    orch = _build(budget_max_output_tokens=1)
+    workflow = {
+        "trace": [{"id": 0, "agent_id": "builder_agent", "role": "worker", "output": "verified"}],
+        "verification": {"accepted": True},
+    }
+    with patch.object(orch, "conduct", return_value=workflow), patch.object(
+        orch.client, "proxy_send"
+    ) as send:
+        with pytest.raises(BudgetExceededError, match="spend budget exceeded"):
+            orch.proxy_completion(
+                {
+                    "model": "mock-planner",
+                    "messages": [{"role": "user", "content": "extract JSON"}],
+                    "response_format": {"type": "json_object"},
+                }
+            )
+
+    send.assert_not_called()
+
+
+def test_structured_provider_completion_enables_model_judge_boundary() -> None:
+    orch = _build()
+    workflow = {
+        "trace": [{"id": 0, "agent_id": "builder_agent", "role": "worker", "output": "verified"}],
+        "verification": {"accepted": True},
+    }
+    raw = {"choices": [{"message": {"content": "{}"}}]}
+    with patch.object(orch, "conduct", return_value=workflow) as conduct, patch.object(
+        orch.client, "proxy_send", return_value=raw
+    ):
+        orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "extract JSON"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    assert conduct.call_args.kwargs["judge"] is True
+
+
+def test_native_responses_drops_chat_only_output_budget_aliases() -> None:
+    orch = _build()
+    raw = {"object": "response", "output_text": "{}", "output": []}
+    with patch.object(orch.client, "proxy_send", return_value=raw) as send:
+        orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "input": "extract JSON",
+                "max_tokens": 11,
+                "max_completion_tokens": 13,
+                "max_output_tokens": 17,
+                "text": {"format": {"type": "json_object"}},
+            },
+            endpoint="responses",
+        )
+
+    forwarded = send.call_args.args[2]
+    assert "max_tokens" not in forwarded
+    assert "max_completion_tokens" not in forwarded
+    assert forwarded["max_output_tokens"] == 17
+
+
 def test_structured_provider_completion_persists_final_synthesis_run() -> None:
     orch = _build()
     result = orch.proxy_completion(

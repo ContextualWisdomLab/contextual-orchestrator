@@ -2315,7 +2315,7 @@ class TaskOrchestrator:
             disabled_model = requested_model if requested_model is not None else final_agent.model
             raise RuntimeError(f"requested model {disabled_model!r} is disabled")
 
-        workflow = self.conduct(messages, preserve_messages=True, judge=False)
+        workflow = self.conduct(messages, preserve_messages=True, judge=True)
         in_flight_output_tokens = 0
         in_flight_cost_usd = 0.0
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -2326,6 +2326,12 @@ class TaskOrchestrator:
             price = self.price_per_million.get(model) if model is not None else None
             if price is not None:
                 in_flight_cost_usd += output_tokens / 1_000_000 * price
+        verification_usage = workflow.get("verification", {}).get("judge_usage", {})
+        if isinstance(verification_usage, dict):
+            judge_output_tokens, _reported = _step_output_token_count(
+                {"usage": verification_usage, "output": ""}
+            )
+            in_flight_output_tokens += judge_output_tokens
         evidence = "\n\n".join(
             f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
             for row in workflow["trace"]
@@ -2345,6 +2351,8 @@ class TaskOrchestrator:
                 for key, value in body.items()
                 if key not in self._ORCHESTRATION_ONLY_KEYS and key != "model"
             }
+            upstream.pop("max_tokens", None)
+            upstream.pop("max_completion_tokens", None)
             original_instructions = _responses_text(body.get("instructions")).strip()
             upstream["instructions"] = (
                 f"{original_instructions}\n\n{guidance}"
