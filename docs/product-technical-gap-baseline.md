@@ -1,6 +1,7 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 17:19, Asia/Seoul
+**Snapshot convention:** the initial inventory records its observation time
+below; each live continuation carries its own recheck time.
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -179,7 +180,7 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) and issue [#567](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/567) by [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771). A draft or implementation PR is not treated as
 completed until the protected-main contract is satisfied.
 
-All links and full commit SHAs in this snapshot reflect the remote state
+All links and full commit SHAs in the initial snapshot reflect the remote state
 observed at 2026-08-21 15:36 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
