@@ -686,7 +686,7 @@ class ModelClient:
         local_max_retries: int = 0,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
-        temperature: float = 0.2,
+        temperature: float | None = None,
         local_concurrency: int = 1,
         chat_template_args: dict[str, Any] | None = None,
         ca_bundle: str | None = None,
@@ -697,7 +697,9 @@ class ModelClient:
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
-        self.default_temperature = 0.2
+        # Do not invent a sampling parameter for a provider/model that may not
+        # support it. Explicit caller values are still forwarded after validation.
+        self.default_temperature: float | None = None
         self.default_top_p: float | None = None
         self.default_presence_penalty: float | None = None
         self.default_frequency_penalty: float | None = None
@@ -772,9 +774,9 @@ class ModelClient:
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
-        When ``temperature``/``top_p`` are omitted, ``default_temperature`` and
-        ``default_top_p`` are used so request-scoped Completions sampling can be
-        applied without threading kwargs through every orchestrator hop.
+        When sampling knobs are omitted, they are omitted from the provider
+        request so the selected model's capability contract remains authoritative.
+        Explicit request-scoped values are still forwarded after validation.
         """
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
@@ -800,10 +802,11 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": effective_temperature,
             "stream": False,
             "max_tokens": self.max_output_tokens,
         }
+        if effective_temperature is not None:  # pragma: no cover
+            payload["temperature"] = effective_temperature
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
         if effective_presence is not None:  # pragma: no cover
@@ -857,7 +860,6 @@ class ModelClient:
                 payload: dict[str, Any] = {
                     "model": agent.model,
                     "messages": [{"role": "user", "content": "Reply with exactly OK."}],
-                    "temperature": 0.0,
                     "stream": False,
                     "max_tokens": 1,
                 }
@@ -1080,10 +1082,12 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
+        effective_temperature = self.temperature if temperature is None else temperature
+        if effective_temperature is not None:  # pragma: no cover
+            payload["temperature"] = effective_temperature
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
@@ -1357,20 +1361,22 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
-        lines = [
-            json.dumps({
+        lines = []
+        for custom_id, messages in requests.items():
+            body: dict[str, Any] = {
+                "model": agent.model,
+                "messages": messages,
+                "max_tokens": self.max_output_tokens,
+            }
+            effective_temperature = self.temperature if temperature is None else temperature
+            if effective_temperature is not None:
+                body["temperature"] = effective_temperature
+            lines.append(json.dumps({
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
-                    "model": agent.model,
-                    "messages": messages,
-                    "temperature": self.temperature if temperature is None else temperature,
-                    "max_tokens": self.max_output_tokens,
-                },
-            }, ensure_ascii=False)
-            for custom_id, messages in requests.items()
-        ]
+                "body": body,
+            }, ensure_ascii=False))
         input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"), destination)
         batch_id = self._batch_json(agent, "POST", "/batches", {
             "input_file_id": input_file_id,
