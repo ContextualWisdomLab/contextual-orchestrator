@@ -33,6 +33,12 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .pii_protection import (
+    DEFAULT_PII_KEY_NAME,
+    ENCRYPTED_FIELDS_KEY,
+    is_encrypted_detail,
+    load_pii_encryptor,
+)
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -1667,6 +1673,7 @@ class TaskOrchestrator:
         agents_db: str | None = None,
         cache_ttl: float = 0.0,
         cache_max_entries: int = 256,
+        pii_key_name: str = DEFAULT_PII_KEY_NAME,
     ) -> None:
         # Optional durable model-group management: stored operator changes overlay the
         # seed agents file at startup (stored rows win by id; stored-new rows append).
@@ -1702,6 +1709,9 @@ class TaskOrchestrator:
         # Optional durable persistence: default None keeps all state purely in-memory
         # (zero behavior change). When set, runs/audit/analytics survive restart.
         self._store = _StateStore(state_db) if state_db else None
+        if not isinstance(pii_key_name, str) or not pii_key_name:
+            raise ValueError("pii_key_name must be a non-empty string")
+        self._pii_key_name = pii_key_name
         self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
@@ -2708,15 +2718,47 @@ class TaskOrchestrator:
             "verifier_output": verifier_output,
         }
 
-    def _append_audit_event(self, event_type: str, detail: dict[str, Any]) -> None:
+    def _protected_event_detail(self, detail: dict[str, Any], pii_fields: Iterable[str]) -> dict[str, Any]:
+        """Encrypt explicitly declared PII fields before an event enters memory or storage."""
+        fields = tuple(pii_fields)
+        if not fields:
+            return detail
+        return load_pii_encryptor(self._pii_key_name).encrypt_fields(detail, fields)
+
+    def _append_audit_event(
+        self,
+        event_type: str,
+        detail: dict[str, Any],
+        *,
+        pii_fields: Iterable[str] = (),
+    ) -> None:
         event = {
             "created_at": int(time.time()),
             "event_type": event_type,
-            "event_detail": detail,
+            "event_detail": self._protected_event_detail(detail, pii_fields),
         }
         self._audit_events.append(event)
         if self._store is not None:
             self._store.save("audit", None, event)
+
+    def record_authorization_decision(
+        self,
+        *,
+        scope: str,
+        purpose: str,
+        allowed: bool,
+        reason: str,
+    ) -> None:
+        """Record a secret-free role/purpose authorization decision."""
+        self._append_audit_event(
+            "authorization_decision",
+            {
+                "scope": scope,
+                "purpose": purpose,
+                "allowed": bool(allowed),
+                "reason": reason,
+            },
+        )
 
     def _infer_provider_name(self, base_url: str) -> str:
         if base_url.startswith("mock://"):
@@ -2805,8 +2847,15 @@ class TaskOrchestrator:
         run_ids = list(self._run_order)[start:end]
         return [self._workflow_runs[run_id] for run_id in run_ids]
 
-    def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
-        """Return recent audit events in newest-first order."""
+    def list_recent_audit_events(
+        self,
+        page_number: int = 1,
+        page_size: int = 25,
+        *,
+        role: str | None = None,
+        purpose: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return recent audit events, decrypting PII only for authorized replay."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
         events = list(self._audit_events)
@@ -2815,15 +2864,40 @@ class TaskOrchestrator:
         total = len(events)
         left = max(0, total - end)
         right = max(0, total - start)
-        return list(reversed(events[left:right]))
+        selected = list(reversed(events[left:right]))
+        if role != "admin" or purpose != "audit_replay":
+            return selected
+        restored: list[dict[str, Any]] = []
+        encryptors: dict[str, Any] = {}
+        for event in selected:
+            detail = event.get("event_detail")
+            if not is_encrypted_detail(detail):
+                restored.append(event)
+                continue
+            restored_event = dict(event)
+            metadata = detail.get(ENCRYPTED_FIELDS_KEY)
+            key_name = metadata.get("key_name") if isinstance(metadata, dict) else self._pii_key_name
+            encryptor = encryptors.get(key_name)
+            if encryptor is None:
+                encryptor = load_pii_encryptor(key_name)
+                encryptors[key_name] = encryptor
+            restored_event["event_detail"] = encryptor.decrypt_fields(detail)
+            restored.append(restored_event)
+        return restored
 
-    def record_analytics_event(self, event_name: str, detail: dict[str, Any]) -> None:
+    def record_analytics_event(
+        self,
+        event_name: str,
+        detail: dict[str, Any],
+        *,
+        pii_fields: Iterable[str] = (),
+    ) -> None:
         """Record a compact in-memory analytics event without prompt or output text."""
         require_object_name(event_name, "analytics.event_name")
         event = {
             "event_time": int(time.time()),
             "event_name": event_name,
-            "event_detail": redact_value(detail),
+            "event_detail": redact_value(self._protected_event_detail(detail, pii_fields)),
         }
         self._analytics_events.append(event)
         if self._store is not None:
@@ -9006,7 +9080,7 @@ class TaskOrchestrator:
             },
         }
 
-    def admin_state(self) -> dict[str, Any]:
+    def admin_state(self, *, role: str | None = None, purpose: str | None = None) -> dict[str, Any]:
         """Build the admin console state payload from agents, policy, and audit data."""
         agent_page_size = max(1, len(self.candidates))
         return {
@@ -9017,7 +9091,7 @@ class TaskOrchestrator:
                 "complex_hints": list(self.COMPLEX_HINTS),
             },
             "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
-            "recent_audit_events": self.list_recent_audit_events(),
+            "recent_audit_events": self.list_recent_audit_events(role=role, purpose=purpose),
             "spend": self.spend_analytics(),
         }
 
