@@ -1107,21 +1107,27 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request, destination) as response:
-            for raw in response:
-                line = raw.decode("utf-8").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:") :].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-                if delta:
-                    yield delta
+        try:
+            with self._open_provider(request, destination) as response:
+                for raw in response:
+                    line = raw.decode("utf-8").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                    if delta:
+                        yield delta
+        except Exception:
+            # A stream may already have emitted bytes, so it cannot be retried or
+            # fail over. Keep the provider body and exception cause inside the
+            # gateway while preserving one stable library error for callers.
+            raise RuntimeError(f"provider {agent.id} streaming request failed") from None
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge

@@ -6,6 +6,7 @@ the capability a model-orchestration gateway is bought for.
 
 from __future__ import annotations
 
+import io
 import socket
 import ssl
 import sys
@@ -13,6 +14,8 @@ import threading
 import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -202,6 +205,30 @@ def test_provider_passthrough_error_does_not_expose_raw_exception_text() -> None
         assert exc.__cause__ is None
     else:  # pragma: no cover
         raise AssertionError("a failed passthrough request must raise")
+
+
+def test_provider_stream_error_does_not_expose_raw_exception_text() -> None:
+    """SSE transport failures stay package-owned before a stream reaches callers."""
+
+    class LeakyStreamingClient(ModelClient):
+        def _open_provider(self, request, destination=None, *, timeout=None):  # type: ignore[override]
+            raise urllib.error.HTTPError(
+                request.full_url,
+                502,
+                "provider failed",
+                None,
+                io.BytesIO(b"provider-stream-secret"),
+            )
+
+    client = LeakyStreamingClient(max_retries=0)
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1", api_key_env="X")
+
+    with pytest.raises(RuntimeError) as raised:
+        list(client._stream_send(agent, {"model": "gpt", "stream": True}))
+
+    assert str(raised.value) == "provider worker_agent streaming request failed"
+    assert "provider-stream-secret" not in str(raised.value)
+    assert raised.value.__cause__ is None
 
 
 class _AgentDownClient(ModelClient):
