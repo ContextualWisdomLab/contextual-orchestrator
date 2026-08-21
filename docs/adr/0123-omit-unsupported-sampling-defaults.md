@@ -8,7 +8,9 @@
 Reasoning-capable providers can reject a `temperature` field even when the
 value is a conventional default such as `0.2`. A gateway that invents this
 field before capability negotiation makes an otherwise valid discovered model
-unusable and can turn failover into a false provider outage.
+unusable and can turn failover into a false provider outage. Azure's current
+reasoning-model documentation explicitly lists `temperature` among the
+unsupported parameters (Microsoft, 2026).
 
 ## Decision
 
@@ -37,3 +39,9 @@ model policy ADRs.
   selected provider's capability response.
 - Provider request assertions must distinguish omitted fields from explicit
   values.
+
+## References
+
+Microsoft. (2026, August 6). *Azure OpenAI reasoning models: GPT-5 series,
+o3-mini, o1, o1-mini*. Microsoft Learn.
+https://learn.microsoft.com/azure/foundry/openai/how-to/reasoning
