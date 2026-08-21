@@ -18,6 +18,10 @@ identifies `temperature` as unsupported, the orchestrator retries once against
 the same endpoint with only `temperature` removed. This negotiation is
 available to both the normal chat transport and raw/Responses passthrough.
 
+When neither the caller nor the operator supplies a sampling temperature, the
+runtime leaves the field absent so the selected provider applies its published
+default. The CLI compatibility flags remain an explicit operator override.
+
 All other 4xx responses, including invalid temperature values, remain
 non-retryable. The orchestrator does not infer capability from a model name,
 provider ordering, parameter count, or local benchmark, and it does not select

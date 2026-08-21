@@ -151,6 +151,25 @@ def test_sampling_temperature_uses_descriptive_name_and_legacy_alias() -> None:
         assert model_client.call_args.kwargs["temperature"] == 0.7
 
 
+def test_sampling_temperature_is_omitted_by_default() -> None:
+    """Startup must not invent a sampling value unsupported by the selected model."""
+
+    with (
+        patch.object(
+            sys,
+            "argv",
+            ["contextual-orchestrator", "--serve", "--auth-token", "token"],
+        ),
+        patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
+        patch("contextual_orchestrator.__main__.ModelClient") as model_client,
+        patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.serve"),
+    ):
+        main()
+
+    assert model_client.call_args.kwargs["temperature"] is None
+
+
 def test_fast_mlsirm_preflight_reports_missing_transitive_dependency() -> None:
     stderr = StringIO()
     real_import = __import__
@@ -198,4 +217,5 @@ if __name__ == "__main__":
     test_key_only_split_tokens_select_split_mode()
     test_invalid_local_provider_options_fail_at_parser_boundary()
     test_sampling_temperature_uses_descriptive_name_and_legacy_alias()
+    test_sampling_temperature_is_omitted_by_default()
     print("ok")
