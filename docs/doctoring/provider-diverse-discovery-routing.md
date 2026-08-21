@@ -46,4 +46,3 @@ Learning Representations. https://arxiv.org/abs/2404.14618
 Ong, I., Almahairi, A., Wu, V., Chiang, W.-L., Wu, T., Gonzalez, J. E.,
 Kadous, M. W., & Stoica, I. (2024). *RouteLLM: Learning to route LLMs with
 preference data*. arXiv. https://arxiv.org/abs/2406.18665
-
