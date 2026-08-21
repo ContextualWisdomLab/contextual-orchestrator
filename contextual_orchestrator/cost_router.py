@@ -34,7 +34,7 @@ from .batch_routing import (
     RoutingHints,
     RoutingPolicy,
 )
-from .cost_ledger import CostLedger, PriceBook
+from .cost_ledger import CostLedger, PriceBook, UsageRecord
 from .kv_config import InMemoryConfigStore
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
@@ -161,6 +161,67 @@ class CostRoutingCoordinator:
                 pass
         return "unknown", fallback_model
 
+    @staticmethod
+    def _provider_usage_counts(usage: Any) -> tuple[int, int] | None:
+        """Return validated provider token counts, accepting Chat and Responses names."""
+        if not isinstance(usage, dict):
+            return None
+        prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+        completion_tokens = usage.get("completion_tokens", usage.get("output_tokens"))
+        if (
+            type(prompt_tokens) is not int
+            or prompt_tokens < 0
+            or type(completion_tokens) is not int
+            or completion_tokens < 0
+        ):
+            return None
+        return prompt_tokens, completion_tokens
+
+    def _record_provider_workflow_usage(
+        self,
+        result: Dict[str, Any],
+        *,
+        attribution: Optional[Dict[str, Any]],
+        model_name: str,
+    ) -> tuple[List[UsageRecord], int]:
+        """Record every provider-reported workflow call under one run lineage."""
+        steps = [step for step in result.get("trace", []) if isinstance(step, dict)]
+        verification = result.get("verification")
+        if isinstance(verification, dict) and isinstance(verification.get("judge_usage"), dict):
+            judge_step = {
+                "agent_id": verification.get("judge_agent_id"),
+                "usage": verification["judge_usage"],
+            }
+            insert_at = (
+                len(steps) - 1
+                if steps and steps[-1].get("subtask") == "Provider-facing structured synthesis"
+                else len(steps)
+            )
+            steps.insert(insert_at, judge_step)
+
+        records: List[UsageRecord] = []
+        unmetered_count = 0
+        for step in steps:
+            counts = self._provider_usage_counts(step.get("usage"))
+            if counts is None:
+                unmetered_count += 1
+                continue
+            records.append(
+                self._record_completion(
+                    messages=[],
+                    answer="",
+                    route_mode=result.get("mode"),
+                    request_channel="sync",
+                    attribution=attribution,
+                    model_name=model_name,
+                    provider_model=self._served_provider_model({"trace": [step]}, model_name),
+                    workflow_run_id=result.get("workflow_run_id"),
+                    prompt_tokens=counts[0],
+                    completion_tokens=counts[1],
+                )
+            )
+        return records, unmetered_count
+
     # ------------------------------------------------------------------
     # Sync + batch completion
     # ------------------------------------------------------------------
@@ -235,34 +296,47 @@ class CostRoutingCoordinator:
                 self.orchestrator.get_workflow_run(orchestration["workflow_run_id"])
             )
             result["provider_response"] = provider_response
-        provider_usage = (
-            provider_response.get("usage")
-            if isinstance(provider_response, dict)
-            and isinstance(provider_response.get("usage"), dict)
-            else {}
-        )
-        prompt_tokens = provider_usage.get(
-            "prompt_tokens", provider_usage.get("input_tokens")
-        )
-        completion_tokens = provider_usage.get(
-            "completion_tokens", provider_usage.get("output_tokens")
-        )
-        if type(prompt_tokens) is not int or prompt_tokens < 0:
-            prompt_tokens = None
-        if type(completion_tokens) is not int or completion_tokens < 0:
-            completion_tokens = None
-        record = self._record_completion(
-            messages=messages,
-            answer=result.get("answer", ""),
-            route_mode=result.get("mode"),
-            request_channel="sync",
-            attribution=attribution,
-            model_name=model_name,
-            provider_model=self._served_provider_model(result, model_name),
-            workflow_run_id=result.get("workflow_run_id"),
-            prompt_tokens=prompt_tokens,
-            completion_tokens=completion_tokens,
-        )
+        records: List[UsageRecord] = []
+        unmetered_count = 0
+        if provider_response is not None:
+            records, unmetered_count = self._record_provider_workflow_usage(
+                result,
+                attribution=attribution,
+                model_name=model_name,
+            )
+        if not records:
+            provider_usage = (
+                provider_response.get("usage")
+                if isinstance(provider_response, dict)
+                and isinstance(provider_response.get("usage"), dict)
+                else {}
+            )
+            counts = self._provider_usage_counts(provider_usage)
+            record = self._record_completion(
+                messages=messages,
+                answer=result.get("answer", ""),
+                route_mode=result.get("mode"),
+                request_channel="sync",
+                attribution=attribution,
+                model_name=model_name,
+                provider_model=self._served_provider_model(result, model_name),
+                workflow_run_id=result.get("workflow_run_id"),
+                prompt_tokens=counts[0] if counts is not None else None,
+                completion_tokens=counts[1] if counts is not None else None,
+            )
+            records = [record]
+        record = records[-1]
+        prompt_tokens = sum(item.prompt_tokens for item in records)
+        completion_tokens = sum(item.completion_tokens for item in records)
+        currencies = {item.currency_code for item in records}
+        cost = {
+            "cost_amount": (
+                round(sum(item.cost_amount for item in records), 6)
+                if len(currencies) == 1
+                else None
+            ),
+            "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+        }
         result["channel"] = "sync"
         result["routing_reason"] = (
             f"{decision.reason};structured_output_forced_sync"
@@ -270,12 +344,14 @@ class CostRoutingCoordinator:
             else decision.reason
         )
         result["usage_record_id"] = record.usage_record_id
+        result["usage_record_ids"] = [item.usage_record_id for item in records]
+        result["unmetered_provider_call_count"] = unmetered_count
         result["usage"] = {
-            "prompt_tokens": record.prompt_tokens,
-            "completion_tokens": record.completion_tokens,
-            "total_tokens": record.total_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
         }
-        result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
+        result["cost"] = cost
         provider_response = result.get("provider_response")
         if isinstance(provider_response, dict):
             orchestration = provider_response.get("orchestration")
@@ -285,6 +361,8 @@ class CostRoutingCoordinator:
                         "channel": result["channel"],
                         "routing_reason": result["routing_reason"],
                         "usage_record_id": result["usage_record_id"],
+                        "usage_record_ids": result["usage_record_ids"],
+                        "unmetered_provider_call_count": unmetered_count,
                         "cost": result["cost"],
                     }
                 )

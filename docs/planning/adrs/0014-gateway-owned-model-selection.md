@@ -68,12 +68,25 @@ because the provider response shape is richer.
   provider-shape-preserving streaming relay. Clients must opt in with the
   `X-Contextual-Orchestrator-Tool-Loop: v1` header; ordinary tool requests stay
   fail-closed until that contract is explicitly selected.
+- Each provider-reported call in a conducted workflow writes its own cost-ledger
+  record under the shared workflow run id, including the model judge and final
+  provider synthesis. The response retains one last-metered-call
+  `usage_record_id` for compatibility and adds the complete `usage_record_ids`
+  list. Calls without
+  valid provider usage increment `unmetered_provider_call_count`; if no workflow
+  call reports usage, the existing request-level estimate remains the explicit
+  compatibility fallback.
 
 ## Consequences
 
 - Provider model selection remains centralized and can change with the registry
   without an application rebuild.
 - Structured output retains the multi-agent trace and cannot bypass synthesis.
+- Cost reports price each metered workflow call against the model that served it
+  instead of attributing all conducted work to the final synthesizer.
+- A response never sums monetary amounts across currencies; mixed-currency
+  workflows expose `currency_code=MIXED` and a null aggregate amount while the
+  individual ledger records retain their original amounts and currencies.
 - Tool callers use an explicit single-agent passthrough contract. The gateway
   remains the model-selection boundary, while tool execution stays with the
   authenticated client and never becomes an implicit multi-agent fallback.

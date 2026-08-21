@@ -161,9 +161,132 @@ def test_provider_native_structured_output_keeps_cost_and_lineage() -> None:
     assert result["provider_response"]["orchestration"]["usage_record_id"] == result[
         "usage_record_id"
     ]
+    assert result["provider_response"]["orchestration"]["usage_record_ids"] == [
+        result["usage_record_id"]
+    ]
     record = coordinator.ledger.records()[0]
     assert record["prompt_tokens"] == 7
     assert record["completion_tokens"] == 11
+
+
+def test_provider_native_workflow_records_each_metered_provider_call() -> None:
+    coordinator = _coordinator()
+    provider_response = {
+        "object": "response",
+        "usage": {"input_tokens": 5, "output_tokens": 7, "total_tokens": 12},
+        "orchestration": {"workflow_run_id": "run_metered"},
+    }
+    workflow_run = {
+        "workflow_run_id": "run_metered",
+        "mode": "conduct",
+        "answer": "{}",
+        "trace": [
+            {
+                "agent_id": "mock_worker",
+                "output": "evidence",
+                "usage": {"prompt_tokens": 2, "completion_tokens": 3},
+            },
+            {
+                "agent_id": "mock_worker",
+                "subtask": "Provider-facing structured synthesis",
+                "output": "{}",
+                "usage": {"input_tokens": 5, "output_tokens": 7},
+            },
+        ],
+        "verification": {
+            "judge_agent_id": "mock_worker",
+            "judge_usage": {"prompt_tokens": 1, "completion_tokens": 2},
+        },
+    }
+
+    with patch.object(
+        coordinator.orchestrator,
+        "proxy_completion",
+        return_value=provider_response,
+    ), patch.object(
+        coordinator.orchestrator,
+        "get_workflow_run",
+        return_value=workflow_run,
+    ):
+        result = coordinator.complete(
+            [{"role": "user", "content": "return JSON"}],
+            response_format={"type": "json_object"},
+            provider_request={"input": "return JSON"},
+            provider_endpoint="responses",
+        )
+
+    records = coordinator.ledger.records()
+    assert [(row["prompt_tokens"], row["completion_tokens"]) for row in records] == [
+        (2, 3),
+        (1, 2),
+        (5, 7),
+    ]
+    assert result["usage"] == {
+        "prompt_tokens": 8,
+        "completion_tokens": 12,
+        "total_tokens": 20,
+    }
+    assert result["cost"] == {"cost_amount": 0.032, "currency_code": "USD"}
+    assert result["usage_record_ids"] == [row["usage_record_id"] for row in records]
+    assert result["usage_record_id"] == records[-1]["usage_record_id"]
+    assert result["unmetered_provider_call_count"] == 0
+
+
+def test_provider_native_workflow_does_not_sum_mixed_currencies() -> None:
+    coordinator = _coordinator()
+    judge_agent = ModelAgent(
+        id="judge_worker",
+        model="mock-judge",
+        base_url="mock://judge",
+        provider_name="mock",
+    )
+    coordinator.orchestrator.candidates.append(judge_agent)
+    coordinator.orchestrator.agents.append(judge_agent)
+    coordinator.price_book.set_price(
+        PriceEntry(
+            "mock",
+            "mock-judge",
+            prompt_price_per_1k=1.0,
+            completion_price_per_1k=1.0,
+            currency_code="KRW",
+        )
+    )
+    provider_response = {
+        "usage": {"input_tokens": 5, "output_tokens": 7},
+        "orchestration": {"workflow_run_id": "run_mixed_currency"},
+    }
+    workflow_run = {
+        "workflow_run_id": "run_mixed_currency",
+        "mode": "conduct",
+        "answer": "{}",
+        "trace": [
+            {
+                "agent_id": "mock_worker",
+                "subtask": "Provider-facing structured synthesis",
+                "output": "{}",
+                "usage": {"input_tokens": 5, "output_tokens": 7},
+            }
+        ],
+        "verification": {
+            "judge_agent_id": "judge_worker",
+            "judge_usage": {"prompt_tokens": 1, "completion_tokens": 2},
+        },
+    }
+
+    with patch.object(
+        coordinator.orchestrator, "proxy_completion", return_value=provider_response
+    ), patch.object(
+        coordinator.orchestrator, "get_workflow_run", return_value=workflow_run
+    ):
+        result = coordinator.complete(
+            [{"role": "user", "content": "return JSON"}],
+            response_format={"type": "json_object"},
+            provider_request={"input": "return JSON"},
+            provider_endpoint="responses",
+        )
+
+    assert result["cost"] == {"cost_amount": None, "currency_code": "MIXED"}
+    assert [row["currency_code"] for row in coordinator.ledger.records()] == ["KRW", "USD"]
 
 
 def test_provider_native_completion_rejects_unknown_endpoint() -> None:
