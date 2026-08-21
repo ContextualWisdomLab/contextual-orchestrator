@@ -112,7 +112,10 @@ def _build(client: SequencedProxyClient) -> TaskOrchestrator:
     )
 
 
-def test_429_advances_immediately_and_preserves_tool_request() -> None:
+@pytest.mark.parametrize("single_agent", [False, True])
+def test_429_advances_immediately_and_preserves_tool_request(
+    single_agent: bool,
+) -> None:
     """A 429 must advance to another model without replaying the saturated one."""
     client = SequencedProxyClient(
         {
@@ -136,12 +139,13 @@ def test_429_advances_immediately_and_preserves_tool_request() -> None:
         "tools": tools,
         "tool_choice": "auto",
         "response_format": {"type": "json_object"},
+        "reasoning_effort": "auto",
         "mode": "auto",
         "stream": True,
     }
     original = deepcopy(body)
 
-    result = orchestrator.proxy_completion(body)
+    result = orchestrator.proxy_completion(body, single_agent=single_agent)
 
     assert result["model"] == "fallback-model"
     assert [call[0] for call in client.calls] == ["primary_agent", "fallback_agent"]
@@ -150,6 +154,7 @@ def test_429_advances_immediately_and_preserves_tool_request() -> None:
     assert client.calls[1][2]["tools"] == tools
     assert client.calls[1][2]["tool_choice"] == "auto"
     assert client.calls[1][2]["response_format"] == {"type": "json_object"}
+    assert "reasoning_effort" not in client.calls[1][2]
     assert client.calls[1][2]["stream"] is False
     assert "mode" not in client.calls[1][2]
     assert body == original

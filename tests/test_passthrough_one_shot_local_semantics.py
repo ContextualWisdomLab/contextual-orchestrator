@@ -90,6 +90,7 @@ def test_one_shot_local_responses_preserves_translation_and_concurrency_slot() -
             "contextual_orchestrator.orchestrator._local_provider_slot",
             side_effect=local_slot,
         ),
+        client.request_settings(max_output_tokens=73),
     ):
         result = client.proxy_send_once(agent, "responses", request)
 
@@ -100,6 +101,7 @@ def test_one_shot_local_responses_preserves_translation_and_concurrency_slot() -
     assert endpoint == "chat/completions"
     assert payload["model"] == "local-model"
     assert payload["stream"] is False
+    assert payload["max_tokens"] == 73
     assert payload["messages"] == [
         {"role": "user", "content": "summarize the incident"}
     ]
@@ -108,17 +110,26 @@ def test_one_shot_local_responses_preserves_translation_and_concurrency_slot() -
     assert result["metadata"] == {"tenant": "tenant-one"}
 
 
-def test_one_shot_local_chat_still_uses_model_switch_concurrency_slot() -> None:
+@pytest.mark.parametrize(
+    ("requested_max_tokens", "expected_max_tokens"), [(None, 57), (11, 11)]
+)
+def test_one_shot_local_chat_still_uses_model_switch_concurrency_slot(
+    requested_max_tokens: int | None,
+    expected_max_tokens: int,
+) -> None:
     """Removing same-model retries must not bypass local model-switch coordination."""
-    client = ModelClient(max_retries=5, local_concurrency=2)
+    client = ModelClient(max_retries=5, local_concurrency=2, max_output_tokens=57)
     agent = _local_agent()
     payload = {
         "model": "local-model",
         "messages": [{"role": "user", "content": "hello"}],
         "stream": False,
     }
+    if requested_max_tokens is not None:
+        payload["max_tokens"] = requested_max_tokens
+    original = deepcopy(payload)
     slots: list[tuple[str, int, int]] = []
-    sends: list[str] = []
+    sends: list[tuple[str, dict[str, object]]] = []
 
     @contextmanager
     def local_slot(
@@ -132,10 +143,10 @@ def test_one_shot_local_chat_still_uses_model_switch_concurrency_slot() -> None:
     def send_raw(
         _agent: ModelAgent,
         endpoint: str,
-        _payload: dict[str, object],
+        sent_payload: dict[str, object],
         _destination: object,
     ) -> dict[str, object]:
-        sends.append(endpoint)
+        sends.append((endpoint, deepcopy(sent_payload)))
         return _chat_response("hello")
 
     with (
@@ -154,7 +165,10 @@ def test_one_shot_local_chat_still_uses_model_switch_concurrency_slot() -> None:
 
     assert result["object"] == "chat.completion"
     assert slots == [(agent.id, 2, client.timeout)]
-    assert sends == ["chat/completions"]
+    assert sends == [
+        ("chat/completions", {**payload, "max_tokens": expected_max_tokens})
+    ]
+    assert payload == original
 
 
 def test_one_shot_remote_passthrough_never_enters_same_agent_retry_wrapper() -> None:

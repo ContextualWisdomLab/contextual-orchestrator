@@ -1559,7 +1559,10 @@ class ModelClient:
         destination = self._validate_provider(agent)  # pragma: no cover
         if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
-            chat_payload.setdefault("max_tokens", self.max_output_tokens)
+            chat_payload.setdefault(
+                "max_tokens",
+                self._request_setting("max_output_tokens", self.max_output_tokens),
+            )
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                 chat_response = self._send_raw_with_retry(
                     agent,
@@ -1569,6 +1572,12 @@ class ModelClient:
                     allow_transient_retries=False,
                 )
             return _chat_to_responses_payload(chat_response, payload)
+        if _is_local_provider_url(agent.base_url) and normalized_endpoint == "chat/completions":
+            payload = dict(payload)
+            payload.setdefault(
+                "max_tokens",
+                self._request_setting("max_output_tokens", self.max_output_tokens),
+            )
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
             return self._send_raw_with_retry(
                 agent,
@@ -2365,6 +2374,7 @@ class TaskOrchestrator:
             "orchestration_mode",
             "mode",
             "include_orchestration_trace",
+            "reasoning_effort",
             "attribution",
             "routing",
         }
