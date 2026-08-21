@@ -539,6 +539,30 @@ def test_local_responses_adapter_preserves_json_schema_contract() -> None:
     }
 
 
+def test_local_responses_adapter_prefers_translated_text_format_contract() -> None:
+    payload = _responses_to_chat_payload(
+        {
+            "input": "prefer the Responses contract",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "responses_shape",
+                    "schema": {"type": "object"},
+                }
+            },
+            "response_format": {"type": "json_object"},
+        }
+    )
+
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "responses_shape",
+            "schema": {"type": "object"},
+        },
+    }
+
+
 def test_local_responses_adapter_rejects_non_string_input() -> None:
     with pytest.raises(ValueError, match="string or item list"):
         _responses_to_chat_payload({"input": {"unexpected": "mapping"}})

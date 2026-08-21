@@ -690,13 +690,6 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
             "type": "function",
             "function": {"name": tool_choice.get("name", "")},
         }
-    response_format = request.get("response_format")
-    if not isinstance(response_format, dict):
-        response_format = _responses_text_format_to_chat_response_format(
-            request.get("text")
-        )
-    if response_format is not None:
-        payload["response_format"] = response_format
     return payload
 
 
