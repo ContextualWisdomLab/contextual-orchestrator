@@ -5719,10 +5719,9 @@ def build_server(
             detail: dict[str, Any] | None = None,
         ) -> None:
             _LOGGER.warning(
-                "request_failed status=%s code=%s path=%s",
+                "request_failed status=%s code=%s",
                 status,
                 code,
-                urllib.parse.urlparse(self.path).path,
             )
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
@@ -5733,7 +5732,7 @@ def build_server(
             self.send_header("content-length", str(len(raw)))
             self._send_security_headers()
             self.end_headers()
-            self.wfile.write(raw)
+            self._write_body(raw)
 
         def _send_text(self, payload: str, content_type: str, status: int = 200) -> None:
             raw = payload.encode("utf-8")
@@ -5742,7 +5741,7 @@ def build_server(
             self.send_header("content-length", str(len(raw)))
             self._send_security_headers()
             self.end_headers()
-            self.wfile.write(raw)
+            self._write_body(raw)
 
         def _send_sse(self, body: str, status: int = 200) -> None:
             raw = body.encode("utf-8")
@@ -5752,7 +5751,14 @@ def build_server(
             self.send_header("content-length", str(len(raw)))
             self._send_security_headers()
             self.end_headers()
-            self.wfile.write(raw)
+            self._write_body(raw)
+
+        def _write_body(self, raw: bytes) -> None:
+            """Treat a caller-closing connection as a completed response attempt."""
+            try:
+                self.wfile.write(raw)
+            except (BrokenPipeError, ConnectionResetError):
+                _LOGGER.debug("client_disconnected")
 
         def _begin_sse(self) -> None:
             # Incremental SSE: no content-length; the connection close delimits the body.
@@ -5764,8 +5770,11 @@ def build_server(
             self.end_headers()
 
         def _write_sse(self, frame: str) -> None:
-            self.wfile.write(frame.encode("utf-8"))
-            self.wfile.flush()
+            try:
+                self.wfile.write(frame.encode("utf-8"))
+                self.wfile.flush()
+            except (BrokenPipeError, ConnectionResetError):
+                _LOGGER.debug("client_disconnected")
 
         def _stream_route_completion(self, orchestrator: Any, security: Any, messages: Any, model_name: str) -> None:
             """Pipe a worker's live deltas out as OpenAI chat.completion.chunk SSE frames."""

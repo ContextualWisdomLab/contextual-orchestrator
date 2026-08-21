@@ -246,6 +246,37 @@ def test_http_error_log_excludes_raw_session_id(monkeypatch, caplog):
     assert "session-secret" not in caplog.text
 
 
+def test_http_diagnostics_exclude_raw_path_and_swallow_client_disconnect(monkeypatch, caplog):
+    """Client cancellation cannot create a second error or leak path identifiers."""
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler.path = "/v1/posts/private-record"
+
+    class DisconnectedWriter:
+        """Simulate a browser that closes while the response is being written."""
+
+        def write(self, _raw):
+            raise BrokenPipeError
+
+        def flush(self):
+            raise BrokenPipeError
+
+    handler.wfile = DisconnectedWriter()
+    monkeypatch.setattr(handler, "send_response", lambda _status: None)
+    monkeypatch.setattr(handler, "send_header", lambda _name, _value: None)
+    monkeypatch.setattr(handler, "end_headers", lambda: None)
+
+    with caplog.at_level("DEBUG"):
+        handler._send({"detail": "private-record"})
+        handler._send_text("private-record", "text/plain")
+        handler._send_sse("data: private-record\n\n")
+        handler._write_sse("data: private-record\n\n")
+
+    assert "client_disconnected" in caplog.text
+    assert "private-record" not in caplog.text
+    server.server_close()
+
+
 def test_provider_calls_use_current_genai_semantic_convention(monkeypatch):
     """Provider spans expose the required, prompt-free GenAI attributes."""
     captured = []
