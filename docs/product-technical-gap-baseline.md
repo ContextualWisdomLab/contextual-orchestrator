@@ -1,6 +1,6 @@
 # Product and Technical Gap Baseline
 
-**As of:** 2026-08-21 14:32, Asia/Seoul
+**As of:** 2026-08-21 15:36, Asia/Seoul
 **Source of truth:** `main` at `e226e1197bdfc890c9d8e5b9b648c78857d7e465`
 **Product boundary:** one OpenAI-compatible gateway plus its operator evidence
 control plane. Fugu, TRINITY, and Conductor are research inputs, not separate
@@ -101,7 +101,7 @@ required workflows, and a normal merge.
 | PR | Exact head at snapshot | State / base | Evidence boundary and next action |
 |---:|---|---|---|
 | [#806](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/806) | `10b87361cff4f4ed5a5d0dd17baee3e840f53b01` | open, based on main; required Checks queued at snapshot | Test-only CLI mock-boundary repair. Exact-head local evidence is `1435 passed in 533.09s`; protected independent approval and terminal Checks remain required. |
-| [#805](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/805) | `503e6397ee8cb1fe6005605c7732a58790d2f00d` | open, based on main; required Checks queued at snapshot | Structured provider-feature orchestration change. The predecessor head was reviewed by Devin, but that evidence does not transfer to this current head; refetch and run exact-head local and hosted verification before treating it as merge-ready. |
+| [#805](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/805) | `5c536debc7c94f5846df96be0619b4b1c65f9a8a` | open, based on main; required Checks pending at snapshot | Structured provider-feature orchestration repair. Exact-head local evidence is `1445 passed in 534.26s`; structured runs persist the final synthesis and usage, the Judge uses one direct provider call, tool history order is preserved, and the self-modifying repair workflow was removed. Current hosted Checks and independent approval remain required. |
 | [#804](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/804) | `a1f6716dd2d87a9b5975ebf9770d760837980025` | open, based on main; required Checks queued at snapshot | Root security repair for the Strix agent-pool resource-boundary finding: GET, PATCH, and DELETE resolve pool and worker together. Local exact-head evidence is `1436 passed`; protected independent approval and terminal Checks remain required. |
 | [#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803) | `5e0611439972f93e86c8047ab239c0a35310fe21` | open, based on main; required Checks queued at snapshot | Purpose-limited PII event protection with explicit field encryption and KV-backed AES-256-GCM. Local exact-head evidence is `1447 passed`; protected independent approval and terminal Checks remain required. |
 | [#802](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/802) | `d7e7cb82bb21e7fff4030b83155c461cf4d5a21` | open, stacked on `fix/auto-reasoning-effort-contract-rebased`; Checks pending at snapshot | Provider telemetry session-correlation change with hash-locked OpenTelemetry dependencies and library-research evidence. Exact-head local evidence is `1524 passed, 2 unrelated stacked-base CLI mock failures`; dependency audit, hash dry-run, Ruff, compileall, diff-check, and telemetry tests pass. Refetch current head and rerun all hosted Checks before treating it as merge-ready. |
@@ -139,7 +139,7 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 14:32 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 15:36 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ### External central workflow prerequisite
