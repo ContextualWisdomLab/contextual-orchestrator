@@ -117,6 +117,7 @@ def test_structured_model_judge_accepts() -> None:
         result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is True
     assert result["verification"]["judge"] == "model"
+    assert result["verification"]["judge_agent_id"] == "general_agent"
     assert client.calls == 5
     assert result["answer"] == "step-output(4)"
 

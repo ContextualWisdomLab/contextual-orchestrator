@@ -348,6 +348,32 @@ def test_structured_provider_completion_rechecks_budget_before_final_provider_ca
     send.assert_not_called()
 
 
+def test_structured_provider_completion_counts_model_judge_cost() -> None:
+    orch = _build()
+    orch.budget_max_cost_usd = 3.0
+    orch.price_per_million = {"mock-reviewer": 1_000_000.0}
+    workflow = {
+        "trace": [{"id": 0, "agent_id": "builder_agent", "role": "worker", "output": "ok"}],
+        "verification": {
+            "accepted": True,
+            "judge_agent_id": "reviewer_agent",
+            "judge_usage": {"completion_tokens": 3},
+        },
+    }
+    with patch.object(orch, "conduct", return_value=workflow), patch.object(
+        orch.client, "proxy_send"
+    ) as send, pytest.raises(BudgetExceededError, match="spend budget exceeded"):
+        orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "extract JSON"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    send.assert_not_called()
+
+
 @pytest.mark.parametrize(
     "additional_spend",
     [
@@ -512,6 +538,39 @@ def test_orchestrated_responses_usage_counts_toward_spend_budget() -> None:
         for row in run["trace"]
     )
     assert orch.spend_analytics()["budget"]["spent_output_tokens"] == expected_spend
+
+
+def test_orchestrated_spend_persists_model_judge_usage() -> None:
+    orch = _build()
+    workflow = {
+        "trace": [{"id": 0, "agent_id": "builder_agent", "role": "worker", "output": "ok"}],
+        "verification": {
+            "accepted": True,
+            "judge_agent_id": "reviewer_agent",
+            "judge_usage": {"prompt_tokens": 4, "completion_tokens": 3, "total_tokens": 7},
+        },
+    }
+    raw = {
+        "object": "chat.completion",
+        "choices": [{"message": {"role": "assistant", "content": "{}"}}],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 5, "total_tokens": 7},
+    }
+
+    with patch.object(orch, "conduct", return_value=workflow), patch.object(
+        orch.client, "proxy_send", return_value=raw
+    ):
+        orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "extract JSON"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    by_model = {row["model"]: row for row in orch.spend_analytics()["by_model"]}
+    assert by_model["mock-reviewer"]["output_tokens"] == 3
+    assert by_model["mock-reviewer"]["usage_source"] == "reported"
+    assert by_model["mock-reviewer"]["step_count"] == 1
 
 
 def test_fast_mlsirm_structured_judge_uses_one_direct_provider_call() -> None:

@@ -2332,12 +2332,18 @@ class TaskOrchestrator:
             price = self.price_per_million.get(model) if model is not None else None
             if price is not None:
                 in_flight_cost_usd += output_tokens / 1_000_000 * price
-        verification_usage = workflow.get("verification", {}).get("judge_usage", {})
+        verification = workflow.get("verification")
+        verification_usage = verification.get("judge_usage") if isinstance(verification, dict) else None
         if isinstance(verification_usage, dict):
             judge_output_tokens, _reported = _step_output_token_count(
                 {"usage": verification_usage, "output": ""}
             )
             in_flight_output_tokens += judge_output_tokens
+            judge_agent_id = verification.get("judge_agent_id")
+            judge_model = model_by_agent.get(judge_agent_id)
+            judge_price = self.price_per_million.get(judge_model) if judge_model is not None else None
+            if judge_price is not None:
+                in_flight_cost_usd += judge_output_tokens / 1_000_000 * judge_price
         evidence = "\n\n".join(
             f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
             for row in workflow["trace"]
@@ -3438,8 +3444,7 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-            if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
-                verification["judge_agent_id"] = judge_adapter.served_agent_id
+            verification["judge_agent_id"] = judge_adapter.served_agent_id or judge.id
             if result.usage:
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
@@ -3634,7 +3639,15 @@ class TaskOrchestrator:
 
         for run in self._workflow_runs.values():
             total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
-            for step in run["trace"]:
+            metered_steps = list(run["trace"])
+            verification = run.get("verification")
+            if isinstance(verification, dict) and isinstance(verification.get("judge_usage"), dict):
+                metered_steps.append({
+                    "agent_id": verification.get("judge_agent_id", "unknown"),
+                    "output": "",
+                    "usage": verification["judge_usage"],
+                })
+            for step in metered_steps:
                 model = model_by_agent.get(step.get("agent_id"), "unknown")
                 estimated = estimate_tokens(step.get("output", ""))
                 usage = step.get("usage")
