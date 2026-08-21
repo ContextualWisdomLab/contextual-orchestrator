@@ -28,21 +28,6 @@ def test_admin_state_includes_spend_block() -> None:
     assert spend["by_model"][0]["model"] == "priced-model"
 
 
-def test_admin_state_scopes_spend_to_owner() -> None:
-    """An authenticated admin sees spend only for that principal's runs."""
-    orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))])
-    orchestrator.run([{"role": "user", "content": "owner a spend"}], owner_id="owner_a")
-    orchestrator.run([{"role": "user", "content": "owner b spend"}], owner_id="owner_b")
-
-    owner_a_spend = orchestrator.admin_state(owner_id="owner_a")["spend"]
-    owner_b_spend = orchestrator.admin_state(owner_id="owner_b")["spend"]
-    all_spend = orchestrator.admin_state()["spend"]
-
-    assert owner_a_spend["totals"]["run_count"] == 1
-    assert owner_b_spend["totals"]["run_count"] == 1
-    assert all_spend["totals"]["run_count"] == 2
-
-
 def test_admin_html_has_spend_panel_and_render() -> None:
     # The Observability view renders the spend totals + by_model table.
     assert 'id="spendTotals"' in ADMIN_HTML

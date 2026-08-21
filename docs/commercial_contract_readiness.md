@@ -9,14 +9,10 @@ compliance certificate.
 
 Figma Code Connect is not used.
 
-The release-authority result is a separate blocker. Reviewer delay, review bot
-delay, queued model review, and pending checks without a concrete failure remain
-non-blocking for product evidence, but a missing or blocked exact-head authority
-snapshot keeps release authorization blocked while the contract packet remains
-inspectable. Other blockers are concrete security
-failures, API contract failures, document contract mismatches, reproducible
-product defects, or Code Connect usage.
-Review process is not a blocker for product evidence.
+Review process is not a blocker. Reviewer delay, review bot delay, queued model
+review, and pending checks without a concrete failure are not blockers. Blockers
+are concrete security failures, API contract failures, document contract
+mismatches, reproducible product defects, or Code Connect usage.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 Contextual Orchestrator as one enterprise control-plane product until a second
@@ -43,9 +39,7 @@ creates an extraction trigger.
   `commercial_contract_blocked`;
 - `measurement_status`: `local_commercial_contract_readiness`;
 - `contract_summary`: ready, warning, blocked, support/SLO gap, buyer
-  order-form gap, release-authority blocker, and review-process blocker counts;
-- `release_authorization`: the upstream fail-closed protected-head result,
-  separate from local contract packet status;
+  order-form gap, and review-process blocker counts;
 - `contract_items`: term rows for license/commercial rights, security/privacy,
   audit/export obligations, contract packet docs, support/SLO terms, buyer
   order-form input, review-process policy, and packaging decision;

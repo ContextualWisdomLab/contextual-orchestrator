@@ -127,7 +127,7 @@ One public interface:
 - Responses include orchestration mode metadata, and trusted callers can request the full trace for audit.
 - `/admin` exposes an operator console for agent pool, policy, trace, and audit review.
 - The admin console can use [Clearfolio](https://github.com/ContextualWisdomLab/clearfolio) as its document viewer: pass `--clearfolio-url URL` (or `CONTEXTUAL_ORCHESTRATOR_CLEARFOLIO_URL`) and the Integrations view gains a Document Viewer card (open viewer / deep-link `{url}/viewer/{docId}`). Default: disabled, console unchanged.
-- `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated only from workflow runs owned by the authenticated principal. Output tokens use provider-reported `usage` when available and fall back to a ~4 chars/token estimate otherwise (each model row is labeled `usage_source: reported | mixed | estimated`); cost is computed only for models with an operator-supplied price (`TaskOrchestrator(price_per_million=...)`), otherwise reported as null with the model listed under `unpriced_models`. The `budget` block remains process-wide because configured caps are shared by the runtime. See [Observability & spend](#observability--spend).
+- `/api/v1/spend_analytics/latest` exposes per-model token and cost spend aggregated from workflow runs. Output tokens use provider-reported `usage` when available and fall back to a ~4 chars/token estimate otherwise (each model row is labeled `usage_source: reported | mixed | estimated`); cost is computed only for models with an operator-supplied price (`TaskOrchestrator(price_per_million=...)`), otherwise reported as null with the model listed under `unpriced_models`. See [Observability & spend](#observability--spend).
 - `/api/v1/sales_readiness/latest` exposes a local enterprise-pilot readiness gate for API compatibility, operator evidence, workflow traces, evaluation replay, security posture, analytics truthfulness, locale parity, and provider egress safety. It is process-local evidence, not a production compliance certificate.
 - `/api/v1/commercial_readiness/latest` exposes a KRW 2,000,000,000 commercial due-diligence readiness gate. It is a buyer-review evidence snapshot, not a valuation guarantee or purchase commitment.
 - `/api/v1/buyer_evidence_manifests/latest` exposes the buyer evidence manifest as a runtime review index across endpoints, repository artifacts, Figma artifacts, verification evidence, and production or buyer-specific caveats.
@@ -182,7 +182,7 @@ curl -s http://127.0.0.1:8000/api/v1/spend_analytics/latest \
     --budget-max-output-tokens 2000000 --budget-max-cost-usd 50
   ```
 
-  Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. Once spend reaches a cap, the next run is refused — `run()` raises `BudgetExceededError` and `/v1/chat/completions` returns HTTP `429 budget_exceeded`. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, `spent_*`, `remaining_*`, `exceeded`); owner-scoped reports keep these budget values global so the dashboard agrees with enforcement. Cost caps require a price table; token caps do not.
+  Or in code: `TaskOrchestrator(budget_max_output_tokens=..., budget_max_cost_usd=...)`. Once spend reaches a cap, the next run is refused — `run()` raises `BudgetExceededError` and `/v1/chat/completions` returns HTTP `429 budget_exceeded`. Current state is in `spend_analytics()["budget"]` (`enabled`, limits, `spent_*`, `remaining_*`, `exceeded`). Cost caps require a price table; token caps do not.
 - **Admin.** The `/admin` **Observability** view renders the totals and the per-model table (unpriced models show an `unpriced` chip).
 
 These are process-local measured signals for a stdlib lab, not a billing system or production compliance data.
@@ -314,8 +314,6 @@ python tests/test_buyer_handoff_bundle.py
 python tests/test_saleability_decision.py
 python tests/test_commercial_evidence_export.py
 python tests/test_commercial_acceptance_check.py
-python tests/test_release_authorization.py
-python tests/test_release_authority_snapshot.py
 python tests/test_commercial_buyer_acceptance_workflow.py
 python tests/test_commercial_release_candidate.py
 python tests/test_commercial_gap_register.py

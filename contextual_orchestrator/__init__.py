@@ -38,7 +38,6 @@ from .cost_router import CostRoutingCoordinator
 from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import ModelAgent, TaskOrchestrator, WorkflowStep, load_agents
-from .release_authorization import evaluate_release_authorization
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 __all__ = [
@@ -88,5 +87,4 @@ __all__ = [
     "build_embeddings_jsonl_body",
     "cheapest_upstream",
     "CostRoutingCoordinator",
-    "evaluate_release_authorization",
 ]

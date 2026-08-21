@@ -122,7 +122,6 @@ class CostRoutingCoordinator:
         hints: Optional[Dict[str, Any]] = None,
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
-        owner_id: Optional[str] = None,
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
@@ -152,12 +151,7 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        result = self.orchestrator.run(
-            messages,
-            mode=mode,
-            workflow_run_id=workflow_run_id,
-            owner_id=owner_id,
-        )
+        result = self.orchestrator.run(messages, mode=mode, workflow_run_id=workflow_run_id)
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),

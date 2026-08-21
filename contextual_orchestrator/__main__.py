@@ -316,11 +316,6 @@ def main() -> None:
                         help="Refuse new runs once estimated cost reaches this USD cap (needs a price table; default: no cap).")
     parser.add_argument("--cache-ttl", type=float, default=0.0,
                         help="Seconds to cache identical requests (default 0 = disabled).")
-    parser.add_argument(
-        "--release-authority-json",
-        default=None,
-        help="Path to a persisted exact-head release-authority snapshot collected by the governance CLI.",
-    )
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
     args = parser.parse_args()
@@ -356,15 +351,6 @@ def main() -> None:
         return
 
     if args.serve:
-        release_authority = None
-        if args.release_authority_json:
-            try:
-                with open(args.release_authority_json, encoding="utf-8") as authority_file:
-                    release_authority = json.load(authority_file)
-            except (OSError, json.JSONDecodeError) as exc:
-                parser.error(f"release authority snapshot could not be read: {exc}")
-            if not isinstance(release_authority, dict):
-                parser.error("release authority snapshot must be a JSON object")
         single_requested = bool(args.auth_token or args.auth_token_key)
         split_requested = bool(
             args.admin_token or args.inference_token or args.admin_token_key or args.inference_token_key
@@ -412,7 +398,6 @@ def main() -> None:
                 expose_trace_by_default=args.expose_trace_by_default,
             ),
             clearfolio_url=args.clearfolio_url,
-            release_authority=release_authority,
         )
         return
 

@@ -26,7 +26,7 @@ def test_plugin_design_brief_preserves_enterprise_control_plane() -> None:
         "Ponytail",
         "Data Analytics",
         "Commercial readiness",
-            "release-authority result is a separate blocker",
+        "Review process is not a blocker",
     ]:
         assert expected_text in brief
 
@@ -102,7 +102,7 @@ def test_superpowers_plan_records_no_code_connect_constraint() -> None:
         "Do not create a separate library, Git submodule, or extracted package",
         "commercial_readiness_pass_rate",
         "KRW 2B Commercial Readiness Flow",
-            "release-authority result is a separate blocker",
+        "Review process is not a blocker",
         "pytest -q",
     ]:
         assert expected_text in commercial_plan
@@ -670,7 +670,7 @@ def test_commercial_release_candidate_defines_buyer_release_package() -> None:
         "Commercial Release Candidate",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "Product evidence and release authorization are separate",
+        "Review process is not a blocker",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Release Inputs",
         "Runtime Shape",
@@ -688,8 +688,6 @@ def test_commercial_release_candidate_defines_buyer_release_package() -> None:
         "local_commercial_release_candidate",
         "release_artifacts",
         "external_release_gaps",
-        "release_authorization",
-        "release_authority_collector",
     ]:
         assert expected_text in release
 
@@ -711,7 +709,7 @@ def test_commercial_gap_register_defines_external_gap_actions() -> None:
         "Commercial Gap Register",
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
-        "release-authority gate is",
+        "Review process is not a blocker",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Gap Inputs",
         "Runtime Shape",

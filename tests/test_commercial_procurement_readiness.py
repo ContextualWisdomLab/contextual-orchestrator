@@ -87,10 +87,8 @@ def test_commercial_procurement_readiness_report_tracks_ready_packet_and_warning
     assert report["procurement_summary"]["warning_count"] == 2
     assert report["procurement_summary"]["production_gap_count"] == 1
     assert report["procurement_summary"]["buyer_specific_gap_count"] == 1
-    assert report["procurement_summary"]["release_authority_blocker_count"] == 1
     assert report["procurement_summary"]["review_process_is_blocker"] is False
     assert report["concrete_blockers"] == []
-    assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
     assert items["license_and_rights"]["completion_state"] == "ready"
     assert items["security_package_metadata"]["completion_state"] == "ready"
     assert items["distribution_packet"]["completion_state"] == "ready"
@@ -98,7 +96,7 @@ def test_commercial_procurement_readiness_report_tracks_ready_packet_and_warning
     assert items["production_support_slo_input"]["source_gap_status"] == "production_input_required"
     assert items["buyer_legal_roi_procurement_input"]["completion_state"] == "warning"
     assert items["buyer_legal_roi_procurement_input"]["source_gap_status"] == "buyer_input_required"
-    assert report["related_runtime_reports"]["commercial_gap_register_status"] == "commercial_gap_register_blocked"
+    assert report["related_runtime_reports"]["commercial_gap_register_status"] == "commercial_gap_register_open"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["procurement_links"]["runtime_endpoint"] == "/api/v1/commercial_procurement_readiness/latest"
 
@@ -108,9 +106,6 @@ def test_commercial_procurement_readiness_endpoint_openapi_admin_and_docs_contra
     assert OPENAPI_SPEC["paths"]["/api/v1/commercial_procurement_readiness/latest"]["get"]["operationId"] == (
         "get_latest_commercial_procurement_readiness"
     )
-    assert OPENAPI_SPEC["components"]["schemas"]["CommercialProcurementReadiness"]["properties"]["release_authorization"] == {
-        "$ref": "#/components/schemas/ReleaseAuthorization"
-    }
     assert "/api/v1/commercial_procurement_readiness/latest" in ADMIN_HTML
     assert "commercial_procurement_readiness_title" in ADMIN_TRANSLATIONS["en"]
     assert "commercial_procurement_readiness_title" in ADMIN_TRANSLATIONS["ko"]
@@ -122,7 +117,7 @@ def test_commercial_procurement_readiness_endpoint_openapi_admin_and_docs_contra
     assert "/api/v1/commercial_procurement_readiness/latest" in procurement_doc
     assert "KRW 2B Commercial Procurement Readiness" in procurement_doc
     assert "Figma Code Connect is not used" in procurement_doc
-    assert "release-authority result is a separate blocker" in procurement_doc
+    assert "Review process is not a blocker" in procurement_doc
     assert "Do not create a separate library, Git submodule, or extracted package now" in procurement_doc
 
     server = build_server(
