@@ -940,7 +940,7 @@ class ModelClient:
             or target_port != provider_port
             or target.username is not None
             or target.password is not None
-            or target.fragment
+            or "#" in url
         ):
             raise RuntimeError("provider JSON URL must share the validated agent origin")
         destination = self._validate_provider(agent)
@@ -1236,7 +1236,7 @@ class ModelClient:
             or not parsed.hostname
             or parsed.username is not None
             or parsed.password is not None
-            or parsed.fragment
+            or "#" in request.full_url
         ):
             raise RuntimeError("provider request URL must be an HTTP(S) URL without userinfo or fragments")
         try:
@@ -1490,7 +1490,12 @@ class ModelClient:
                     f"'{credential_name or '<missing>'}' in the KV"
                 )
             parsed = urlparse(agent.base_url)
-            if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+            if (
+                parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or "#" in agent.base_url
+            ):
                 raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
             addresses = self._resolve_addresses(parsed.hostname or "", parsed.port or 80)
             if any(not ipaddress.ip_address(sockaddr[0]).is_loopback for _family, sockaddr in addresses):
@@ -1505,7 +1510,12 @@ class ModelClient:
         parsed = urlparse(agent.base_url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise RuntimeError(f"{agent.id} base_url must use https")
-        if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or "#" in agent.base_url
+        ):
             raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
         hostname = parsed.hostname.lower()
         if self.allowed_provider_hosts and hostname not in self.allowed_provider_hosts:
@@ -1527,7 +1537,12 @@ class ModelClient:
         """Build a provider URL while rejecting urllib-supported local schemes."""
         parsed = urlparse(agent.base_url)
         if _is_local_provider_url(agent.base_url):
-            if parsed.username is not None or parsed.password is not None or parsed.query or parsed.fragment:
+            if (
+                parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or "#" in agent.base_url
+            ):
                 raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
             base_url = urlunsplit(("http", parsed.netloc, parsed.path.rstrip("/"), "", ""))
         elif parsed.scheme in {"http", "https"} and parsed.hostname:
