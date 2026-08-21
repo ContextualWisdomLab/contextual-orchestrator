@@ -16,6 +16,8 @@ import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -25,20 +27,20 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     ProviderResponseError,
     is_transient_error,
 )
-from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError  # noqa: E402
+from contextual_orchestrator.tool_fallback import ToolFallbackStoppedError
 
 
 def _http_error(code: int) -> urllib.error.HTTPError:
     return urllib.error.HTTPError("https://provider.example/chat/completions", code, "err", None, None)
 
 
-def _tool_execution_stopped_error() -> urllib.error.HTTPError:
+def _stopped_http_error() -> urllib.error.HTTPError:
     return urllib.error.HTTPError(
         "https://provider.example/chat/completions",
         409,
-        "tool stopped",
+        "Conflict",
         None,
-        io.BytesIO(b'{"error":{"code":"tool_execution_stopped"}}'),
+        io.BytesIO(json.dumps({"error": {"code": "tool_execution_stopped"}}).encode()),
     )
 
 
@@ -67,12 +69,12 @@ def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> N
         def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
             del agent, payload, destination, timeout
             self.chat_calls += 1
-            raise _tool_execution_stopped_error()
+            raise _stopped_http_error()
 
         def _send_raw(self, agent, endpoint, payload, destination=None):  # type: ignore[override]
             del agent, endpoint, payload, destination
             self.raw_calls += 1
-            raise _tool_execution_stopped_error()
+            raise _stopped_http_error()
 
     client = StoppedProviderClient()
     agent = ModelAgent(
@@ -105,15 +107,40 @@ def test_provider_tool_stop_is_terminal_through_chat_and_raw_retry_layers() -> N
 
 
 def test_tool_execution_stopped_409_is_terminal_but_generic_conflict_retries() -> None:
-    stopped = urllib.error.HTTPError(
-        "https://provider.example/chat/completions",
-        409,
-        "Conflict",
-        None,
-        io.BytesIO(json.dumps({"error": {"code": "tool_execution_stopped"}}).encode()),
-    )
+    stopped = _stopped_http_error()
     assert not is_transient_error(stopped)
     assert is_transient_error(_http_error(409))
+
+
+def test_terminal_tool_stop_is_preserved_by_chat_and_passthrough_transport() -> None:
+    class StoppedClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=3, retry_backoff=0.0)
+            self.attempts = 0
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            del agent, payload, destination
+            self.attempts += 1
+            raise _stopped_http_error()
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            del agent, endpoint, payload, destination
+            self.attempts += 1
+            raise _stopped_http_error()
+
+    client = StoppedClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+
+    with pytest.raises(ToolFallbackStoppedError) as chat_error:
+        client._send_with_retry(agent, {"model": agent.model})
+    assert chat_error.value.decision.kind.value == "ambiguous_outcome"
+    assert chat_error.value.decision.observed_kind.value == "transport_error"
+    assert client.attempts == 1
+
+    with pytest.raises(ToolFallbackStoppedError) as passthrough_error:
+        client._send_raw_with_retry(agent, "chat/completions", {"model": agent.model})
+    assert passthrough_error.value.decision.reason_code == "tool_failure.ambiguous_outcome.fail_closed"
+    assert client.attempts == 2
 
 
 def test_retry_recovers_from_transient_failures_with_backoff() -> None:

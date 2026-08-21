@@ -423,7 +423,8 @@ LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
     """Return whether an HTTP error carries the terminal tool-stop contract."""
-    cached = getattr(error, "_contextual_tool_execution_stopped", None)
+    cache_key = "_contextual_orchestrator_tool_execution_stopped"
+    cached = getattr(error, cache_key, None)
     if isinstance(cached, bool):
         return cached
     try:
@@ -434,23 +435,23 @@ def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
         details = payload.get("error") if isinstance(payload, dict) else None
         result = isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
     try:
-        error._contextual_tool_execution_stopped = result
-    except AttributeError:  # pragma: no cover - HTTPError permits attributes
+        setattr(error, cache_key, result)
+    except (AttributeError, TypeError):  # pragma: no cover - HTTPError is mutable
         pass
     return result
 
 
-def _provider_tool_execution_stopped(agent_id: str) -> ToolFallbackStoppedError:
-    """Convert the provider's terminal tool-stop response to the safe gateway contract."""
+def _provider_tool_execution_stopped(agent: ModelAgent) -> ToolFallbackStoppedError:
+    """Convert the provider's terminal tool-stop contract to the public safe error."""
     decision = classify_tool_failure(
         ToolExecutionError(
-            "provider reported tool_execution_stopped",
-            tool_name="provider",
+            "provider reported terminal tool execution state",
+            tool_name="provider_tool_runtime",
             kind=ToolFailureKind.TRANSPORT_ERROR,
             outcome_unknown=True,
         )
     )
-    return ToolFallbackStoppedError(agent_id, decision)
+    return ToolFallbackStoppedError(agent.id, decision)
 
 
 def _is_local_provider_url(base_url: str) -> bool:
@@ -958,7 +959,7 @@ class ModelClient:
                     break
                 self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
-            raise _provider_tool_execution_stopped(agent.id) from None
+            raise _provider_tool_execution_stopped(agent) from None
         if isinstance(last_error, ProviderResponseError):
             raise last_error
         raise RuntimeError(f"provider {agent.id} request failed") from None
@@ -1154,21 +1155,26 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request, destination) as response:
-            for raw in response:
-                line = raw.decode("utf-8").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:") :].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-                if delta:
-                    yield delta
+        try:
+            with self._open_provider(request, destination) as response:
+                for raw in response:
+                    line = raw.decode("utf-8").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                    if delta:
+                        yield delta
+        except urllib.error.HTTPError as exc:
+            if _is_tool_execution_stopped(exc):
+                raise _provider_tool_execution_stopped(agent) from None
+            raise
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
@@ -1215,7 +1221,7 @@ class ModelClient:
                     break
                 self._sleep(self._backoff_delay(attempt))
         if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
-            raise _provider_tool_execution_stopped(agent.id) from None
+            raise _provider_tool_execution_stopped(agent) from None
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
 
     def _send_raw(
@@ -2617,7 +2623,7 @@ class TaskOrchestrator:
             while True:
                 try:
                     output = self.client.chat(agent, messages)
-                except Exception as exc:  # noqa: BLE001 - classify before fallback
+                except Exception as exc:
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
                     last_error = exc

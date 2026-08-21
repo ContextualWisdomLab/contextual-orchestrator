@@ -21,9 +21,9 @@ from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
+    ToolFailureKind,
     ToolFallbackAction,
     ToolFallbackStoppedError,
-    ToolFailureKind,
     classify_tool_failure,
 )
 
@@ -641,6 +641,46 @@ def _post_fallback_json(
         return error.code, json.loads(error.read().decode("utf-8"))
 
 
+def _provider_tool_stop_http_error() -> urllib.error.HTTPError:
+    """Build the provider-originated terminal 409 without retaining provider text."""
+    return urllib.error.HTTPError(
+        "https://provider.example/chat/completions",
+        409,
+        "Conflict",
+        None,
+        io.BytesIO(json.dumps({"error": {"code": "tool_execution_stopped"}}).encode()),
+    )
+
+
+class _ProviderStoppedChatClient(ModelClient):
+    """Return the provider terminal contract through the real chat transport path."""
+
+    def __init__(self) -> None:
+        super().__init__(max_retries=3, retry_backoff=0.0)
+        self.calls: list[str] = []
+
+    def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+        del agent
+        return None
+
+    def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+        del payload, destination
+        self.calls.append(agent.id)
+        raise _provider_tool_stop_http_error()
+
+
+class _ProviderStoppedStreamingClient(ModelClient):
+    """Return the provider terminal contract while opening a streaming response."""
+
+    def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+        del agent
+        return None
+
+    def _open_provider(self, request, destination=None, *, timeout=None):  # type: ignore[override]
+        del request, destination, timeout
+        raise _provider_tool_stop_http_error()
+
+
 def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
     error = ToolExecutionError(
         "request may have completed token=must-not-leak",
@@ -683,39 +723,24 @@ def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
     assert "must-not-leak" not in json.dumps(body)
 
 
-class _ProviderStoppedClient(ModelClient):
-    """Expose a provider's terminal 409 without making a network request."""
-
-    def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
-        del agent
-        return
-
-    def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
-        del agent, payload, destination, timeout
-        raise urllib.error.HTTPError(
-            "https://provider.example/chat/completions",
-            409,
-            "tool stopped",
-            None,
-            io.BytesIO(b'{"error":{"code":"tool_execution_stopped"}}'),
-        )
-
-
-def test_provider_tool_stop_preserves_http_contract() -> None:
-    orchestrator = TaskOrchestrator(
-        [
-            ModelAgent(
-                "provider_worker",
-                "provider-model",
-                base_url="https://provider.example/v1",
-                api_key_env="",
-                credential_key="",
-            )
-        ],
-        client=_ProviderStoppedClient(max_retries=2, retry_backoff=0.0),
-    )
+def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
+    agents = [
+        ModelAgent(
+            "primary_worker",
+            "provider-model",
+            base_url="https://provider.example/v1",
+            credential_key="",
+        ),
+        ModelAgent(
+            "backup_worker",
+            "provider-model",
+            base_url="https://provider.example/v1",
+            credential_key="",
+        ),
+    ]
+    client = _ProviderStoppedChatClient()
     server = build_server(
-        orchestrator,
+        TaskOrchestrator(agents, client=client),
         port=0,
         security=SecurityConfig(auth_token="secret_token"),
     )
@@ -737,7 +762,53 @@ def test_provider_tool_stop_preserves_http_contract() -> None:
     assert status == 409
     assert body["error"]["code"] == "tool_execution_stopped"
     assert body["error"]["detail"]["failure_kind"] == "ambiguous_outcome"
+    assert client.calls == ["primary_worker"]
     assert "provider.example" not in json.dumps(body)
+
+
+def test_provider_http_tool_stop_preserves_streaming_sse_contract() -> None:
+    agent = ModelAgent(
+        "primary_worker",
+        "provider-model",
+        base_url="https://provider.example/v1",
+        credential_key="",
+    )
+    server = build_server(
+        TaskOrchestrator([agent], client=_ProviderStoppedStreamingClient(max_retries=0)),
+        port=0,
+        security=SecurityConfig(auth_token="secret_token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+        data=json.dumps(
+            {
+                "model": "provider-model",
+                "mode": "route",
+                "stream": True,
+                "messages": [{"role": "user", "content": "send this message"}],
+            }
+        ).encode("utf-8"),
+        headers={
+            "authorization": "Bearer secret_token",
+            "content-type": "application/json",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status = response.status
+            body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert '"code": "tool_execution_stopped"' in body
+    assert '"finish_reason": "error"' in body
+    assert body.endswith("data: [DONE]\n\n")
 
 
 class _StoppedStreamingClient(ModelClient):
