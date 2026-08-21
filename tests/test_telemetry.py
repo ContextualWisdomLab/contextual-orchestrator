@@ -53,6 +53,9 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
             {
                 "": "empty-key",
                 "nested": {"prompt": "excluded"},
+                "prompt": "do not export",
+                "gen_ai.input.messages": "do not export",
+                "api_key": "do not export",
                 "long": "x" * 300,
                 "enabled": True,
                 "attempt": 2,
