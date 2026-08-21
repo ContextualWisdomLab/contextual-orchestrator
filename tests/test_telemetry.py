@@ -74,6 +74,37 @@ def test_session_binding_is_reset():
     assert current_session_id() is None
 
 
+def test_local_batch_workers_inherit_session_id(monkeypatch):
+    """Concurrent local batch provider spans retain the caller's session."""
+    client = ModelClient(local_concurrency=2)
+    agent = ModelAgent(
+        "local_agent",
+        "local-model",
+        base_url="local://127.0.0.1:8080/v1",
+        local_credential_key="LOCAL_GATEWAY_TOKEN",
+    )
+    observed: list[str | None] = []
+
+    def fake_chat(_agent, _messages, temperature=None):
+        del temperature
+        observed.append(current_session_id())
+        return "ok"
+
+    monkeypatch.setattr(client, "chat", fake_chat)
+    token = set_session_id("post-session")
+    try:
+        result = client._local_batch_chat(
+            agent,
+            {"one": [{"role": "user", "content": "1"}], "two": [{"role": "user", "content": "2"}]},
+            None,
+        )
+    finally:
+        reset_session_id(token)
+
+    assert set(observed) == {"post-session"}
+    assert {key: value["content"] for key, value in result.items()} == {"one": "ok", "two": "ok"}
+
+
 def test_traced_preserves_provider_error():
     """Tracing records failure but never changes the provider contract."""
     try:

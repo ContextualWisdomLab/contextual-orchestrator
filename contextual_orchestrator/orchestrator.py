@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
@@ -1640,7 +1640,10 @@ class ModelClient:
         if self.local_concurrency == 1 or len(requests) <= 1:
             return dict(complete(custom_id, messages) for custom_id, messages in requests.items())
         with ThreadPoolExecutor(max_workers=min(self.local_concurrency, len(requests))) as pool:
-            futures = [pool.submit(complete, custom_id, messages) for custom_id, messages in requests.items()]
+            futures = [
+                pool.submit(copy_context().run, complete, custom_id, messages)
+                for custom_id, messages in requests.items()
+            ]
             return dict(future.result() for future in futures)
 
     def _batch_run(
