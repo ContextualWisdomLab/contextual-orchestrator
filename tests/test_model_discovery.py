@@ -13,17 +13,19 @@ import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
-from contextual_orchestrator.credentials import (  # noqa: E402
+from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.cost_ledger import PriceBook
+from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     register_credential,
     set_backend,
 )
-from contextual_orchestrator.cost_ledger import PriceBook  # noqa: E402
-from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
-from contextual_orchestrator.model_discovery import (  # noqa: E402
+from contextual_orchestrator.kv_config import InMemoryConfigStore
+from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
+    ProviderDiscoveryError,
     ProviderModelSource,
+    _provider_discovery_error_code,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -154,6 +156,67 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
     assert len(errors) == 1
     assert errors[0].provider_name == "openai"
+    assert errors[0].error_code == "transport_error"
+    assert str(errors[0]) == "model discovery failed for provider 'openai': transport_error"
+    assert "connection refused" not in str(errors[0])
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        (
+            urllib.error.HTTPError(
+                "https://provider.example/models", 401, "secret", None, None
+            ),
+            "http_status_401",
+        ),
+        (TimeoutError("provider timeout secret"), "timeout"),
+        (urllib.error.URLError("transport secret"), "transport_error"),
+        (ConnectionError("connection secret"), "transport_error"),
+        (OSError("socket secret"), "transport_error"),
+        (ValueError("malformed response secret"), "invalid_response"),
+        (RuntimeError("unclassified provider secret"), "provider_error"),
+    ],
+)
+def test_provider_discovery_errors_are_stable_and_redacted(
+    failure: Exception, expected_code: str
+) -> None:
+    """Provider discovery must never expose an upstream exception message."""
+    register_credential("OPENAI_API_KEY", "sk-openai")
+
+    with patch(
+        "contextual_orchestrator.model_discovery.urllib.request.urlopen",
+        side_effect=failure,
+    ), pytest.raises(ProviderDiscoveryError) as raised:
+        discover_provider_models(OPENAI_SOURCE)
+
+    assert raised.value.error_code == expected_code
+    assert "secret" not in str(raised.value)
+    assert "secret" not in repr(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
+@pytest.mark.parametrize(
+    ("failure", "expected_code"),
+    [
+        (
+            urllib.error.HTTPError(
+                "https://provider.example/models", 500, "secret", None, None
+            ),
+            "http_status_500",
+        ),
+        (TimeoutError("secret"), "timeout"),
+        (urllib.error.URLError("secret"), "transport_error"),
+        (ValueError("secret"), "invalid_response"),
+        (RuntimeError("secret"), "provider_error"),
+    ],
+)
+def test_provider_error_classifier_never_copies_message(
+    failure: Exception, expected_code: str
+) -> None:
+    """The classifier returns only package-owned diagnostic codes."""
+    assert _provider_discovery_error_code(failure) == expected_code
 
 
 def test_agent_id_for_is_two_word_snake_case() -> None:

@@ -17,6 +17,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator, load_agents  #
 from contextual_orchestrator.credentials import NotConfigured  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     ModelClient,
+    ProviderResponseError,
     _chat_to_responses_payload,
     _is_local_provider_url,
     _responses_to_chat_payload,
@@ -214,6 +215,42 @@ def test_provider_probe_reports_timeout_without_retry() -> None:
     assert open_provider.call_count == 1
 
 
+def test_provider_probe_labels_structural_response_errors() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_retries=0)
+
+    def open_provider(request, _destination=None, *, timeout=None):
+        del timeout
+        if request.get_method() == "GET":
+            return _Response({"object": "list", "data": [{"id": "local-model"}]})
+        return _Response({"choices": [{"message": {"reasoning": "still thinking"}}]})
+
+    with patch.object(client, "_open_provider", side_effect=open_provider):
+        report = client.probe(agent, timeout=0.5)
+
+    assert report["status"] == "not_ready"
+    assert report["error_type"] == "ProviderResponseError"
+    assert report["failure_code"] == "provider_probe_failed"
+
+
+def test_provider_probe_labels_empty_content_separately() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_retries=0)
+
+    def open_provider(request, _destination=None, *, timeout=None):
+        del timeout
+        if request.get_method() == "GET":
+            return _Response({"object": "list", "data": [{"id": "local-model"}]})
+        return _Response({"choices": [{"message": {"content": "  "}}]})
+
+    with patch.object(client, "_open_provider", side_effect=open_provider):
+        report = client.probe(agent, timeout=0.5)
+
+    assert report["status"] == "not_ready"
+    assert report["error_type"] == "RuntimeError"
+    assert report["failure_code"] == "provider_empty_probe_response"
+
+
 def test_provider_probe_does_not_serialize_provider_exception_text() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=0)
@@ -348,6 +385,12 @@ def test_response_without_content_or_reasoning_fails_clearly() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     with pytest.raises(RuntimeError, match="assistant content"):
         ModelClient()._response_content(agent, {"choices": [{"message": {}}]})
+
+
+def test_response_with_empty_content_fails_as_a_structural_provider_error() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    with pytest.raises(ProviderResponseError, match="empty assistant content"):
+        ModelClient()._response_content(agent, {"choices": [{"message": {"content": "  "}}]})
 
 
 def test_local_responses_passthrough_adapts_to_chat_transport() -> None:

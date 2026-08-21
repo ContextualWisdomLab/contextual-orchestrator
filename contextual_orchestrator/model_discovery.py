@@ -30,6 +30,20 @@ if TYPE_CHECKING:
 DISCOVERY_TIMEOUT_SECONDS = 15.0
 
 
+def _provider_discovery_error_code(exc: Exception) -> str:
+    """Map provider failures to stable diagnostics without copying exception text."""
+    if isinstance(exc, urllib.error.HTTPError):
+        status = exc.code if type(exc.code) is int else "unknown"
+        return f"http_status_{status}"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, (urllib.error.URLError, ConnectionError, OSError)):
+        return "transport_error"
+    if isinstance(exc, ValueError):
+        return "invalid_response"
+    return "provider_error"
+
+
 @dataclass(frozen=True)
 class ProviderModelSource:
     """Where and how to discover one provider's models."""
@@ -99,9 +113,10 @@ class DiscoveredModel:
 class ProviderDiscoveryError(RuntimeError):
     """Raised when a provider's model list could not be fetched (network/auth failure)."""
 
-    def __init__(self, provider_name: str, detail: str) -> None:
+    def __init__(self, provider_name: str, error_code: str) -> None:
         self.provider_name = provider_name
-        super().__init__(f"model discovery failed for provider {provider_name!r}: {detail}")
+        self.error_code = error_code
+        super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
 
 
 def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
@@ -117,7 +132,7 @@ def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> 
         method="GET",
     )
     # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
+    with urllib.request.urlopen(request, timeout=timeout) as response:  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
         return json.loads(response.read().decode("utf-8"))
 
 
@@ -188,10 +203,13 @@ def discover_provider_models(
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
+    error_code: str | None = None
     try:
         payload = _fetch_json(url, api_key=api_key, auth_scheme=source.auth_scheme, timeout=timeout)
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:  # pragma: no cover - network path
-        raise ProviderDiscoveryError(source.provider_name, str(exc)) from exc
+    except Exception as exc:  # noqa: BLE001 - provider boundary emits only a stable code
+        error_code = _provider_discovery_error_code(exc)
+    if error_code is not None:
+        raise ProviderDiscoveryError(source.provider_name, error_code)
     if source.style == "bytez":
         return _parse_bytez(payload, source)
     return _parse_openai_compatible(payload, source)
@@ -245,7 +263,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
     )
 
 
-def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook") -> int:
+def refresh_price_book(discovered: list[DiscoveredModel], price_book: PriceBook) -> int:
     """Write every discovered model's known pricing into the price book.
 
     Returns the number of price rows written. A model without provider-reported
@@ -273,7 +291,7 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 
 
 def select_cheapest_discovered_agent(
-    discovered: list[DiscoveredModel], price_book: "PriceBook"
+    discovered: list[DiscoveredModel], price_book: PriceBook
 ) -> DiscoveredModel | None:
     """Pick the lowest-cost discovered model per the price book (auto-optimization).
 
@@ -299,7 +317,7 @@ def select_cheapest_discovered_agent(
 
 
 def select_top_n_cheapest_discovered_agents(
-    discovered: list[DiscoveredModel], price_book: "PriceBook", limit: int
+    discovered: list[DiscoveredModel], price_book: PriceBook, limit: int
 ) -> list[DiscoveredModel]:
     """Return the ``limit`` lowest-cost discovered models, cheapest first.
 

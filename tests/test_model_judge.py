@@ -457,6 +457,17 @@ def test_model_judge_parser_rejects_oversized_reply() -> None:
         _parse_model_judge_reply("x" * 32_001)
 
 
+def test_model_judge_parser_hides_raw_provider_response() -> None:
+    raw_provider_response = "provider-secret-response"
+
+    with pytest.raises(ValueError, match="not valid JSON") as error:
+        _parse_model_judge_reply(raw_provider_response)
+
+    assert raw_provider_response not in str(error.value)
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+
+
 def test_missing_fast_mlsirm_does_not_use_a_direct_judge_fallback() -> None:
     orchestrator, _ = _orch("unused")
     with patch.object(orchestrator_module, "_resolve_fast_mlsirm_components", return_value=None), patch.object(

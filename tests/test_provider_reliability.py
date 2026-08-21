@@ -6,6 +6,7 @@ the capability a model-orchestration gateway is bought for.
 
 from __future__ import annotations
 
+import io
 import socket
 import ssl
 import sys
@@ -14,12 +15,15 @@ import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
+    ProviderResponseError,
     is_transient_error,
 )
 
@@ -163,6 +167,103 @@ def test_permanent_error_is_not_retried() -> None:
     assert client.attempts == 1  # 400 is a caller error: exactly one attempt, no retry
 
 
+def test_provider_retry_error_does_not_expose_raw_exception_text() -> None:
+    class LeakyProviderClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            raise RuntimeError("provider-response-secret")
+
+    client = LeakyProviderClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1", api_key_env="X")
+    try:
+        client._send_with_retry(agent, {"model": agent.model})
+    except RuntimeError as exc:
+        assert str(exc) == "provider worker_agent request failed"
+        assert "provider-response-secret" not in str(exc)
+        assert exc.__cause__ is None
+    else:  # pragma: no cover
+        raise AssertionError("a failed provider request must raise")
+
+
+def test_provider_passthrough_error_does_not_expose_raw_exception_text() -> None:
+    class LeakyProviderClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+
+        def _send_raw(self, agent: ModelAgent, endpoint: str, payload: dict, destination=None) -> dict:  # type: ignore[override]
+            raise RuntimeError("passthrough-response-secret")
+
+    client = LeakyProviderClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1", api_key_env="X")
+    try:
+        client._send_raw_with_retry(agent, "responses", {})
+    except RuntimeError as exc:
+        assert str(exc) == "provider worker_agent passthrough request failed"
+        assert "passthrough-response-secret" not in str(exc)
+        assert exc.__cause__ is None
+    else:  # pragma: no cover
+        raise AssertionError("a failed passthrough request must raise")
+
+
+def test_provider_batch_error_does_not_expose_raw_exception_text() -> None:
+    """Batch upload/poll/download failures stay inside the provider boundary."""
+
+    class LeakyBatchClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+
+        def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+            return None
+
+        def _batch_upload(self, agent, payload, destination=None):  # type: ignore[override]
+            raise urllib.error.HTTPError(
+                "https://provider.example/files",
+                502,
+                "provider-batch-secret",
+                None,
+                io.BytesIO(b"provider-batch-body-secret"),
+            )
+
+    client = LeakyBatchClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1", api_key_env="X")
+
+    with pytest.raises(RuntimeError) as raised:
+        client.batch_chat(agent, {"task_0": [{"role": "user", "content": "run batch"}]})
+
+    assert str(raised.value) == "provider worker_agent batch request failed"
+    assert "provider-batch-secret" not in str(raised.value)
+    assert "provider-batch-body-secret" not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
+def test_provider_stream_error_does_not_expose_raw_exception_text() -> None:
+    """SSE transport failures stay package-owned before a stream reaches callers."""
+
+    class LeakyStreamingClient(ModelClient):
+        def _open_provider(self, request, destination=None, *, timeout=None):  # type: ignore[override]
+            raise urllib.error.HTTPError(
+                request.full_url,
+                502,
+                "provider failed",
+                None,
+                io.BytesIO(b"provider-stream-secret"),
+            )
+
+    client = LeakyStreamingClient(max_retries=0)
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1", api_key_env="X")
+
+    with pytest.raises(RuntimeError) as raised:
+        list(client._stream_send(agent, {"model": "gpt", "stream": True}))
+
+    assert str(raised.value) == "provider worker_agent streaming request failed"
+    assert "provider-stream-secret" not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
 class _AgentDownClient(ModelClient):
     """Fails for a chosen agent id, succeeds for the rest."""
 
@@ -197,6 +298,39 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
 
 
+def test_structural_provider_response_stops_before_failover_or_circuit_update() -> None:
+    agents = [
+        ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
+        ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
+    ]
+
+    class MalformedPrimaryClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(retry_backoff=0.0)
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            if agent.id == "primary_worker":
+                raise ProviderResponseError("provider primary_worker response did not contain assistant content")
+            return "backup must not be called"
+
+    client = MalformedPrimaryClient()
+    orchestrator = TaskOrchestrator(agents, client=client)
+
+    try:
+        orchestrator._invoke(
+            agents[0], [{"role": "user", "content": "route this"}], text="route this", role="worker"
+        )
+    except ProviderResponseError as exc:
+        assert str(exc) == "provider primary_worker response did not contain assistant content"
+    else:  # pragma: no cover
+        raise AssertionError("a structurally invalid provider response must fail closed")
+
+    assert client.calls == ["primary_worker"]
+    assert orchestrator._circuit == {}
+
+
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     agents = [
         ModelAgent("primary_worker", "mock", tags=("reasoning",)),
@@ -214,6 +348,8 @@ def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     except RuntimeError as exc:
         raised = True
         assert "candidate agents failed" in str(exc)
+        assert "everything is down" not in str(exc)
+        assert exc.__cause__ is None
     assert raised
 
 

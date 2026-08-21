@@ -45,6 +45,7 @@ _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "ConnectionError",
     "HTTPError",
     "OSError",
+    "ProviderResponseError",
     "RuntimeError",
     "SSLError",
     "TimeoutError",
@@ -79,6 +80,10 @@ class BudgetExceededError(RuntimeError):
     def __init__(self, message: str, detail: dict[str, Any] | None = None) -> None:
         super().__init__(message)
         self.detail = detail or {}
+
+
+class ProviderResponseError(RuntimeError):
+    """A package-owned, safe explanation for a structurally invalid provider response."""
 
 
 def estimate_tokens(text: str) -> int:
@@ -218,10 +223,13 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
             result[key] = value
         return result
 
+    parse_error: ValueError | None = None
     try:
         decision = json.loads(reply.strip(), object_pairs_hook=reject_duplicate_keys)
-    except (json.JSONDecodeError, RecursionError, TypeError) as exc:
-        raise ValueError("judge response is not valid JSON") from exc
+    except (json.JSONDecodeError, RecursionError, TypeError):
+        parse_error = ValueError("judge response is not valid JSON")
+    if parse_error is not None:
+        raise parse_error
     if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
         raise ValueError("judge response must match the exact verdict schema")
     decision_value = decision["decision"]
@@ -864,7 +872,13 @@ class ModelClient:
                 if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                     payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
-                    content = self._send(agent, payload, destination, timeout=probe_timeout)
+                    content = self._send(
+                        agent,
+                        payload,
+                        destination,
+                        timeout=probe_timeout,
+                        allow_empty_content=True,
+                    )
                 usage = self.take_usage()
             if not content.strip():
                 failure_code = "provider_empty_probe_response"
@@ -895,7 +909,6 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
-        last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
@@ -905,12 +918,12 @@ class ModelClient:
                     else self._send(agent, payload, destination, timeout=timeout)
                 )
             except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
+                if isinstance(exc, ProviderResponseError):
+                    raise
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        detail = f": {last_error}" if last_error else ""
-        raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
+        raise RuntimeError(f"provider {agent.id} request failed") from None
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -928,6 +941,7 @@ class ModelClient:
         destination: ProviderDestination | None = None,
         *,
         timeout: float | None = None,
+        allow_empty_content: bool = False,
     ) -> str:
         """Perform one provider HTTP request (isolated so retry/backoff stays testable)."""
         api_key = _provider_credential(agent)
@@ -950,22 +964,31 @@ class ModelClient:
         usage = data.get("usage")
         if isinstance(usage, dict):
             self._local.usage = usage
-        return self._response_content(agent, data)
+        return self._response_content(agent, data, allow_empty_content=allow_empty_content)
 
     @staticmethod
-    def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
+    def _response_content(
+        agent: ModelAgent,
+        data: dict[str, Any],
+        *,
+        allow_empty_content: bool = False,
+    ) -> str:
         """Extract text and explain provider responses that contain reasoning only."""
         choices = data.get("choices")
         message = choices[0].get("message") if isinstance(choices, list) and choices else None
         content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
+        if isinstance(content, str) and content.strip():
             return content
+        if isinstance(content, str):
+            if allow_empty_content:
+                return content
+            raise ProviderResponseError(f"provider {agent.id} returned empty assistant content")
         if isinstance(message, dict) and message.get("reasoning"):
-            raise RuntimeError(
+            raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
                 "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
             )
-        raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
+        raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
 
     @staticmethod
     def _connect_validated(
@@ -980,7 +1003,7 @@ class ModelClient:
                 connection.bind(source_address)
             connection.connect(sockaddr)
             return connection
-        except Exception:
+        except Exception:  # noqa: BLE001 - provider error boundary
             connection.close()
             raise
 
@@ -1103,21 +1126,30 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
-        with self._open_provider(request, destination) as response:
-            for raw in response:
-                line = raw.decode("utf-8").strip()
-                if not line.startswith("data:"):
-                    continue
-                data = line[len("data:") :].strip()
-                if data == "[DONE]":
-                    break
-                try:
-                    chunk = json.loads(data)
-                except json.JSONDecodeError:
-                    continue
-                delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
-                if delta:
-                    yield delta
+        stream_error: RuntimeError | None = None
+        try:
+            with self._open_provider(request, destination) as response:
+                for raw in response:
+                    line = raw.decode("utf-8").strip()
+                    if not line.startswith("data:"):
+                        continue
+                    data = line[len("data:") :].strip()
+                    if data == "[DONE]":
+                        break
+                    try:
+                        chunk = json.loads(data)
+                    except json.JSONDecodeError:
+                        continue
+                    delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
+                    if delta:
+                        yield delta
+        except Exception:  # noqa: BLE001 - provider error boundary
+            # A stream may already have emitted bytes, so it cannot be retried or
+            # fail over. Keep the provider body and exception cause inside the
+            # gateway while preserving one stable library error for callers.
+            stream_error = RuntimeError(f"provider {agent.id} streaming request failed")
+        if stream_error is not None:
+            raise stream_error
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
@@ -1153,17 +1185,15 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
-        last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
+        raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
 
     def _send_raw(
         self,
@@ -1325,9 +1355,18 @@ class ModelClient:
             results = self._local_batch_chat(agent, requests, temperature)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
-            results = self._batch_run(  # pragma: no cover
-                agent, requests, temperature, poll_interval, poll_timeout, destination
-            )
+            batch_error: RuntimeError | None = None
+            try:
+                results = self._batch_run(  # pragma: no cover
+                    agent, requests, temperature, poll_interval, poll_timeout, destination
+                )
+            except Exception:  # noqa: BLE001 - provider batch boundary
+                # Batch upload, polling, and output retrieval all cross the same
+                # public gateway boundary; provider bodies and exception text stay
+                # inside the authorized provider observability system.
+                batch_error = RuntimeError(f"provider {agent.id} batch request failed")
+            if batch_error is not None:
+                raise batch_error
         return _validate_batch_results(requests, results)
 
     def _local_batch_chat(
@@ -1978,11 +2017,16 @@ class TaskOrchestrator:
                 self.client.batch_chat(agents_by_id[agent_id], requests),
             )
             for custom_id, result in results.items():
+                identifier_error: RuntimeError | None = None
                 try:
                     prefix, suffix = custom_id.rsplit("_", 1)
                     index = int(suffix)
-                except (AttributeError, ValueError) as exc:
-                    raise RuntimeError("batch provider returned an invalid request identifier") from exc
+                except (AttributeError, ValueError):
+                    identifier_error = RuntimeError(
+                        "batch provider returned an invalid request identifier"
+                    )
+                if identifier_error is not None:
+                    raise identifier_error
                 if prefix != "task" or custom_id != f"task_{index}" or not 0 <= index < len(selected):
                     raise RuntimeError("batch provider returned an invalid request identifier")
                 if index in answers:
@@ -2528,20 +2572,24 @@ class TaskOrchestrator:
         cross-agent failover plus a per-agent circuit breaker, and returns
         ``(output, served_agent_id, usage)`` — usage is the provider-reported token
         usage when available (else None), so spend analytics can prefer it.
+
+        Structurally invalid provider responses are package-owned boundary errors,
+        not transport failures. They fail closed before another provider is tried
+        or circuit-breaker state is changed.
         """
         candidates = self._failover_candidates(primary, text, role)
-        last_error: Exception | None = None
         for agent in candidates:
             try:
                 output = self.client.chat(agent, messages)
-            except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
-                last_error = exc
+            except Exception as exc:
+                if isinstance(exc, ProviderResponseError):
+                    raise
                 self._record_failure(agent.id)
                 continue
             self._record_success(agent.id)
             usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
             return output, agent.id, usage
-        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
         ranked = self._ranked_agents(text, role)

@@ -127,6 +127,21 @@ def test_batch_route_rejects_incomplete_or_empty_provider_results(kind: str) -> 
     assert orchestrator._workflow_runs == {}
 
 
+def test_batch_route_hides_malformed_provider_identifier() -> None:
+    orchestrator = _orch(_CountingClient())
+
+    with patch.object(
+        orchestrator_module,
+        "_validate_batch_results",
+        return_value={"task_provider-secret": {"content": "ok"}},
+    ), pytest.raises(RuntimeError, match="invalid request identifier") as error:
+        orchestrator.batch_route(["task one"])
+
+    assert "provider-secret" not in str(error.value)
+    assert error.value.__cause__ is None
+    assert error.value.__context__ is None
+
+
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
     client = ModelClient()
     agent = ModelAgent("local_agent", "model-x", base_url="local://127.0.0.1:1")
