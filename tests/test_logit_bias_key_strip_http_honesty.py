@@ -65,7 +65,7 @@ def test_http_responses_rejects_unapplied_logit_bias_padded_digit_keys() -> None
                     "logit_bias": {key: "-5", "200": 1},
                 },
             )
-            assert status == 400, (key, body)
+            assert status == 422, (key, body)
             assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()

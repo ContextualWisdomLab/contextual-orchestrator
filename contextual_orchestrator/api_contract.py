@@ -167,6 +167,7 @@ OPENAPI_SPEC = {
                 "responses": {
                     "200": {"description": "Responses API result"},
                     "400": {"description": "Invalid request"},
+                    "422": {"description": "Valid request shape with unsupported orchestration controls"},
                 },
             }
         },
@@ -591,6 +592,10 @@ OPENAPI_SPEC = {
                         "application/json": {
                             "schema": {
                                 "type": "object",
+                                "anyOf": [
+                                    {"required": ["input"]},
+                                    {"required": ["inputs"]},
+                                ],
                                 "properties": {
                                     "model": {
                                         "type": "string",

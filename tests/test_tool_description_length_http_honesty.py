@@ -52,7 +52,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_chat_accepts_tool_description_at_1024_chars() -> None:
+def test_http_chat_rejects_tool_request_with_1024_char_description() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -110,6 +110,6 @@ def test_http_chat_rejects_tool_description_over_1024_chars() -> None:
 
 
 if __name__ == "__main__":
-    test_http_chat_accepts_tool_description_at_1024_chars()
+    test_http_chat_rejects_tool_request_with_1024_char_description()
     test_http_chat_rejects_tool_description_over_1024_chars()
     print("ok")

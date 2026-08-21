@@ -62,13 +62,24 @@ def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> Non
 
     assert embeddings_schema["required"] == ["input"]
     assert "model" not in batch_schema.get("required", [])
+    assert batch_schema["anyOf"] == [
+        {"required": ["input"]},
+        {"required": ["inputs"]},
+    ]
     assert "Optional enabled embedding-capable pool model" in embeddings_schema["properties"]["model"][
         "description"
     ]
+
+
+def test_openapi_documents_unsupported_responses_controls() -> None:
+    responses = OPENAPI_SPEC["paths"]["/v1/responses"]["post"]["responses"]
+
+    assert "422" in responses
 
 
 if __name__ == "__main__":  # pragma: no cover
     test_rest_resource_paths_use_two_word_snake_case()
     test_openapi_uses_resource_oriented_operation_ids()
     test_openapi_documents_orchestrator_owned_embedding_model_selection()
+    test_openapi_documents_unsupported_responses_controls()
     print("ok")

@@ -60,7 +60,7 @@ def test_http_responses_rejects_unapplied_temperature_and_top_p() -> None:
                 "top_p": 0.9,
             },
         )
-        assert status == 400, body
+        assert status == 422, body
         assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()

@@ -14,7 +14,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.server import SecurityConfig, build_server
 
-_TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"
+_TEST_AUTH_TOKEN = "embeddings_model_pool_http_honesty_token"  # noqa: S105
 
 
 def build() -> TaskOrchestrator:
@@ -224,6 +224,7 @@ if __name__ == "__main__":
     test_http_embeddings_rejects_model_outside_agent_pool()
     test_http_embeddings_accepts_model_in_agent_pool()
     test_http_embeddings_auto_selects_enabled_embedding_agent()
+    test_http_embeddings_auto_selection_fails_when_capability_is_missing()
     test_http_embeddings_reject_virtual_orchestrator_model()
     test_http_batch_embeddings_rejects_model_outside_agent_pool()
     test_http_batch_embeddings_accepts_model_in_agent_pool()

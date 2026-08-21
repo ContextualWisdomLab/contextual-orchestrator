@@ -122,7 +122,7 @@ def test_validate_openai_metadata_pops_when_only_null_values() -> None:
     assert "metadata" not in body
 
 
-def test_http_chat_tools_persist_null_arguments_as_empty_string() -> None:
+def test_http_chat_rejects_tools_with_null_arguments() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -202,7 +202,7 @@ def test_http_responses_echoes_nonempty_instructions() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_tools_omits_null_metadata_value_from_echo() -> None:
+def test_http_chat_rejects_tools_with_null_metadata() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -278,7 +278,7 @@ def test_http_chat_tools_rejects_nonzero_top_logprobs() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_tools_omits_whitespace_top_logprobs_from_echo() -> None:
+def test_http_chat_rejects_tools_with_blank_top_logprobs() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -312,11 +312,11 @@ if __name__ == "__main__":
     test_validate_responses_instructions_keeps_nonempty()
     test_validate_openai_metadata_writes_back_without_null_values()
     test_validate_openai_metadata_pops_when_only_null_values()
-    test_http_chat_tools_persist_null_arguments_as_empty_string()
+    test_http_chat_rejects_tools_with_null_arguments()
     test_http_responses_omits_blank_instructions_from_echo()
     test_http_responses_echoes_nonempty_instructions()
-    test_http_chat_tools_omits_null_metadata_value_from_echo()
+    test_http_chat_rejects_tools_with_null_metadata()
     test_http_responses_omits_null_metadata_value_from_echo()
     test_http_chat_tools_rejects_nonzero_top_logprobs()
-    test_http_chat_tools_omits_whitespace_top_logprobs_from_echo()
+    test_http_chat_rejects_tools_with_blank_top_logprobs()
     print("ok")

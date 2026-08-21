@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import replace
@@ -65,6 +66,17 @@ def _local_concurrency(value: str) -> int:
         raise argparse.ArgumentTypeError(
             f"integer in 1..{MAX_LOCAL_CONCURRENCY} required"
         )
+    return parsed
+
+
+def _request_read_timeout(value: str) -> float:
+    """Parse a finite request-body deadline in the server-supported range."""
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("number in 0.1..120 required") from exc
+    if not math.isfinite(parsed) or not 0.1 <= parsed <= 120.0:
+        raise argparse.ArgumentTypeError("number in 0.1..120 required")
     return parsed
 
 
@@ -353,7 +365,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--request-read-timeout-seconds",
-        type=float,
+        type=_request_read_timeout,
         default=10.0,
         help="Maximum time to read one fixed-length JSON body (default: 10 seconds).",
     )

@@ -96,7 +96,7 @@ def test_http_chat_accepts_padded_tool_calls_id_and_function_name() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_padded_tools_and_tool_choice_names() -> None:
+def test_http_chat_rejects_padded_tools_and_tool_choice_names() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -230,7 +230,7 @@ def test_http_chat_still_rejects_illegal_name_after_strip() -> None:
 
 if __name__ == "__main__":
     test_http_chat_accepts_padded_tool_calls_id_and_function_name()
-    test_http_chat_accepts_padded_tools_and_tool_choice_names()
+    test_http_chat_rejects_padded_tools_and_tool_choice_names()
     test_http_chat_accepts_padded_message_name()
     test_http_chat_accepts_padded_json_schema_name()
     test_http_chat_still_rejects_whitespace_only_tool_call_id()
