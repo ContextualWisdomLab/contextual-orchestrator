@@ -1,4 +1,4 @@
-"""Provider model-list discovery: turns registered KV credentials into agent candidates.
+"""Provider model-list discovery for chat-agent candidates.
 
 Queries each configured provider's model-list endpoint over its OpenAI-compatible
 (or provider-specific) discovery API and returns :class:`DiscoveredModel` rows that
@@ -9,25 +9,43 @@ Credentials are never fabricated: a provider resolves through :func:`get_credent
 (the KV registry), and a provider with nothing registered is silently skipped so
 registering a subset of the five supported keys still works. Stdlib only
 (``urllib.request``), matching this repo's dependency-free transport convention.
+
+This module owns the ordinary chat-agent discovery boundary. Provider catalogs may
+mix chat, embedding, reranking, transcription, moderation, image, and realtime
+models under one ``/models`` endpoint. Clearly non-chat identifiers are rejected
+before they can be converted to workers, selected by cost, or persisted into the
+chat agent pool.
 """
 
 from __future__ import annotations
 
-import json
 import re
 import urllib.error
-import urllib.request
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
+from urllib.parse import urlparse
 
-from .batch_routing import cheapest_upstream
+from .chat_capability import is_general_chat_agent_model_id
 from .credentials import get_credential
-from .orchestrator import ModelAgent
+from .orchestrator import ModelAgent, ModelClient
 
 if TYPE_CHECKING:
     from .cost_ledger import PriceBook
 
 DISCOVERY_TIMEOUT_SECONDS = 15.0
+
+
+def _provider_discovery_error_code(exc: Exception) -> str:
+    """Map provider failures to stable codes without retaining provider response text."""
+    if isinstance(exc, urllib.error.HTTPError):
+        return f"http_status_{exc.code}"
+    if isinstance(exc, TimeoutError):
+        return "timeout"
+    if isinstance(exc, urllib.error.URLError) or isinstance(exc, OSError):
+        return "transport_error"
+    if isinstance(exc, ValueError):
+        return "invalid_response"
+    return "provider_error"
 
 
 @dataclass(frozen=True)
@@ -84,7 +102,7 @@ PROVIDER_MODEL_SOURCES: tuple[ProviderModelSource, ...] = (
 
 @dataclass(frozen=True)
 class DiscoveredModel:
-    """One model found on a provider, with pricing when the provider reports it."""
+    """One general chat-agent eligible model found on a provider, with pricing."""
 
     provider_name: str
     model_id: str
@@ -99,26 +117,41 @@ class DiscoveredModel:
 class ProviderDiscoveryError(RuntimeError):
     """Raised when a provider's model list could not be fetched (network/auth failure)."""
 
-    def __init__(self, provider_name: str, detail: str) -> None:
+    def __init__(self, provider_name: str, error_code: str) -> None:
         self.provider_name = provider_name
-        super().__init__(f"model discovery failed for provider {provider_name!r}: {detail}")
+        self.error_code = error_code
+        super().__init__(f"model discovery failed for provider {provider_name!r}: {error_code}")
 
 
-def _fetch_json(url: str, *, api_key: str, auth_scheme: str, timeout: float) -> Any:
-    if not url.startswith("https://"):
-        # Every caller passes one of the hardcoded PROVIDER_SOURCES chat_base_url
-        # constants below, never external input -- but urlopen also honors
-        # file:// and other unsafe schemes, so refuse anything not https as a
-        # cheap invariant check rather than trusting the constant list alone.
-        raise ValueError(f"refusing non-https model discovery URL: {url!r}")
-    request = urllib.request.Request(
-        url,
-        headers={"authorization": f"{auth_scheme} {api_key}"},
-        method="GET",
+def _fetch_json(
+    url: str,
+    *,
+    auth_scheme: str,
+    timeout: float,
+    credential_name: str,
+) -> Any:
+    """Fetch a provider catalog through the validated, DNS-pinned transport."""
+    parsed = urlparse(url)
+    if parsed.scheme != "https" or not parsed.hostname:
+        raise ValueError("model discovery requires an https provider URL")
+    if parsed.username is not None or parsed.password is not None or "#" in url:
+        raise ValueError("model discovery URL must not contain credentials or a fragment")
+    try:
+        port = parsed.port
+    except ValueError as exc:
+        raise ValueError("model discovery URL has an invalid port") from exc
+    origin = f"https://{parsed.hostname}"
+    if port not in (None, 443):
+        origin = f"{origin}:{port}"
+    agent = ModelAgent(
+        id="model_discovery_agent",
+        model="model_catalog",
+        base_url=origin,
+        credential_key=credential_name,
+        auth_scheme=auth_scheme,
     )
-    # Scheme is enforced to https:// immediately above; url is never attacker-controlled.
-    with urllib.request.urlopen(request, timeout=timeout) as response:  # noqa: S310 - fixed https provider hosts  # nosemgrep: python.lang.security.audit.dynamic-urllib-use-detected.dynamic-urllib-use-detected
-        return json.loads(response.read().decode("utf-8"))
+    client = ModelClient()
+    return client.fetch_json(agent, url, timeout=timeout)
 
 
 def _price_per_1k(value: Any) -> float | None:
@@ -132,13 +165,14 @@ def _price_per_1k(value: Any) -> float | None:
 
 
 def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
+    """Parse one OpenAI-compatible catalog into general chat-agent candidates."""
     rows = payload.get("data") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
         model_id = row.get("id")
-        if type(model_id) is not str or not model_id:
+        if not is_general_chat_agent_model_id(model_id):
             continue
         pricing = row.get("pricing") if isinstance(row.get("pricing"), dict) else {}
         discovered.append(
@@ -156,13 +190,14 @@ def _parse_openai_compatible(payload: Any, source: ProviderModelSource) -> list[
 
 
 def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredModel]:
+    """Parse one Bytez chat catalog without admitting ineligible identifiers."""
     rows = payload.get("output") if isinstance(payload, dict) else None
     discovered: list[DiscoveredModel] = []
     for row in rows if isinstance(rows, list) else []:
         if not isinstance(row, dict):
             continue
         model_id = row.get("modelId")
-        if type(model_id) is not str or not model_id:
+        if not is_general_chat_agent_model_id(model_id):
             continue
         discovered.append(
             DiscoveredModel(
@@ -181,7 +216,7 @@ def _parse_bytez(payload: Any, source: ProviderModelSource) -> list[DiscoveredMo
 def discover_provider_models(
     source: ProviderModelSource, *, timeout: float = DISCOVERY_TIMEOUT_SECONDS
 ) -> list[DiscoveredModel]:
-    """Discover one provider's models, or ``[]`` if its credential is not registered."""
+    """Discover chat candidates, or ``[]`` when the credential is not registered."""
     api_key = get_credential(source.credential_name)
     if not api_key:
         return []
@@ -189,9 +224,14 @@ def discover_provider_models(
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
     try:
-        payload = _fetch_json(url, api_key=api_key, auth_scheme=source.auth_scheme, timeout=timeout)
-    except (urllib.error.URLError, TimeoutError, ValueError) as exc:  # pragma: no cover - network path
-        raise ProviderDiscoveryError(source.provider_name, str(exc)) from exc
+        payload = _fetch_json(
+            url,
+            auth_scheme=source.auth_scheme,
+            timeout=timeout,
+            credential_name=source.credential_name,
+        )
+    except (urllib.error.URLError, TimeoutError, ValueError, RuntimeError, OSError) as exc:  # pragma: no cover - network path
+        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
     if source.style == "bytez":
         return _parse_bytez(payload, source)
     return _parse_openai_compatible(payload, source)
@@ -202,7 +242,7 @@ def discover_all_models(
     *,
     timeout: float = DISCOVERY_TIMEOUT_SECONDS,
 ) -> tuple[list[DiscoveredModel], list[ProviderDiscoveryError]]:
-    """Discover models across every provider with a registered credential.
+    """Discover chat candidates across providers with registered credentials.
 
     One provider's failure never blocks the others: errors are collected and
     returned alongside whatever models were successfully discovered.
@@ -231,7 +271,9 @@ def agent_id_for(discovered: DiscoveredModel) -> str:
 
 
 def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> ModelAgent:
-    """Build a disabled-by-default ModelAgent for a discovered model (opt-in serving)."""
+    """Build a disabled general chat agent or reject an ineligible record."""
+    if not is_general_chat_agent_model_id(discovered.model_id):
+        raise ValueError("model is not eligible for a general chat agent")
     return ModelAgent(
         id=agent_id_for(discovered),
         model=discovered.model_id,
@@ -246,7 +288,7 @@ def agent_from_discovered(discovered: DiscoveredModel, *, priority: int = 0) -> 
 
 
 def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook") -> int:
-    """Write every discovered model's known pricing into the price book.
+    """Write every discovered chat model's known pricing into the price book.
 
     Returns the number of price rows written. A model without provider-reported
     pricing is skipped rather than defaulted to 0 -- an unpriced model already
@@ -257,6 +299,8 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 
     written = 0
     for model in discovered:
+        if not is_general_chat_agent_model_id(model.model_id):
+            continue
         if model.prompt_price_per_1k is None and model.completion_price_per_1k is None:
             continue
         price_book.set_price(
@@ -275,43 +319,37 @@ def refresh_price_book(discovered: list[DiscoveredModel], price_book: "PriceBook
 def select_cheapest_discovered_agent(
     discovered: list[DiscoveredModel], price_book: "PriceBook"
 ) -> DiscoveredModel | None:
-    """Pick the lowest-cost discovered model per the price book (auto-optimization).
+    """Pick the lowest-cost general chat-agent model per the price book.
 
-    Reuses :func:`~contextual_orchestrator.batch_routing.cheapest_upstream`, the
-    existing cost-optimizing upstream selector. Call :func:`refresh_price_book`
-    first so discovered pricing is visible; an unpriced candidate costs ``0``
+    Uses the same representative request cost as the top-N selector. Call
+    :func:`refresh_price_book` first so discovered pricing is visible; an
+    unpriced candidate costs ``0``
     under that selector's documented contract and is treated as free, not
     unknown -- so a genuinely unpriced provider (e.g. Bytez, priced by
     GPU-second rather than per token) will always look cheapest here. Fine for
     "auto-pick something free to try," but callers doing real cost comparison
     should refresh pricing for every candidate they care about first.
     """
-    if not discovered:
+    eligible = [model for model in discovered if is_general_chat_agent_model_id(model.model_id)]
+    if not eligible:
         return None
-    candidates = [{"provider": model.provider_name, "model": model.model_id} for model in discovered]
-    winner = cheapest_upstream(candidates, price_book)
-    if winner is None:
-        return None
-    for model in discovered:
-        if model.provider_name == winner["provider"] and model.model_id == winner["model"]:
-            return model
-    return None  # pragma: no cover - winner always comes from candidates
+    return min(eligible, key=lambda model: _discovered_cost(model, price_book))
 
 
 def select_top_n_cheapest_discovered_agents(
     discovered: list[DiscoveredModel], price_book: "PriceBook", limit: int
 ) -> list[DiscoveredModel]:
-    """Return the ``limit`` lowest-cost discovered models, cheapest first.
-
-    For bootstrapping a CI sidecar (or any first-boot pool) with more than one
-    enabled agent for failover, without hand-picking which discovered models to
-    trust. Same pricing contract as :func:`select_cheapest_discovered_agent`.
-    """
-    if limit <= 0 or not discovered:
+    """Return the ``limit`` cheapest general chat-agent models in ascending cost."""
+    if limit <= 0:
+        return []
+    eligible = [model for model in discovered if is_general_chat_agent_model_id(model.model_id)]
+    if not eligible:
         return []
 
-    def _cost(model: DiscoveredModel) -> float:
-        cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
-        return cost
+    return sorted(eligible, key=lambda model: _discovered_cost(model, price_book))[:limit]
 
-    return sorted(discovered, key=_cost)[:limit]
+
+def _discovered_cost(model: DiscoveredModel, price_book: "PriceBook") -> float:
+    """Price the representative discovery request used by both selectors."""
+    cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
+    return cost

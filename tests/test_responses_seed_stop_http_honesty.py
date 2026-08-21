@@ -48,14 +48,15 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_accepts_valid_seed() -> None:
+def test_http_responses_rejects_unapplied_seed() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {"model": "mock-planner", "input": "hello seed", "seed": 42},
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -89,14 +90,15 @@ def test_http_responses_rejects_boolean_seed() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_stop_string_and_array() -> None:
+def test_http_responses_rejects_unapplied_stop_string_and_array() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
             port,
             {"model": "mock-planner", "input": "hello stop str", "stop": "END"},
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
         status, body = _post(
             port,
             {
@@ -105,7 +107,8 @@ def test_http_responses_accepts_stop_string_and_array() -> None:
                 "stop": ["END", "STOP"],
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -158,10 +161,10 @@ def test_http_responses_rejects_non_string_stop_item() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_valid_seed()
+    test_http_responses_rejects_unapplied_seed()
     test_http_responses_rejects_non_integer_seed()
     test_http_responses_rejects_boolean_seed()
-    test_http_responses_accepts_stop_string_and_array()
+    test_http_responses_rejects_unapplied_stop_string_and_array()
     test_http_responses_accepts_empty_stop_string_as_omit()
     test_http_responses_rejects_stop_array_too_long()
     test_http_responses_rejects_non_string_stop_item()

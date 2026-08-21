@@ -52,7 +52,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_accepts_logit_bias_numeric_string_values() -> None:
+def test_http_responses_rejects_unapplied_logit_bias_after_type_check() -> None:
     server, thread, port = _server()
     try:
         for val in ("-5", "0", "100", " -12.5 ", 0, -5.0, 100):
@@ -65,7 +65,8 @@ def test_http_responses_accepts_logit_bias_numeric_string_values() -> None:
                     "logit_bias": {"100": val, "200": 1},
                 },
             )
-            assert status == 200, (val, body)
+            assert status == 422, (val, body)
+            assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -113,7 +114,7 @@ def test_http_chat_still_rejects_nonempty_logit_bias_after_type_check() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_logit_bias_numeric_string_values()
+    test_http_responses_rejects_unapplied_logit_bias_after_type_check()
     test_http_responses_still_rejects_logit_bias_bool_and_oob()
     test_http_chat_still_rejects_nonempty_logit_bias_after_type_check()
     print("ok")

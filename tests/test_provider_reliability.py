@@ -14,6 +14,8 @@ import urllib.error
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
@@ -78,7 +80,7 @@ def test_local_retry_budget_is_zero_by_default_to_avoid_queue_multiplication() -
             raise urllib.error.URLError("local server is busy")
 
     client = LocalDownClient()
-    agent = ModelAgent("local_worker", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     try:
         client._send_with_retry(agent, {"model": agent.model})
     except RuntimeError:
@@ -101,7 +103,7 @@ def test_local_retry_budget_can_be_explicitly_opted_into() -> None:
             return "recovered"
 
     client = LocalFlakyClient()
-    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
     assert client.attempts == 2
 
@@ -119,7 +121,7 @@ def test_local_retry_budget_is_not_capped_by_remote_retry_default() -> None:
             return "recovered"
 
     client = LocalFlakyClient()
-    agent = ModelAgent("local_worker", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     assert client._send_with_retry(agent, {"model": agent.model}) == "recovered"
     assert client.attempts == 3
 
@@ -137,7 +139,7 @@ def test_local_passthrough_retry_budget_is_not_capped_by_remote_retry_default() 
             return {"ok": True}
 
     client = LocalRawFlakyClient()
-    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1")
+    agent = ModelAgent("local_worker", "local-model", base_url="local://127.0.0.1:8080/v1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     assert client._send_raw_with_retry(agent, "chat/completions", {}) == {"ok": True}
     assert client.attempts == 3
 
@@ -161,6 +163,38 @@ def test_permanent_error_is_not_retried() -> None:
         raised = True
     assert raised
     assert client.attempts == 1  # 400 is a caller error: exactly one attempt, no retry
+
+
+def test_provider_request_hides_raw_error_text_and_cause() -> None:
+    class RawProviderFailureClient(ModelClient):
+        def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+            raise RuntimeError("provider-secret-response")
+
+    client = RawProviderFailureClient(max_retries=0)
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1")
+
+    try:
+        client._send_with_retry(agent, {"model": "gpt"})
+    except RuntimeError as error:
+        assert "provider-secret-response" not in str(error)
+        assert error.__cause__ is None
+    else:  # pragma: no cover
+        raise AssertionError("a failed provider request must raise")
+
+
+def test_embedding_request_hides_raw_error_text_and_cause() -> None:
+    class RawEmbeddingFailureClient(ModelClient):
+        def _send_embeddings(self, agent: ModelAgent, payload: dict, destination=None) -> list[list[float]]:  # type: ignore[override]
+            raise RuntimeError("embedding-provider-secret")
+
+    client = RawEmbeddingFailureClient(max_retries=0)
+    agent = ModelAgent("embedding_agent", "embedding-model", base_url="https://provider.example/v1")
+
+    with pytest.raises(RuntimeError) as error:
+        client._send_embeddings_with_retry(agent, {"model": agent.model, "input": ["text"]})
+
+    assert "embedding-provider-secret" not in str(error.value)
+    assert error.value.__cause__ is None
 
 
 class _AgentDownClient(ModelClient):
@@ -214,6 +248,8 @@ def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     except RuntimeError as exc:
         raised = True
         assert "candidate agents failed" in str(exc)
+        assert "everything is down" not in str(exc)
+        assert exc.__cause__ is None
     assert raised
 
 

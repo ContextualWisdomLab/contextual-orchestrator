@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 import json
+import sys
 import threading
 import urllib.error
 import urllib.request
 from pathlib import Path
-import sys
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -19,7 +19,7 @@ _TEST_AUTH_TOKEN = "encoding_stream_logprobs_http_honesty_token"  # noqa: S105
 
 def build() -> TaskOrchestrator:
     return TaskOrchestrator(
-        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing", "embedding"))]
     )
 
 

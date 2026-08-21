@@ -48,7 +48,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_accepts_empty_and_valid_logit_bias() -> None:
+def test_http_responses_accepts_empty_and_rejects_unapplied_logit_bias() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -64,7 +64,8 @@ def test_http_responses_accepts_empty_and_valid_logit_bias() -> None:
                 "logit_bias": {"50256": -100, "220": 50},
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -119,7 +120,7 @@ def test_http_responses_accepts_logprobs_false() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_logprobs_true_with_top_logprobs() -> None:
+def test_http_responses_rejects_unapplied_logprobs_with_top_logprobs() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -131,7 +132,8 @@ def test_http_responses_accepts_logprobs_true_with_top_logprobs() -> None:
                 "top_logprobs": 5,
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -166,11 +168,11 @@ def test_http_responses_rejects_non_boolean_logprobs() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_empty_and_valid_logit_bias()
+    test_http_responses_accepts_empty_and_rejects_unapplied_logit_bias()
     test_http_responses_rejects_non_digit_logit_bias_key()
     test_http_responses_rejects_out_of_range_logit_bias_value()
     test_http_responses_accepts_logprobs_false()
-    test_http_responses_accepts_logprobs_true_with_top_logprobs()
+    test_http_responses_rejects_unapplied_logprobs_with_top_logprobs()
     test_http_responses_rejects_top_logprobs_without_logprobs()
     test_http_responses_rejects_non_boolean_logprobs()
     print("ok")

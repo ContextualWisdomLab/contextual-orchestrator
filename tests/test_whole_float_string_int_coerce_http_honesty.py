@@ -71,7 +71,7 @@ def test_http_chat_accepts_n_whole_float_string() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_seed_whole_float_string() -> None:
+def test_http_responses_rejects_unapplied_seed_whole_float_string() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -83,7 +83,8 @@ def test_http_responses_accepts_seed_whole_float_string() -> None:
                 "seed": "1.0",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -202,7 +203,7 @@ def test_http_chat_accepts_max_tool_calls_zero_float_string() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_top_logprobs_whole_float_string() -> None:
+def test_http_responses_rejects_unapplied_top_logprobs_whole_float_string() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -215,20 +216,8 @@ def test_http_responses_accepts_top_logprobs_whole_float_string() -> None:
                 "top_logprobs": "5.0",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
-
-
-if __name__ == "__main__":
-    test_http_chat_accepts_n_whole_float_string()
-    test_http_responses_accepts_seed_whole_float_string()
-    test_http_chat_rejects_fractional_float_string_n()
-    test_http_chat_accepts_top_logprobs_zero_float_strings()
-    test_http_chat_still_rejects_nonzero_top_logprobs_float_string()
-    test_http_completions_accepts_top_logprobs_zero_float_string()
-    test_http_completions_accepts_best_of_whole_float_string()
-    test_http_chat_accepts_max_tool_calls_zero_float_string()
-    test_http_responses_accepts_top_logprobs_whole_float_string()
-    print("ok")

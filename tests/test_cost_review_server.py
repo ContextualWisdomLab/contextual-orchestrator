@@ -73,7 +73,11 @@ def test_chat_completion_reports_real_usage_and_records_cost() -> None:
         assert body["usage"]["total_tokens"] > 0
         assert body["orchestration"]["channel"] == "sync"
 
-        status, report = _request("GET", f"{base}/api/v1/cost_reports/rollup?dimension=team", token)
+        status, report = _request(
+            "GET",
+            f"{base}/api/v1/cost_reports/rollup?dimension=team&start=0&end=9999999999",
+            token,
+        )
         assert status == 200
         values = {item["dimension_value"]: item for item in report["items"]}
         assert "alpha" in values
@@ -130,6 +134,20 @@ def test_batch_routing_jobs_endpoint_submits_multiple_requests() -> None:
         assert records["total_count"] == 2
     finally:
         server.shutdown()
+
+
+def test_unknown_batch_results_return_not_found() -> None:
+    server, port, token = _serve()
+    try:
+        status, body = _request(
+            "POST",
+            f"http://127.0.0.1:{port}/api/v1/batch_routing_jobs/missing_job/results",
+            token,
+        )
+    finally:
+        server.shutdown()
+    assert status == 404
+    assert body["error"]["code"] == "batch_job_not_found"
 
 
 def test_cost_report_rejects_unknown_dimension() -> None:

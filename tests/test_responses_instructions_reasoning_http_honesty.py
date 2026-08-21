@@ -139,6 +139,23 @@ def test_http_responses_accepts_reasoning_effort_known_levels() -> None:
         thread.join(timeout=5)
 
 
+def test_http_responses_accepts_orchestrator_owned_reasoning_effort_auto() -> None:
+    server, thread, port = _server()
+    try:
+        status, body = _post(
+            port,
+            {
+                "model": "mock-planner",
+                "input": "think automatically",
+                "reasoning": {"effort": "auto"},
+            },
+        )
+        assert status == 200, body
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+
 def test_http_responses_still_rejects_unknown_reasoning_effort() -> None:
     server, thread, port = _server()
     try:

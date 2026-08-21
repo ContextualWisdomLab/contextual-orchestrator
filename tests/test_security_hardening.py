@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import json
-import os
 import socket
 import threading
 import urllib.error
@@ -58,6 +57,19 @@ def post_json(url: str, payload: dict[str, object], token: str | None = None) ->
         return exc.code, json.loads(exc.read().decode("utf-8"))
 
 
+def get_status(url: str, token: str) -> int:
+    request = urllib.request.Request(
+        url,
+        headers={"authorization": f"Bearer {token}", "connection": "close"},
+        method="GET",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            return response.status
+    except urllib.error.HTTPError as exc:
+        return exc.code
+
+
 def test_http_api_requires_bearer_token_and_hides_trace_by_default() -> None:
     server = build_server(build(), port=0, security=SecurityConfig(auth_token="secret_token"))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -88,7 +100,11 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     server = build_server(
         build(),
         port=0,
-        security=SecurityConfig(auth_token="", admin_token="admin_secret", inference_token="inference_secret"),
+        security=SecurityConfig(
+            auth_token="",
+            admin_token="admin_secret",  # noqa: S106
+            inference_token="inference_secret",  # noqa: S106
+        ),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -114,6 +130,38 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     assert inference_status == 200
     assert inference_body["orchestration"]["mode"] == "route"
     assert "trace" not in inference_body["orchestration"]
+
+
+def test_inference_token_cannot_read_admin_get_surfaces() -> None:
+    server = build_server(
+        build(),
+        port=0,
+        security=SecurityConfig(auth_token="", admin_token="admin_secret", inference_token="inference_secret"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    port = server.server_address[1]
+    admin_paths = (
+        "/api/v1/workflow_runs",
+        "/api/v1/evaluation_runs/missing",
+        "/api/v1/access_reports/missing",
+    )
+
+    try:
+        inference_statuses = [
+            get_status(f"http://127.0.0.1:{port}{path}", "inference_secret")
+            for path in admin_paths
+        ]
+        admin_statuses = [
+            get_status(f"http://127.0.0.1:{port}{path}", "admin_secret")
+            for path in admin_paths
+        ]
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert inference_statuses == [401, 401, 401]
+    assert admin_statuses == [200, 404, 404]
 
 
 def test_single_and_split_token_modes_cannot_be_combined() -> None:

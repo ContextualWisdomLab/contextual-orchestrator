@@ -48,7 +48,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_accepts_valid_penalties() -> None:
+def test_http_responses_rejects_unapplied_penalties() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -60,7 +60,8 @@ def test_http_responses_accepts_valid_penalties() -> None:
                 "frequency_penalty": -0.5,
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -121,7 +122,7 @@ def test_http_responses_rejects_boolean_presence_penalty() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_valid_penalties()
+    test_http_responses_rejects_unapplied_penalties()
     test_http_responses_rejects_out_of_range_presence_penalty()
     test_http_responses_rejects_out_of_range_frequency_penalty()
     test_http_responses_rejects_boolean_presence_penalty()

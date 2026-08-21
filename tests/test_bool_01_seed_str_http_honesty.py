@@ -144,7 +144,7 @@ def test_http_chat_parallel_tool_calls_one_requires_tools() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_seed_digit_string() -> None:
+def test_http_responses_rejects_unapplied_seed_digit_string() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -152,7 +152,8 @@ def test_http_responses_accepts_seed_digit_string() -> None:
             "/v1/responses",
             {"model": "mock-planner", "input": "seed str", "seed": "42"},
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -182,6 +183,6 @@ if __name__ == "__main__":
     test_http_chat_accepts_stream_zero_as_false()
     test_http_chat_accepts_parallel_tool_calls_zero()
     test_http_chat_parallel_tool_calls_one_requires_tools()
-    test_http_responses_accepts_seed_digit_string()
+    test_http_responses_rejects_unapplied_seed_digit_string()
     test_http_completions_rejects_seed_digit_string_as_unsupported()
     print("ok")

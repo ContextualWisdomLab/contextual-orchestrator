@@ -152,11 +152,25 @@ def test_database_design_avoids_plaintext_prompt_output_storage():
 def test_python_lockfile_uses_hash_pinning():
     lock_text = read_text("requirements.lock")
 
-    assert "pip-compile" in lock_text
+    assert "uv pip compile" in lock_text
+    assert "--universal" in lock_text
     assert "--hash=sha256:" in lock_text
     assert "fastapi==" in lock_text
     assert "uvicorn==" in lock_text
     assert "sqlalchemy==" in lock_text
+    for platform_dependency in ("colorama", "greenlet", "tzdata"):
+        assert f"{platform_dependency}==" in lock_text
+
+
+def test_unit_workflow_installs_runtime_and_test_lockfiles():
+    """CI must exercise declared runtime integrations, not graceful no-op imports."""
+    workflow_text = read_text(".github/workflows/tests.yml")
+
+    assert "python -m pip install --require-hashes -r requirements.lock" in workflow_text
+    assert (
+        "python -m pip install --require-hashes -r fuzz/requirements-property.txt"
+        in workflow_text
+    )
 
 
 def test_security_tool_lockfile_uses_hash_pinning():

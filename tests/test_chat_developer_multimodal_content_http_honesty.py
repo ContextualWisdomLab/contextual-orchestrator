@@ -19,7 +19,7 @@ _TEST_AUTH_TOKEN = "chat_message_content_honesty_token"  # noqa: S105
 
 def build() -> TaskOrchestrator:
     return TaskOrchestrator(
-        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing", "vision"))]
     )
 
 

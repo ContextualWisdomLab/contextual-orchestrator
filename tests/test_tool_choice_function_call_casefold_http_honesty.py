@@ -71,7 +71,7 @@ def test_http_chat_accepts_function_call_none_auto_padded_casefold() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_tool_choice_required_padded_casefold_with_tools() -> None:
+def test_http_chat_rejects_tool_choice_required_padded_casefold_with_tools() -> None:
     server, thread, port = _server()
     try:
         for value in ("required", " REQUIRED ", "Required"):
@@ -93,7 +93,8 @@ def test_http_chat_accepts_tool_choice_required_padded_casefold_with_tools() -> 
                     "tool_choice": value,
                 },
             )
-            assert status == 200, (value, body)
+            assert status == 422, (value, body)
+            assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -138,7 +139,7 @@ def test_http_completions_accepts_function_call_none_padded_casefold() -> None:
 
 if __name__ == "__main__":
     test_http_chat_accepts_function_call_none_auto_padded_casefold()
-    test_http_chat_accepts_tool_choice_required_padded_casefold_with_tools()
+    test_http_chat_rejects_tool_choice_required_padded_casefold_with_tools()
     test_http_chat_accepts_tool_choice_none_auto_padded_casefold()
     test_http_completions_accepts_function_call_none_padded_casefold()
     print("ok")

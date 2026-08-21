@@ -5,7 +5,7 @@ from __future__ import annotations
 from collections import Counter, deque, OrderedDict
 from collections.abc import Iterable, Mapping
 from contextlib import contextmanager
-from contextvars import ContextVar
+from contextvars import ContextVar, copy_context
 from concurrent.futures import ThreadPoolExecutor
 import copy
 from dataclasses import dataclass, replace
@@ -31,8 +31,13 @@ from urllib.parse import urlparse, urlunsplit
 import urllib.error
 import urllib.request
 
+from .chat_capability import (
+    is_chat_compatible_model_id,
+    is_general_chat_agent_model_id,
+)
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .telemetry import inject_trace_context, traced
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -61,6 +66,35 @@ def _safe_provider_probe_error_type(exc: Exception) -> str:
     return name if name in _SAFE_PROVIDER_PROBE_ERROR_TYPES else "UnknownError"
 
 
+def _temperature_capability_rejection(exc: Exception) -> bool:
+    """Recognize only explicit provider rejection of the optional temperature field."""
+    if not isinstance(exc, urllib.error.HTTPError) or exc.code not in {400, 422}:
+        return False
+    try:
+        body = exc.read()
+    except http.client.IncompleteRead as read_error:
+        body = read_error.partial
+    except (OSError, ValueError):
+        body = b""
+    body_bytes = body if isinstance(body, bytes) else str(body).encode("utf-8")
+    replay = io.BytesIO(body_bytes)
+    exc.fp = exc.file = replay
+    exc.read = replay.read
+    detail = body_bytes.decode("utf-8", errors="replace")
+    detail = f"{exc} {detail}".lower()
+    return "temperature" in detail and any(
+        marker in detail
+        for marker in (
+            "unsupported",
+            "not supported",
+            "does not support",
+            "unknown parameter",
+            "unknown field",
+            "unrecognized",
+        )
+    )
+
+
 def _validate_provider_probe_timeout(timeout: float) -> float:
     """Validate the finite, bounded timeout used by explicit readiness probes."""
     if isinstance(timeout, bool) or not isinstance(timeout, (int, float)):
@@ -81,6 +115,10 @@ class BudgetExceededError(RuntimeError):
         self.detail = detail or {}
 
 
+class ProviderResponseError(RuntimeError):
+    """Raised for a provider response that cannot become a safe completion."""
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
 
@@ -88,6 +126,17 @@ def estimate_tokens(text: str) -> int:
     usage when real workers return it.
     """
     return (len(text) + 3) // 4 if text else 0
+
+
+def _step_output_token_count(step: dict[str, Any]) -> tuple[int, bool]:
+    """Return effective output tokens and whether they were provider-reported."""
+    usage = step.get("usage")
+    reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    if type(reported) is not int or reported < 0:
+        reported = usage.get("output_tokens") if isinstance(usage, dict) else None
+    if type(reported) is int and reported >= 0:
+        return reported, True
+    return estimate_tokens(step.get("output", "")), False
 
 
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
@@ -158,21 +207,26 @@ class _FastMLSIJudgeAdapter:
         *,
         response_format: dict[str, Any],
     ) -> dict[str, Any]:
-        """Route a Judge JSON-schema request through the existing gateway proxy."""
+        """Send one bounded Judge JSON-schema request through the provider transport."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
-        response = self.orchestrator.proxy_completion({
+        self.orchestrator._raise_if_spend_budget_exceeded()
+        payload = {
             "model": agent.model,
             "messages": messages,
-            "temperature": self.orchestrator.client.temperature,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        })
+            "stream": False,
+        }
+        if self.orchestrator.client.temperature is not None:
+            payload["temperature"] = self.orchestrator.client.temperature
+        response = self.orchestrator.client.proxy_send(agent, "chat/completions", payload)
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
+        self.orchestrator._record_in_flight_provider_usage(agent, usage, output)
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
 
     def _completion_payload(
@@ -220,8 +274,8 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
 
     try:
         decision = json.loads(reply.strip(), object_pairs_hook=reject_duplicate_keys)
-    except (json.JSONDecodeError, RecursionError, TypeError) as exc:
-        raise ValueError("judge response is not valid JSON") from exc
+    except (json.JSONDecodeError, RecursionError, TypeError):
+        raise ValueError("judge response is not valid JSON") from None
     if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
         raise ValueError("judge response must match the exact verdict schema")
     decision_value = decision["decision"]
@@ -251,7 +305,7 @@ class ModelAgent:
     provider_name: str = ""
     provider_exclusions: tuple[str, ...] = ()
     # Explicit KV credential for an authenticated loopback gateway. Keep this
-    # separate from ``credential_key`` so mlx:// workers remain keyless.
+    # separate from ``credential_key`` so local gateway credentials stay scoped.
     local_credential_key: str = ""
     # Authorization header scheme, e.g. "Bearer" (OpenAI-compatible default) or
     # "Key" (Bytez). Sent as f"{auth_scheme} {api_key}".
@@ -259,9 +313,16 @@ class ModelAgent:
 
     def __post_init__(self) -> None:
         require_object_name(self.id, "agent.id")
+        scheme = urlparse(self.base_url).scheme
+        if scheme == "mlx":
+            raise ValueError("direct mlx:// provider URLs are unsupported; use the gateway")
         if type(self.local_credential_key) is not str:
             raise TypeError("local_credential_key must be a string")
-        if self.local_credential_key and urlparse(self.base_url).scheme != "local":
+        if scheme == "local" and not self.local_credential_key:
+            raise ValueError("local:// gateway URLs require local_credential_key")
+        if scheme == "local" and not _is_local_provider_url(self.base_url):
+            raise ValueError("local:// gateway URLs require a well-formed explicit loopback endpoint")
+        if self.local_credential_key and scheme != "local":
             raise ValueError("local_credential_key requires a local:// gateway URL")
         if not self.auth_scheme or type(self.auth_scheme) is not str:
             raise ValueError("auth_scheme must be a non-empty string")
@@ -403,7 +464,7 @@ class OrchestrationPolicy:
 # and the standard upstream/gateway failures. Everything else (400/401/403/404 ...)
 # is a caller or configuration error and must not be retried.
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
-LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
+LOCAL_PROVIDER_SCHEMES = frozenset({"local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
@@ -417,19 +478,10 @@ def _is_local_provider_url(base_url: str) -> bool:
     return parsed.scheme in LOCAL_PROVIDER_SCHEMES and parsed.hostname in LOCAL_PROVIDER_HOSTS
 
 
-def _is_direct_mlx_provider_url(base_url: str) -> bool:
-    """Return whether a loopback provider is the direct mlx-lm transport."""
-    return _is_local_provider_url(base_url) and urlparse(base_url).scheme == "mlx"
-
-
 def _provider_credential_name(agent: ModelAgent) -> str | None:
     """Return the credential name allowed for this provider transport."""
     if not _is_local_provider_url(agent.base_url):
         return agent.credential_name
-    # mlx-lm is intentionally keyless; only the explicit local:// gateway
-    # transport may opt into a separately named loopback bearer credential.
-    if urlparse(agent.base_url).scheme != "local":
-        return None
     return agent.local_credential_key or None
 
 
@@ -516,9 +568,60 @@ def _responses_text(value: Any) -> str:
     return "".join(parts)
 
 
+def _responses_chat_content(value: Any) -> str | list[dict[str, Any]]:
+    """Normalize Responses text and URL images into Chat content parts."""
+    if isinstance(value, str):
+        return value
+    if not isinstance(value, list):
+        return ""
+    parts: list[dict[str, Any]] = []
+    has_image = False
+    for item in value:
+        if isinstance(item, str):
+            parts.append({"type": "text", "text": item})
+            continue
+        if not isinstance(item, dict):
+            continue
+        part_type = item.get("type")
+        if part_type in {"input_image", "image_url"}:
+            raw_image = item.get("image_url")
+            image_url = (
+                {"url": raw_image}
+                if isinstance(raw_image, str)
+                else copy.deepcopy(raw_image)
+            )
+            if (
+                not isinstance(image_url, dict)
+                or not isinstance(image_url.get("url"), str)
+                or not image_url["url"].strip()
+            ):
+                raise ValueError("Responses input_image requires a non-empty image_url")
+            detail = item.get("detail", image_url.get("detail"))
+            if detail is None or (isinstance(detail, str) and not detail.strip()):
+                image_url.pop("detail", None)
+            else:
+                if (
+                    not isinstance(detail, str)
+                    or detail.strip().lower() not in {"auto", "low", "high"}
+                ):
+                    raise ValueError(
+                        "Responses input_image detail must be one of auto, low, high"
+                    )
+                image_url["detail"] = detail.strip().lower()
+            parts.append({"type": "image_url", "image_url": image_url})
+            has_image = True
+            continue
+        text = item.get("text")
+        if isinstance(text, str):
+            parts.append({"type": "text", "text": text})
+    if has_image:
+        return parts
+    return "".join(str(part["text"]) for part in parts)
+
+
 def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
-    # ADR 0002: keep Codex Responses compatibility at the public control-plane
-    # boundary; mlx-lm remains a local Chat Completions worker provider.
+    # Keep Responses compatibility at the public control-plane boundary; a
+    # provider-neutral local gateway may expose Chat Completions downstream.
     messages: list[dict[str, Any]] = []
     instructions = _responses_text(request.get("instructions"))
     if instructions:
@@ -530,7 +633,7 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     elif isinstance(raw_input, str):
         items = [{"type": "message", "role": "user", "content": raw_input}]
     else:
-        raise ValueError("local Responses input must be a string or item list")
+        raise ValueError("gateway Responses input must be a string or item list")
     for item in items:
         if isinstance(item, str):
             messages.append({"role": "user", "content": item})
@@ -544,7 +647,7 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
                 role = "system"
             if role not in {"system", "user", "assistant"}:
                 raise ValueError(f"unsupported local Responses message role: {role}")
-            content = _responses_text(item.get("content"))
+            content = _responses_chat_content(item.get("content"))
             if content:
                 messages.append({"role": role, "content": content})
         elif item_type == "function_call_output":
@@ -586,8 +689,17 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     if "max_output_tokens" in request and "max_tokens" not in payload:
         payload["max_tokens"] = request["max_output_tokens"]
 
+    response_format = _responses_text_format_to_chat_response_format(request.get("text"))
+    if response_format is None and isinstance(request.get("response_format"), dict):
+        response_format = request["response_format"]
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if isinstance(request.get("metadata"), dict):
+        payload["metadata"] = dict(request["metadata"])
+
     tools: list[dict[str, Any]] = []
-    for tool in request.get("tools", []):
+    raw_tools = request.get("tools")
+    for tool in raw_tools if isinstance(raw_tools, list) else []:
         if not isinstance(tool, dict) or tool.get("type") != "function":
             continue
         function = {
@@ -606,6 +718,55 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
             "function": {"name": tool_choice.get("name", "")},
         }
     return payload
+
+
+def _responses_text_format_to_chat_response_format(
+    text: Any,
+) -> dict[str, Any] | None:
+    """Translate Responses ``text.format`` to Chat ``response_format``."""
+    if not isinstance(text, dict):
+        return None
+    fmt = text.get("format")
+    if not isinstance(fmt, dict):
+        return None
+    fmt_type = fmt.get("type")
+    if fmt_type in {"text", "json_object"}:
+        return {"type": fmt_type}
+    if fmt_type != "json_schema":
+        return None
+    schema = {
+        key: fmt[key]
+        for key in ("name", "schema", "description", "strict")
+        if key in fmt
+    }
+    return {"type": "json_schema", "json_schema": schema}
+
+
+def _canonical_provider_usage(
+    usage: dict[str, Any], *, responses: bool
+) -> dict[str, Any]:
+    """Copy provider usage with canonical aliases used by spend accounting."""
+    canonical = dict(usage)
+    if responses:
+        for responses_key, chat_key in (
+            ("input_tokens", "prompt_tokens"),
+            ("output_tokens", "completion_tokens"),
+        ):
+            value = canonical.get(responses_key)
+            if type(value) is int and value >= 0:
+                canonical.setdefault(chat_key, value)
+    return canonical
+
+
+def _responses_usage(usage: dict[str, Any]) -> dict[str, int]:
+    """Return usage with the Responses API's native token field names."""
+    input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
+    output_tokens = int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
+    }
 
 
 def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
@@ -639,8 +800,6 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
         })
 
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    input_tokens = int(usage.get("prompt_tokens", 0) or 0)
-    output_tokens = int(usage.get("completion_tokens", 0) or 0)
     response: dict[str, Any] = {
         "id": f"resp_{data.get('id', uuid.uuid4().hex)}",
         "object": "response",
@@ -649,14 +808,25 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
         "output": output,
         "output_text": content,
         "status": "completed" if choice.get("finish_reason") != "length" else "incomplete",
-        "usage": {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
-        },
+        "usage": _responses_usage(usage),
     }
     if isinstance(request.get("metadata"), dict):
         response["metadata"] = request["metadata"]
+    if isinstance(data.get("orchestration"), dict):
+        response["orchestration"] = data["orchestration"]
+    echo: dict[str, Any] = {}
+    if isinstance(request.get("response_format"), dict):
+        echo["response_format"] = request["response_format"]
+    instructions = request.get("instructions")
+    if isinstance(instructions, str) and instructions.strip():
+        echo["instructions"] = instructions
+    metadata = request.get("metadata")
+    if isinstance(metadata, dict):
+        cleaned_metadata = {key: value for key, value in metadata.items() if value is not None}
+        if cleaned_metadata:
+            echo["metadata"] = cleaned_metadata
+    if echo:
+        response["echo"] = echo
     return response
 
 
@@ -686,9 +856,8 @@ class ModelClient:
         local_max_retries: int = 0,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
-        temperature: float = 0.2,
+        temperature: float | None = None,
         local_concurrency: int = 1,
-        chat_template_args: dict[str, Any] | None = None,
         ca_bundle: str | None = None,
         verify_tls: bool = True,
         allowed_provider_hosts: Iterable[str] | None = None,
@@ -697,7 +866,9 @@ class ModelClient:
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
-        self.default_temperature = 0.2
+        # ``None`` keeps internal orchestration provider-neutral; the CLI passes
+        # its explicit sampling default when that policy is desired.
+        self.default_temperature = temperature
         self.default_top_p: float | None = None
         self.default_presence_penalty: float | None = None
         self.default_frequency_penalty: float | None = None
@@ -713,7 +884,6 @@ class ModelClient:
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
             )
         self.local_concurrency = local_concurrency
-        self.chat_template_args = dict(chat_template_args or {})
         self.allowed_provider_hosts = self._normalize_allowed_provider_hosts(allowed_provider_hosts)
         # Seam so tests can observe/skip real sleeping during backoff.
         self._sleep = time.sleep
@@ -763,6 +933,47 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    @contextmanager
+    def request_settings(
+        self,
+        *,
+        max_output_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+    ):
+        """Apply request sampling settings to this thread without shared mutation."""
+        settings = {
+            "max_output_tokens": max_output_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+        }
+        previous: dict[str, tuple[bool, Any]] = {}
+        for name, value in settings.items():
+            if value is None:
+                continue
+            attribute = f"request_{name}"
+            previous[attribute] = (
+                hasattr(self._local, attribute),
+                getattr(self._local, attribute, None),
+            )
+            setattr(self._local, attribute, value)
+        try:
+            yield
+        finally:
+            for attribute, (present, value) in previous.items():
+                if present:
+                    setattr(self._local, attribute, value)
+                else:
+                    delattr(self._local, attribute)
+
+    def _request_setting(self, name: str, fallback: Any) -> Any:
+        """Return a request-local override or the client default."""
+        return getattr(self._local, f"request_{name}", fallback)
+
     def chat(
         self,
         agent: ModelAgent,
@@ -776,12 +987,29 @@ class ModelClient:
         ``default_top_p`` are used so request-scoped Completions sampling can be
         applied without threading kwargs through every orchestrator hop.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError("model is not chat-compatible and cannot serve a chat request")
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
-        effective_temperature = self.default_temperature if temperature is None else temperature
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
+        effective_temperature = (
+            self._request_setting("temperature", self.default_temperature)
+            if temperature is None
+            else temperature
+        )
+        effective_top_p = (
+            self._request_setting("top_p", self.default_top_p)
+            if top_p is None
+            else top_p
+        )
+        effective_presence = self._request_setting(
+            "presence_penalty", self.default_presence_penalty
+        )
+        effective_frequency = self._request_setting(
+            "frequency_penalty", self.default_frequency_penalty
+        )
+        effective_max_tokens = self._request_setting(
+            "max_output_tokens", self.max_output_tokens
+        )
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
@@ -800,20 +1028,111 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": effective_temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": effective_max_tokens,
         }
+        if effective_temperature is not None:
+            payload["temperature"] = effective_temperature
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
         if effective_presence is not None:  # pragma: no cover
             payload["presence_penalty"] = effective_presence
         if effective_frequency is not None:  # pragma: no cover
             payload["frequency_penalty"] = effective_frequency
-        if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-            payload["chat_template_kwargs"] = self.chat_template_args
-        with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+        parsed_provider = urlparse(agent.base_url)
+        with (
+            traced(
+                f"chat {agent.model}",
+                {
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                    "gen_ai.request.model": agent.model,
+                    "contextual_orchestrator.agent_id": agent.id,
+                    "server.address": parsed_provider.hostname or "",
+                    "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+                },
+            ),
+            _local_provider_slot(agent, self.local_concurrency, self.timeout),
+        ):
             return self._send_with_retry(agent, payload, destination)
+
+    def embed_many(self, agent: ModelAgent, inputs: list[str]) -> list[list[float]]:
+        """Send one real embeddings request through the configured provider agent."""
+        if not inputs:
+            return []
+        if agent.base_url.startswith("mock://"):
+            raise RuntimeError("mock agents do not provide semantic embeddings")
+        destination = self._validate_provider(agent)
+        api_key = _provider_credential(agent)
+        credential_name = _provider_credential_name(agent)
+        if credential_name and not api_key:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
+            )
+        payload = {"model": agent.model, "input": inputs}
+        parsed_provider = urlparse(agent.base_url)
+        with (
+            traced(
+                f"embeddings {agent.model}",
+                {
+                    "gen_ai.operation.name": "embeddings",
+                    "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                    "gen_ai.request.model": agent.model,
+                    "contextual_orchestrator.agent_id": agent.id,
+                    "server.address": parsed_provider.hostname or "",
+                    "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+                },
+            ),
+            _local_provider_slot(agent, self.local_concurrency, self.timeout),
+        ):
+            return self._send_embeddings_with_retry(agent, payload, destination)
+
+    def fetch_json(
+        self,
+        agent: ModelAgent,
+        url: str,
+        *,
+        timeout: float | None = None,
+        max_bytes: int = 8 * 1024 * 1024,
+    ) -> Any:
+        """Fetch bounded provider JSON through validated, DNS-pinned transport."""
+        if type(max_bytes) is not int or max_bytes <= 0:
+            raise ValueError("max_bytes must be a positive integer")
+        provider = urlparse(agent.base_url)
+        target = urlparse(url)
+        provider_port = provider.port or (443 if provider.scheme == "https" else 80)
+        target_port = target.port or (443 if target.scheme == "https" else 80)
+        if (
+            target.scheme != provider.scheme
+            or target.hostname != provider.hostname
+            or target_port != provider_port
+            or target.username is not None
+            or target.password is not None
+            or "#" in url
+        ):
+            raise RuntimeError("provider JSON URL must share the validated agent origin")
+        destination = self._validate_provider(agent)
+        api_key = _provider_credential(agent)
+        credential_name = _provider_credential_name(agent)
+        if credential_name and not api_key:
+            raise NotConfigured(
+                f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
+            )
+        request = urllib.request.Request(
+            url,
+            headers={"authorization": f"{agent.auth_scheme} {api_key}"} if api_key else {},
+            method="GET",
+        )
+        opened = (
+            self._open_provider(request, destination)
+            if timeout is None
+            else self._open_provider(request, destination, timeout=timeout)
+        )
+        with opened as response:
+            body = response.read(max_bytes + 1)
+        if len(body) > max_bytes:
+            raise ValueError("provider JSON response exceeds the maximum size")
+        return json.loads(body.decode("utf-8"))
 
     def probe(self, agent: ModelAgent, *, timeout: float = DEFAULT_PROVIDER_PROBE_TIMEOUT) -> dict[str, Any]:
         """Verify a local model registry, then run one bounded completion probe.
@@ -825,6 +1144,15 @@ class ModelClient:
         """
         probe_timeout = _validate_provider_probe_timeout(timeout)
         started = time.monotonic()
+        if not is_chat_compatible_model_id(agent.model):
+            return {
+                "agent_id": agent.id,
+                "model": agent.model,
+                "status": "not_ready",
+                "latency_ms": round((time.monotonic() - started) * 1000, 2),
+                "error_type": "ValueError",
+                "failure_code": "non_chat_model",
+            }
         self._local.usage = None
         failure_code = "provider_probe_failed"
         try:
@@ -857,12 +1185,9 @@ class ModelClient:
                 payload: dict[str, Any] = {
                     "model": agent.model,
                     "messages": [{"role": "user", "content": "Reply with exactly OK."}],
-                    "temperature": 0.0,
                     "stream": False,
                     "max_tokens": 1,
                 }
-                if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-                    payload["chat_template_kwargs"] = self.chat_template_args
                 with _local_provider_slot(agent, self.local_concurrency, probe_timeout):
                     content = self._send(agent, payload, destination, timeout=probe_timeout)
                 usage = self.take_usage()
@@ -897,20 +1222,54 @@ class ModelClient:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
         last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
+        active_payload = payload
+        temperature_negotiated = False
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
+            while True:
+                try:
+                    return (
+                        self._send(agent, active_payload, destination)
+                        if timeout is None
+                        else self._send(agent, active_payload, destination, timeout=timeout)
+                    )
+                except urllib.error.HTTPError as exc:
+                    if (
+                        not temperature_negotiated
+                        and "temperature" in active_payload
+                        and _temperature_capability_rejection(exc)
+                    ):
+                        active_payload = dict(active_payload)
+                        active_payload.pop("temperature", None)
+                        temperature_negotiated = True
+                        continue
+                    last_error = exc
+                    break
+                except Exception as exc:  # noqa: BLE001 - classify then decide
+                    last_error = exc
+                    break
+            if attempt >= retry_limit or not is_transient_error(last_error):
+                break
+            self._sleep(self._backoff_delay(attempt))
+        if isinstance(last_error, ProviderResponseError):
+            raise last_error
+        raise RuntimeError(f"provider {agent.id} request failed") from None
+
+    def _send_embeddings_with_retry(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+    ) -> list[list[float]]:
+        """Call the provider embeddings endpoint with the chat retry policy."""
+        retry_limit = self._retry_limit(agent)
+        for attempt in range(retry_limit + 1):
             try:
-                return (
-                    self._send(agent, payload, destination)
-                    if timeout is None
-                    else self._send(agent, payload, destination, timeout=timeout)
-                )
+                return self._send_embeddings(agent, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        detail = f": {last_error}" if last_error else ""
-        raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
+        raise RuntimeError(f"provider {agent.id} embeddings request failed") from None
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -934,6 +1293,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
@@ -952,6 +1312,48 @@ class ModelClient:
             self._local.usage = usage
         return self._response_content(agent, data)
 
+    def _send_embeddings(
+        self,
+        agent: ModelAgent,
+        payload: dict[str, Any],
+        destination: ProviderDestination | None = None,
+    ) -> list[list[float]]:
+        """Perform one provider embeddings request and validate every vector."""
+        api_key = _provider_credential(agent)
+        headers = {"content-type": "application/json"}
+        if api_key:
+            headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
+        request = urllib.request.Request(
+            self._provider_url(agent, "/embeddings"),
+            data=json.dumps(payload).encode("utf-8"),
+            headers=headers,
+            method="POST",
+        )
+        with self._open_provider(request, destination) as response:
+            data = json.loads(response.read().decode("utf-8"))
+        rows = data.get("data")
+        expected = payload.get("input")
+        if not isinstance(expected, list) or not isinstance(rows, list) or len(rows) != len(expected):
+            raise RuntimeError("provider embeddings response did not contain a complete vector batch")
+        ordered: list[list[float] | None] = [None] * len(expected)
+        for row in rows:
+            if not isinstance(row, dict) or not isinstance(row.get("index"), int):
+                raise RuntimeError("provider embeddings response contained an invalid index")
+            index = row["index"]
+            vector = row.get("embedding")
+            if not 0 <= index < len(expected) or not isinstance(vector, list) or not vector:
+                raise RuntimeError("provider embeddings response contained an invalid vector")
+            if not all(isinstance(value, (int, float)) and math.isfinite(float(value)) for value in vector):
+                raise RuntimeError("provider embeddings response contained a non-finite vector")
+            if ordered[index] is not None:
+                raise RuntimeError("provider embeddings response contained a duplicate index")
+            ordered[index] = [float(value) for value in vector]
+        usage = data.get("usage")
+        if isinstance(usage, dict):
+            self._local.usage = usage
+        return [vector for vector in ordered if vector is not None]
+
     @staticmethod
     def _response_content(agent: ModelAgent, data: dict[str, Any]) -> str:
         """Extract text and explain provider responses that contain reasoning only."""
@@ -961,11 +1363,11 @@ class ModelClient:
         if isinstance(content, str):
             return content
         if isinstance(message, dict) and message.get("reasoning"):
-            raise RuntimeError(
+            raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
-                "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
+                "configure the provider to return assistant content or increase max_output_tokens"
             )
-        raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
+        raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
 
     @staticmethod
     def _connect_validated(
@@ -1007,9 +1409,9 @@ class ModelClient:
         if (
             parsed.scheme not in {"http", "https"}
             or not parsed.hostname
-            or parsed.username
-            or parsed.password
-            or parsed.fragment
+            or parsed.username is not None
+            or parsed.password is not None
+            or "#" in request.full_url
         ):
             raise RuntimeError("provider request URL must be an HTTP(S) URL without userinfo or fragments")
         try:
@@ -1070,6 +1472,10 @@ class ModelClient:
         are yielded as they arrive (not computed-then-framed). The mock path yields its
         answer in fixed chunks so behavior shape stays testable and unchanged.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
             answer = self._mock(agent, messages)
             for start in range(0, len(answer), 24):
@@ -1080,12 +1486,18 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": self._request_setting(
+                "max_output_tokens", self.max_output_tokens
+            ),
         }
-        if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-            payload["chat_template_kwargs"] = self.chat_template_args
+        effective_temperature = (
+            self._request_setting("temperature", self.default_temperature)
+            if temperature is None
+            else temperature
+        )
+        if effective_temperature is not None:  # pragma: no cover
+            payload["temperature"] = effective_temperature
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             yield from self._stream_send(agent, payload, destination)  # pragma: no cover
 
@@ -1097,6 +1509,7 @@ class ModelClient:
         headers = {"content-type": "application/json", "accept": "text/event-stream"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, "/chat/completions"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1125,25 +1538,90 @@ class ModelClient:
     # so the full provider response shape (tool_calls, parsed structured output,
     # Responses output items) survives verbatim. Agent selection lives on the
     # orchestrator; this is the agent-level transport.
+    def proxy_send_once(
+        self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
+    ) -> dict[str, Any]:
+        """Send one passthrough attempt without same-agent retry amplification."""
+        normalized_endpoint = endpoint.strip("/")
+        if normalized_endpoint.startswith("v1/"):
+            normalized_endpoint = normalized_endpoint[3:]
+        if (
+            normalized_endpoint in {"chat/completions", "completions", "responses"}
+            and not is_chat_compatible_model_id(agent.model)
+        ):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
+        if agent.base_url.startswith("mock://"):
+            return self._mock_raw(agent, normalized_endpoint, payload)
+        destination = self._validate_provider(agent)  # pragma: no cover
+        if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
+            chat_payload = _responses_to_chat_payload(payload)
+            chat_payload.setdefault(
+                "max_tokens",
+                self._request_setting("max_output_tokens", self.max_output_tokens),
+            )
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                chat_response = self._send_raw_with_retry(
+                    agent,
+                    "chat/completions",
+                    chat_payload,
+                    destination,
+                    allow_transient_retries=False,
+                )
+            return _chat_to_responses_payload(chat_response, payload)
+        if _is_local_provider_url(agent.base_url) and normalized_endpoint == "chat/completions":
+            payload = dict(payload)
+            payload.setdefault(
+                "max_tokens",
+                self._request_setting("max_output_tokens", self.max_output_tokens),
+            )
+        with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+            return self._send_raw_with_retry(
+                agent,
+                normalized_endpoint,
+                payload,
+                destination,
+                allow_transient_retries=False,
+            )
+
     def proxy_send(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Passthrough a full request to one agent, returning the raw provider JSON."""
+        normalized_endpoint = endpoint.strip("/")
+        if normalized_endpoint.startswith("v1/"):
+            normalized_endpoint = normalized_endpoint[3:]
+        if (
+            normalized_endpoint in {"chat/completions", "completions", "responses"}
+            and not is_chat_compatible_model_id(agent.model)
+        ):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
-            return self._mock_raw(agent, endpoint, payload)
+            return self._mock_raw(agent, normalized_endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
-        if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
+        if normalized_endpoint == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
-            chat_payload.setdefault("max_tokens", self.max_output_tokens)
-            if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-                chat_payload["chat_template_kwargs"] = self.chat_template_args
+            chat_payload.setdefault(
+                "max_tokens",
+                self._request_setting("max_output_tokens", self.max_output_tokens),
+            )
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                 chat_response = self._send_raw_with_retry(
                     agent, "chat/completions", chat_payload, destination
                 )
             return _chat_to_responses_payload(chat_response, payload)
+        if _is_local_provider_url(agent.base_url) and endpoint.strip("/") == "chat/completions":
+            local_payload = dict(payload)
+            local_payload.setdefault(
+                "max_tokens", self._request_setting("max_output_tokens", self.max_output_tokens)
+            )
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                return self._send_raw_with_retry(agent, endpoint, local_payload, destination)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            return self._send_raw_with_retry(agent, endpoint, payload, destination)
+            return self._send_raw_with_retry(agent, normalized_endpoint, payload, destination)
 
     def _send_raw_with_retry(
         self,
@@ -1151,18 +1629,38 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
+        *,
+        allow_transient_retries: bool = True,
     ) -> dict[str, Any]:  # pragma: no cover
-        """Passthrough transport with the same transient-failure retry policy as _send."""
+        """Negotiate optional temperature and optionally retry transient failures."""
         last_error: Exception | None = None
-        retry_limit = self._retry_limit(agent)
+        retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
+        active_payload = payload
+        temperature_negotiated = False
         for attempt in range(retry_limit + 1):
-            try:
-                return self._send_raw(agent, endpoint, payload, destination)
-            except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
-                if attempt >= retry_limit or not is_transient_error(exc):
+            while True:
+                try:
+                    return self._send_raw(agent, endpoint, active_payload, destination)
+                except urllib.error.HTTPError as exc:
+                    if (
+                        not temperature_negotiated
+                        and "temperature" in active_payload
+                        and _temperature_capability_rejection(exc)
+                    ):
+                        active_payload = dict(active_payload)
+                        active_payload.pop("temperature", None)
+                        temperature_negotiated = True
+                        continue
+                    last_error = exc
                     break
-                self._sleep(self._backoff_delay(attempt))
+                except Exception as exc:  # noqa: BLE001 - classify then decide
+                    last_error = exc
+                    break
+            if attempt >= retry_limit or not is_transient_error(last_error):
+                break
+            self._sleep(self._backoff_delay(attempt))
+        if not allow_transient_retries and last_error is not None:
+            raise last_error
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
 
     def _send_raw(
@@ -1177,6 +1675,7 @@ class ModelClient:
         headers = {"content-type": "application/json"}
         if api_key:
             headers["authorization"] = f"{agent.auth_scheme} {api_key}"
+        inject_trace_context(headers)
         request = urllib.request.Request(
             self._provider_url(agent, f"/{endpoint.lstrip('/')}"),
             data=json.dumps(payload).encode("utf-8"),
@@ -1190,6 +1689,17 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
+        response_format = payload.get("response_format")
+        text_config = payload.get("text")
+        text_format = text_config.get("format") if isinstance(text_config, dict) else None
+        structured_json = (
+            isinstance(response_format, dict)
+            and response_format.get("type") in {"json_object", "json_schema"}
+        ) or (
+            isinstance(text_format, dict)
+            and text_format.get("type") in {"json_object", "json_schema"}
+        )
+        mock_text = "{}" if structured_json else f"[{agent.id}] responses-mock"
         echoed = {
             key: payload[key]
             for key in (
@@ -1198,9 +1708,11 @@ class ModelClient:
                 "tools",
                 "tool_choice",
                 "temperature",
+                "top_p",
                 "max_tokens",
                 "instructions",
                 "metadata",
+                "input",
                 "messages",
                 "top_logprobs",
                 "text",
@@ -1208,6 +1720,17 @@ class ModelClient:
             if key in payload
         }
         if endpoint.strip("/") == "responses":
+            instructions = echoed.get("instructions")
+            guidance_prefix = "You are the final synthesizer in a multi-agent workflow."
+            marker = "\n\nYou are the final synthesizer in a multi-agent workflow."
+            if isinstance(instructions, str) and instructions.startswith(guidance_prefix):
+                echoed.pop("instructions", None)
+            elif isinstance(instructions, str) and marker in instructions:
+                original_instructions = instructions.split(marker, 1)[0]
+                if original_instructions.strip():
+                    echoed["instructions"] = original_instructions
+                else:
+                    echoed.pop("instructions", None)
             return {
                 "id": f"resp_mock_{agent.id}",
                 "object": "response",
@@ -1216,7 +1739,7 @@ class ModelClient:
                     {
                         "type": "message",
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
+                        "content": [{"type": "output_text", "text": mock_text}],
                     }
                 ],
                 "echo": echoed,
@@ -1228,7 +1751,10 @@ class ModelClient:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": f"[{agent.id}] chat-mock"},
+                    "message": {
+                        "role": "assistant",
+                        "content": "{}" if structured_json else f"[{agent.id}] chat-mock",
+                    },
                     "finish_reason": "stop",
                 }
             ],
@@ -1242,8 +1768,19 @@ class ModelClient:
         # never a silent os.getenv fallback. (Legacy api_key_env, if set, is used
         # only as the credential NAME; see ModelAgent.credential_name.)
         if _is_local_provider_url(agent.base_url):
+            credential_name = _provider_credential_name(agent)
+            if not credential_name or get_credential(credential_name) is None:
+                raise NotConfigured(
+                    f"{agent.id} requires a resolvable local gateway credential "
+                    f"'{credential_name or '<missing>'}' in the KV"
+                )
             parsed = urlparse(agent.base_url)
-            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            if (
+                parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or "#" in agent.base_url
+            ):
                 raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
             addresses = self._resolve_addresses(parsed.hostname or "", parsed.port or 80)
             if any(not ipaddress.ip_address(sockaddr[0]).is_loopback for _family, sockaddr in addresses):
@@ -1258,7 +1795,12 @@ class ModelClient:
         parsed = urlparse(agent.base_url)
         if parsed.scheme != "https" or not parsed.hostname:
             raise RuntimeError(f"{agent.id} base_url must use https")
-        if parsed.username or parsed.password or parsed.query or parsed.fragment:
+        if (
+            parsed.username is not None
+            or parsed.password is not None
+            or parsed.query
+            or "#" in agent.base_url
+        ):
             raise RuntimeError(f"{agent.id} base_url must not contain credentials, query data, or fragments")
         hostname = parsed.hostname.lower()
         if self.allowed_provider_hosts and hostname not in self.allowed_provider_hosts:
@@ -1280,7 +1822,12 @@ class ModelClient:
         """Build a provider URL while rejecting urllib-supported local schemes."""
         parsed = urlparse(agent.base_url)
         if _is_local_provider_url(agent.base_url):
-            if parsed.username or parsed.password or parsed.query or parsed.fragment:
+            if (
+                parsed.username is not None
+                or parsed.password is not None
+                or parsed.query
+                or "#" in agent.base_url
+            ):
                 raise RuntimeError(f"{agent.id} local provider URL must not contain credentials or query data")
             base_url = urlunsplit(("http", parsed.netloc, parsed.path.rstrip("/"), "", ""))
         elif parsed.scheme in {"http", "https"} and parsed.hostname:
@@ -1298,6 +1845,8 @@ class ModelClient:
         match = re.search(r"Role: ([a-z]+)", system)
         if match:
             role = match.group(1)
+        if "final answer must contain only one JSON value" in system:
+            return "{}"
         return f"[{agent.id}:{role}] {last[:220]}"
 
     # --- OpenAI Batch API (async, ~50% provider discount; NOT for latency-sensitive chat) ---
@@ -1316,6 +1865,10 @@ class ModelClient:
         workloads (24h completion window, ~half the price); real-time chat should keep
         using ``chat``. The mock path answers synchronously so tests and local runs work.
         """
+        if not is_chat_compatible_model_id(agent.model):
+            raise ValueError(
+                f"model {agent.model!r} is not chat-compatible and cannot serve {agent.id!r}"
+            )
         if agent.base_url.startswith("mock://"):
             results = {
                 custom_id: {"content": self._mock(agent, messages), "usage": None}
@@ -1336,7 +1889,7 @@ class ModelClient:
         requests: dict[str, list[ChatMessage]],
         temperature: float | None,
     ) -> dict[str, dict[str, Any]]:
-        """Run local OpenAI-compatible requests concurrently through mlx-lm."""
+        """Run local OpenAI-compatible requests concurrently through a gateway."""
         def complete(custom_id: str, messages: list[ChatMessage]) -> tuple[str, dict[str, Any]]:
             content = self.chat(agent, messages, temperature=temperature)
             return custom_id, {"content": content, "usage": self.take_usage()}
@@ -1344,33 +1897,44 @@ class ModelClient:
         if self.local_concurrency == 1 or len(requests) <= 1:
             return dict(complete(custom_id, messages) for custom_id, messages in requests.items())
         with ThreadPoolExecutor(max_workers=min(self.local_concurrency, len(requests))) as pool:
-            futures = [pool.submit(complete, custom_id, messages) for custom_id, messages in requests.items()]
+            futures = [
+                pool.submit(copy_context().run, complete, custom_id, messages)
+                for custom_id, messages in requests.items()
+            ]
             return dict(future.result() for future in futures)
 
     def _batch_run(
         self,
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
-        temperature: float,
+        temperature: float | None,
         poll_interval: float,
         poll_timeout: float,
         destination: ProviderDestination | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
-        lines = [
-            json.dumps({
+        lines = []
+        for custom_id, messages in requests.items():
+            body = {
+                "model": agent.model,
+                "messages": messages,
+                "max_tokens": self._request_setting(
+                    "max_output_tokens", self.max_output_tokens
+                ),
+            }
+            effective_temperature = (
+                self._request_setting("temperature", self.default_temperature)
+                if temperature is None
+                else temperature
+            )
+            if effective_temperature is not None:
+                body["temperature"] = effective_temperature
+            lines.append(json.dumps({
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
-                    "model": agent.model,
-                    "messages": messages,
-                    "temperature": self.temperature if temperature is None else temperature,
-                    "max_tokens": self.max_output_tokens,
-                },
-            }, ensure_ascii=False)
-            for custom_id, messages in requests.items()
-        ]
+                "body": body,
+            }, ensure_ascii=False))
         input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"), destination)
         batch_id = self._batch_json(agent, "POST", "/batches", {
             "input_file_id": input_file_id,
@@ -1541,14 +2105,15 @@ class _AgentPoolStore:
 class _StateStore:
     """Minimal write-through sqlite persistence for orchestrator runtime state.
 
-    ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
+    ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run,
+    budget_meter)
     upsert by key; stream kinds (analytics, audit) append. Stream rows grow unbounded
     on disk while the in-memory deques stay capped — add pruning if db size matters.
     Runtime values (kind, key, payload, limit) are always bound through SQLite
     placeholders so persisted prompts and identifiers cannot become SQL syntax.
     """
 
-    _KEYED = {"workflow_run", "evaluation_run"}
+    _KEYED = {"workflow_run", "evaluation_run", "budget_meter"}
     _CREATE_RECORDS_SQL = (
         "CREATE TABLE IF NOT EXISTS records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
@@ -1631,6 +2196,7 @@ class TaskOrchestrator:
         "worker": ("coding", "implementation", "reasoning"),
         "verifier": ("verification", "security", "review", "debugging"),
         "synthesizer": ("writing", "reasoning", "planning"),
+        "embedding": ("embedding",),
     }
     DOMAIN_HINTS = {
         "coding": ("code", "bug", "debug", "implement", "repository", "test", "코드", "구현"),
@@ -1690,6 +2256,18 @@ class TaskOrchestrator:
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
+        self._workflow_run_lock = threading.Lock()
+        self._budget_spend_lock = threading.Lock()
+        self._budget_spent_output_tokens = 0
+        self._budget_spent_cost_usd = 0.0
+        self._archived_spend: dict[str, Any] = {
+            "run_count": 0,
+            "estimated_prompt_tokens": 0,
+            "reported_prompt_tokens": 0,
+            "any_reported_prompt": False,
+            "total_output_tokens": 0,
+            "by_model": {},
+        }
         # Per-agent circuit breaker: consecutive failures trip an agent "open"
         # so a persistently failing provider is skipped until it cools down.
         self._circuit: dict[str, dict[str, float]] = {}
@@ -1705,6 +2283,15 @@ class TaskOrchestrator:
         self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
+            restored = self.spend_analytics()["totals"]
+            self._budget_spent_output_tokens = max(
+                self._budget_spent_output_tokens,
+                restored["estimated_output_tokens"],
+            )
+            self._budget_spent_cost_usd = max(
+                self._budget_spent_cost_usd,
+                restored["estimated_cost_usd"] or 0.0,
+            )
 
     def close(self) -> None:
         """Release optional durable resources owned by this orchestrator."""
@@ -1761,9 +2348,16 @@ class TaskOrchestrator:
         }
 
     def _reload_state(self) -> None:
+        budget_meter = self._store.load("budget_meter")
+        if budget_meter:
+            self._budget_spent_output_tokens = int(
+                budget_meter[-1].get("spent_output_tokens", 0)
+            )
+            self._budget_spent_cost_usd = float(
+                budget_meter[-1].get("spent_cost_usd", 0.0)
+            )
         for record in self._store.load("workflow_run"):
-            self._workflow_runs[record["workflow_run_id"]] = record
-            self._run_order.appendleft(record["workflow_run_id"])
+            self._remember_workflow_run(record)
         for evaluation in self._store.load("evaluation_run"):
             self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
         for event in self._store.load("analytics", self._analytics_events.maxlen):
@@ -1778,21 +2372,33 @@ class TaskOrchestrator:
             "orchestration_mode",
             "mode",
             "include_orchestration_trace",
+            "reasoning_effort",
             "attribution",
             "routing",
         }
     )
 
     def proxy_completion(
-        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
+        self,
+        body: dict[str, Any],
+        *,
+        endpoint: str = "chat/completions",
+        single_agent: bool = False,
     ) -> dict[str, Any]:
-        """Passthrough a full OpenAI request to the primary agent, returning its raw response.
+        """Serve provider-shaped requests through a conducted workflow.
 
-        Requests carrying provider features the multi-agent verifier cannot merge
-        (``response_format``, ``tools``, or the Responses API) are handled by a
-        single selected agent so the full provider response shape survives; the
-        orchestration path stays reserved for plain-text routing/verification.
+        Structured output, tools, and Responses requests cannot be merged by
+        string concatenation. They therefore run the same multi-agent workflow
+        as ordinary orchestration, then use the selected synthesizer once to
+        produce the requested provider shape. This preserves provider features
+        without silently downgrading the request to a single-agent workflow.
         """
+        self._raise_if_spend_budget_exceeded()
+        if not single_agent and (endpoint.strip("/") == "responses" or any(
+            key in body and body.get(key) is not None
+            for key in ("response_format", "tools", "tool_choice", "functions", "function_call")
+        )):
+            return self._orchestrated_provider_completion(body, endpoint=endpoint)
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)
@@ -1819,7 +2425,292 @@ class TaskOrchestrator:
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
-        return self.client.proxy_send(agent, endpoint, upstream)
+        passthrough_started = time.perf_counter()
+        raw = self._proxy_provider_completion(
+            agent,
+            endpoint,
+            upstream,
+            requested_model=requested_model,
+            text=text,
+            role="worker",
+        )
+        passthrough_output = ""
+        try:
+            passthrough_output = ModelClient._response_content(agent, raw)
+        except RuntimeError:
+            # Tool-call-only responses are billable even without assistant text.
+            pass
+        passthrough_step = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "subtask": "Provider passthrough",
+            "access": [],
+            "latency_ms": round((time.perf_counter() - passthrough_started) * 1000, 2),
+            "output": passthrough_output,
+        }
+        usage = raw.get("usage")
+        if isinstance(usage, dict):
+            passthrough_step["usage"] = _canonical_provider_usage(
+                usage,
+                responses=endpoint.strip("/") == "responses",
+            )
+        self._record_in_flight_provider_usage(
+            agent,
+            passthrough_step.get("usage"),
+            passthrough_output,
+        )
+        self._persist_workflow_run(
+            {
+                "workflow_run_id": f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": text,
+                "answer": passthrough_output,
+                "trace": [passthrough_step],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {
+                    "accepted": True,
+                    "reason": "single provider passthrough",
+                    "verifier_output": "",
+                },
+            }
+        )
+        return raw
+
+    def _orchestrated_provider_completion(
+        self, body: dict[str, Any], *, endpoint: str
+    ) -> dict[str, Any]:
+        """Conduct a workflow, then synthesize one OpenAI-compatible response."""
+        response_request = endpoint.strip("/") == "responses"
+        chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
+        messages = chat_body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("structured completion requires non-empty messages")
+        task = self._latest_user_text(messages)
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        requested_model = body.get("model")
+        final_agent = self._requested_agent(requested_model)
+        if final_agent is None:
+            final_agent = self._select_agent(
+                task,
+                "synthesizer",
+                required_tags=required_tags,
+            )
+        elif any(tag not in final_agent.tags for tag in required_tags):
+            required = ", ".join(required_tags)
+            raise RuntimeError(
+                f"requested model {requested_model!r} lacks required tags: {required}"
+            )
+        if final_agent.disabled:
+            disabled_model = requested_model if requested_model is not None else final_agent.model
+            raise RuntimeError(f"requested model {disabled_model!r} is disabled")
+
+        with self._budget_spend_lock:
+            budget_before = (
+                self._budget_spent_output_tokens,
+                self._budget_spent_cost_usd,
+            )
+        workflow = self.conduct(messages, preserve_messages=True, judge=True)
+        workflow_output_tokens = 0
+        workflow_cost_usd = 0.0
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        metered_steps = list(workflow["trace"])
+        verification = workflow.get("verification")
+        if isinstance(verification, dict) and isinstance(
+            verification.get("judge_usage"), dict
+        ):
+            metered_steps.append(
+                {
+                    "agent_id": verification.get("judge_agent_id", "unknown"),
+                    "usage": verification["judge_usage"],
+                    "output": "",
+                }
+            )
+        for row in metered_steps:
+            output_tokens, _reported = _step_output_token_count(row)
+            workflow_output_tokens += output_tokens
+            model = model_by_agent.get(
+                row.get("served_agent_id") or row.get("agent_id")
+            )
+            price = self.price_per_million.get(model) if model is not None else None
+            if price is not None:
+                workflow_cost_usd += output_tokens / 1_000_000 * price
+        with self._budget_spend_lock:
+            recorded_output_tokens = self._budget_spent_output_tokens - budget_before[0]
+            recorded_cost_usd = self._budget_spent_cost_usd - budget_before[1]
+            self._budget_spent_output_tokens += max(
+                0,
+                workflow_output_tokens - recorded_output_tokens,
+            )
+            self._budget_spent_cost_usd += max(
+                0.0,
+                workflow_cost_usd - recorded_cost_usd,
+            )
+        evidence = "\n\n".join(
+            f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
+            for row in workflow["trace"]
+        )
+        guidance = (
+            "You are the final synthesizer in a multi-agent workflow. "
+            "Use the original request and verified workflow evidence. "
+            "Return only the requested provider response; do not mention "
+            "the workflow or invent evidence.\n\n"
+            f"Verified workflow evidence:\n{evidence}"
+        )
+        if response_request:
+            # Preserve the Responses contract for remote providers. Local-only
+            # providers may translate this at ModelClient.proxy_send.
+            upstream = {
+                key: value
+                for key, value in body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS and key != "model"
+            }
+            upstream.pop("max_tokens", None)
+            upstream.pop("max_completion_tokens", None)
+            original_instructions = _responses_text(body.get("instructions")).strip()
+            upstream["instructions"] = (
+                f"{original_instructions}\n\n{guidance}"
+                if original_instructions
+                else guidance
+            )
+            upstream["model"] = final_agent.model
+            upstream["stream"] = False
+            self._raise_if_spend_budget_exceeded()
+            synthesis_started = time.perf_counter()
+            raw = self._proxy_provider_completion(
+                final_agent,
+                "responses",
+                upstream,
+                requested_model=requested_model,
+                text=task,
+                role="synthesizer",
+                required_tags=required_tags,
+            )
+            synthesis_output = raw.get("output_text")
+            if not isinstance(synthesis_output, str):
+                output_parts = [
+                    _responses_text(item.get("content"))
+                    for item in raw.get("output", [])
+                    if isinstance(item, dict) and item.get("type") == "message"
+                ]
+                synthesis_output = "".join(part for part in output_parts if part)
+            raw.setdefault("output_text", synthesis_output)
+        else:
+            # Keep the caller's complete message sequence and first-message position
+            # unchanged. Add guidance to an existing system/user turn so no system
+            # or evidence message is inserted after an assistant tool call.
+            synthesis_messages = copy.deepcopy(messages)
+            guidance_index = next(
+                (
+                    index
+                    for index in range(len(synthesis_messages) - 1, -1, -1)
+                    if synthesis_messages[index].get("role") == "user"
+                ),
+                0 if synthesis_messages and synthesis_messages[0].get("role") == "system" else None,
+            )
+            if guidance_index is not None:
+                original_content = synthesis_messages[guidance_index].get("content")
+                if isinstance(original_content, str):
+                    synthesis_messages[guidance_index]["content"] = f"{original_content}\n\n{guidance}"
+                elif isinstance(original_content, list):
+                    synthesis_messages[guidance_index]["content"] = [
+                        *original_content,
+                        {"type": "text", "text": guidance},
+                    ]
+                else:
+                    synthesis_messages[guidance_index]["content"] = guidance
+            else:
+                synthesis_messages.insert(0, {"role": "system", "content": guidance})
+            upstream = {
+                key: value
+                for key, value in chat_body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS and key not in {"model", "messages"}
+            }
+            upstream["model"] = final_agent.model
+            upstream["messages"] = synthesis_messages
+            upstream["stream"] = False
+            self._raise_if_spend_budget_exceeded()
+            synthesis_started = time.perf_counter()
+            raw = self._proxy_provider_completion(
+                final_agent,
+                "chat/completions",
+                upstream,
+                requested_model=requested_model,
+                text=task,
+                role="synthesizer",
+                required_tags=required_tags,
+            )
+            synthesis_output = ""
+            try:
+                synthesis_output = ModelClient._response_content(final_agent, raw)
+            except RuntimeError:
+                # Tool-call-only provider responses are valid structured output but
+                # have no assistant text to use as the workflow answer.
+                pass
+        synthesis_step = {
+            "id": len(workflow["trace"]),
+            "role": "synthesizer",
+            "agent_id": final_agent.id,
+            "subtask": "Provider-facing structured synthesis",
+            "access": [step["id"] for step in workflow["trace"]],
+            "latency_ms": round((time.perf_counter() - synthesis_started) * 1000, 2),
+            "output": synthesis_output,
+        }
+        usage = raw.get("usage")
+        if isinstance(usage, dict):
+            synthesis_step["usage"] = _canonical_provider_usage(
+                usage,
+                responses=response_request,
+            )
+        self._record_in_flight_provider_usage(
+            final_agent,
+            synthesis_step.get("usage"),
+            synthesis_output,
+        )
+        trace = [*workflow["trace"], synthesis_step]
+        workflow_run_id = f"run_{uuid.uuid4().hex}"
+        record = {
+            "workflow_run_id": workflow_run_id,
+            "created_at": int(time.time()),
+            "mode": "conduct",
+            "policy_mode": "conduct",
+            "prompt_text": task,
+            "answer": synthesis_output,
+            "trace": trace,
+            "policy_snapshot": self.policy.as_dict(),
+            "verification": workflow.get("verification"),
+        }
+        self._persist_workflow_run(record)
+        orchestration = {
+            "workflow_run_id": workflow_run_id,
+            "mode": "conduct",
+            "agent_count": len(workflow["trace"]),
+            "plan_source": workflow.get("plan_source"),
+        }
+        raw["orchestration"] = orchestration
+        return raw
+
+    def _proxy_provider_completion(
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+        *,
+        requested_model: Any,
+        text: str,
+        role: str,
+        required_tags: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        """Send one provider-shaped completion through the owning client transport.
+
+        The default path keeps the single-provider contract. A bounded failover
+        subclass may override this seam for the final provider call while
+        retaining workflow, spend, and response-shape handling here.
+        """
+        del requested_model, text, role, required_tags
+        return self.client.proxy_send(agent, endpoint, payload)
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
@@ -1832,23 +2723,36 @@ class TaskOrchestrator:
             raise ValueError(f"requested model {requested_model!r} is not configured")
         return next((candidate for candidate in matches if not candidate.disabled), matches[0])
 
-    def complete(self, messages: list[ChatMessage], mode: str = "auto") -> dict[str, Any]:
+    def complete(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        *,
+        output_contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Return a route or conducted completion without persisting a workflow run."""
+        effective_mode = "conduct" if output_contract is not None else mode
         if self._cache is None:
-            return self._dispatch(messages, mode)
-        key = self._cache_key(messages, mode)
+            return self._dispatch(messages, effective_mode, output_contract=output_contract)
+        key = self._cache_key(messages, effective_mode, output_contract=output_contract)
         cached = self._cache.get(key)
         if cached is not None:
             return cached
-        result = self._dispatch(messages, mode)
+        result = self._dispatch(messages, effective_mode, output_contract=output_contract)
         self._cache.put(key, result)
         return result
 
-    def _dispatch(self, messages: list[ChatMessage], mode: str) -> dict[str, Any]:
+    def _dispatch(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        *,
+        output_contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         text = self._latest_user_text(messages)
-        if mode == "route" or (mode == "auto" and not self._needs_workflow(text)):
+        if output_contract is None and (mode == "route" or (mode == "auto" and not self._needs_workflow(text))):
             return self.route_once(messages)
-        return self.conduct(messages)
+        return self.conduct(messages, output_contract=output_contract)
 
     def would_route(self, messages: list[ChatMessage], mode: str = "auto") -> bool:
         """True when this request takes the single-worker route path (vs the conduct workflow)."""
@@ -1862,12 +2766,14 @@ class TaskOrchestrator:
         already sent can't be recalled, so a mid-stream provider failure surfaces to the caller.
         """
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        agent = self._select_agent(text, "worker", required_tags=required_tags)
         parts: list[str] = []
         for delta in self.client.stream_chat(agent, messages):
             parts.append(delta)
             yield delta
         answer = "".join(parts)
+        self._record_in_flight_provider_usage(agent, None, answer)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
             "created_at": int(time.time()),
@@ -1882,29 +2788,33 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
         }
-        self._workflow_runs[record["workflow_run_id"]] = record
-        self._run_order.appendleft(record["workflow_run_id"])
-        self._append_audit_event(
-            "workflow_run_created",
-            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
-        )
-        self.record_analytics_event(
-            "workflow_run_created",
-            {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
-             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
-        )
+        self._persist_workflow_run(record)
 
-    def _cache_key(self, messages: list[ChatMessage], mode: str) -> str:
-        payload = json.dumps({"mode": mode, "messages": messages}, sort_keys=True, ensure_ascii=False)
+    def _cache_key(
+        self,
+        messages: list[ChatMessage],
+        mode: str,
+        *,
+        output_contract: dict[str, Any] | None = None,
+    ) -> str:
+        payload = json.dumps(
+            {"mode": mode, "messages": messages, "output_contract": output_contract},
+            sort_keys=True,
+            ensure_ascii=False,
+        )
         return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
-    def run(self, messages: list[ChatMessage], mode: str = "auto", workflow_run_id: str | None = None) -> dict[str, Any]:
+    def run(
+        self,
+        messages: list[ChatMessage],
+        mode: str = "auto",
+        workflow_run_id: str | None = None,
+        *,
+        output_contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
-        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-            budget = self.budget_status()
-            if budget["exceeded"]:
-                raise BudgetExceededError("spend budget exceeded", detail=budget)
-        result = self.complete(messages, mode=mode)
+        self._raise_if_spend_budget_exceeded()
+        result = self.complete(messages, mode=mode, output_contract=output_contract)
         prompt = self._latest_user_text(messages)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
@@ -1917,8 +2827,12 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
         }
-        self._workflow_runs[record["workflow_run_id"]] = record
-        self._run_order.appendleft(record["workflow_run_id"])
+        self._persist_workflow_run(record)
+        return record
+
+    def _persist_workflow_run(self, record: dict[str, Any]) -> None:
+        """Persist one completed workflow and its compact audit/analytics evidence."""
+        self._remember_workflow_run(record)
         if self._store is not None:
             self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
@@ -1951,7 +2865,22 @@ class TaskOrchestrator:
                     "duration_ms": step.get("latency_ms"),
                 },
             )
-        return record
+
+    def _remember_workflow_run(self, record: dict[str, Any]) -> None:
+        """Retain recent raw evidence and compact spend for evicted runs."""
+        run_id = record["workflow_run_id"]
+        with self._workflow_run_lock:
+            if run_id in self._workflow_runs:
+                try:
+                    self._run_order.remove(run_id)
+                except ValueError:  # pragma: no cover - defensive state repair
+                    pass
+            elif self._run_order.maxlen and len(self._run_order) >= self._run_order.maxlen:
+                evicted_id = self._run_order[-1]
+                evicted = self._workflow_runs.pop(evicted_id)
+                self._accumulate_run_spend(self._archived_spend, evicted)
+            self._workflow_runs[run_id] = record
+            self._run_order.appendleft(run_id)
 
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
@@ -1961,10 +2890,7 @@ class TaskOrchestrator:
         ``route_once``; results are persisted as normal route runs (with provider usage
         when reported) so spend analytics and the admin console see them unchanged.
         """
-        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-            budget = self.budget_status()
-            if budget["exceeded"]:
-                raise BudgetExceededError("spend budget exceeded", detail=budget)
+        self._raise_if_spend_budget_exceeded()
         selected = [(prompt, self._select_agent(prompt, "worker")) for prompt in prompts]
         agents_by_id = {agent.id: agent for _, agent in selected}
         requests_by_agent: dict[str, dict[str, list[ChatMessage]]] = {}
@@ -1981,8 +2907,8 @@ class TaskOrchestrator:
                 try:
                     prefix, suffix = custom_id.rsplit("_", 1)
                     index = int(suffix)
-                except (AttributeError, ValueError) as exc:
-                    raise RuntimeError("batch provider returned an invalid request identifier") from exc
+                except (AttributeError, ValueError):
+                    raise RuntimeError("batch provider returned an invalid request identifier") from None
                 if prefix != "task" or custom_id != f"task_{index}" or not 0 <= index < len(selected):
                     raise RuntimeError("batch provider returned an invalid request identifier")
                 if index in answers:
@@ -1998,6 +2924,11 @@ class TaskOrchestrator:
             }
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
+            self._record_in_flight_provider_usage(
+                agent,
+                row.get("usage"),
+                result["content"],
+            )
             record = {
                 "workflow_run_id": f"run_{uuid.uuid4().hex}",
                 "created_at": int(time.time()),
@@ -2009,19 +2940,7 @@ class TaskOrchestrator:
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
             }
-            self._workflow_runs[record["workflow_run_id"]] = record
-            self._run_order.appendleft(record["workflow_run_id"])
-            if self._store is not None:
-                self._store.save("workflow_run", record["workflow_run_id"], record)
-            self._append_audit_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
-            )
-            self.record_analytics_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
-                 "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
-            )
+            self._persist_workflow_run(record)
             records.append(record)
         return records
 
@@ -2144,9 +3063,10 @@ class TaskOrchestrator:
 
     def get_workflow_run(self, workflow_run_id: str) -> dict[str, Any]:
         """Return a persisted workflow run by identifier."""
-        if workflow_run_id not in self._workflow_runs:  # pragma: no cover
-            raise KeyError(workflow_run_id)
-        return self._workflow_runs[workflow_run_id]
+        with self._workflow_run_lock:
+            if workflow_run_id not in self._workflow_runs:  # pragma: no cover
+                raise KeyError(workflow_run_id)
+            return self._workflow_runs[workflow_run_id]
 
     def get_access_report(self, workflow_run_id: str) -> dict[str, Any]:
         """Return per-step visibility and accessed output evidence for a run."""
@@ -2240,7 +3160,7 @@ class TaskOrchestrator:
         if not agent.base_url.startswith("mock://"):
             parsed = urlparse(agent.base_url)
             if not _is_local_provider_url(agent.base_url) and (parsed.scheme != "https" or not parsed.hostname):
-                raise ValueError("non-mock remote agents must use an https base_url; local agents use mlx://loopback")
+                raise ValueError("non-mock remote agents must use an https base_url; local agents use local://loopback")
             if not _is_local_provider_url(agent.base_url) and not agent.credential_name:
                 raise ValueError("non-mock agents require credential_key or legacy api_key_env")
         self.candidates = [*self.candidates, agent]
@@ -2321,9 +3241,12 @@ class TaskOrchestrator:
     def route_once(self, messages: list[ChatMessage]) -> dict[str, Any]:
         """Route a prompt to one selected worker agent and return a single-step trace."""
         text = self._latest_user_text(messages)
-        agent = self._select_agent(text, "worker")
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        agent = self._select_agent(text, "worker", required_tags=required_tags)
         start = time.perf_counter()
-        answer, served_id, usage = self._invoke(agent, messages, text=text, role="worker")
+        answer, served_id, usage = self._invoke(
+            agent, messages, text=text, role="worker", required_tags=required_tags
+        )
         latency_ms = (time.perf_counter() - start) * 1000
         row = {
             "id": 0,
@@ -2346,14 +3269,25 @@ class TaskOrchestrator:
             "trace": [row],
         }
 
-    def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
-        """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
+    def conduct(
+        self,
+        messages: list[ChatMessage],
+        *,
+        preserve_messages: bool = False,
+        judge: bool = True,
+        output_contract: dict[str, Any] | None = None,
+    ) -> dict[str, Any]:
+        """Run a planned workflow with optional context, judge, and output contract."""
         task = self._latest_user_text(messages)
+        source_images = self._source_image_parts(messages)
+        required_tags = ("vision",) if source_images else ()
         plan_source = "template"
         if self.policy.workflow_planning == "generated":
             try:
                 steps = self._plan_generated(task)
                 plan_source = "generated"
+            except BudgetExceededError:
+                raise
             except Exception:  # noqa: BLE001 - invalid plans must not break the request
                 steps = self._plan(task)
                 plan_source = "template_fallback"
@@ -2363,9 +3297,20 @@ class TaskOrchestrator:
         trace: list[dict[str, Any]] = []
 
         for step in steps:
-            agent = self._agent(step.agent_id)
+            agent = (
+                self._select_agent(task, step.role, required_tags=required_tags)
+                if required_tags
+                else self._agent(step.agent_id)
+            )
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
-            step_messages = [
+            instruction = f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
+            user_content: str | list[dict[str, Any]] = instruction
+            if source_images and not preserve_messages:
+                user_content = [
+                    {"type": "text", "text": instruction},
+                    *copy.deepcopy(source_images),
+                ]
+            step_messages: list[ChatMessage] = [
                 {
                     "role": "system",
                     "content": (
@@ -2374,16 +3319,39 @@ class TaskOrchestrator:
                         "Return concise, directly useful work."
                     ),
                 },
-                {
-                    "role": "user",
-                    "content": f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}",
-                },
             ]
+            if preserve_messages:
+                step_messages[0]["content"] += (
+                    f"\n\nOriginal task:\n{task}\n\n"
+                    f"Accessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
+                )
+                # Preserve the caller's tool-call history byte-for-byte after
+                # the workflow instruction; do not insert a user turn into it.
+                step_messages.extend(copy.deepcopy(messages))
+            else:
+                step_messages.append(
+                    {
+                        "role": "user",
+                        "content": user_content,
+                    }
+                )
+            if output_contract is not None and step.id == steps[-1].id:
+                step_messages[0]["content"] += (
+                    "\nThe final answer must contain only one JSON value. "
+                    f"Honor this output contract exactly: {json.dumps(output_contract, ensure_ascii=False, sort_keys=True)}"
+                )
             start = time.perf_counter()
-            output, served_id, usage = self._invoke(agent, step_messages, text=task, role=step.role)
+            output, served_id, usage = self._invoke(
+                agent,
+                step_messages,
+                text=task,
+                role=step.role,
+                required_tags=required_tags,
+            )
             elapsed = (time.perf_counter() - start) * 1000
             outputs[step.id] = output
             row = step.as_dict()
+            row["agent_id"] = agent.id
             row["latency_ms"] = round(elapsed, 2)
             row["output"] = output
             if usage is not None:
@@ -2402,17 +3370,22 @@ class TaskOrchestrator:
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
-            if self.policy.verifier_judge == "model":
+            if judge and self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[-1].id]
-            if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
+            if (
+                output_contract is None
+                and not verification["accepted"]
+                and self.policy.verifier_required
+                and last_output("worker")
+            ):
                 answer = last_output("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
-            if self.policy.verifier_judge == "model":
+            if judge and self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
-            if not verification["accepted"] and self.policy.verifier_required:
+            if output_contract is None and not verification["accepted"] and self.policy.verifier_required:
                 answer = outputs[steps[1].id]
 
         return {
@@ -2434,6 +3407,7 @@ class TaskOrchestrator:
         pool = "\n".join(
             f"- {agent.id}: model={agent.model}, tags={', '.join(agent.tags) or 'none'}"
             for agent in self.agents
+            if is_general_chat_agent_model_id(agent.model)
         )
         system = (
             "You are the workflow conductor. Decompose the user's task into a short workflow.\n"
@@ -2444,10 +3418,15 @@ class TaskOrchestrator:
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
-        raw = self.client.chat(planner, [
-            {"role": "system", "content": system},
-            {"role": "user", "content": task},
-        ])
+        raw, _served_id, _usage = self._invoke(
+            planner,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": task},
+            ],
+            text=task,
+            role="thinker",
+        )
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -2459,7 +3438,7 @@ class TaskOrchestrator:
         raw_steps = data.get("steps")
         if not isinstance(raw_steps, list) or not (2 <= len(raw_steps) <= self.policy.max_workflow_steps):
             raise ValueError(f"plan must have 2..{self.policy.max_workflow_steps} steps")
-        known_agents = {agent.id for agent in self.agents}
+        known_agents = {agent.id: agent for agent in self.agents}
         steps: list[WorkflowStep] = []
         for index, item in enumerate(raw_steps):
             if int(item.get("id", -1)) != index:
@@ -2474,8 +3453,9 @@ class TaskOrchestrator:
             if any(value < 0 or value >= index for value in access):
                 raise ValueError("access may reference only earlier steps")
             agent_id = item.get("agent_id")
-            if agent_id not in known_agents:
-                # The planner named an unknown agent: reselect honestly instead of failing the plan.
+            assigned = known_agents.get(agent_id)
+            if assigned is None or not is_general_chat_agent_model_id(assigned.model):
+                # Unknown or stale ineligible assignments are reselected honestly.
                 agent_id = self._select_agent(subtask, role).id
             steps.append(WorkflowStep(index, role, agent_id, subtask, access))
         if steps[-1].role not in {"synthesizer", "worker"}:
@@ -2506,21 +3486,68 @@ class TaskOrchestrator:
                 domain_score += 2
         return (role_score + domain_score + agent.priority, len(agent.tags), agent.id)
 
-    def _ranked_agents(self, text: str, role: str) -> list[ModelAgent]:
+    def _ranked_agents(
+        self,
+        text: str,
+        role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
+        require_chat_model: bool = True,
+    ) -> list[ModelAgent]:
         """Agents sorted best-first for a role; the head is the primary, the tail are failovers."""
         lowered = text.lower()
-        return sorted(self.agents, key=lambda agent: self._score_agent(agent, role, lowered), reverse=True)
+        candidates = [
+            agent
+            for agent in self.agents
+            if all(tag in agent.tags for tag in required_tags)
+            and (not require_chat_model or is_general_chat_agent_model_id(agent.model))
+        ]
+        return sorted(
+            candidates,
+            key=lambda agent: self._score_agent(agent, role, lowered),
+            reverse=True,
+        )
 
-    def _select_agent(self, text: str, role: str) -> ModelAgent:
-        selected = self._ranked_agents(text, role)[0]
+    def _select_agent(
+        self, text: str, role: str, *, required_tags: tuple[str, ...] = ()
+    ) -> ModelAgent:
+        ranked = self._ranked_agents(text, role, required_tags=required_tags)
+        if not ranked:
+            required = ", ".join(required_tags) or "none"
+            raise RuntimeError(
+                f"no chat-compatible agent has required tags for role={role}: {required}"
+            )
+        selected = ranked[0]
         if selected.disabled:  # pragma: no cover
             raise RuntimeError(f"no enabled agent available for role={role}")
         if role in selected.provider_exclusions:  # pragma: no cover
             raise RuntimeError(f"no eligible agent available for role={role}")
         return selected
 
+    def select_capability_agent(self, capability: str) -> ModelAgent:
+        """Select an enabled agent carrying an explicit capability tag."""
+        capability = capability.strip().lower()
+        if not capability:
+            raise ValueError("capability must be a non-empty string")
+        ranked = [
+            agent
+            for agent in self._ranked_agents("", capability, require_chat_model=False)
+            if not agent.disabled
+            and capability in agent.tags
+            and capability not in agent.provider_exclusions
+        ]
+        if not ranked:
+            raise RuntimeError(f"no enabled agent available for capability={capability}")
+        return ranked[0]
+
     def _invoke(
-        self, primary: ModelAgent, messages: list[ChatMessage], *, text: str, role: str
+        self,
+        primary: ModelAgent,
+        messages: list[ChatMessage],
+        *,
+        text: str,
+        role: str,
+        required_tags: tuple[str, ...] = (),
     ) -> tuple[str, str, dict[str, Any] | None]:
         """Call the primary agent, failing over across capability-matched agents on error.
 
@@ -2529,27 +3556,54 @@ class TaskOrchestrator:
         ``(output, served_agent_id, usage)`` — usage is the provider-reported token
         usage when available (else None), so spend analytics can prefer it.
         """
-        candidates = self._failover_candidates(primary, text, role)
+        candidates = self._failover_candidates(
+            primary, text, role, required_tags=required_tags
+        )
+        if not candidates:
+            raise RuntimeError(f"no chat-compatible agent available for role={role}")
         last_error: Exception | None = None
         for agent in candidates:
             try:
+                self._raise_if_spend_budget_exceeded()
                 output = self.client.chat(agent, messages)
+            except BudgetExceededError:
+                raise
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
                 self._record_failure(agent.id)
                 continue
             self._record_success(agent.id)
             usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+            self._record_in_flight_provider_usage(agent, usage, output)
             return output, agent.id, usage
-        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+        if isinstance(last_error, ProviderResponseError):
+            raise last_error
+        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
-    def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
-        ranked = self._ranked_agents(text, role)
-        ordered = [primary] + [agent for agent in ranked if agent.id != primary.id]
+    def _failover_candidates(
+        self,
+        primary: ModelAgent,
+        text: str,
+        role: str,
+        *,
+        required_tags: tuple[str, ...] = (),
+    ) -> list[ModelAgent]:
+        ranked = self._ranked_agents(text, role, required_tags=required_tags)
+        primary_matches = (
+            all(tag in primary.tags for tag in required_tags)
+            and is_general_chat_agent_model_id(primary.model)
+        )
+        ordered = ([primary] if primary_matches else []) + [
+            agent for agent in ranked if agent.id != primary.id
+        ]
         eligible = [agent for agent in ordered if not agent.disabled and role not in agent.provider_exclusions]
         healthy = [agent for agent in eligible if not self._circuit_open(agent.id)]
         # If every eligible agent is circuit-open, still probe them rather than fail with no attempt.
-        return healthy or eligible or [primary]
+        return healthy or eligible or (
+            [primary]
+            if not required_tags and is_general_chat_agent_model_id(primary.model)
+            else []
+        )
 
     def _circuit_open(self, agent_id: str) -> bool:
         with self._circuit_lock:
@@ -2592,6 +3646,17 @@ class TaskOrchestrator:
             if text:
                 return text
         return ""  # pragma: no cover
+
+    @staticmethod
+    def _source_image_parts(messages: list[ChatMessage]) -> list[dict[str, Any]]:
+        """Copy source image parts so every evidence step receives the pixels."""
+        return [
+            copy.deepcopy(part)
+            for message in messages
+            if isinstance(message.get("content"), list)
+            for part in message["content"]
+            if isinstance(part, dict) and part.get("type") == "image_url"
+        ]
 
     def _model_judge_verification(self, task: str, fallback: dict[str, Any]) -> dict[str, Any]:
         """Ask a model for a strict structured verdict and fail closed on uncertainty."""
@@ -2652,8 +3717,7 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-            if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
-                verification["judge_agent_id"] = judge_adapter.served_agent_id
+            verification["judge_agent_id"] = judge_adapter.served_agent_id or judge.id
             if result.usage:
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
@@ -2714,7 +3778,8 @@ class TaskOrchestrator:
             "event_type": event_type,
             "event_detail": detail,
         }
-        self._audit_events.append(event)
+        with self._workflow_run_lock:
+            self._audit_events.append(event)
         if self._store is not None:
             self._store.save("audit", None, event)
 
@@ -2802,14 +3867,16 @@ class TaskOrchestrator:
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        run_ids = list(self._run_order)[start:end]
-        return [self._workflow_runs[run_id] for run_id in run_ids]
+        with self._workflow_run_lock:
+            run_ids = list(self._run_order)[start:end]
+            return [self._workflow_runs[run_id] for run_id in run_ids]
 
     def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
         """Return recent audit events in newest-first order."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
-        events = list(self._audit_events)
+        with self._workflow_run_lock:
+            events = list(self._audit_events)
         start = (page_number - 1) * page_size
         end = start + page_size
         total = len(events)
@@ -2825,49 +3892,71 @@ class TaskOrchestrator:
             "event_name": event_name,
             "event_detail": redact_value(detail),
         }
-        self._analytics_events.append(event)
+        with self._workflow_run_lock:
+            self._analytics_events.append(event)
         if self._store is not None:
             self._store.save("analytics", None, event)
 
-    def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
-        """Estimated token and cost spend per model, aggregated from workflow runs.
+    def _accumulate_run_spend(self, stats: dict[str, Any], run: dict[str, Any]) -> None:
+        """Add one run to compact, provider-aware spend statistics."""
+        stats["run_count"] += 1
+        stats["estimated_prompt_tokens"] += estimate_tokens(run.get("prompt_text", ""))
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        metered_steps = list(run["trace"])
+        verification = run.get("verification")
+        if isinstance(verification, dict) and isinstance(verification.get("judge_usage"), dict):
+            metered_steps.append({
+                "agent_id": verification.get("judge_agent_id", "unknown"),
+                "output": "",
+                "usage": verification["judge_usage"],
+            })
+        for step in metered_steps:
+            model = model_by_agent.get(
+                step.get("served_agent_id") or step.get("agent_id"), "unknown"
+            )
+            estimated = estimate_tokens(step.get("output", ""))
+            usage = step.get("usage")
+            reported_prompt = (
+                usage.get("prompt_tokens", usage.get("input_tokens"))
+                if isinstance(usage, dict)
+                else None
+            )
+            if type(reported_prompt) is int and reported_prompt >= 0:
+                stats["reported_prompt_tokens"] += reported_prompt
+                stats["any_reported_prompt"] = True
+            effective, is_reported = _step_output_token_count(step)
+            bucket = stats["by_model"].setdefault(
+                model,
+                {
+                    "estimated_output_tokens": 0,
+                    "output_tokens": 0,
+                    "step_count": 0,
+                    "reported_steps": 0,
+                },
+            )
+            bucket["estimated_output_tokens"] += estimated
+            bucket["output_tokens"] += effective
+            bucket["step_count"] += 1
+            bucket["reported_steps"] += int(is_reported)
+            stats["total_output_tokens"] += effective
 
-        Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
-        usage. Cost is computed only for models with an operator-supplied price; models without
-        one are reported under ``unpriced_models`` with a null cost. This is the honest local
-        floor for spend observability, not a billing system.
+    def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
+        """Token and cost spend per model, aggregated from workflow runs.
+
+        Provider-reported usage is preferred; runtime output text provides a
+        deterministic estimate only when usage is unavailable. Cost is computed
+        only for models with an operator-supplied price, and unpriced models are
+        reported explicitly. This is the honest local floor for spend
+        observability, not a billing system.
         """
         prices = {**self.price_per_million, **(price_per_million or {})}
-        model_by_agent = {agent.id: agent.model for agent in self.agents}
-        by_model: dict[str, dict[str, Any]] = {}
-        total_output_tokens = 0
-        total_prompt_tokens = 0
-        reported_prompt_tokens = 0
-        any_reported_prompt = False
-
-        for run in self._workflow_runs.values():
-            total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
-            for step in run["trace"]:
-                model = model_by_agent.get(step.get("agent_id"), "unknown")
-                estimated = estimate_tokens(step.get("output", ""))
-                usage = step.get("usage")
-                reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
-                if isinstance(reported_prompt, int):
-                    reported_prompt_tokens += reported_prompt
-                    any_reported_prompt = True
-                reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
-                if isinstance(reported, int):
-                    effective, is_reported = reported, True
-                else:
-                    effective, is_reported = estimated, False
-                bucket = by_model.setdefault(
-                    model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
-                )
-                bucket["estimated_output_tokens"] += estimated
-                bucket["output_tokens"] += effective
-                bucket["step_count"] += 1
-                bucket["reported_steps"] += 1 if is_reported else 0
-                total_output_tokens += effective
+        with self._workflow_run_lock:
+            stats = copy.deepcopy(self._archived_spend)
+            recent_runs = list(self._workflow_runs.values())
+        for run in recent_runs:
+            self._accumulate_run_spend(stats, run)
+        by_model = stats["by_model"]
+        total_output_tokens = stats["total_output_tokens"]
 
         rows: list[dict[str, Any]] = []
         unpriced: list[str] = []
@@ -2895,6 +3984,10 @@ class TaskOrchestrator:
                 "estimated_cost_usd": cost,
             })
 
+        with self._budget_spend_lock:
+            budget_output_tokens = self._budget_spent_output_tokens
+            budget_cost_usd = self._budget_spent_cost_usd
+
         return {
             "measurement_status": "local_runtime_estimate",
             "source_note": (
@@ -2903,17 +3996,22 @@ class TaskOrchestrator:
             ),
             "pricing_configured": bool(prices),
             "totals": {
-                "run_count": len(self._workflow_runs),
+                "run_count": stats["run_count"],
                 "estimated_output_tokens": total_output_tokens,
-                "estimated_prompt_tokens": total_prompt_tokens,
-                "reported_prompt_tokens": reported_prompt_tokens,
-                "prompt_tokens_source": "reported" if any_reported_prompt else "estimated",
+                "estimated_prompt_tokens": stats["estimated_prompt_tokens"],
+                "reported_prompt_tokens": stats["reported_prompt_tokens"],
+                "prompt_tokens_source": (
+                    "reported" if stats["any_reported_prompt"] else "estimated"
+                ),
                 "estimated_cost_usd": round(total_cost, 6) if prices else None,
                 "currency": "USD",
             },
             "by_model": rows,
             "unpriced_models": unpriced,
-            "budget": self._budget_block(total_output_tokens, round(total_cost, 6) if prices else None),
+            "budget": self._budget_block(
+                budget_output_tokens,
+                round(budget_cost_usd, 6) if prices else None,
+            ),
         }
 
     def _budget_block(self, spent_tokens: int, spent_cost: float | None) -> dict[str, Any]:
@@ -2939,18 +4037,81 @@ class TaskOrchestrator:
 
     def budget_status(self) -> dict[str, Any]:
         """Current spend-budget state (limits, spent, remaining, exceeded)."""
-        return self.spend_analytics()["budget"]
+        with self._budget_spend_lock:
+            spent_tokens = self._budget_spent_output_tokens
+            spent_cost = self._budget_spent_cost_usd
+        return self._budget_block(
+            spent_tokens,
+            round(spent_cost, 6) if self.price_per_million else None,
+        )
+
+    def _record_in_flight_provider_usage(
+        self,
+        agent: ModelAgent,
+        usage: dict[str, Any] | None,
+        output: str,
+    ) -> None:
+        """Add one completed provider call to the process budget ledger."""
+        output_tokens, _reported = _step_output_token_count(
+            {"usage": usage, "output": output}
+        )
+        price = self.price_per_million.get(agent.model)
+        with self._budget_spend_lock:
+            self._budget_spent_output_tokens += output_tokens
+            if price is not None:
+                self._budget_spent_cost_usd += output_tokens / 1_000_000 * price
+            if self._store is not None:
+                self._store.save(
+                    "budget_meter",
+                    "process_budget",
+                    {
+                        "spent_output_tokens": self._budget_spent_output_tokens,
+                        "spent_cost_usd": self._budget_spent_cost_usd,
+                    },
+                )
+
+    def _raise_if_spend_budget_exceeded(
+        self,
+        *,
+        additional_output_tokens: int = 0,
+        additional_cost_usd: float = 0.0,
+    ) -> None:
+        """Stop a provider call when persisted plus in-flight spend reaches a cap."""
+        if type(additional_output_tokens) is not int or additional_output_tokens < 0:
+            raise ValueError("additional_output_tokens must be a non-negative integer")
+        if (
+            isinstance(additional_cost_usd, bool)
+            or not isinstance(additional_cost_usd, (int, float))
+            or not math.isfinite(float(additional_cost_usd))
+            or additional_cost_usd < 0
+        ):
+            raise ValueError("additional_cost_usd must be a non-negative finite number")
+        if self.budget_max_output_tokens is None and self.budget_max_cost_usd is None:
+            return
+        budget = self.budget_status()
+        if additional_output_tokens or additional_cost_usd:
+            spent_cost = budget["spent_cost_usd"]
+            if spent_cost is not None:
+                spent_cost = round(spent_cost + additional_cost_usd, 6)
+            budget = self._budget_block(
+                budget["spent_output_tokens"] + additional_output_tokens,
+                spent_cost,
+            )
+        if budget["exceeded"]:
+            raise BudgetExceededError("spend budget exceeded", detail=budget)
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
-        runs = list(self._workflow_runs.values())
+        with self._workflow_run_lock:
+            runs = list(self._workflow_runs.values())
+            analytics_events = list(self._analytics_events)
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         policy_safe_count = sum(1 for run in runs if self._is_policy_safe_run(run))
-        event_counts = Counter(event["event_name"] for event in self._analytics_events)
+        event_counts = Counter(event["event_name"] for event in analytics_events)
         successful_chat_requests = sum(
             1
-            for event in self._analytics_events
+            for event in analytics_events
             if event["event_name"] == "chat_completion_requested"
             and event["event_detail"].get("status_code") == 200
         )
@@ -3041,7 +4202,8 @@ class TaskOrchestrator:
         """Return a local, evidence-backed sales-readiness gate for enterprise pilots."""
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
-        runs = list(self._workflow_runs.values())
+        with self._workflow_run_lock:
+            runs = list(self._workflow_runs.values())
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         event_counts = analytics["event_counts"]
@@ -9430,7 +10592,10 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
     """Mean quality of one config over the task set; route configs may evaluate via Batch."""
     if use_batch and mode == "route":
         records = orchestrator.batch_route([task["prompt"] for task in tasks])
-        scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
+        scores = [
+            float(quality_fn(task, record["answer"] or ""))
+            for task, record in zip(tasks, records, strict=True)
+        ]
     else:
         scores = [
             float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
