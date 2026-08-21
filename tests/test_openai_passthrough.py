@@ -119,6 +119,49 @@ def test_proxy_completion_blocks_before_structured_workflow_when_budget_is_excee
         )
 
 
+def test_plain_proxy_completion_persists_reported_usage_before_next_budget_check() -> None:
+    orch = _build(budget_max_output_tokens=3)
+    raw = {
+        "id": "chatcmpl-accounted",
+        "object": "chat.completion",
+        "model": "mock-planner",
+        "choices": [
+            {
+                "index": 0,
+                "message": {"role": "assistant", "content": "accounted"},
+                "finish_reason": "stop",
+            }
+        ],
+        "usage": {"prompt_tokens": 2, "completion_tokens": 3, "total_tokens": 5},
+        "echo": {},
+    }
+    body = {
+        "model": "mock-planner",
+        "messages": [{"role": "user", "content": "plain passthrough"}],
+    }
+
+    with patch.object(orch.client, "proxy_send", return_value=raw) as send:
+        assert orch.proxy_completion(body)["id"] == "chatcmpl-accounted"
+        analytics = orch.spend_analytics()
+        assert analytics["totals"]["run_count"] == 1
+        assert analytics["budget"]["spent_output_tokens"] == 3
+        assert analytics["by_model"] == [
+            {
+                "model": "mock-planner",
+                "estimated_output_tokens": 3,
+                "output_tokens": 3,
+                "usage_source": "reported",
+                "step_count": 1,
+                "price_per_million_usd": None,
+                "estimated_cost_usd": None,
+            }
+        ]
+        with pytest.raises(BudgetExceededError, match="spend budget exceeded"):
+            orch.proxy_completion(body)
+
+    assert send.call_count == 1
+
+
 def test_structured_provider_completion_rechecks_budget_before_final_provider_call() -> None:
     orch = _build()
     orch.budget_max_output_tokens = 1

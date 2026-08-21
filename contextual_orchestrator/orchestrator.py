@@ -1862,7 +1862,44 @@ class TaskOrchestrator:
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
-        return self.client.proxy_send(agent, endpoint, upstream)
+        passthrough_started = time.perf_counter()
+        raw = self.client.proxy_send(agent, endpoint, upstream)
+        passthrough_output = ""
+        try:
+            passthrough_output = ModelClient._response_content(agent, raw)
+        except RuntimeError:
+            # Tool-call-only responses are billable even without assistant text.
+            pass
+        passthrough_step = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "subtask": "Provider passthrough",
+            "access": [],
+            "latency_ms": round((time.perf_counter() - passthrough_started) * 1000, 2),
+            "output": passthrough_output,
+        }
+        usage = raw.get("usage")
+        if isinstance(usage, dict):
+            passthrough_step["usage"] = usage
+        self._persist_workflow_run(
+            {
+                "workflow_run_id": f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": text,
+                "answer": passthrough_output,
+                "trace": [passthrough_step],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {
+                    "accepted": True,
+                    "reason": "single provider passthrough",
+                    "verifier_output": "",
+                },
+            }
+        )
+        return raw
 
     def _orchestrated_provider_completion(
         self, body: dict[str, Any], *, endpoint: str
