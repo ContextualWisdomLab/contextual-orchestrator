@@ -4,6 +4,9 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from unittest.mock import patch
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -122,6 +125,51 @@ def test_structured_output_forces_sync_when_batch_is_selected() -> None:
     )
     assert result["channel"] == "sync"
     assert result["routing_reason"].endswith("structured_output_forced_sync")
+
+
+def test_provider_native_structured_output_keeps_cost_and_lineage() -> None:
+    coordinator = _coordinator()
+    provider_request = {
+        "model": "mock-a",
+        "messages": [{"role": "user", "content": "return one JSON object"}],
+        "response_format": {"type": "json_object"},
+    }
+
+    result = coordinator.complete(
+        provider_request["messages"],
+        hints={"channel": "batch"},
+        response_format=provider_request["response_format"],
+        provider_request=provider_request,
+    )
+
+    assert result["channel"] == "sync"
+    assert result["answer"] == "{}"
+    assert result["provider_response"]["orchestration"]["channel"] == "sync"
+    assert result["provider_response"]["orchestration"]["usage_record_id"] == result[
+        "usage_record_id"
+    ]
+
+
+def test_provider_native_completion_rejects_unknown_endpoint() -> None:
+    coordinator = _coordinator()
+
+    with pytest.raises(ValueError, match="provider_endpoint must be"):
+        coordinator.complete(
+            [{"role": "user", "content": "hello"}],
+            provider_request={"messages": [{"role": "user", "content": "hello"}]},
+            provider_endpoint="images",
+        )
+
+
+def test_provider_native_completion_requires_workflow_lineage() -> None:
+    coordinator = _coordinator()
+
+    with patch.object(coordinator.orchestrator, "proxy_completion", return_value={}):
+        with pytest.raises(RuntimeError, match="omitted orchestration lineage"):
+            coordinator.complete(
+                [{"role": "user", "content": "hello"}],
+                provider_request={"messages": [{"role": "user", "content": "hello"}]},
+            )
 
 
 def test_default_local_batch_backend_reuses_orchestrator_concurrency() -> None:

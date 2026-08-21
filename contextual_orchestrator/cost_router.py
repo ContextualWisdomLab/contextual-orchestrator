@@ -174,19 +174,26 @@ class CostRoutingCoordinator:
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        provider_request: Optional[Dict[str, Any]] = None,
+        provider_endpoint: str = "chat/completions",
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
         Sync requests run the orchestrator immediately and return the completion
         augmented with ``channel``, ``routing_reason``, ``usage``, and the
         ``usage_record_id``. Batch requests are dispatched to the batch backend
-        and return a job envelope; their cost is recorded on retrieval.
+        and return a job envelope; their cost is recorded on retrieval. When a
+        validated ``provider_request`` is supplied, final synthesis preserves
+        that Chat or Responses wire contract while this coordinator still owns
+        the cost record.
         """
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
 
-        structured_output_forced_sync = decision.channel == "batch" and response_format is not None
+        structured_output_forced_sync = decision.channel == "batch" and (
+            response_format is not None or provider_request is not None
+        )
         if decision.channel == "batch" and not structured_output_forced_sync:
             request = BatchRequest(
                 messages=messages,
@@ -204,12 +211,29 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        result = self.orchestrator.run(
-            messages,
-            mode=mode,
-            workflow_run_id=workflow_run_id,
-            output_contract=response_format,
-        )
+        if provider_request is None:
+            result = self.orchestrator.run(
+                messages,
+                mode=mode,
+                workflow_run_id=workflow_run_id,
+                output_contract=response_format,
+            )
+        else:
+            if provider_endpoint not in {"chat/completions", "responses"}:
+                raise ValueError("provider_endpoint must be chat/completions or responses")
+            provider_response = self.orchestrator.proxy_completion(
+                provider_request,
+                endpoint=provider_endpoint,
+            )
+            orchestration = provider_response.get("orchestration")
+            if not isinstance(orchestration, dict) or not isinstance(
+                orchestration.get("workflow_run_id"), str
+            ):
+                raise RuntimeError("provider completion omitted orchestration lineage")
+            result = dict(
+                self.orchestrator.get_workflow_run(orchestration["workflow_run_id"])
+            )
+            result["provider_response"] = provider_response
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),
@@ -233,6 +257,18 @@ class CostRoutingCoordinator:
             "total_tokens": record.total_tokens,
         }
         result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
+        provider_response = result.get("provider_response")
+        if isinstance(provider_response, dict):
+            orchestration = provider_response.get("orchestration")
+            if isinstance(orchestration, dict):
+                orchestration.update(
+                    {
+                        "channel": result["channel"],
+                        "routing_reason": result["routing_reason"],
+                        "usage_record_id": result["usage_record_id"],
+                        "cost": result["cost"],
+                    }
+                )
         return result
 
     def _record_completion(
