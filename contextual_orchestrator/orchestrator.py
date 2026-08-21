@@ -965,8 +965,10 @@ class ModelClient:
         choices = data.get("choices")
         message = choices[0].get("message") if isinstance(choices, list) and choices else None
         content = message.get("content") if isinstance(message, dict) else None
-        if isinstance(content, str):
+        if isinstance(content, str) and content.strip():
             return content
+        if isinstance(content, str):
+            raise ProviderResponseError(f"provider {agent.id} returned empty assistant content")
         if isinstance(message, dict) and message.get("reasoning"):
             raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
