@@ -206,6 +206,23 @@ The hosted queues and absent approvals are normal protected-path blockers, not
 D1-D5 deadlock evidence. The active ruleset has no bypass actor; no force merge,
 direct protected-branch push, or approval bypass was attempted.
 
+### Live exact-head continuation — 2026-08-22 01:43 KST
+
+The following exact-head recheck supersedes the immediately preceding rows for
+these PRs. The hosted queues remain separate from local evidence.
+
+| PR | Current exact identity | Live gate evidence and local verification | Decision |
+|---:|---|---|---|
+| [#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803) | head `1f836527a718374585c5fde7838148cfa22765b2`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 7 skipped and 15 queued check-runs, approvals `0`. Exact local full suite `1453 passed`, focused PII/security `34 passed`, aggregate statement/branch coverage `90%`, `pii_protection.py` 100%, interrogate `95.9%`, Semgrep `0`, pip-audit clean, actionlint/compile/diff clean, and wheel build/install/import smoke passed. One valid documentation finding was fixed in this head. | `WAIT_AND_REMEDIATE` |
+| [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) | head `d19e3492192e21e4a040fa3fc13a0793443731bf`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 20 success, 8 skipped, 2 neutral, and 1 queued check-run; approvals `0`. Exact local full suite `1729 passed`, focused suite `78 passed`, aggregate statement/branch coverage `92%`, interrogate `100%`. | `WAIT_AND_REMEDIATE` |
+| [#804](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/804) | head `71895c7f1f1d63a55e5f67d75dbd8408f8e608f9`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 19 success, 8 skipped, 2 neutral, and 1 queued check-run; approvals `0`. The bounded root tree and exact local suite/static evidence remain as recorded above. | `WAIT_AND_REMEDIATE` |
+| [#807](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/807) | head `d5122a0a30b4543ac2778a1c71e9ee079cbd699f`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 15 success, 7 skipped, 2 neutral, 3 in progress, and 1 queued check-run; approvals `0`. Exact local full suite `1454 passed`, focused suite `117 passed`, aggregate statement/branch coverage `90%`, interrogate `95.8%`, Semgrep `0`, pip-audit clean, and actionlint/compile/diff clean. | `WAIT_AND_REMEDIATE` |
+| [#773](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/773) | head `1ec2ab6315341ad576fe1d1c27f6cbeaab1111dc`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 10 success, 8 skipped, 2 neutral, 3 in progress, and 4 queued check-runs; approvals `0`. The baseline update was normally pushed and its current hosted gate remains incomplete. | `WAIT_AND_REMEDIATE` |
+
+None of these states establishes a D1-D5 deadlock: current heads have generated
+checks or are awaiting normal approvals, and the active ruleset exposes no
+bypass actor.
+
 All links and full commit SHAs in the initial snapshot reflect the remote state
 observed at 2026-08-21 15:36 Asia/Seoul; they are evidence pointers, not
 standing approval.
