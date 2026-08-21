@@ -75,7 +75,7 @@ def test_http_responses_accepts_false_parallel_tool_calls_without_tools() -> Non
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_true_parallel_tool_calls_with_tools() -> None:
+def test_http_responses_rejects_true_parallel_tool_calls_with_tools() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -95,7 +95,8 @@ def test_http_responses_accepts_true_parallel_tool_calls_with_tools() -> None:
                 ],
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -158,7 +159,7 @@ def test_http_responses_rejects_integer_parallel_tool_calls() -> None:
 if __name__ == "__main__":
     test_http_responses_accepts_omitted_parallel_tool_calls()
     test_http_responses_accepts_false_parallel_tool_calls_without_tools()
-    test_http_responses_accepts_true_parallel_tool_calls_with_tools()
+    test_http_responses_rejects_true_parallel_tool_calls_with_tools()
     test_http_responses_rejects_true_parallel_tool_calls_without_tools()
     test_http_responses_rejects_non_boolean_parallel_tool_calls()
     test_http_responses_rejects_integer_parallel_tool_calls()

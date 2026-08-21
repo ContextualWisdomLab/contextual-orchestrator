@@ -1,4 +1,4 @@
-"""Model strip writeback so tools/Responses passthrough bind padded names."""
+"""Model strip writeback keeps routed and structured requests bound to the pool."""
 
 from __future__ import annotations
 
@@ -82,8 +82,8 @@ def test_unit_model_rejects_blank() -> None:
             assert getattr(exc, "code", None) == "invalid_model"
 
 
-def test_http_chat_tools_accepts_padded_model() -> None:
-    """Tools passthrough uses body.model for pool match — must see strip writeback."""
+def test_http_chat_tools_rejects_padded_model_after_validation() -> None:
+    """Validated tool requests stop at the explicit multi-agent contract boundary."""
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -103,7 +103,8 @@ def test_http_chat_tools_accepts_padded_model() -> None:
                 ],
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -142,7 +143,7 @@ def test_http_responses_accepts_padded_model() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_tools_accepts_padded_model() -> None:
+def test_http_responses_tools_rejects_padded_model_after_validation() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -160,7 +161,8 @@ def test_http_responses_tools_accepts_padded_model() -> None:
                 ],
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -180,7 +182,7 @@ def test_http_completions_accepts_padded_model() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_still_rejects_unknown_padded_model() -> None:
+def test_http_chat_tools_fail_closed_before_model_lookup() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -200,12 +202,8 @@ def test_http_chat_still_rejects_unknown_padded_model() -> None:
                 ],
             },
         )
-        assert status == 400, body
-        blob = json.dumps(body)
-        assert "invalid_request" in blob or "not available" in blob
-        assert "no-such-model" in blob
-        # Must not echo leading pad after strip (buyer sees real id).
-        assert "'  no-such-model  '" not in blob
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -214,10 +212,10 @@ def test_http_chat_still_rejects_unknown_padded_model() -> None:
 if __name__ == "__main__":
     test_unit_model_strip_writeback()
     test_unit_model_rejects_blank()
-    test_http_chat_tools_accepts_padded_model()
+    test_http_chat_tools_rejects_padded_model_after_validation()
     test_http_chat_response_format_accepts_padded_model()
     test_http_responses_accepts_padded_model()
-    test_http_responses_tools_accepts_padded_model()
+    test_http_responses_tools_rejects_padded_model_after_validation()
     test_http_completions_accepts_padded_model()
-    test_http_chat_still_rejects_unknown_padded_model()
+    test_http_chat_tools_fail_closed_before_model_lookup()
     print("ok")

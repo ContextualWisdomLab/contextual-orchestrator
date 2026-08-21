@@ -71,7 +71,8 @@ def test_http_responses_accepts_flat_tool_choice_name() -> None:
                 "tool_choice": {"type": "function", "name": "lookup_item"},
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -96,7 +97,8 @@ def test_http_responses_accepts_flat_tool_choice_padded_casefold() -> None:
                 "tool_choice": {"type": " FUNCTION ", "name": " lookup_item "},
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -124,7 +126,8 @@ def test_http_chat_accepts_flat_tool_choice_with_nested_tools() -> None:
                 "tool_choice": {"type": "function", "name": "lookup_item"},
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -154,7 +157,8 @@ def test_http_chat_still_accepts_nested_tool_choice() -> None:
                 },
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)

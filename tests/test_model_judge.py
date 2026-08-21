@@ -308,7 +308,6 @@ def test_fast_mlsirm_adapter_keeps_structured_completion_to_one_provider_call() 
         {
             "model": "model-x",
             "messages": [{"role": "user", "content": "judge"}],
-            "temperature": orchestrator.client.temperature,
             "max_tokens": orchestrator.client.max_output_tokens,
             "response_format": response_format,
         }

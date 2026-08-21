@@ -129,7 +129,7 @@ def test_batch_route_rejects_incomplete_or_empty_provider_results(kind: str) -> 
 
 def test_batch_chat_rejects_incomplete_local_result_set() -> None:
     client = ModelClient()
-    agent = ModelAgent("local_agent", "model-x", base_url="local://127.0.0.1:1")
+    agent = ModelAgent("local_agent", "model-x", base_url="local://127.0.0.1:1", local_credential_key="LOCAL_GATEWAY_TOKEN")
     requests = {
         "task_0": [{"role": "user", "content": "one"}],
         "task_1": [{"role": "user", "content": "two"}],

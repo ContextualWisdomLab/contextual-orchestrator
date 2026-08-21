@@ -20,7 +20,7 @@ from contextual_orchestrator.server import SecurityConfig, build_server, respons
 def _build() -> TaskOrchestrator:
     return TaskOrchestrator(
         agents=[
-            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning", "vision")),
             ModelAgent("disabled_builder_duplicate", "mock-builder", disabled=True),
             ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation")),
             ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "review")),
@@ -166,6 +166,32 @@ def test_structured_workflow_preserves_multimodal_input_for_final_synthesis() ->
     )
 
 
+def test_structured_multimodal_rejects_an_explicit_text_only_model() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("text_agent", "text-model", tags=("reasoning",))]
+    )
+
+    with pytest.raises(RuntimeError, match="lacks required tags: vision"):
+        orchestrator.proxy_completion(
+            {
+                "model": "text-model",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "describe this"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "data:image/png;base64,fixture"},
+                            },
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+
 # -- HTTP server -------------------------------------------------------------
 
 def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
@@ -189,7 +215,7 @@ def _serve() -> tuple[object, int, str]:
     return server, server.server_address[1], token
 
 
-def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:
+def test_http_chat_completions_orchestrates_json_object_instead_of_passthrough() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     try:
@@ -204,9 +230,27 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
         )
     finally:
         server.shutdown()
-    assert status == 200  # previously rejected 400 'unknown_fields'
+    assert status == 200
     assert body["object"] == "chat.completion"
-    assert body["echo"]["response_format"] == {"type": "json_object"}
+    assert json.loads(body["choices"][0]["message"]["content"]) == {}
+
+
+def test_http_chat_completions_omits_model_for_orchestrator_selection() -> None:
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "give me JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+    assert status == 200, body
+    assert body["model"] == "contextual-orchestrator"
+    assert json.loads(body["choices"][0]["message"]["content"]) == {}
 
 
 def test_http_responses_endpoint_passes_through() -> None:

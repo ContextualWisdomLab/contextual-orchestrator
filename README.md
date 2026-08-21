@@ -66,16 +66,16 @@ Use real workers by replacing `mock://` agents with OpenAI-compatible endpoints.
 }
 ```
 
-For a local `mlx-lm` OpenAI-compatible server, use the explicit `mlx://` scheme. It is loopback-only, does not require a credential, and is translated to HTTP only after the loopback check:
+For a local OpenAI-compatible gateway, use the explicit `local://` loopback scheme and name its separate KV credential. Provider-specific runtime settings stay behind that gateway:
 
 ```json
 {
   "agents": [
     {
-      "id": "local_fast_agent",
-      "model": "mlx-community/llama-3.2-3b-instruct-4bit",
-      "base_url": "mlx://127.0.0.1:8080/v1",
-      "provider_name": "mlx-lm",
+      "id": "local_gateway_agent",
+      "model": "gateway-selected-model",
+      "base_url": "local://127.0.0.1:8080/v1",
+      "local_credential_key": "LOCAL_GATEWAY_TOKEN",
       "tags": ["reasoning", "coding", "verification"]
     }
   ]
@@ -83,8 +83,8 @@ For a local `mlx-lm` OpenAI-compatible server, use the explicit `mlx://` scheme.
 ```
 
 The full local candidate registry is [examples/agents.local.json](examples/agents.local.json).
-It contains the public `contextual-orchestrator` candidate, discovered MLX
-worker models, and every discovered llama.cpp/LM Studio candidate. Discovery
+It contains the public `contextual-orchestrator` candidate and generic local
+gateway/llama.cpp/LM Studio candidates. Discovery
 does not decide governance state: seed candidates are enabled by default, while
 `disabled` is reserved for an explicit operator/admin quarantine or a persisted
 removal tombstone. The contextual-orchestrator record is excluded from internal
@@ -92,13 +92,13 @@ roles because this implementation has no bounded recursive self-call protocol;
 that is a routing safety constraint, not a disabled candidate. The registry is
 explicit; runtime discovery does not silently change the pool.
 
-Run an evaluation against that server with `--temperature 0` for repeatable judging. For reasoning-capable mlx models, pass `--chat-template-args '{"enable_thinking":false}'` when a short structured judge response is required. `--local-concurrency N` enables bounded concurrent local batch requests (`1..64`; the current measured starting point for this server is `8`); when serving HTTP, set `--max-concurrent-runs N` explicitly as well if the measured batch concurrency exceeds the secure default of `8`. Keep interactive route/conduct requests on the default sequential path.
+Run an evaluation against that gateway with the normal provider capability contract. `--local-concurrency N` enables bounded concurrent local batch requests (`1..64`); when serving HTTP, set `--max-concurrent-runs N` explicitly as well if the measured batch concurrency exceeds the secure default of `8`. Keep interactive route/conduct requests on the default sequential path.
 
 Model-based conduct verification requires `fast-mlsirm` in the same runtime and fails closed when it is absent or broken; fast-mlsirm sends its judge completion through this contextual-orchestrator gateway, so no direct provider fallback is used. “Same runtime” means that the exact interpreter used for the live run can import both packages: install both checkouts into one environment (prefer editable installs), or expose both source roots with `PYTHONPATH` during a source run. Before a live judge benchmark, run `python -m contextual_orchestrator check-fast-mlsirm` with that exact interpreter. It prints the interpreter, package version, transitive-import status, and contextual contract check, and exits nonzero on a missing dependency or contract mismatch. Do not run the preflight in one virtual environment and the judge in another. See [ADR 0001](docs/planning/adrs/0001-fail-closed-model-judgment.md).
 
 The agent pool is manageable at runtime: `POST`/`PATCH`/`DELETE` on `/api/v1/agent_pools/default/worker_agents[/{id}]` add, govern, and remove model-group members. Pass `--agents-db PATH` (or `CONTEXTUAL_ORCHESTRATOR_AGENTS_DB`) to persist those changes to a stdlib sqlite file — stored changes overlay the seed agents file at startup, and removals write disabled tombstones so they survive restarts; without it the pool is in-memory as before.
 
-Beyond the local MLX/llama.cpp discovery above, `python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. See [docs/kv-credentials.md](docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
+`python -m contextual_orchestrator discover-models [--agents-db PATH]` discovers models from remote providers (OpenAI, OpenRouter, NVIDIA NIM ×2 keys, Bytez) for any subset of their KV-registered credentials, and can persist them into the same `--agents-db` sqlite file, added disabled by default. See [docs/kv-credentials.md](docs/kv-credentials.md#multi-provider-auto-discovery) for the credential-name table and cost-based auto-selection.
 
 Seed the credential into the KV once at bootstrap:
 

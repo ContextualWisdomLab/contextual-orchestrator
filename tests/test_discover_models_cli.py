@@ -3,6 +3,8 @@
 from __future__ import annotations
 
 import json
+from contextlib import contextmanager
+import socket
 import sys
 import urllib.parse
 from io import StringIO
@@ -17,6 +19,7 @@ from contextual_orchestrator.credentials import (  # noqa: E402
     register_credential,
     set_backend,
 )
+from contextual_orchestrator.orchestrator import ModelClient  # noqa: E402
 
 
 class _Response:
@@ -29,8 +32,25 @@ class _Response:
     def __exit__(self, *_args):
         return False
 
-    def read(self) -> bytes:
-        return self._body
+    def read(self, _size: int = -1) -> bytes:
+        return self._body if _size < 0 else self._body[:_size]
+
+
+@contextmanager
+def _patched_provider_transport(urlopen):
+    """Keep CLI discovery tests offline while exercising the validated transport seam."""
+    def open_provider(request, _destination=None, *, timeout=None):
+        return urlopen(request, timeout=timeout)
+
+    with (
+        patch.object(
+            ModelClient,
+            "_validate_provider",
+            return_value=(socket.AF_INET, ("93.184.216.34", 443)),
+        ),
+        patch.object(ModelClient, "_open_provider", side_effect=open_provider),
+    ):
+        yield
 
 
 def test_discover_models_with_no_credentials_reports_zero_and_succeeds() -> None:
@@ -68,7 +88,7 @@ def test_discover_models_reports_models_found_over_a_registered_credential() -> 
         with (
             patch.object(sys, "argv", ["contextual-orchestrator", "discover-models"]),
             patch.object(sys, "stdout", stdout),
-            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            _patched_provider_transport(urlopen),
         ):
             main()
     finally:
@@ -96,7 +116,7 @@ def test_discover_models_persists_to_agents_db(tmp_path) -> None:
         with (
             patch.object(sys, "argv", ["contextual-orchestrator", "discover-models", "--agents-db", db_path]),
             patch.object(sys, "stdout", stdout),
-            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            _patched_provider_transport(urlopen),
         ):
             main()
     finally:
@@ -151,7 +171,7 @@ def test_enable_cheapest_activates_the_lowest_priced_discovered_agent(tmp_path) 
                 ["contextual-orchestrator", "discover-models", "--agents-db", db_path, "--enable-cheapest", "1"],
             ),
             patch.object(sys, "stdout", stdout),
-            patch("contextual_orchestrator.model_discovery.urllib.request.urlopen", side_effect=urlopen),
+            _patched_provider_transport(urlopen),
         ):
             main()
     finally:

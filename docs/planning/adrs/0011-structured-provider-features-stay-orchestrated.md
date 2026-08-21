@@ -26,9 +26,11 @@ related:
     relation: extends
   - path: "docs/architecture.md"
     relation: implements
+  - path: "docs/planning/adrs/0014-gateway-owned-model-selection.md"
+    relation: constrained-by
 success_criteria:
   - metric: "structured requests using the multi-agent workflow"
-    target: "100% of client-facing non-null response_format, tools, tool_choice, functions, function_call, and Responses requests"
+    target: "100% of client-facing non-null response_format and Responses requests"
     measurement_window: "every structured-output regression run"
     source: "tests/test_openai_passthrough.py"
   - metric: "Responses json_schema translation"
@@ -45,8 +47,8 @@ success_criteria:
 
 ## Context
 
-The OpenAI-compatible boundary previously treated `response_format`, tools, and
-the Responses API as a provider passthrough. That made a request look
+The OpenAI-compatible boundary previously treated `response_format` and the
+Responses API as a provider passthrough. That made a request look
 successful while skipping the Thinker/Worker/Verifier/Synthesizer workflow.
 Structured output and multimodal requests are still product work, not an
 exception to the orchestration contract. A consumer must receive the same
@@ -55,13 +57,13 @@ as a plain chat request.
 
 ## Decision
 
-1. A non-null structured provider feature is an orchestration trigger, never a
-   silent single-agent downgrade.
+1. A non-null structured-output contract or Responses request is an
+   orchestration trigger, never a silent single-agent downgrade.
 2. The request enters the existing conducted workflow. Intermediate steps use
    the original messages, including multimodal content, and the final
    synthesizer performs the provider-facing structured completion.
-3. The final provider payload preserves validated tools and structured-output
-   fields. Responses `text.format` is translated to the equivalent Chat
+3. The final provider payload preserves validated structured-output fields.
+   Responses `text.format` is translated to the equivalent Chat
    `response_format` for the internal provider call, then the result is mapped
    back to the Responses shape.
 4. `json_object` and `json_schema` are both first-class structured workflows.
@@ -70,9 +72,10 @@ as a plain chat request.
 5. The workflow response exposes bounded orchestration metadata by default.
    Prompts, answers, images, tool arguments, secrets, and unbounded raw traces
    are not put into telemetry or the default response.
-6. Tool execution loops are not fabricated by this decision. Provider tools are
-   preserved for the final synthesized call; an actual execute-observe-replan
-   loop requires a separate ADR and contract.
+6. Tool execution loops are not fabricated by this decision. Per ADR 0014,
+   clients must opt into the explicit client-owned `v1` tool-loop contract;
+   ordinary tool declarations fail closed, while the opted-in provider-shape
+   call remains a single-worker exception.
 7. The internal fail-closed LLM-as-a-Judge call remains one bounded,
    schema-constrained provider request. It uses the orchestrator's existing
    provider transport but never recursively starts another conducted workflow.
@@ -103,16 +106,17 @@ define the wire-shape translation, not the orchestration policy.
   replace the judge verdict with an unrelated synthesized answer.
 * Bad: structured requests consume more provider calls and can take longer than
   a plain routed request.
-* Bad: tool execution remains a follow-up capability rather than being implied
-  by merely forwarding a tool declaration.
+* Bad: tool execution remains a distinct explicit client-owned contract rather
+  than being implied by merely forwarding a tool declaration.
 
 ## Confirmation
 
 Run the focused structured-output and orchestration tests. Confirm that the
-Responses JSON-schema test preserves the schema, the tools test reports the
-conducted workflow, the multimodal test retains `image_url` through final
-synthesis, and the internal structured judge test performs exactly one provider
-call. Do not claim provider-side semantic schema validity from HTTP 200.
+Responses JSON-schema test preserves the schema, the structured-output test
+reports the conducted workflow, the multimodal test retains `image_url` through final
+synthesis, the explicit tool-loop test preserves its single-worker response,
+and the internal structured judge test performs exactly one provider call. Do
+not claim provider-side semantic schema validity from HTTP 200.
 
 ## References
 
