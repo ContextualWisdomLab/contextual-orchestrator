@@ -984,7 +984,7 @@ class ModelClient:
                 connection.bind(source_address)
             connection.connect(sockaddr)
             return connection
-        except Exception:
+        except Exception:  # noqa: BLE001 - provider error boundary
             connection.close()
             raise
 
