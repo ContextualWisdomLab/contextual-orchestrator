@@ -2530,13 +2530,19 @@ class TaskOrchestrator:
         cross-agent failover plus a per-agent circuit breaker, and returns
         ``(output, served_agent_id, usage)`` — usage is the provider-reported token
         usage when available (else None), so spend analytics can prefer it.
+
+        Structurally invalid provider responses are package-owned boundary errors,
+        not transport failures. They fail closed before another provider is tried
+        or circuit-breaker state is changed.
         """
         candidates = self._failover_candidates(primary, text, role)
         last_error: Exception | None = None
         for agent in candidates:
             try:
                 output = self.client.chat(agent, messages)
-            except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
+            except Exception as exc:
+                if isinstance(exc, ProviderResponseError):
+                    raise
                 last_error = exc
                 self._record_failure(agent.id)
                 continue

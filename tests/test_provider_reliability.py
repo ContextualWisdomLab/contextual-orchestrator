@@ -20,6 +20,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     TRANSIENT_HTTP_STATUS,
     ModelClient,
+    ProviderResponseError,
     is_transient_error,
 )
 
@@ -235,6 +236,39 @@ def test_failover_to_backup_agent_when_primary_fails() -> None:
     assert row["served_agent_id"] == "backup_worker"
     assert row["failover_from"] == "primary_worker"
     assert client.calls == ["primary_worker", "backup_worker"]  # tried primary first, then failed over
+
+
+def test_structural_provider_response_stops_before_failover_or_circuit_update() -> None:
+    agents = [
+        ModelAgent("primary_worker", "mock", tags=("reasoning", "writing"), priority=5),
+        ModelAgent("backup_worker", "mock", tags=("reasoning", "writing"), priority=1),
+    ]
+
+    class MalformedPrimaryClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(retry_backoff=0.0)
+            self.calls: list[str] = []
+
+        def chat(self, agent: ModelAgent, messages: list, temperature: float = 0.2) -> str:  # type: ignore[override]
+            self.calls.append(agent.id)
+            if agent.id == "primary_worker":
+                raise ProviderResponseError("provider primary_worker response did not contain assistant content")
+            return "backup must not be called"
+
+    client = MalformedPrimaryClient()
+    orchestrator = TaskOrchestrator(agents, client=client)
+
+    try:
+        orchestrator._invoke(
+            agents[0], [{"role": "user", "content": "route this"}], text="route this", role="worker"
+        )
+    except ProviderResponseError as exc:
+        assert str(exc) == "provider primary_worker response did not contain assistant content"
+    else:  # pragma: no cover
+        raise AssertionError("a structurally invalid provider response must fail closed")
+
+    assert client.calls == ["primary_worker"]
+    assert orchestrator._circuit == {}
 
 
 def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
