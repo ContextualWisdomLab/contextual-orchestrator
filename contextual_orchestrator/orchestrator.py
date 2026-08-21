@@ -224,8 +224,8 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
 
     try:
         decision = json.loads(reply.strip(), object_pairs_hook=reject_duplicate_keys)
-    except (json.JSONDecodeError, RecursionError, TypeError) as exc:
-        raise ValueError("judge response is not valid JSON") from exc
+    except (json.JSONDecodeError, RecursionError, TypeError):
+        raise ValueError("judge response is not valid JSON") from None
     if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
         raise ValueError("judge response must match the exact verdict schema")
     decision_value = decision["decision"]
@@ -1986,8 +1986,8 @@ class TaskOrchestrator:
                 try:
                     prefix, suffix = custom_id.rsplit("_", 1)
                     index = int(suffix)
-                except (AttributeError, ValueError) as exc:
-                    raise RuntimeError("batch provider returned an invalid request identifier") from exc
+                except (AttributeError, ValueError):
+                    raise RuntimeError("batch provider returned an invalid request identifier") from None
                 if prefix != "task" or custom_id != f"task_{index}" or not 0 <= index < len(selected):
                     raise RuntimeError("batch provider returned an invalid request identifier")
                 if index in answers:
