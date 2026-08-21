@@ -97,6 +97,27 @@ def test_analytics_snapshot_measures_runtime_kpis_and_guardrails() -> None:
     assert guardrails["locale_key_parity"]["value_percent"] == 100.0
 
 
+def test_analytics_snapshot_reads_runtime_collections_under_one_lock() -> None:
+    class CountingLock:
+        def __init__(self) -> None:
+            self.enter_count = 0
+
+        def __enter__(self):
+            self.enter_count += 1
+            return self
+
+        def __exit__(self, *_args: object) -> None:
+            return None
+
+    orchestrator = build()
+    lock = CountingLock()
+    orchestrator._workflow_run_lock = lock
+
+    orchestrator.analytics_snapshot()
+
+    assert lock.enter_count == 1
+
+
 def test_analytics_endpoint_and_admin_console_use_source_backed_snapshot() -> None:
     assert "/api/v1/analytics_snapshots/latest" in OPENAPI_SPEC["paths"]
     assert OPENAPI_SPEC["paths"]["/api/v1/analytics_snapshots/latest"]["get"]["operationId"] == (

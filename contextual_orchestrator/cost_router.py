@@ -34,7 +34,7 @@ from .batch_routing import (
     RoutingHints,
     RoutingPolicy,
 )
-from .cost_ledger import CostLedger, PriceBook
+from .cost_ledger import CostLedger, PriceBook, UsageRecord
 from .kv_config import InMemoryConfigStore
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
@@ -103,19 +103,36 @@ class CostRoutingCoordinator:
 
         def embed_batch(requests: List[EmbeddingBatchRequest]) -> List[List[float]]:
             vectors: List[List[float] | None] = [None] * len(requests)
-            for model in {request.model for request in requests}:
-                matching = [agent for agent in candidates if agent.model == model]
+            provider_models = {
+                (request.provider_name, request.model) for request in requests
+            }
+            for provider_name, model in provider_models:
+                matching = [
+                    agent
+                    for agent in candidates
+                    if agent.model == model
+                    and (agent.provider_name or _provider_from_base_url(agent.base_url) or "unknown")
+                    == provider_name
+                ]
                 if not matching:
                     raise ValueError(f"embedding model {model!r} is not configured in the embedding agent pool")
-                indexes = [index for index, request in enumerate(requests) if request.model == model]
+                selected = max(matching, key=lambda agent: (agent.priority, agent.id))
+                indexes = [
+                    index
+                    for index, request in enumerate(requests)
+                    if request.model == model and request.provider_name == provider_name
+                ]
                 client = getattr(self.orchestrator, "client", None)
                 embed_many = getattr(client, "embed_many", None)
                 if not callable(embed_many):
                     raise RuntimeError("configured embedding agent has no provider embedding client")
-                batch_vectors = embed_many(matching[0], [requests[index].input_text for index in indexes])
+                batch_vectors = embed_many(
+                    selected,
+                    [requests[index].input_text for index in indexes],
+                )
                 if len(batch_vectors) != len(indexes):
                     raise RuntimeError("provider returned an incomplete embedding vector batch")
-                for index, vector in zip(indexes, batch_vectors):
+                for index, vector in zip(indexes, batch_vectors, strict=True):
                     vectors[index] = vector
             if any(vector is None for vector in vectors):
                 raise RuntimeError("provider returned an incomplete embedding vector batch")
@@ -144,6 +161,63 @@ class CostRoutingCoordinator:
                 pass
         return "unknown", fallback_model
 
+    @staticmethod
+    def _provider_usage_counts(usage: Any) -> tuple[int, int] | None:
+        """Return validated provider token counts, accepting Chat and Responses names."""
+        if not isinstance(usage, dict):
+            return None
+        prompt_tokens = usage.get("prompt_tokens", usage.get("input_tokens"))
+        completion_tokens = usage.get("completion_tokens", usage.get("output_tokens"))
+        if (
+            type(prompt_tokens) is not int
+            or prompt_tokens < 0
+            or type(completion_tokens) is not int
+            or completion_tokens < 0
+        ):
+            return None
+        return prompt_tokens, completion_tokens
+
+    def _record_provider_workflow_usage(
+        self,
+        result: Dict[str, Any],
+        *,
+        attribution: Optional[Dict[str, Any]],
+        model_name: str,
+    ) -> tuple[List[UsageRecord], int]:
+        """Record every provider-reported workflow call under one run lineage."""
+        steps = [step for step in result.get("trace", []) if isinstance(step, dict)]
+        verification = result.get("verification")
+        if isinstance(verification, dict) and isinstance(verification.get("judge_usage"), dict):
+            judge_step = {
+                "agent_id": verification.get("judge_agent_id"),
+                "usage": verification["judge_usage"],
+            }
+            # Provider-facing synthesis is the final persisted trace step.
+            steps.insert(max(0, len(steps) - 1), judge_step)
+
+        records: List[UsageRecord] = []
+        unmetered_count = 0
+        for step in steps:
+            counts = self._provider_usage_counts(step.get("usage"))
+            if counts is None:
+                unmetered_count += 1
+                continue
+            records.append(
+                self._record_completion(
+                    messages=[],
+                    answer="",
+                    route_mode=result.get("mode"),
+                    request_channel="sync",
+                    attribution=attribution,
+                    model_name=model_name,
+                    provider_model=self._served_provider_model({"trace": [step]}, model_name),
+                    workflow_run_id=result.get("workflow_run_id"),
+                    prompt_tokens=counts[0],
+                    completion_tokens=counts[1],
+                )
+            )
+        return records, unmetered_count
+
     # ------------------------------------------------------------------
     # Sync + batch completion
     # ------------------------------------------------------------------
@@ -157,19 +231,26 @@ class CostRoutingCoordinator:
         model_name: str = "contextual-orchestrator",
         workflow_run_id: Optional[str] = None,
         response_format: Optional[Dict[str, Any]] = None,
+        provider_request: Optional[Dict[str, Any]] = None,
+        provider_endpoint: str = "chat/completions",
     ) -> Dict[str, Any]:
         """Route a request (sync or batch) and record its usage + cost.
 
         Sync requests run the orchestrator immediately and return the completion
         augmented with ``channel``, ``routing_reason``, ``usage``, and the
         ``usage_record_id``. Batch requests are dispatched to the batch backend
-        and return a job envelope; their cost is recorded on retrieval.
+        and return a job envelope; their cost is recorded on retrieval. When a
+        validated ``provider_request`` is supplied, final synthesis preserves
+        that Chat or Responses wire contract while this coordinator still owns
+        the cost record.
         """
         routing_hints = hints if isinstance(hints, RoutingHints) else RoutingHints.from_mapping(hints)
         prompt_tokens_estimate = self.token_counter.count_messages(messages, model_name)
         decision = self.policy.decide(routing_hints, prompt_tokens_estimate)
 
-        structured_output_forced_sync = decision.channel == "batch" and response_format is not None
+        structured_output_forced_sync = decision.channel == "batch" and (
+            response_format is not None or provider_request is not None
+        )
         if decision.channel == "batch" and not structured_output_forced_sync:
             request = BatchRequest(
                 messages=messages,
@@ -187,22 +268,71 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
-        result = self.orchestrator.run(
-            messages,
-            mode=mode,
-            workflow_run_id=workflow_run_id,
-            output_contract=response_format,
-        )
-        record = self._record_completion(
-            messages=messages,
-            answer=result.get("answer", ""),
-            route_mode=result.get("mode"),
-            request_channel="sync",
-            attribution=attribution,
-            model_name=model_name,
-            provider_model=self._served_provider_model(result, model_name),
-            workflow_run_id=result.get("workflow_run_id"),
-        )
+        provider_response: Optional[Dict[str, Any]] = None
+        if provider_request is None:
+            result = self.orchestrator.run(
+                messages,
+                mode=mode,
+                workflow_run_id=workflow_run_id,
+                output_contract=response_format,
+            )
+        else:
+            if provider_endpoint not in {"chat/completions", "responses"}:
+                raise ValueError("provider_endpoint must be chat/completions or responses")
+            provider_response = self.orchestrator.proxy_completion(
+                provider_request,
+                endpoint=provider_endpoint,
+            )
+            orchestration = provider_response.get("orchestration")
+            if not isinstance(orchestration, dict) or not isinstance(
+                orchestration.get("workflow_run_id"), str
+            ):
+                raise RuntimeError("provider completion omitted orchestration lineage")
+            result = dict(
+                self.orchestrator.get_workflow_run(orchestration["workflow_run_id"])
+            )
+            result["provider_response"] = provider_response
+        records: List[UsageRecord] = []
+        unmetered_count = 0
+        if provider_response is not None:
+            records, unmetered_count = self._record_provider_workflow_usage(
+                result,
+                attribution=attribution,
+                model_name=model_name,
+            )
+        if not records:
+            provider_usage = (
+                provider_response.get("usage")
+                if isinstance(provider_response, dict)
+                and isinstance(provider_response.get("usage"), dict)
+                else {}
+            )
+            counts = self._provider_usage_counts(provider_usage)
+            record = self._record_completion(
+                messages=messages,
+                answer=result.get("answer", ""),
+                route_mode=result.get("mode"),
+                request_channel="sync",
+                attribution=attribution,
+                model_name=model_name,
+                provider_model=self._served_provider_model(result, model_name),
+                workflow_run_id=result.get("workflow_run_id"),
+                prompt_tokens=counts[0] if counts is not None else None,
+                completion_tokens=counts[1] if counts is not None else None,
+            )
+            records = [record]
+        record = records[-1]
+        prompt_tokens = sum(item.prompt_tokens for item in records)
+        completion_tokens = sum(item.completion_tokens for item in records)
+        currencies = {item.currency_code for item in records}
+        cost = {
+            "cost_amount": (
+                round(sum(item.cost_amount for item in records), 6)
+                if len(currencies) == 1
+                else None
+            ),
+            "currency_code": next(iter(currencies)) if len(currencies) == 1 else "MIXED",
+        }
         result["channel"] = "sync"
         result["routing_reason"] = (
             f"{decision.reason};structured_output_forced_sync"
@@ -210,12 +340,28 @@ class CostRoutingCoordinator:
             else decision.reason
         )
         result["usage_record_id"] = record.usage_record_id
+        result["usage_record_ids"] = [item.usage_record_id for item in records]
+        result["unmetered_provider_call_count"] = unmetered_count
         result["usage"] = {
-            "prompt_tokens": record.prompt_tokens,
-            "completion_tokens": record.completion_tokens,
-            "total_tokens": record.total_tokens,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": prompt_tokens + completion_tokens,
         }
-        result["cost"] = {"cost_amount": record.cost_amount, "currency_code": record.currency_code}
+        result["cost"] = cost
+        provider_response = result.get("provider_response")
+        if isinstance(provider_response, dict):
+            orchestration = provider_response.get("orchestration")
+            if isinstance(orchestration, dict):
+                orchestration.update(
+                    {
+                        "channel": result["channel"],
+                        "routing_reason": result["routing_reason"],
+                        "usage_record_id": result["usage_record_id"],
+                        "usage_record_ids": result["usage_record_ids"],
+                        "unmetered_provider_call_count": unmetered_count,
+                        "cost": result["cost"],
+                    }
+                )
         return result
 
     def _record_completion(
@@ -334,8 +480,12 @@ class CostRoutingCoordinator:
         and recorded cost are produced by :meth:`embeddings_batch_document`.
         """
         shared_attribution = dict(attribution or {})
+        provider_name, resolved_model = self._resolve_embedding_provider_model(model)
         requests, part_counts, part_limits = self._build_embedding_requests(
-            inputs, model=model, attribution=shared_attribution
+            inputs,
+            model=resolved_model,
+            provider_name=provider_name,
+            attribution=shared_attribution,
         )
         job = self.embedding_batch_backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
@@ -345,11 +495,42 @@ class CostRoutingCoordinator:
         self._embedding_part_limits[job.job_id] = part_limits
         return job
 
+    def _resolve_embedding_provider_model(self, model: str) -> tuple[str, str]:
+        """Resolve a server-owned embedding provider/model pair."""
+        candidates = [
+            agent
+            for agent in getattr(self.orchestrator, "candidates", [])
+            if not agent.disabled and "embedding" in agent.tags
+        ]
+        if model == "contextual-orchestrator":
+            selector = getattr(self.orchestrator, "select_capability_agent", None)
+            if callable(selector):
+                agent = selector("embedding")
+            elif candidates:
+                agent = max(
+                    candidates,
+                    key=lambda candidate: (candidate.priority, candidate.id),
+                )
+            else:
+                raise ValueError("no enabled embedding-capable agent is available")
+        else:
+            matching = [agent for agent in candidates if agent.model == model]
+            if not matching:
+                if candidates:
+                    raise ValueError(
+                        f"embedding model {model!r} is not configured in the embedding agent pool"
+                    )
+                return self.embedding_batch_backend.name, model
+            agent = max(matching, key=lambda candidate: (candidate.priority, candidate.id))
+        provider = agent.provider_name or _provider_from_base_url(agent.base_url) or "unknown"
+        return provider, agent.model
+
     def _build_embedding_requests(
         self,
         inputs: List[str],
         *,
         model: str,
+        provider_name: str,
         attribution: Dict[str, Any],
     ) -> tuple[List[EmbeddingBatchRequest], List[int], Dict[str, int]]:
         """Map original embedding inputs into token-budgeted provider parts."""
@@ -368,6 +549,7 @@ class CostRoutingCoordinator:
                     EmbeddingBatchRequest(
                         input_text=part_text,
                         model=model,
+                        provider_name=provider_name,
                         attribution=dict(attribution),
                         source_index=source_index,
                         part_index=part_index,
@@ -551,6 +733,11 @@ class CostRoutingCoordinator:
                     "embedding": item.embedding,
                     "prompt_tokens": max(0, prompt_tokens),
                     "model": item.model,
+                    "provider_name": (
+                        item.provider_name
+                        if item.provider_name != "unknown"
+                        else request.provider_name if request else "unknown"
+                    ),
                     "attribution": dict(request.attribution) if request else {},
                 }
             )
@@ -560,6 +747,7 @@ class CostRoutingCoordinator:
         total_cost_amount = 0.0
         currency_code = "USD"
         model_name = "contextual-orchestrator"
+        provider_name = "unknown"
         for source_index in range(input_count):
             parts = sorted(parts_by_source.get(source_index, []), key=lambda item: item["part_index"])
             if not parts:
@@ -569,11 +757,9 @@ class CostRoutingCoordinator:
             attribution = dict(parts[0]["attribution"])
             prompt_tokens = sum(int(part["prompt_tokens"]) for part in parts)
             model_name = str(parts[0]["model"])
-            provider = str(
-                attribution.get("provider") or attribution.get("upstream_api") or "unknown"
-            )
+            provider_name = str(parts[0]["provider_name"])
             record = self.ledger.record_usage(
-                provider=provider,
+                provider=provider_name,
                 model=model_name,
                 prompt_tokens=prompt_tokens,
                 completion_tokens=0,
@@ -598,6 +784,7 @@ class CostRoutingCoordinator:
             "batch_id": batch_id,
             "status": "completed",
             "backend": job.backend,
+            "provider": provider_name,
             "model": model_name,
             "embeddings": embeddings,
             "token_counts": token_counts,

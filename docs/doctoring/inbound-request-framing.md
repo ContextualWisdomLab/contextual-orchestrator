@@ -3,7 +3,7 @@
 ## Root cause
 
 `_read_json` used `int(headers["Content-Length"])` and read that value without
-representing unsupported transfer coding, duplicate fields, premature EOF, or
+handling unsupported transfer coding, duplicate fields, premature EOF, or
 a read deadline. A negative value could reach an unbounded `read(-1)`.
 
 ## Implemented contract

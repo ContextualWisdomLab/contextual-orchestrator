@@ -2,9 +2,9 @@
 
 from __future__ import annotations
 
+import urllib.error
 from copy import deepcopy
 from typing import Any
-import urllib.error
 
 import pytest
 
@@ -18,6 +18,21 @@ class SequencedProxyClient:
         self.outcomes = outcomes
         self.calls: list[tuple[str, str, dict[str, Any]]] = []
 
+    def chat(
+        self,
+        agent: ModelAgent,
+        messages: list[dict[str, Any]],
+        temperature: float | None = None,
+        top_p: float | None = None,
+    ) -> str:
+        """Supply deterministic workflow evidence before final passthrough."""
+        del messages, temperature, top_p
+        return f"verified evidence from {agent.id}"
+
+    def take_usage(self) -> None:
+        """Expose the client usage seam used by workflow accounting."""
+        return
+
     def proxy_send_once(
         self,
         agent: ModelAgent,
@@ -30,6 +45,15 @@ class SequencedProxyClient:
         if isinstance(outcome, BaseException):
             raise outcome
         return deepcopy(outcome)
+
+    def proxy_send(
+        self,
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
+    ) -> dict[str, Any]:
+        """Expose the ordinary explicit-model transport seam."""
+        return self.proxy_send_once(agent, endpoint, payload)
 
 
 def _http_error(status: int, message: str) -> urllib.error.HTTPError:

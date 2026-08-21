@@ -143,8 +143,9 @@ def test_discover_local_gateway_is_not_a_model_discovery_source() -> None:
         list_url="local://host.docker.internal:8080/v1/models",
         chat_base_url="local://host.docker.internal:8080/v1",
     )
-    with pytest.raises(RuntimeError, match="model discovery requires an https provider URL"):
+    with pytest.raises(ProviderDiscoveryError, match="invalid_response") as error:
         discover_provider_models(source)
+    assert error.value.__cause__ is None
 
 
 def test_discover_rejects_private_provider_before_authorized_transport() -> None:
@@ -163,8 +164,9 @@ def test_discover_rejects_private_provider_before_authorized_transport() -> None
         ),
         patch.object(ModelClient, "_open_provider") as open_provider,
     ):
-        with pytest.raises(ProviderDiscoveryError, match="non-public address"):
-            discover_provider_models(source)
+            with pytest.raises(ProviderDiscoveryError, match="provider_error") as error:
+                discover_provider_models(source)
+            assert error.value.__cause__ is None
     open_provider.assert_not_called()
 
 
@@ -204,6 +206,25 @@ def test_model_discovery_rejects_empty_userinfo_and_fragment(url: str) -> None:
             timeout=1.0,
             credential_name="OPENAI_API_KEY",
         )
+
+
+def test_model_discovery_rejects_invalid_port_and_preserves_nondefault_port() -> None:
+    with pytest.raises(ValueError, match="invalid port"):
+        _fetch_json(
+            "https://api.openai.com:not-a-port/v1/models",
+            auth_scheme="Bearer",
+            timeout=1.0,
+            credential_name="",
+        )
+
+    with patch.object(ModelClient, "fetch_json", return_value={}) as fetch_json:
+        _fetch_json(
+            "https://api.openai.com:8443/v1/models",
+            auth_scheme="Bearer",
+            timeout=1.0,
+            credential_name="",
+        )
+    assert fetch_json.call_args.args[0].base_url == "https://api.openai.com:8443"
 
 
 def test_fetch_json_rejects_empty_userinfo_and_fragment_before_transport() -> None:
@@ -266,6 +287,9 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
     assert len(errors) == 1
     assert errors[0].provider_name == "openai"
+    assert errors[0].error_code == "transport_error"
+    assert "connection refused" not in str(errors[0])
+    assert errors[0].__cause__ is None
 
 
 def test_agent_id_for_is_two_word_snake_case() -> None:

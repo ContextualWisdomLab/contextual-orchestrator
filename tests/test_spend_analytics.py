@@ -7,6 +7,7 @@ price is configured, honest nulls when it is not, and the read-only HTTP endpoin
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
 from pathlib import Path
 import sys
@@ -77,6 +78,54 @@ def test_spend_empty_when_no_runs() -> None:
     assert report["totals"]["run_count"] == 0
     assert report["by_model"] == []
     assert report["totals"]["estimated_output_tokens"] == 0
+
+
+def test_raw_run_retention_is_bounded_without_resetting_spend() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "priced-model")],
+        price_per_million={"priced-model": 10.0},
+    )
+    run_count = orchestrator._run_order.maxlen * 2
+
+    def persist(index: int) -> None:
+        orchestrator._persist_workflow_run(
+            {
+                "workflow_run_id": f"run_retention_{index}",
+                "created_at": index,
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": "abcd",
+                "answer": "done",
+                "trace": [
+                    {
+                        "id": 0,
+                        "role": "worker",
+                        "agent_id": "general_agent",
+                        "subtask": "Direct route",
+                        "access": [],
+                        "output": "done",
+                        "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+                    }
+                ],
+                "policy_snapshot": {},
+                "verification": {"accepted": True},
+            }
+        )
+
+    with ThreadPoolExecutor(max_workers=8) as pool:
+        list(pool.map(persist, range(run_count)))
+
+    retained = orchestrator._workflow_runs[next(iter(orchestrator._workflow_runs))]
+    orchestrator._persist_workflow_run(retained)
+
+    report = orchestrator.spend_analytics()
+    assert len(orchestrator._workflow_runs) == orchestrator._run_order.maxlen
+    assert len(orchestrator._run_order) == orchestrator._run_order.maxlen
+    assert len(set(orchestrator._run_order)) == orchestrator._run_order.maxlen
+    assert report["totals"]["run_count"] == run_count
+    assert report["totals"]["estimated_output_tokens"] == run_count
+    assert report["totals"]["reported_prompt_tokens"] == run_count
+    assert report["by_model"][0]["step_count"] == run_count
 
 
 def test_http_spend_endpoint_returns_report() -> None:

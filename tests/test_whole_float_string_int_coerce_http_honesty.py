@@ -83,7 +83,7 @@ def test_http_responses_rejects_unapplied_seed_whole_float_string() -> None:
                 "seed": "1.0",
             },
         )
-        assert status == 400, body
+        assert status == 422, body
         assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()
@@ -216,7 +216,7 @@ def test_http_responses_rejects_unapplied_top_logprobs_whole_float_string() -> N
                 "top_logprobs": "5.0",
             },
         )
-        assert status == 400, body
+        assert status == 422, body
         assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()

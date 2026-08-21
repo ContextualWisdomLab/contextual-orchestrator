@@ -117,6 +117,7 @@ def test_structured_model_judge_accepts() -> None:
         result = orchestrator.conduct(MESSAGES)
     assert result["verification"]["accepted"] is True
     assert result["verification"]["judge"] == "model"
+    assert result["verification"]["judge_agent_id"] == "general_agent"
     assert client.calls == 5
     assert result["answer"] == "step-output(4)"
 
@@ -276,7 +277,7 @@ def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
     assert completion["mode"] == "conduct"
 
 
-def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> None:
+def test_fast_mlsirm_adapter_keeps_structured_completion_to_one_provider_call() -> None:
     orchestrator, _ = _orch("unused")
     adapter = orchestrator_module._FastMLSIJudgeAdapter(
         orchestrator,
@@ -289,30 +290,55 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
         "json_schema": {"name": "judge", "strict": True, "schema": {"type": "object"}},
     }
     with patch.object(
-        orchestrator,
-        "proxy_completion",
+        orchestrator.client,
+        "proxy_send",
         return_value={
             "choices": [{"message": {"content": '{"meets_threshold":true,"rationale":"ok"}'}}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
         },
-    ) as proxy:
+    ) as proxy_send:
         completion = adapter.complete_structured(
             [{"role": "user", "content": "judge"}],
             mode="conduct",
             response_format=response_format,
         )
 
-    proxy.assert_called_once_with(
+    proxy_send.assert_called_once_with(
+        orchestrator._agent("general_agent"),
+        "chat/completions",
         {
             "model": "model-x",
             "messages": [{"role": "user", "content": "judge"}],
             "max_tokens": orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        }
+            "stream": False,
+        },
     )
     assert completion["answer"] == '{"meets_threshold":true,"rationale":"ok"}'
     assert completion["mode"] == "conduct"
     assert completion["trace"][0]["usage"]["total_tokens"] == 5
+
+
+def test_fast_mlsirm_structured_adapter_omits_implicit_temperature() -> None:
+    orchestrator, _ = _orch("unused")
+    orchestrator.client.temperature = None
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator,
+        "task",
+        "general_agent",
+    )
+
+    with patch.object(
+        orchestrator.client,
+        "proxy_send",
+        return_value={"choices": [{"message": {"content": "{}"}}]},
+    ) as proxy:
+        adapter.complete_structured(
+            [{"role": "user", "content": "judge"}],
+            response_format={"type": "json_object"},
+        )
+
+    assert "temperature" not in proxy.call_args.args[2]
 
 
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:
@@ -454,6 +480,16 @@ def test_model_judge_parser_rejects_invalid_structured_values(reply: str, messag
 def test_model_judge_parser_rejects_oversized_reply() -> None:
     with pytest.raises(ValueError, match="maximum size"):
         _parse_model_judge_reply("x" * 32_001)
+
+
+def test_model_judge_parser_hides_raw_provider_response() -> None:
+    raw_provider_response = "provider-secret-response"
+
+    with pytest.raises(ValueError, match="not valid JSON") as error:
+        _parse_model_judge_reply(raw_provider_response)
+
+    assert raw_provider_response not in str(error.value)
+    assert error.value.__cause__ is None
 
 
 def test_missing_fast_mlsirm_does_not_use_a_direct_judge_fallback() -> None:

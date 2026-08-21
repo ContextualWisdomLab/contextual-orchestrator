@@ -65,7 +65,7 @@ def test_http_responses_rejects_unapplied_logit_bias_after_type_check() -> None:
                     "logit_bias": {"100": val, "200": 1},
                 },
             )
-            assert status == 400, (val, body)
+            assert status == 422, (val, body)
             assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()

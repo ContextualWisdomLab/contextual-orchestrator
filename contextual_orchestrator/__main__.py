@@ -4,20 +4,22 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import replace
 
 from .cost_ledger import PriceBook
+from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
+    ProviderDiscoveryError,
+    ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
     discover_provider_models,
-    ProviderDiscoveryError,
-    ProviderModelSource,
     refresh_price_book,
     select_top_n_cheapest_discovered_agents,
 )
@@ -34,6 +36,20 @@ from .server import SecurityConfig, serve
 DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+
+
+def _bootstrap_telemetry_config() -> InMemoryConfigStore:
+    """Load non-secret OTEL deployment settings into the process KV at startup."""
+    config = InMemoryConfigStore()
+    for environment_name, key in (
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", "exporter_otlp_endpoint"),
+        ("OTEL_SERVICE_NAME", "service_name"),
+        ("OTEL_SDK_DISABLED", "sdk_disabled"),
+    ):
+        value = os.environ.get(environment_name, "").strip()
+        if value:
+            config.set("telemetry", key, value)
+    return config
 
 
 def _positive_int(value: str) -> int:
@@ -65,6 +81,17 @@ def _local_concurrency(value: str) -> int:
         raise argparse.ArgumentTypeError(
             f"integer in 1..{MAX_LOCAL_CONCURRENCY} required"
         )
+    return parsed
+
+
+def _request_read_timeout(value: str) -> float:
+    """Parse a finite request-body deadline in the server-supported range."""
+    try:
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("number in 0.1..120 required") from exc
+    if not math.isfinite(parsed) or not 0.1 <= parsed <= 120.0:
+        raise argparse.ArgumentTypeError("number in 0.1..120 required")
     return parsed
 
 
@@ -284,15 +311,16 @@ def _auto_discover_seed_agents(
     return expanded
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
-    if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
-        _register_credential_command(sys.argv[2:])
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "register-credential":
+        _register_credential_command(arguments[1:])
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "discover-models":
-        _discover_models_command(sys.argv[2:])
+    if arguments and arguments[0] == "discover-models":
+        _discover_models_command(arguments[1:])
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "check-fast-mlsirm":
+    if arguments and arguments[0] == "check-fast-mlsirm":
         _check_fast_mlsirm_command()
         return
 
@@ -353,7 +381,7 @@ def main() -> None:
     )
     parser.add_argument(
         "--request-read-timeout-seconds",
-        type=float,
+        type=_request_read_timeout,
         default=10.0,
         help="Maximum time to read one fixed-length JSON body (default: 10 seconds).",
     )
@@ -373,7 +401,7 @@ def main() -> None:
                         help="Seconds to cache identical requests (default 0 = disabled).")
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
-    args = parser.parse_args()
+    args = parser.parse_args(arguments)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
@@ -460,6 +488,10 @@ def main() -> None:
                 request_read_timeout_seconds=args.request_read_timeout_seconds,
             ),
             clearfolio_url=args.clearfolio_url,
+            coordinator=CostRoutingCoordinator(
+                orchestrator,
+                config_store=_bootstrap_telemetry_config(),
+            ),
         )
         return
 

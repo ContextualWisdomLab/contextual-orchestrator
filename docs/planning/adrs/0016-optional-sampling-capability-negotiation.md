@@ -21,6 +21,9 @@ available to both the normal chat transport and raw/Responses passthrough.
 When neither the caller nor the operator supplies a sampling temperature, the
 runtime leaves the field absent so the selected provider applies its published
 default. The CLI compatibility flags remain an explicit operator override.
+HTTP request sampling and output-token controls are stored in thread-local
+request scope; concurrent requests never mutate the shared client defaults or
+inherit one another's controls.
 
 All other 4xx responses, including invalid temperature values, remain
 non-retryable. The orchestrator does not infer capability from a model name,
@@ -33,6 +36,8 @@ another model as a temperature fallback.
   incompatibility is an optional sampling field.
 - The original endpoint, model, authentication, and all other request fields
   remain unchanged.
+- Concurrent Completions, Chat Completions, Responses, streaming, and batch
+  transports apply only their own request-scoped controls.
 - The provider error body is consumed only for bounded capability
   classification; it is not persisted or exposed as a credential-bearing log.
 

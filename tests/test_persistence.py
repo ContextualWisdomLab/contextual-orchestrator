@@ -23,6 +23,30 @@ def _orch(state_db: str | None = None) -> TaskOrchestrator:
     return TaskOrchestrator([ModelAgent("general_agent", "mock", tags=("reasoning", "writing"))], state_db=state_db)
 
 
+def _run_record(index: int) -> dict:
+    return {
+        "workflow_run_id": f"run_retention_{index}",
+        "created_at": index,
+        "mode": "route",
+        "policy_mode": "route",
+        "prompt_text": "abcd",
+        "answer": "done",
+        "trace": [
+            {
+                "id": 0,
+                "role": "worker",
+                "agent_id": "general_agent",
+                "subtask": "Direct route",
+                "access": [],
+                "output": "done",
+                "usage": {"prompt_tokens": 1, "completion_tokens": 1},
+            }
+        ],
+        "policy_snapshot": {},
+        "verification": {"accepted": True},
+    }
+
+
 def test_runs_audit_analytics_survive_restart() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "state.db")
@@ -114,6 +138,31 @@ def test_stream_reload_respects_deque_maxlen() -> None:
         try:
             assert len(second._analytics_events) == maxlen  # reload also capped
             assert second._analytics_events[-1]["event_detail"]["i"] == maxlen + 24  # newest kept
+        finally:
+            second.close()
+
+
+def test_workflow_reload_bounds_raw_records_and_preserves_spend() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "state.db")
+        first = _orch(db)
+        run_count = first._run_order.maxlen + 2
+        for index in range(run_count):
+            first._persist_workflow_run(_run_record(index))
+        assert len(first._workflow_runs) == first._run_order.maxlen
+        assert first.spend_analytics()["totals"]["run_count"] == run_count
+        first.close()
+
+        second = _orch(db)
+        try:
+            assert len(second._workflow_runs) == second._run_order.maxlen
+            assert "run_retention_0" not in second._workflow_runs
+            assert "run_retention_129" in second._workflow_runs
+            report = second.spend_analytics()
+            assert report["totals"]["run_count"] == run_count
+            assert report["totals"]["estimated_output_tokens"] == run_count
+            assert report["totals"]["reported_prompt_tokens"] == run_count
+            assert len(second._store.load("workflow_run")) == run_count
         finally:
             second.close()
 

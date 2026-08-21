@@ -100,7 +100,11 @@ def test_admin_and_inference_tokens_are_separate() -> None:
     server = build_server(
         build(),
         port=0,
-        security=SecurityConfig(auth_token="", admin_token="admin_secret", inference_token="inference_secret"),
+        security=SecurityConfig(
+            auth_token="",
+            admin_token="admin_secret",  # noqa: S106
+            inference_token="inference_secret",  # noqa: S106
+        ),
     )
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()

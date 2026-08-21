@@ -26,6 +26,7 @@ import json
 import time
 import uuid
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from dataclasses import dataclass, field
 from typing import Any, Callable, Dict, List, Optional, Protocol
 
@@ -253,8 +254,13 @@ class LocalBatchBackend:
         if self.max_concurrency == 1 or len(requests) <= 1:
             items = [run(request) for request in requests]
         else:
+            def run_with_context(item: tuple[Any, BatchRequest]) -> BatchResultItem:
+                context, request = item
+                return context.run(run, request)
+
+            contexts_and_requests = [(copy_context(), request) for request in requests]
             with ThreadPoolExecutor(max_workers=min(self.max_concurrency, len(requests))) as pool:
-                items = list(pool.map(run, requests))
+                items = list(pool.map(run_with_context, contexts_and_requests))
         self._results[job_id] = items
         return BatchJob(job_id=job_id, backend=self.name, status="completed", request_count=len(requests))
 
@@ -411,6 +417,7 @@ class EmbeddingBatchRequest:
 
     input_text: str
     model: str = "contextual-orchestrator"
+    provider_name: str = "unknown"
     custom_id: str = field(default_factory=lambda: f"emb_{uuid.uuid4().hex}")
     attribution: Dict[str, Any] = field(default_factory=dict)
     source_index: int = 0
@@ -437,6 +444,7 @@ class EmbeddingBatchResultItem:
     embedding: List[float]
     prompt_tokens: int = 0
     model: str = "contextual-orchestrator"
+    provider_name: str = "unknown"
 
 
 class EmbeddingBatchBackend(Protocol):
@@ -529,6 +537,7 @@ class LocalEmbeddingBatchBackend:
                     embedding=list(vectors[index]),
                     prompt_tokens=self._count_tokens(request.input_text, request.model),
                     model=request.model,
+                    provider_name=request.provider_name,
                 )
             )
         self._results[job_id] = items
@@ -648,6 +657,9 @@ class PgLlmBatchEmbeddingBackend:
                     embedding=embedding,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     model=tracked_request.model if tracked_request else "contextual-orchestrator",
+                    provider_name=(
+                        tracked_request.provider_name if tracked_request else "unknown"
+                    ),
                 )
             )
         items.sort(key=lambda item: item.index)

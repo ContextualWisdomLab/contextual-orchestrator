@@ -56,8 +56,11 @@ because the provider response shape is richer.
   HTTPS `/models` endpoint. Embedding-only registry rows are excluded from the
   chat pool. Consumers provide only the gateway URL and credential.
 - `json_object`, `json_schema`, and Responses text JSON formats force the
-  conduct workflow. The final synthesis receives the output contract and the
-  gateway validates the resulting JSON locally before returning it.
+  conduct workflow. The final synthesis receives the original provider-native
+  output contract, and the gateway independently validates the resulting JSON
+  locally before returning it. A Chat request therefore keeps
+  `response_format`, while a Responses request keeps `text.format`, at the
+  final provider boundary.
 - Tool-loop requests are explicitly passed to one selected worker agent. The
   gateway preserves the provider's full tool-call response and the client owns
   execution of the returned function calls; they do not claim a multi-agent
@@ -65,12 +68,32 @@ because the provider response shape is richer.
   provider-shape-preserving streaming relay. Clients must opt in with the
   `X-Contextual-Orchestrator-Tool-Loop: v1` header; ordinary tool requests stay
   fail-closed until that contract is explicitly selected.
+- Each provider-reported call in a conducted workflow writes its own cost-ledger
+  record under the shared workflow run id, including the model judge and final
+  provider synthesis. The response retains one last-metered-call
+  `usage_record_id` for compatibility and adds the complete `usage_record_ids`
+  list. Calls without
+  valid provider usage increment `unmetered_provider_call_count`; if no workflow
+  call reports usage, the existing request-level estimate remains the explicit
+  compatibility fallback.
+- Raw in-memory workflow records share the existing bounded recent-run capacity.
+  Evicted records contribute to a compact per-model spend accumulator, so budget
+  enforcement and spend totals remain cumulative without retaining every prompt,
+  answer, or trace in process memory. A configured durable state store remains
+  the long-term run-evidence boundary.
 
 ## Consequences
 
 - Provider model selection remains centralized and can change with the registry
   without an application rebuild.
 - Structured output retains the multi-agent trace and cannot bypass synthesis.
+- Cost reports price each metered workflow call against the model that served it
+  instead of attributing all conducted work to the final synthesizer.
+- A response never sums monetary amounts across currencies; mixed-currency
+  workflows expose `currency_code=MIXED` and a null aggregate amount while the
+  individual ledger records retain their original amounts and currencies.
+- High-volume passthrough traffic cannot grow raw workflow memory without bound,
+  while evicted usage still contributes to buyer-visible spend and budget gates.
 - Tool callers use an explicit single-agent passthrough contract. The gateway
   remains the model-selection boundary, while tool execution stays with the
   authenticated client and never becomes an implicit multi-agent fallback.

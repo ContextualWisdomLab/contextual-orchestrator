@@ -60,7 +60,7 @@ def test_http_responses_rejects_unapplied_penalties() -> None:
                 "frequency_penalty": -0.5,
             },
         )
-        assert status == 400, body
+        assert status == 422, body
         assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()

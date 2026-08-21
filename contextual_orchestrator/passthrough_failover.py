@@ -10,17 +10,18 @@ unavailable.
 from __future__ import annotations
 
 import time
-from typing import Any, Iterator
 import urllib.error
+from collections.abc import Iterator
+from typing import Any
 
 from .orchestrator import (
     ModelAgent,
     ModelClient,
-    TaskOrchestrator as BaseTaskOrchestrator,
-    _coerce_input_text,
     is_transient_error,
 )
-
+from .orchestrator import (
+    TaskOrchestrator as BaseTaskOrchestrator,
+)
 
 _CANDIDATE_UNAVAILABLE_HTTP_STATUS = frozenset({404, 410})
 _MAX_PROVIDER_ERROR_CHAIN_DEPTH = 8
@@ -78,15 +79,20 @@ def _proxy_send_once(
 
 
 class TaskOrchestrator(BaseTaskOrchestrator):
-    """Add bounded provider failover to full-shape OpenAI passthrough requests."""
+    """Add bounded provider failover to the final OpenAI-compatible provider call."""
 
-    def proxy_completion(
+    def _proxy_provider_completion(
         self,
-        body: dict[str, Any],
+        agent: ModelAgent,
+        endpoint: str,
+        payload: dict[str, Any],
         *,
-        endpoint: str = "chat/completions",
+        requested_model: Any,
+        text: str,
+        role: str,
+        required_tags: tuple[str, ...] = (),
     ) -> dict[str, Any]:
-        """Preserve raw response shapes while failing over virtual-model requests.
+        """Preserve response shapes while failing over only adaptive requests.
 
         An explicitly requested concrete model remains sticky and receives its
         original provider error: serving another model would violate the caller's
@@ -101,44 +107,34 @@ class TaskOrchestrator(BaseTaskOrchestrator):
         authentication, policy, and other non-transient failures are returned
         immediately instead of being replayed to another provider.
         """
-        messages = body.get("messages")
-        if isinstance(messages, list):
-            text = self._latest_user_text(messages)
-        else:
-            text = _coerce_input_text(body.get("input"))
-
-        requested_model = body.get("model")
         requested_agent = self._requested_agent(requested_model)
         adaptive_request = requested_agent is None
         if requested_agent is not None:
             if requested_agent.disabled:
                 raise RuntimeError(f"requested model {requested_model!r} is disabled")
-            candidates = [requested_agent]
+            return self.client.proxy_send(requested_agent, endpoint, payload)
         else:
-            primary = self._select_agent(text, "worker")
-            candidates = self._failover_candidates(primary, text, "worker")
-
-        upstream_template = {
-            key: value
-            for key, value in body.items()
-            if key not in self._ORCHESTRATION_ONLY_KEYS
-        }
-        upstream_template["stream"] = False
+            candidates = self._failover_candidates(
+                agent,
+                text,
+                role,
+                required_tags=required_tags,
+            )
 
         last_error: Exception | None = None
-        for agent in candidates:
-            upstream = dict(upstream_template)
-            upstream["model"] = agent.model
+        for candidate_agent in candidates:
+            upstream = dict(payload)
+            upstream["model"] = candidate_agent.model
             try:
-                result = _proxy_send_once(self.client, agent, endpoint, upstream)
-            except Exception as exc:  # noqa: BLE001 - only adaptive provider failures may fail over
+                result = _proxy_send_once(self.client, candidate_agent, endpoint, upstream)
+            except Exception as exc:
                 if not adaptive_request or not _is_adaptive_failover_error(exc):
                     raise
                 last_error = exc
-                self._record_failure(agent.id)
+                self._record_failure(candidate_agent.id)
                 with self._circuit_lock:
                     state = self._circuit.setdefault(
-                        agent.id,
+                        candidate_agent.id,
                         {"failures": 0.0, "opened_at": 0.0},
                     )
                     state["failures"] = max(
@@ -147,7 +143,7 @@ class TaskOrchestrator(BaseTaskOrchestrator):
                     )
                     state["opened_at"] = time.monotonic()
                 continue
-            self._record_success(agent.id)
+            self._record_success(candidate_agent.id)
             return result
 
         raise RuntimeError(
