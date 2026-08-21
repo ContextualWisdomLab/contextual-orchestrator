@@ -229,6 +229,7 @@ def test_provider_stream_error_does_not_expose_raw_exception_text() -> None:
     assert str(raised.value) == "provider worker_agent streaming request failed"
     assert "provider-stream-secret" not in str(raised.value)
     assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
 
 
 class _AgentDownClient(ModelClient):

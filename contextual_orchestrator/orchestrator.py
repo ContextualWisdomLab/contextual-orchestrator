@@ -1107,6 +1107,7 @@ class ModelClient:
             headers=headers,
             method="POST",
         )
+        stream_error: RuntimeError | None = None
         try:
             with self._open_provider(request, destination) as response:
                 for raw in response:
@@ -1123,11 +1124,13 @@ class ModelClient:
                     delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
                     if delta:
                         yield delta
-        except Exception:
+        except Exception:  # noqa: BLE001 - provider error boundary
             # A stream may already have emitted bytes, so it cannot be retried or
             # fail over. Keep the provider body and exception cause inside the
             # gateway while preserving one stable library error for callers.
-            raise RuntimeError(f"provider {agent.id} streaming request failed") from None
+            stream_error = RuntimeError(f"provider {agent.id} streaming request failed")
+        if stream_error is not None:
+            raise stream_error
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
