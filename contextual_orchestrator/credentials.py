@@ -50,6 +50,10 @@ class CredentialBackend(Protocol):
         """Register (or replace) the secret stored under ``name``."""
         ...
 
+    def delete(self, name: str) -> None:
+        """Remove one credential after an unvalidated candidate promotion."""
+        ...
+
 
 class InMemoryCredentialBackend:
     """Process-local credential registry for dev and tests (no Postgres needed)."""
@@ -67,6 +71,11 @@ class InMemoryCredentialBackend:
         """Store ``value`` under ``name`` in the in-memory registry."""
         with self._lock:
             self._store[name] = value
+
+    def delete(self, name: str) -> None:
+        """Remove ``name`` from the in-memory credential registry if present."""
+        with self._lock:
+            self._store.pop(name, None)
 
 
 # --- Postgres pgcrypto-encrypted credential registry ------------------------
@@ -111,6 +120,15 @@ class PostgresCredentialBackend:
         self._dsn = dsn
         self._passphrase = passphrase
         self._ensured = False
+
+    @property
+    def connection_dsn(self) -> str:
+        """Return the bootstrap DSN for a colocated metadata store.
+
+        Callers must treat this as connection material: never include it in logs,
+        reports, traces, or exceptions. Provider API keys remain inaccessible.
+        """
+        return self._dsn
 
     @classmethod
     def from_env(cls) -> "PostgresCredentialBackend":
@@ -173,6 +191,17 @@ class PostgresCredentialBackend:
                 )
             conn.commit()
 
+    def delete(self, name: str) -> None:  # pragma: no cover - requires a live Postgres
+        """Delete one encrypted credential after a failed candidate promotion."""
+        with self._connect() as conn:
+            self._ensure_schema(conn)
+            with conn.cursor() as cur:
+                cur.execute(
+                    "DELETE FROM provider_credentials WHERE credential_name = %s",
+                    (name,),
+                )
+            conn.commit()
+
 
 _backend: CredentialBackend | None = None
 _backend_lock = threading.Lock()
@@ -216,3 +245,8 @@ def get_credential(name: str) -> str | None:
 def register_credential(name: str, value: str) -> None:
     """Register a named secret into the KV (used by the bootstrap CLI)."""
     get_backend().set(name, value)
+
+
+def delete_credential(name: str) -> None:
+    """Remove a named credential from the KV after an unvalidated promotion."""
+    get_backend().delete(name)
