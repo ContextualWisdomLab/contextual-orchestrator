@@ -712,7 +712,6 @@ class ModelClient:
         self.local_max_retries = int(local_max_retries)
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
-        self.temperature = temperature
         if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -772,9 +771,7 @@ class ModelClient:
         """Resolve request, request-scoped, and constructor sampling values in order."""
         if requested is not None:
             return requested
-        if self.default_temperature is not None:
-            return self.default_temperature
-        return self.temperature
+        return self.default_temperature
 
     def chat(
         self,
