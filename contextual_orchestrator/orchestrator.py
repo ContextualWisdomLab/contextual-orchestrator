@@ -2542,21 +2542,17 @@ class TaskOrchestrator:
         or circuit-breaker state is changed.
         """
         candidates = self._failover_candidates(primary, text, role)
-        last_error: Exception | None = None
         for agent in candidates:
             try:
                 output = self.client.chat(agent, messages)
             except Exception as exc:
                 if isinstance(exc, ProviderResponseError):
                     raise
-                last_error = exc
                 self._record_failure(agent.id)
                 continue
             self._record_success(agent.id)
             usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
             return output, agent.id, usage
-        if isinstance(last_error, ProviderResponseError):
-            raise last_error
         raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _failover_candidates(self, primary: ModelAgent, text: str, role: str) -> list[ModelAgent]:
