@@ -1231,6 +1231,7 @@ class ModelClient:
                 "max_tokens",
                 "instructions",
                 "metadata",
+                "input",
                 "messages",
                 "top_logprobs",
                 "text",
@@ -1238,6 +1239,17 @@ class ModelClient:
             if key in payload
         }
         if endpoint.strip("/") == "responses":
+            instructions = echoed.get("instructions")
+            guidance_prefix = "You are the final synthesizer in a multi-agent workflow."
+            marker = "\n\nYou are the final synthesizer in a multi-agent workflow."
+            if isinstance(instructions, str) and instructions.startswith(guidance_prefix):
+                echoed.pop("instructions", None)
+            elif isinstance(instructions, str) and marker in instructions:
+                original_instructions = instructions.split(marker, 1)[0]
+                if original_instructions.strip():
+                    echoed["instructions"] = original_instructions
+                else:
+                    echoed.pop("instructions", None)
             return {
                 "id": f"resp_mock_{agent.id}",
                 "object": "response",
@@ -1880,22 +1892,71 @@ class TaskOrchestrator:
             f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
             for row in workflow["trace"]
         )
-        # Preserve the caller's message order for tool and structured-output
-        # contracts.  Synthesis remains multi-agent; its private guidance is
-        # appended rather than prepended over an assistant tool call.
-        synthesis_messages: list[ChatMessage] = [
-            *messages,
-            {
-                "role": "system",
-                "content": (
-                    "You are the final synthesizer in a multi-agent workflow. "
-                    "Use the original request and verified workflow evidence. "
-                    "Return only the requested provider response; do not mention "
-                    "the workflow or invent evidence."
-                ),
-            },
-            {"role": "user", "content": f"Verified workflow evidence:\n{evidence}"},
-        ]
+        workflow_run_id = f"run_{uuid.uuid4().hex}"
+        self._persist_provider_workflow(workflow, workflow_run_id=workflow_run_id, prompt=task)
+        synthesis_guidance = (
+            "You are the final synthesizer in a multi-agent workflow. "
+            "Use the original request and verified workflow evidence. "
+            "Return only the requested provider response; do not mention "
+            "the workflow or invent evidence.\n\n"
+            f"Verified workflow evidence:\n{evidence}"
+        )
+        if response_request:
+            # Keep Responses-native fields and endpoint semantics. Local-only
+            # providers may translate at ModelClient.proxy_send, but a remote
+            # Responses-capable model must receive the Responses contract.
+            upstream = {
+                key: value
+                for key, value in body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS and key != "model"
+            }
+            original_instructions = _responses_text(body.get("instructions")).strip()
+            upstream["instructions"] = (
+                f"{original_instructions}\n\n{synthesis_guidance}"
+                if original_instructions
+                else synthesis_guidance
+            )
+            upstream["model"] = final_agent.model
+            upstream["stream"] = False
+            self._raise_if_spend_budget_exceeded()
+            raw = self.client.proxy_send(final_agent, "responses", upstream)
+            raw["orchestration"] = {
+                "workflow_run_id": workflow_run_id,
+                "mode": "conduct",
+                "agent_count": len(workflow["trace"]),
+                "plan_source": workflow.get("plan_source"),
+            }
+            return raw
+        has_tool_call_history = any(
+            message.get("role") == "assistant" and message.get("tool_calls")
+            for message in messages
+        )
+        if not has_tool_call_history:
+            synthesis_messages: list[ChatMessage] = [
+                {"role": "system", "content": synthesis_guidance},
+                *messages,
+            ]
+        else:
+            # Keep assistant tool-call messages adjacent to the caller's
+            # following messages. Attach private evidence to the latest user
+            # message instead of inserting a system message into tool state.
+            synthesis_messages = [dict(message) for message in messages]
+            for message in reversed(synthesis_messages):
+                if message.get("role") != "user":
+                    continue
+                content = message.get("content")
+                if isinstance(content, str):
+                    message["content"] = f"{content}\n\n{synthesis_guidance}"
+                elif isinstance(content, list):
+                    message["content"] = [
+                        *content,
+                        {"type": "text", "text": synthesis_guidance},
+                    ]
+                else:
+                    message["content"] = synthesis_guidance
+                break
+            else:
+                synthesis_messages.insert(0, {"role": "system", "content": synthesis_guidance})
         upstream = {
             key: value
             for key, value in chat_body.items()
@@ -1904,42 +1965,76 @@ class TaskOrchestrator:
         upstream["model"] = final_agent.model
         upstream["messages"] = synthesis_messages
         upstream["stream"] = False
-        if response_request:
-            if isinstance(body.get("metadata"), dict):
-                upstream["metadata"] = body["metadata"]
-            response_format = body.get("response_format")
-            if response_format is None:
-                response_format = _responses_text_format_to_chat_response_format(body.get("text"))
-            if response_format is not None:
-                upstream["response_format"] = response_format
         self._raise_if_spend_budget_exceeded()
         raw = self.client.proxy_send(final_agent, "chat/completions", upstream)
         orchestration = {
-            "workflow_run_id": f"run_{uuid.uuid4().hex}",
+            "workflow_run_id": workflow_run_id,
             "mode": "conduct",
             "agent_count": len(workflow["trace"]),
             "plan_source": workflow.get("plan_source"),
         }
-        if response_request:
-            converted = _chat_to_responses_payload(raw, body)
-            if isinstance(raw.get("echo"), dict):
-                echo = dict(raw["echo"])
-                instructions = _responses_text(body.get("instructions"))
-                if instructions:
-                    echo["instructions"] = instructions
-                metadata = body.get("metadata")
-                if isinstance(metadata, dict):
-                    echo["metadata"] = {
-                        key: value for key, value in metadata.items() if value is not None
-                    }
-                for key in ("text", "tools"):
-                    if body.get(key) is not None:
-                        echo[key] = body[key]
-                converted["echo"] = echo
-            converted["orchestration"] = orchestration
-            return converted
         raw["orchestration"] = orchestration
         return raw
+
+    def _persist_provider_workflow(
+        self, workflow: dict[str, Any], *, workflow_run_id: str, prompt: str
+    ) -> None:
+        """Persist structured-provider workflow evidence before final synthesis."""
+        trace = workflow.get("trace") or []
+        answer = workflow.get("answer")
+        if not isinstance(answer, str):
+            answer = str(trace[-1].get("output", "")) if trace else ""
+        verification = workflow.get("verification")
+        if not isinstance(verification, dict):
+            verification = {
+                "accepted": False,
+                "reason": "workflow evidence persisted before final synthesis",
+            }
+        record = {
+            "workflow_run_id": workflow_run_id,
+            "created_at": int(time.time()),
+            "mode": workflow.get("mode", "conduct"),
+            "policy_mode": "conduct",
+            "prompt_text": prompt,
+            "answer": answer,
+            "trace": trace,
+            "policy_snapshot": self.policy.as_dict(),
+            "verification": verification,
+        }
+        self._workflow_runs[workflow_run_id] = record
+        self._run_order.appendleft(workflow_run_id)
+        if self._store is not None:
+            self._store.save("workflow_run", workflow_run_id, record)
+        self._append_audit_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": workflow_run_id,
+                "mode": record["mode"],
+                "agent_count": len(record["trace"]),
+            },
+        )
+        self.record_analytics_event(
+            "workflow_run_created",
+            {
+                "workflow_run_id": workflow_run_id,
+                "run_mode": record["mode"],
+                "policy_mode": record["policy_mode"],
+                "trace_step_count": len(record["trace"]),
+                "trace_complete": self._is_trace_complete(record),
+            },
+        )
+        for step in record["trace"]:
+            self.record_analytics_event(
+                "workflow_step_completed",
+                {
+                    "workflow_run_id": workflow_run_id,
+                    "run_mode": record["mode"],
+                    "step_id": step.get("id"),
+                    "agent_id": step.get("agent_id", "unknown"),
+                    "role": step.get("role", "unknown"),
+                    "duration_ms": step.get("latency_ms"),
+                },
+            )
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
