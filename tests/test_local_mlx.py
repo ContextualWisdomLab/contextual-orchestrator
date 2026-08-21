@@ -214,6 +214,24 @@ def test_provider_probe_reports_timeout_without_retry() -> None:
     assert open_provider.call_count == 1
 
 
+def test_provider_probe_labels_structural_response_errors() -> None:
+    agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
+    client = ModelClient(max_retries=0)
+
+    def open_provider(request, _destination=None, *, timeout=None):
+        del timeout
+        if request.get_method() == "GET":
+            return _Response({"object": "list", "data": [{"id": "local-model"}]})
+        return _Response({"choices": [{"message": {"reasoning": "still thinking"}}]})
+
+    with patch.object(client, "_open_provider", side_effect=open_provider):
+        report = client.probe(agent, timeout=0.5)
+
+    assert report["status"] == "not_ready"
+    assert report["error_type"] == "ProviderResponseError"
+    assert report["failure_code"] == "provider_probe_failed"
+
+
 def test_provider_probe_does_not_serialize_provider_exception_text() -> None:
     agent = ModelAgent("local_agent", "local-model", base_url="mlx://127.0.0.1:8080/v1")
     client = ModelClient(max_retries=0)
