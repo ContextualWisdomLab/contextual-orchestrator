@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -65,6 +66,38 @@ def test_http_responses_rejects_unapplied_temperature_and_top_p() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_http_responses_prefers_native_max_output_tokens() -> None:
+    orch = build()
+    observed: list[int | None] = []
+    original_chat = orch.client.chat
+
+    def observe_chat(agent, messages, temperature=None, top_p=None):
+        observed.append(orch.client._request_setting("max_output_tokens", orch.client.max_output_tokens))
+        return original_chat(agent, messages, temperature=temperature, top_p=top_p)
+
+    with patch.object(orch.client, "chat", side_effect=observe_chat):
+        server = build_server(orch, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, body = _post(
+                server.server_address[1],
+                {
+                    "model": "mock-planner",
+                    "input": "hello budget",
+                    "max_tokens": 11,
+                    "max_completion_tokens": 13,
+                    "max_output_tokens": 17,
+                },
+            )
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    assert status == 200, body
+    assert observed and set(observed) == {17}
 
 
 def test_http_responses_rejects_out_of_range_temperature() -> None:

@@ -5123,24 +5123,13 @@ def build_server(
                         attribution["service"] = "completions_api"
                     routing = _validate_routing(body.get("routing"))
                     started_at = time.perf_counter()
-                    # Apply request sampling knobs to the provider client for this call.
-                    model_client = orchestrator.client
-                    previous_max_tokens = model_client.max_output_tokens
-                    previous_temperature = model_client.default_temperature
-                    previous_top_p = model_client.default_top_p
-                    previous_presence = model_client.default_presence_penalty
-                    previous_frequency = model_client.default_frequency_penalty
-                    if max_tokens is not None:
-                        model_client.max_output_tokens = max_tokens
-                    if temperature is not None:
-                        model_client.default_temperature = temperature
-                    if top_p is not None:
-                        model_client.default_top_p = top_p
-                    if presence_penalty is not None:
-                        model_client.default_presence_penalty = presence_penalty
-                    if frequency_penalty is not None:
-                        model_client.default_frequency_penalty = frequency_penalty
-                    try:
+                    with orchestrator.client.request_settings(
+                        max_output_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        presence_penalty=presence_penalty,
+                        frequency_penalty=frequency_penalty,
+                    ):
                         result = self._run(lambda: coordinator.complete(
                             messages,
                             mode="route",
@@ -5149,12 +5138,6 @@ def build_server(
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                         ))
-                    finally:
-                        model_client.max_output_tokens = previous_max_tokens
-                        model_client.default_temperature = previous_temperature
-                        model_client.default_top_p = previous_top_p
-                        model_client.default_presence_penalty = previous_presence
-                        model_client.default_frequency_penalty = previous_frequency
                     # Batch-channel Completions return a job handle (202), not a
                     # text_completion body — match chat Completions honesty so
                     # clients never receive a 500 on a valid batch routing hint.
@@ -5393,23 +5376,13 @@ def build_server(
                     if "metadata" in body:
                         _validate_openai_metadata(body)
                     started_at = time.perf_counter()
-                    model_client = orchestrator.client
-                    previous_max_tokens = model_client.max_output_tokens
-                    previous_temperature = model_client.default_temperature
-                    previous_top_p = model_client.default_top_p
-                    previous_presence = model_client.default_presence_penalty
-                    previous_frequency = model_client.default_frequency_penalty
-                    if max_tokens is not None:
-                        model_client.max_output_tokens = max_tokens
-                    if temperature is not None:
-                        model_client.default_temperature = temperature
-                    if top_p is not None:
-                        model_client.default_top_p = top_p
-                    if presence_penalty is not None:
-                        model_client.default_presence_penalty = presence_penalty
-                    if frequency_penalty is not None:
-                        model_client.default_frequency_penalty = frequency_penalty
-                    try:
+                    with orchestrator.client.request_settings(
+                        max_output_tokens=max_tokens,
+                        temperature=temperature,
+                        top_p=top_p,
+                        presence_penalty=presence_penalty,
+                        frequency_penalty=frequency_penalty,
+                    ):
                         if stream and orchestrator.would_route(messages, mode):
                             self._stream_route_completion(orchestrator, security, messages, model_name)
                             orchestrator.record_analytics_event(
@@ -5433,12 +5406,6 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             response_format=structured_response_format,
                         ))
-                    finally:
-                        model_client.max_output_tokens = previous_max_tokens
-                        model_client.default_temperature = previous_temperature
-                        model_client.default_top_p = previous_top_p
-                        model_client.default_presence_penalty = previous_presence
-                        model_client.default_frequency_penalty = previous_frequency
                     if structured_response_format is not None and result.get("channel") != "batch":
                         _validate_structured_completion_answer(result.get("answer"), structured_response_format)
                     # Latency-tolerant requests get dispatched to the batch backend.
@@ -5853,19 +5820,17 @@ def build_server(
                             }
                     _reject_responses_orchestration_controls(body)
                     chat_payload = _responses_to_chat_payload(body)
-                    model_client = orchestrator.client
-                    previous_max_tokens = model_client.max_output_tokens
                     response_max_tokens = (
-                        responses_max_tokens
-                        if responses_max_tokens is not None
+                        responses_max_output_tokens
+                        if responses_max_output_tokens is not None
                         else responses_max_completion_tokens
                         if responses_max_completion_tokens is not None
-                        else responses_max_output_tokens
+                        else responses_max_tokens
                     )
-                    if response_max_tokens is not None:
-                        model_client.max_output_tokens = response_max_tokens
                     started_at = time.perf_counter()
-                    try:
+                    with orchestrator.client.request_settings(
+                        max_output_tokens=response_max_tokens,
+                    ):
                         result = self._run(lambda: coordinator.complete(
                             chat_payload["messages"],
                             mode="conduct",
@@ -5875,8 +5840,6 @@ def build_server(
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             response_format=response_contract,
                         ))
-                    finally:
-                        model_client.max_output_tokens = previous_max_tokens
                     if response_contract is not None:
                         _validate_structured_completion_answer(result.get("answer"), response_contract)
                     chat_response = chat_completion_response(

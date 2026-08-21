@@ -7,6 +7,7 @@ import sys
 import threading
 import urllib.error
 import urllib.request
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from unittest.mock import patch
 
@@ -122,6 +123,37 @@ def test_proxy_completion_blocks_before_structured_workflow_when_budget_is_excee
                 "response_format": {"type": "json_object"},
             }
         )
+
+
+def test_model_client_request_settings_are_thread_local() -> None:
+    client = _build().client
+    previous_temperature = client.default_temperature
+    barrier = threading.Barrier(2)
+
+    def read_settings(temperature: float, max_tokens: int) -> tuple[float, int]:
+        with client.request_settings(temperature=temperature, max_output_tokens=max_tokens):
+            barrier.wait(timeout=5)
+            values = (
+                client._request_setting("temperature", client.default_temperature),
+                client._request_setting("max_output_tokens", client.max_output_tokens),
+            )
+            barrier.wait(timeout=5)
+            return values
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        futures = [
+            executor.submit(read_settings, 0.1, 11),
+            executor.submit(read_settings, 0.9, 29),
+        ]
+        assert {future.result() for future in futures} == {(0.1, 11), (0.9, 29)}
+
+    assert client.default_temperature == previous_temperature
+    assert client.max_output_tokens == 2048
+
+    with client.request_settings(temperature=0.3):
+        with client.request_settings(temperature=0.4):
+            assert client._request_setting("temperature", None) == 0.4
+        assert client._request_setting("temperature", None) == 0.3
 
 
 def test_plain_proxy_completion_persists_reported_usage_before_next_budget_check() -> None:
@@ -550,7 +582,10 @@ def test_http_structured_workflow_applies_sampling_and_records_orchestration() -
 
     def observe_chat(agent, messages, temperature=None, top_p=None):
         del top_p
-        seen_sampling.append((orch.client.default_temperature, orch.client.max_output_tokens))
+        seen_sampling.append((
+            orch.client._request_setting("temperature", orch.client.default_temperature),
+            orch.client._request_setting("max_output_tokens", orch.client.max_output_tokens),
+        ))
         return original_chat(agent, messages, temperature=temperature)
 
     with patch.object(orch.client, "chat", side_effect=observe_chat):
