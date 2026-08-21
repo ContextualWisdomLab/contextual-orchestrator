@@ -10,11 +10,14 @@ from __future__ import annotations
 import json
 import os
 from pathlib import Path
+import sqlite3
 import sys
 import tempfile
 import threading
 import urllib.error
 import urllib.request
+
+import pytest
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -68,6 +71,112 @@ def test_seed_agent_removal_tombstones_across_restart() -> None:
 
         second = TaskOrchestrator(list(seed), agents_db=db)  # seed still lists backup_worker
         assert {a.id for a in second.agents} == {"general_agent"}  # tombstone wins over seed
+
+
+def test_agent_pool_storage_is_normalized_and_preserves_ordered_attributes() -> None:
+    """Persist scalar fields and multi-valued fields in separate 3NF tables."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        agent = ModelAgent(
+            "ordered_agent",
+            "model-x",
+            tags=("second", "first"),
+            provider_exclusions=("provider-b", "provider-a"),
+        )
+        first = TaskOrchestrator([agent], agents_db=db)
+        first._pool_store.save(agent)
+
+        with sqlite3.connect(db) as connection:
+            columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_pool)")}
+            assert "payload" not in columns
+            assert connection.execute("SELECT COUNT(*) FROM agent_pool").fetchone() == (1,)
+            assert connection.execute("SELECT COUNT(*) FROM agent_pool_tags").fetchone() == (2,)
+            assert connection.execute(
+                "SELECT COUNT(*) FROM agent_pool_provider_exclusions"
+            ).fetchone() == (2,)
+
+        restored = TaskOrchestrator([], agents_db=db).agents
+        assert restored == [agent]
+
+
+def test_agent_pool_foreign_keys_reject_orphans_and_cascade_deletes() -> None:
+    """Keep child rows attached to a parent on every runtime connection."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        agent = ModelAgent("integrity_agent", "model-x")
+        orchestrator = TaskOrchestrator([agent], agents_db=db)
+        orchestrator._pool_store.save(agent)
+        connection = orchestrator._pool_store._connect(db)
+        try:
+            assert connection.execute("PRAGMA foreign_keys").fetchone() == (1,)
+            with pytest.raises(sqlite3.IntegrityError):
+                connection.execute(
+                    "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) "
+                    "VALUES (?, ?, ?)",
+                    ("missing_agent", 0, "orphan"),
+                )
+            connection.execute(
+                "INSERT INTO agent_pool_tags (agent_id, tag_position, tag_name) "
+                "VALUES (?, ?, ?)",
+                (agent.id, 0, "attached"),
+            )
+            connection.execute("DELETE FROM agent_pool WHERE agent_id = ?", (agent.id,))
+            assert connection.execute(
+                "SELECT COUNT(*) FROM agent_pool_tags WHERE agent_id = ?", (agent.id,)
+            ).fetchone() == (0,)
+        finally:
+            connection.close()
+
+
+def test_legacy_agent_pool_payloads_migrate_transactionally() -> None:
+    """Upgrade legacy JSON rows while preserving their public agent contract."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        legacy = ModelAgent(
+            "legacy_agent",
+            "legacy-model",
+            tags=("reasoning", "coding"),
+            provider_exclusions=("provider-x",),
+        )
+        with sqlite3.connect(db) as connection:
+            connection.execute(
+                "CREATE TABLE agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO agent_pool (agent_id, payload) VALUES (?, ?)",
+                (legacy.id, json.dumps(legacy.to_config())),
+            )
+            connection.commit()
+
+        restored = TaskOrchestrator([], agents_db=db).agents
+        assert restored == [legacy]
+        with sqlite3.connect(db) as connection:
+            assert connection.execute(
+                "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?",
+                ("agent_pool_legacy_payloads",),
+            ).fetchone() is None
+
+
+def test_malformed_legacy_agent_pool_rolls_back_without_losing_source() -> None:
+    """Reject malformed legacy data and leave the original table recoverable."""
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "pool.db")
+        with sqlite3.connect(db) as connection:
+            connection.execute(
+                "CREATE TABLE agent_pool (agent_id TEXT PRIMARY KEY, payload TEXT NOT NULL)"
+            )
+            connection.execute(
+                "INSERT INTO agent_pool (agent_id, payload) VALUES (?, ?)",
+                ("broken_agent", "not-json"),
+            )
+            connection.commit()
+
+        with pytest.raises(json.JSONDecodeError):
+            TaskOrchestrator([ModelAgent("seed_agent", "unused")], agents_db=db)
+        with sqlite3.connect(db) as connection:
+            assert connection.execute(
+                "SELECT payload FROM agent_pool WHERE agent_id = ?", ("broken_agent",)
+            ).fetchone() == ("not-json",)
 
 
 def test_add_agent_validations() -> None:
