@@ -193,6 +193,8 @@ def test_provider_discovery_errors_are_stable_and_redacted(
     assert raised.value.error_code == expected_code
     assert "secret" not in str(raised.value)
     assert "secret" not in repr(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
 
 
 @pytest.mark.parametrize(

@@ -203,10 +203,13 @@ def discover_provider_models(
     url = source.list_url
     if source.task_filter:
         url = f"{url}?task={source.task_filter}"
+    error_code: str | None = None
     try:
         payload = _fetch_json(url, api_key=api_key, auth_scheme=source.auth_scheme, timeout=timeout)
     except Exception as exc:  # noqa: BLE001 - provider boundary emits only a stable code
-        raise ProviderDiscoveryError(source.provider_name, _provider_discovery_error_code(exc)) from None
+        error_code = _provider_discovery_error_code(exc)
+    if error_code is not None:
+        raise ProviderDiscoveryError(source.provider_name, error_code)
     if source.style == "bytez":
         return _parse_bytez(payload, source)
     return _parse_openai_compatible(payload, source)
