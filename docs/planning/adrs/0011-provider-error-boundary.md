@@ -12,8 +12,9 @@ available through a public gateway error or an exception cause.
 
 ## Decision
 
-1. Retry and passthrough transport failures expose only a package-owned message
-   containing the affected agent and operation.
+1. Retry, passthrough, and Batch API transport failures expose only a
+   package-owned message containing the affected agent and operation. Batch
+   upload, polling, and output retrieval use the same boundary.
 2. Model discovery reports a stable diagnostic code (`transport_error`,
    `timeout`, `http_status_<code>`, or `invalid_response`) without copying the
    provider response or exception text.
