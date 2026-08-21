@@ -1524,6 +1524,7 @@ class ModelClient:
                 "max_tokens",
                 "instructions",
                 "metadata",
+                "input",
                 "messages",
                 "top_logprobs",
                 "text",
@@ -1531,6 +1532,17 @@ class ModelClient:
             if key in payload
         }
         if endpoint.strip("/") == "responses":
+            instructions = echoed.get("instructions")
+            guidance_prefix = "You are the final synthesizer in a multi-agent workflow."
+            marker = "\n\nYou are the final synthesizer in a multi-agent workflow."
+            if isinstance(instructions, str) and instructions.startswith(guidance_prefix):
+                echoed.pop("instructions", None)
+            elif isinstance(instructions, str) and marker in instructions:
+                original_instructions = instructions.split(marker, 1)[0]
+                if original_instructions.strip():
+                    echoed["instructions"] = original_instructions
+                else:
+                    echoed.pop("instructions", None)
             return {
                 "id": f"resp_mock_{agent.id}",
                 "object": "response",
@@ -2278,57 +2290,77 @@ class TaskOrchestrator:
             "the workflow or invent evidence.\n\n"
             f"Verified workflow evidence:\n{evidence}"
         )
-        # Keep the caller's complete message sequence and first-message position
-        # unchanged. Add guidance to an existing system/user turn so no system
-        # or evidence message is inserted after an assistant tool call.
-        synthesis_messages = copy.deepcopy(messages)
-        guidance_index = next(
-            (
-                index
-                for index in range(len(synthesis_messages) - 1, -1, -1)
-                if synthesis_messages[index].get("role") == "user"
-            ),
-            0 if synthesis_messages and synthesis_messages[0].get("role") == "system" else None,
-        )
-        if guidance_index is not None:
-            original_content = synthesis_messages[guidance_index].get("content")
-            if isinstance(original_content, str):
-                synthesis_messages[guidance_index]["content"] = f"{original_content}\n\n{guidance}"
-            elif isinstance(original_content, list):
-                synthesis_messages[guidance_index]["content"] = [
-                    *original_content,
-                    {"type": "text", "text": guidance},
-                ]
-            else:
-                synthesis_messages[guidance_index]["content"] = guidance
-        else:
-            synthesis_messages.insert(0, {"role": "system", "content": guidance})
-        upstream = {
-            key: value
-            for key, value in chat_body.items()
-            if key not in self._ORCHESTRATION_ONLY_KEYS and key not in {"model", "messages"}
-        }
-        upstream["model"] = final_agent.model
-        upstream["messages"] = synthesis_messages
-        upstream["stream"] = False
         if response_request:
-            if isinstance(body.get("metadata"), dict):
-                upstream["metadata"] = body["metadata"]
-            response_format = body.get("response_format")
-            if response_format is None:
-                response_format = _responses_text_format_to_chat_response_format(body.get("text"))
-            if response_format is not None:
-                upstream["response_format"] = response_format
-        self._raise_if_spend_budget_exceeded()
-        synthesis_started = time.perf_counter()
-        raw = self.client.proxy_send(final_agent, "chat/completions", upstream)
-        synthesis_output = ""
-        try:
-            synthesis_output = ModelClient._response_content(final_agent, raw)
-        except RuntimeError:
-            # Tool-call-only provider responses are valid structured output but
-            # have no assistant text to use as the workflow answer.
-            pass
+            # Preserve the Responses contract for remote providers. Local-only
+            # providers may translate this at ModelClient.proxy_send.
+            upstream = {
+                key: value
+                for key, value in body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS and key != "model"
+            }
+            original_instructions = _responses_text(body.get("instructions")).strip()
+            upstream["instructions"] = (
+                f"{original_instructions}\n\n{guidance}"
+                if original_instructions
+                else guidance
+            )
+            upstream["model"] = final_agent.model
+            upstream["stream"] = False
+            self._raise_if_spend_budget_exceeded()
+            synthesis_started = time.perf_counter()
+            raw = self.client.proxy_send(final_agent, "responses", upstream)
+            synthesis_output = raw.get("output_text")
+            if not isinstance(synthesis_output, str):
+                output_parts = [
+                    _responses_text(item.get("content"))
+                    for item in raw.get("output", [])
+                    if isinstance(item, dict) and item.get("type") == "message"
+                ]
+                synthesis_output = "".join(part for part in output_parts if part)
+        else:
+            # Keep the caller's complete message sequence and first-message position
+            # unchanged. Add guidance to an existing system/user turn so no system
+            # or evidence message is inserted after an assistant tool call.
+            synthesis_messages = copy.deepcopy(messages)
+            guidance_index = next(
+                (
+                    index
+                    for index in range(len(synthesis_messages) - 1, -1, -1)
+                    if synthesis_messages[index].get("role") == "user"
+                ),
+                0 if synthesis_messages and synthesis_messages[0].get("role") == "system" else None,
+            )
+            if guidance_index is not None:
+                original_content = synthesis_messages[guidance_index].get("content")
+                if isinstance(original_content, str):
+                    synthesis_messages[guidance_index]["content"] = f"{original_content}\n\n{guidance}"
+                elif isinstance(original_content, list):
+                    synthesis_messages[guidance_index]["content"] = [
+                        *original_content,
+                        {"type": "text", "text": guidance},
+                    ]
+                else:
+                    synthesis_messages[guidance_index]["content"] = guidance
+            else:
+                synthesis_messages.insert(0, {"role": "system", "content": guidance})
+            upstream = {
+                key: value
+                for key, value in chat_body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS and key not in {"model", "messages"}
+            }
+            upstream["model"] = final_agent.model
+            upstream["messages"] = synthesis_messages
+            upstream["stream"] = False
+            self._raise_if_spend_budget_exceeded()
+            synthesis_started = time.perf_counter()
+            raw = self.client.proxy_send(final_agent, "chat/completions", upstream)
+            synthesis_output = ""
+            try:
+                synthesis_output = ModelClient._response_content(final_agent, raw)
+            except RuntimeError:
+                # Tool-call-only provider responses are valid structured output but
+                # have no assistant text to use as the workflow answer.
+                pass
         synthesis_step = {
             "id": len(workflow["trace"]),
             "role": "synthesizer",
@@ -2361,24 +2393,6 @@ class TaskOrchestrator:
             "agent_count": len(workflow["trace"]),
             "plan_source": workflow.get("plan_source"),
         }
-        if response_request:
-            converted = _chat_to_responses_payload(raw, body)
-            if isinstance(raw.get("echo"), dict):
-                echo = dict(raw["echo"])
-                instructions = _responses_text(body.get("instructions"))
-                if instructions:
-                    echo["instructions"] = instructions
-                metadata = body.get("metadata")
-                if isinstance(metadata, dict):
-                    echo["metadata"] = {
-                        key: value for key, value in metadata.items() if value is not None
-                    }
-                for key in ("text", "tools"):
-                    if body.get(key) is not None:
-                        echo[key] = body[key]
-                converted["echo"] = echo
-            converted["orchestration"] = orchestration
-            return converted
         raw["orchestration"] = orchestration
         return raw
 

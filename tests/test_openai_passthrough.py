@@ -523,36 +523,71 @@ def test_proxy_completion_responses_endpoint_returns_response_object() -> None:
     assert result["echo"]["response_format"] == {"type": "text"}
 
 
-def test_proxy_completion_responses_json_schema_is_orchestrated_and_translated() -> None:
-    result = _build().proxy_completion(
-        {
-            "input": "extract the visible region",
-            "instructions": "Keep the result concise.",
-            "metadata": {"tenant": "anonymous", "omitted": None},
-            "text": {
-                "format": {
-                    "type": "json_schema",
-                    "name": "region_result",
-                    "schema": {"type": "object"},
-                    "strict": True,
-                }
-            },
+def test_proxy_completion_responses_json_schema_is_orchestrated_and_native() -> None:
+    orch = _build()
+    body = {
+        "input": "extract the visible region",
+        "instructions": "Keep the result concise.",
+        "metadata": {"tenant": "anonymous", "omitted": None},
+        "text": {
+            "format": {
+                "type": "json_schema",
+                "name": "region_result",
+                "schema": {"type": "object"},
+                "strict": True,
+            }
         },
+    }
+    result = orch.proxy_completion(
+        body,
         endpoint="responses",
     )
 
     assert result["object"] == "response"
-    assert result["echo"]["response_format"] == {
-        "type": "json_schema",
-        "json_schema": {
-            "name": "region_result",
-            "schema": {"type": "object"},
-            "strict": True,
-        },
-    }
+    assert result["echo"]["text"] == body["text"]
+    assert "response_format" not in result["echo"]
     assert result["echo"]["instructions"] == "Keep the result concise."
-    assert result["echo"]["metadata"] == {"tenant": "anonymous"}
+    assert result["echo"]["metadata"] == body["metadata"]
     assert result["orchestration"]["agent_count"] == 4
+    run = orch.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    assert run["mode"] == "conduct"
+
+
+def test_responses_structured_request_keeps_native_endpoint_and_input() -> None:
+    orch = _build()
+    calls: list[tuple[str, dict]] = []
+
+    def native_response(_agent, endpoint: str, payload: dict) -> dict:
+        calls.append((endpoint, payload))
+        return {"object": "response", "output": [], "echo": dict(payload)}
+
+    with patch.object(orch.client, "proxy_send", side_effect=native_response):
+        result = orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "input": [{"role": "user", "content": "extract the visible region"}],
+                "instructions": "Keep the original input order.",
+                "text": {"format": {"type": "json_object"}},
+            },
+            endpoint="responses",
+        )
+
+    assert calls[0][0] == "responses"
+    assert calls[0][1]["input"] == [{"role": "user", "content": "extract the visible region"}]
+    assert "Keep the original input order." in calls[0][1]["instructions"]
+    assert result["orchestration"]["workflow_run_id"]
+
+
+def test_structured_chat_guidance_stays_in_original_user_turn() -> None:
+    result = _build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [{"role": "user", "content": "extract JSON"}],
+            "response_format": {"type": "json_object"},
+        }
+    )
+    assert result["echo"]["messages"][0]["role"] == "user"
+    assert "You are the final synthesizer" in result["echo"]["messages"][0]["content"]
 
 
 def test_structured_workflow_preserves_multimodal_input_for_final_synthesis() -> None:
@@ -577,6 +612,12 @@ def test_structured_workflow_preserves_multimodal_input_for_final_synthesis() ->
         isinstance(message.get("content"), list)
         and any(part.get("type") == "image_url" for part in message["content"])
         for message in final_messages
+    )
+    assert final_messages[0]["role"] == "user"
+    assert any(
+        isinstance(part, dict) and part.get("type") == "text"
+        and "You are the final synthesizer" in part.get("text", "")
+        for part in final_messages[0]["content"]
     )
 
 

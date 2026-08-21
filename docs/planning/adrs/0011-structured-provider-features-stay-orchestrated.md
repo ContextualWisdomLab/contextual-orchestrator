@@ -62,10 +62,12 @@ as a plain chat request.
 2. The request enters the existing conducted workflow. Intermediate steps use
    the original messages, including multimodal content, and the final
    synthesizer performs the provider-facing structured completion.
-3. The final provider payload preserves validated structured-output fields.
-   Responses `text.format` is translated to the equivalent Chat
-   `response_format` for the internal provider call, then the result is mapped
-   back to the Responses shape.
+3. The final provider payload preserves validated tools and structured-output
+   fields. A Responses request remains a Responses request at the final
+   provider boundary when the selected provider supports it; a local provider
+   may perform an explicit transport-level translation when its capability
+   boundary requires Chat Completions. Responses `text.format` therefore stays
+   native for Responses-capable providers rather than being silently downgraded.
 4. `json_object` and `json_schema` are both first-class structured workflows.
    Schema validation remains fail-closed at the HTTP boundary; a provider
    success is not treated as semantic schema validity.
@@ -101,6 +103,8 @@ define the wire-shape translation, not the orchestration policy.
   orchestration evidence.
 * Good: JSON object and JSON schema requests share one tested policy instead of
   diverging into transport-specific single-agent paths.
+* Good: Responses-only providers receive their native endpoint and input shape
+  after the multi-agent workflow.
 * Good: the final provider retains the capability fields it must interpret.
 * Good: internal verification does not recursively multiply provider calls or
   replace the judge verdict with an unrelated synthesized answer.
