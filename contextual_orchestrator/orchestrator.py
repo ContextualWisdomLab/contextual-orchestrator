@@ -108,6 +108,10 @@ class BudgetExceededError(RuntimeError):
         self.detail = detail or {}
 
 
+class ProviderResponseError(RuntimeError):
+    """Raised for a provider response that cannot become a safe completion."""
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
 
@@ -262,8 +266,8 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
 
     try:
         decision = json.loads(reply.strip(), object_pairs_hook=reject_duplicate_keys)
-    except (json.JSONDecodeError, RecursionError, TypeError) as exc:
-        raise ValueError("judge response is not valid JSON") from exc
+    except (json.JSONDecodeError, RecursionError, TypeError):
+        raise ValueError("judge response is not valid JSON") from None
     if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
         raise ValueError("judge response must match the exact verdict schema")
     decision_value = decision["decision"]
@@ -701,13 +705,6 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
             "type": "function",
             "function": {"name": tool_choice.get("name", "")},
         }
-    response_format = request.get("response_format")
-    if not isinstance(response_format, dict):
-        response_format = _responses_text_format_to_chat_response_format(
-            request.get("text")
-        )
-    if response_format is not None:
-        payload["response_format"] = response_format
     return payload
 
 
@@ -1183,8 +1180,9 @@ class ModelClient:
             if attempt >= retry_limit or not is_transient_error(last_error):
                 break
             self._sleep(self._backoff_delay(attempt))
-        detail = f": {last_error}" if last_error else ""
-        raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
+        if isinstance(last_error, ProviderResponseError):
+            raise last_error
+        raise RuntimeError(f"provider {agent.id} request failed") from None
 
     def _send_embeddings_with_retry(
         self,
@@ -1203,8 +1201,7 @@ class ModelClient:
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        detail = f": {last_error}" if last_error else ""
-        raise RuntimeError(f"provider {agent.id} embeddings request failed{detail}") from last_error
+        raise RuntimeError(f"provider {agent.id} embeddings request failed") from None
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -1296,11 +1293,11 @@ class ModelClient:
         if isinstance(content, str):
             return content
         if isinstance(message, dict) and message.get("reasoning"):
-            raise RuntimeError(
+            raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
                 "configure the provider to return assistant content or increase max_output_tokens"
             )
-        raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
+        raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
 
     @staticmethod
     def _connect_validated(
@@ -1525,7 +1522,7 @@ class ModelClient:
             if attempt >= retry_limit or not is_transient_error(last_error):
                 break
             self._sleep(self._backoff_delay(attempt))
-        raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
+        raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
 
     def _send_raw(
         self,
@@ -2662,8 +2659,8 @@ class TaskOrchestrator:
                 try:
                     prefix, suffix = custom_id.rsplit("_", 1)
                     index = int(suffix)
-                except (AttributeError, ValueError) as exc:
-                    raise RuntimeError("batch provider returned an invalid request identifier") from exc
+                except (AttributeError, ValueError):
+                    raise RuntimeError("batch provider returned an invalid request identifier") from None
                 if prefix != "task" or custom_id != f"task_{index}" or not 0 <= index < len(selected):
                     raise RuntimeError("batch provider returned an invalid request identifier")
                 if index in answers:
@@ -3312,7 +3309,9 @@ class TaskOrchestrator:
             self._record_success(agent.id)
             usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
             return output, agent.id, usage
-        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+        if isinstance(last_error, ProviderResponseError):
+            raise last_error
+        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _failover_candidates(
         self,

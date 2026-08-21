@@ -2005,8 +2005,8 @@ def _validate_structured_completion_answer(answer: Any, response_format: dict[st
         raise RequestError(502, "invalid_structured_output", "orchestrator returned no textual JSON")
     try:
         value = json.loads(answer)
-    except json.JSONDecodeError as exc:
-        raise RequestError(502, "invalid_structured_output", "orchestrator returned invalid JSON") from exc
+    except json.JSONDecodeError:
+        raise RequestError(502, "invalid_structured_output", "orchestrator returned invalid JSON") from None
     if response_format.get("type") == "json_object" and not isinstance(value, dict):
         raise RequestError(502, "invalid_structured_output", "json_object output must be an object")
     if response_format.get("type") == "json_schema":
