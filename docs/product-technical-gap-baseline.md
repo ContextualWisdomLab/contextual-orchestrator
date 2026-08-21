@@ -263,6 +263,17 @@ The scheduler's earlier dry-run decision for PR #787 was `review_dispatch` for i
 
 Central Strix context repair is now owned by [.github#1153](https://github.com/ContextualWisdomLab/.github/pull/1153) at exact head `035343c8a68e880a4abf27f7c947bfed9dbaafcf`; its canonical local gate suite passed, while protected hosted Checks and independent approval remain pending. Duplicate follow-ups [.github#1191](https://github.com/ContextualWisdomLab/.github/pull/1191) and [.github#1192](https://github.com/ContextualWisdomLab/.github/pull/1192) are closed and must not be treated as active integration evidence.
 
+### Central exact-head continuation — 2026-08-22 02:05 KST
+
+The prior central snapshot is historical. Current control-plane evidence is:
+
+| PR | Current exact identity | Live evidence and decision |
+|---:|---|---|
+| [.github#1178](https://github.com/ContextualWisdomLab/.github/pull/1178) | merged commit `efea53a11c90c7ca519af56aed6918124f45826e` into stacked base `fix/pip-audit-pip-2621` | The hourly caller merged into its non-main base, not protected `.github` `main`. Its CodeQL merge-preview run failed because `refs/pull/1178/merge` was absent although `merge_commit_sha` existed; the failure is preserved as control-plane evidence. |
+| [.github#1206](https://github.com/ContextualWisdomLab/.github/pull/1206) | head `633342d56801fdb4a9261a165bd31e94cf9a58f4`, base `ac26a07e9fe19760f3b55e3a1db4021ce4776ae6` | Follow-up fixes CodeQL merge analysis to use the exact merge SHA. Local exact suite `1297 passed`, statement/branch coverage `100%`, interrogate `100%`, focused contract `3 passed`, actionlint/compile/diff clean. Hosted state: 5 queued, 5 skipped, approvals `0`. Decision: `WAIT_AND_REMEDIATE`. |
+| [.github#1170](https://github.com/ContextualWisdomLab/.github/pull/1170) | head `fa4c6faa7a8c580aca556c31b00068d7aab69010`, base `dd58a88391e44a32fb399f7407f508d8e73cc1c7` | Open main-target gateway PR; hosted state observed as 5 success, 13 skipped, 16 cancelled, approvals `0`. Decision: `WAIT_AND_REMEDIATE`. |
+| [.github#1153](https://github.com/ContextualWisdomLab/.github/pull/1153) | head `ebda81f832261489289447778b0e0e7726f9741e`, base `dd58a88391e44a32fb399f7407f508d8e73cc1c7` | Open Strix repair; hosted state observed as 27 success, 15 skipped, 3 neutral, 1 failure, 2 queued, approvals `0`. Failure remains a source/control-plane finding to inspect; no merge or bypass. |
+
 ## 5. Open issue and product-gap queue
 
 | Issue | Customer-visible gap | Planned proof / next PR |
