@@ -30,6 +30,17 @@ _CURRENT_SESSION: ContextVar[str | None] = ContextVar(
     "contextual_orchestrator_session_id", default=None
 )
 _CONFIGURED = False
+_ALLOWED_ATTRIBUTE_KEYS = frozenset(
+    {
+        "gen_ai.operation.name",
+        "gen_ai.provider.name",
+        "gen_ai.request.model",
+        "contextual_orchestrator.agent_id",
+        "server.address",
+        "server.port",
+        "error.type",
+    }
+)
 
 
 def _otlp_trace_endpoint(endpoint: str) -> str:
@@ -59,8 +70,10 @@ def _normalize_session_id(value: object) -> str | None:
 
 def session_id_from_headers(headers: Mapping[str, str]) -> str | None:
     """Read the LineageWeave correlation header from an HTTP request."""
+    normalized_headers = {str(key).lower(): value for key, value in headers.items()}
     return _normalize_session_id(
-        headers.get("x-lineageweave-session-id") or headers.get("x-session-id")
+        normalized_headers.get("x-lineageweave-session-id")
+        or normalized_headers.get("x-session-id")
     )
 
 
@@ -126,12 +139,13 @@ def inject_trace_context(headers: dict[str, str]) -> None:
 def _safe_attributes(
     attributes: Mapping[str, Any] | None,
 ) -> dict[str, str | int | float | bool]:
-    """Keep span attributes scalar and exclude prompt, answer, and secret content."""
+    """Keep only approved scalar span attributes; prompts and secrets never enter OTLP."""
     result: dict[str, str | int | float | bool] = {}
     for key, value in (attributes or {}).items():
         if (
             not isinstance(key, str)
             or not key
+            or key not in _ALLOWED_ATTRIBUTE_KEYS
             or isinstance(value, (dict, list, tuple, set))
         ):
             continue
@@ -139,9 +153,6 @@ def _safe_attributes(
             result[key] = value[:256]
         elif isinstance(value, (bool, int, float)):
             result[key] = value
-    session_id = current_session_id()
-    if session_id:
-        result.setdefault("contextual_orchestrator.session_id", session_id)
     return result
 
 
@@ -206,18 +217,18 @@ def traced(
         name,
         kind=SpanKind.CLIENT,
         attributes=safe,
+        record_exception=False,
+        set_status_on_exception=False,
     ) as span:
         try:
             yield span
         except Exception as exc:
             if Status is not None and StatusCode is not None:
-                span.record_exception(exc)
                 span.set_attribute("error.type", type(exc).__name__)
                 span.set_status(Status(StatusCode.ERROR))
             _LOGGER.warning(
-                "telemetry.operation_failed operation=%s error_type=%s session_id=%s",
+                "telemetry.operation_failed operation=%s error_type=%s",
                 name,
                 type(exc).__name__,
-                safe.get("contextual_orchestrator.session_id", ""),
             )
             raise

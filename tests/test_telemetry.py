@@ -29,6 +29,10 @@ def test_session_id_accepts_lineageweave_header_and_metadata():
         == "session-1"
     )
     assert (
+        session_id_from_headers({"X-LineageWeave-Session-Id": "title-case-session"})
+        == "title-case-session"
+    )
+    assert (
         session_id_from_metadata({"lineageweave_post_session_id": "session-1"})
         == "session-1"
     )
@@ -40,7 +44,7 @@ def test_session_id_accepts_lineageweave_header_and_metadata():
 
 
 def test_session_and_attribute_boundaries_reject_unsafe_values():
-    """Correlation and span attributes stay bounded, scalar, and prompt-free."""
+    """Correlation and span attributes stay bounded, scalar, allowlisted, and prompt-free."""
     assert telemetry_module._config_value(None, "missing", "fallback") == "fallback"
     assert telemetry_module._normalize_session_id(None) is None
     for value in ("", "x" * 129, "line\nbreak"):
@@ -53,18 +57,21 @@ def test_session_and_attribute_boundaries_reject_unsafe_values():
             {
                 "": "empty-key",
                 "nested": {"prompt": "excluded"},
-                "long": "x" * 300,
-                "enabled": True,
-                "attempt": 2,
-                "ratio": 0.5,
+                "prompt": "prompt-secret",
+                "response": "response-secret",
+                "authorization": "Bearer secret",
+                "api_key": "provider-secret",
+                "server.address": "x" * 300,
+                "server.port": 2,
+                "gen_ai.operation.name": "chat",
+                "gen_ai.request.model": "model-x",
                 "object": object(),
             }
         ) == {
-            "long": "x" * 256,
-            "enabled": True,
-            "attempt": 2,
-            "ratio": 0.5,
-            "contextual_orchestrator.session_id": "session-safe",
+            "server.address": "x" * 256,
+            "server.port": 2,
+            "gen_ai.operation.name": "chat",
+            "gen_ai.request.model": "model-x",
         }
     finally:
         reset_session_id(token)
@@ -221,6 +228,24 @@ def test_handler_resets_session_after_each_keep_alive_request(monkeypatch):
         server.server_close()
 
 
+def test_http_error_log_excludes_raw_session_id(monkeypatch, caplog):
+    """HTTP diagnostics keep request correlation local and omit the raw session value."""
+    server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler.path = "/v1/chat/completions"
+    monkeypatch.setattr(handler, "_send", lambda *_args, **_kwargs: None)
+    token = set_session_id("session-secret")
+    try:
+        with caplog.at_level("WARNING"):
+            handler._send_error(401, "unauthorized", "not authorized")
+    finally:
+        reset_session_id(token)
+        server.server_close()
+
+    assert "request_failed" in caplog.text
+    assert "session-secret" not in caplog.text
+
+
 def test_provider_calls_use_current_genai_semantic_convention(monkeypatch):
     """Provider spans expose the required, prompt-free GenAI attributes."""
     captured = []
@@ -289,23 +314,30 @@ def test_stream_and_passthrough_provider_calls_create_client_spans(monkeypatch):
     assert captured == ["stream_chat model-x", "passthrough responses model-x"]
 
 
-def test_traced_starts_client_span_with_attributes_and_error_type(monkeypatch):
-    """Sampling attributes exist at span creation and failures stay classifiable."""
+def test_traced_starts_safe_client_span_with_error_type_and_no_raw_exception(monkeypatch, caplog):
+    """Failures remain classifiable without recording raw exception or session data."""
     tracer = MagicMock()
     span = tracer.start_as_current_span.return_value.__enter__.return_value
     monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
 
+    token = set_session_id("session-secret")
     try:
-        with traced("chat model-x", {"gen_ai.operation.name": "chat"}):
-            error = TimeoutError("provider timeout")
+        with traced("chat model-x", {"gen_ai.operation.name": "chat", "prompt": "secret"}):
+            error = TimeoutError("provider-response-secret")
             raise error
     except TimeoutError as caught:
         assert caught is error
+    finally:
+        reset_session_id(token)
 
     tracer.start_as_current_span.assert_called_once_with(
         "chat model-x",
         kind=telemetry_module.SpanKind.CLIENT,
         attributes={"gen_ai.operation.name": "chat"},
+        record_exception=False,
+        set_status_on_exception=False,
     )
-    span.record_exception.assert_called_once_with(error)
+    span.record_exception.assert_not_called()
     span.set_attribute.assert_called_once_with("error.type", "TimeoutError")
+    assert "provider-response-secret" not in caplog.text
+    assert "session-secret" not in caplog.text

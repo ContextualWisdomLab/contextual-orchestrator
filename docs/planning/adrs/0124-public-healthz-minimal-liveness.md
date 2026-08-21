@@ -32,4 +32,5 @@ unnecessary sensitive operational information through public API responses.
 
 ## References
 
-OWASP Foundation. (2023). *OWASP API Security Top 10 2023*.\n+https://owasp.org/API-Security/editions/2023/en/0x11-t10/
+OWASP Foundation. (2023). *OWASP API Security Top 10 2023*.
+https://owasp.org/API-Security/editions/2023/en/0x11-t10/

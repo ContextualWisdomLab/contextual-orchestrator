@@ -5719,11 +5719,10 @@ def build_server(
             detail: dict[str, Any] | None = None,
         ) -> None:
             _LOGGER.warning(
-                "request_failed status=%s code=%s path=%s session_id=%s",
+                "request_failed status=%s code=%s path=%s",
                 status,
                 code,
                 urllib.parse.urlparse(self.path).path,
-                current_session_id() or "",
             )
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
