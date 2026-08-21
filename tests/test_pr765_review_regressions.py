@@ -2,7 +2,9 @@
 
 from __future__ import annotations
 
+from concurrent.futures import ThreadPoolExecutor
 import json
+import threading
 import urllib.error
 from unittest.mock import patch
 
@@ -106,6 +108,60 @@ def test_internal_chat_preserves_explicit_temperature(monkeypatch) -> None:
         temperature=0.2,
     ) == "OK"
     assert captured["temperature"] == 0.2
+
+
+def test_request_sampling_settings_are_isolated_between_threads(monkeypatch) -> None:
+    client = ModelClient(max_retries=0)
+    agent = ModelAgent(
+        id="concurrent_worker",
+        model="provider/model",
+        base_url="https://gateway.example.com",
+        credential_key="",
+    )
+    barrier = threading.Barrier(2)
+    observed: list[tuple[float, int]] = []
+    monkeypatch.setattr(client, "_validate_provider", lambda _agent: None)
+
+    def capture_payload(_agent, payload, _destination=None, *, timeout=None):
+        del timeout
+        observed.append((payload["temperature"], payload["max_tokens"]))
+        barrier.wait(timeout=5)
+        return "OK"
+
+    monkeypatch.setattr(client, "_send", capture_payload)
+
+    def call(temperature: float, max_tokens: int) -> str:
+        with client.request_settings(
+            temperature=temperature,
+            max_output_tokens=max_tokens,
+        ):
+            return client.chat(agent, [{"role": "user", "content": "Sample."}])
+
+    with ThreadPoolExecutor(max_workers=2) as pool:
+        replies = list(pool.map(lambda row: call(*row), [(0.1, 11), (0.9, 29)]))
+
+    assert replies == ["OK", "OK"]
+    assert set(observed) == {(0.1, 11), (0.9, 29)}
+    assert client.default_temperature is None
+    assert client.max_output_tokens == 2048
+
+    with client.request_settings(temperature=0.3):
+        with client.request_settings(temperature=0.4):
+            assert client._request_setting("temperature", None) == 0.4
+        assert client._request_setting("temperature", None) == 0.3
+
+    streamed: list[tuple[float, int]] = []
+
+    def capture_stream(_agent, payload, _destination=None):
+        streamed.append((payload["temperature"], payload["max_tokens"]))
+        yield "chunk"
+
+    monkeypatch.setattr(client, "_stream_send", capture_stream)
+    with client.request_settings(temperature=0.6, max_output_tokens=19):
+        assert list(
+            client.stream_chat(agent, [{"role": "user", "content": "Stream."}])
+        ) == ["chunk"]
+    assert streamed == [(0.6, 19)]
 
 
 @pytest.mark.parametrize(

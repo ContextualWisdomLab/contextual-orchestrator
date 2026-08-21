@@ -933,7 +933,7 @@ class ModelClient:
         presence_penalty: float | None = None,
         frequency_penalty: float | None = None,
     ):
-        """Apply request sampling settings to this thread without shared-state mutation."""
+        """Apply request sampling settings to this thread without shared mutation."""
         settings = {
             "max_output_tokens": max_output_tokens,
             "temperature": temperature,
@@ -946,7 +946,10 @@ class ModelClient:
             if value is None:
                 continue
             attribute = f"request_{name}"
-            previous[attribute] = (hasattr(self._local, attribute), getattr(self._local, attribute, None))
+            previous[attribute] = (
+                hasattr(self._local, attribute),
+                getattr(self._local, attribute, None),
+            )
             setattr(self._local, attribute, value)
         try:
             yield
@@ -978,12 +981,23 @@ class ModelClient:
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         effective_temperature = (
             self._request_setting("temperature", self.default_temperature)
-            if temperature is None else temperature
+            if temperature is None
+            else temperature
         )
-        effective_top_p = self._request_setting("top_p", self.default_top_p) if top_p is None else top_p
-        effective_presence = self._request_setting("presence_penalty", self.default_presence_penalty)
-        effective_frequency = self._request_setting("frequency_penalty", self.default_frequency_penalty)
-        effective_max_tokens = self._request_setting("max_output_tokens", self.max_output_tokens)
+        effective_top_p = (
+            self._request_setting("top_p", self.default_top_p)
+            if top_p is None
+            else top_p
+        )
+        effective_presence = self._request_setting(
+            "presence_penalty", self.default_presence_penalty
+        )
+        effective_frequency = self._request_setting(
+            "frequency_penalty", self.default_frequency_penalty
+        )
+        effective_max_tokens = self._request_setting(
+            "max_output_tokens", self.max_output_tokens
+        )
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
@@ -1420,7 +1434,9 @@ class ModelClient:
             "model": agent.model,
             "messages": messages,
             "stream": True,
-            "max_tokens": self._request_setting("max_output_tokens", self.max_output_tokens),
+            "max_tokens": self._request_setting(
+                "max_output_tokens", self.max_output_tokens
+            ),
         }
         effective_temperature = (
             self._request_setting("temperature", self.default_temperature)
@@ -1478,7 +1494,8 @@ class ModelClient:
         if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault(
-                "max_tokens", self._request_setting("max_output_tokens", self.max_output_tokens)
+                "max_tokens",
+                self._request_setting("max_output_tokens", self.max_output_tokens),
             )
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
                 chat_response = self._send_raw_with_retry(
