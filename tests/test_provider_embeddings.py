@@ -115,6 +115,34 @@ def test_cost_router_uses_embedding_agent_instead_of_heuristic() -> None:
     }
 
 
+def test_default_embedding_backend_observes_runtime_agent_addition() -> None:
+    calls: list[tuple[str, list[str]]] = []
+
+    def embed_many(selected: ModelAgent, inputs: list[str]) -> list[list[float]]:
+        calls.append((selected.model, inputs))
+        return [[1.0] for _input in inputs]
+
+    orchestrator = SimpleNamespace(
+        candidates=[],
+        client=SimpleNamespace(embed_many=embed_many),
+    )
+    coordinator = CostRoutingCoordinator(orchestrator)
+    orchestrator.candidates.append(
+        ModelAgent(
+            "runtime_embedding_agent",
+            "runtime-embedding-model",
+            "https://gateway.example/v1",
+            tags=("embedding",),
+        )
+    )
+
+    result = coordinator.complete_embeddings_batch(["added later"])
+
+    assert calls == [("runtime-embedding-model", ["added later"])]
+    assert result["embeddings"][0]["embedding"] == [1.0]
+    assert result["provider"] == "gateway.example"
+
+
 def test_embedding_client_fails_closed_before_or_after_transport(monkeypatch) -> None:
     client = ModelClient(max_retries=0)
     mock_agent = ModelAgent("mock_embedding", "embedding-model", "mock://embedding")

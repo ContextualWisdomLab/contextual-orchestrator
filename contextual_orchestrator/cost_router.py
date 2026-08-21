@@ -77,12 +77,14 @@ class CostRoutingCoordinator:
             )
         else:
             self.batch_backend = batch_backend
+        self._embedding_backend_is_default = embedding_batch_backend is None
         self.embedding_batch_backend: EmbeddingBatchBackend = embedding_batch_backend or self._default_embedding_backend()
         # job_id -> submitted BatchJob (so poll/retrieve can be driven by id)
         self._batch_jobs: Dict[str, BatchJob] = {}
         # embeddings batch state: job handle + submitted requests + cached doc,
         # keyed by batch id so poll/retrieve is idempotent (usage recorded once).
         self._embedding_jobs: Dict[str, BatchJob] = {}
+        self._embedding_job_backends: Dict[str, EmbeddingBatchBackend] = {}
         self._embedding_requests: Dict[str, List[EmbeddingBatchRequest]] = {}
         self._embedding_input_counts: Dict[str, int] = {}
         self._embedding_part_counts: Dict[str, List[int]] = {}
@@ -358,8 +360,14 @@ class CostRoutingCoordinator:
             provider_name=provider_name,
             attribution=shared_attribution,
         )
-        job = self.embedding_batch_backend.submit(requests, metadata=metadata)
+        backend = (
+            self._default_embedding_backend()
+            if self._embedding_backend_is_default
+            else self.embedding_batch_backend
+        )
+        job = backend.submit(requests, metadata=metadata)
         self._embedding_jobs[job.job_id] = job
+        self._embedding_job_backends[job.job_id] = backend
         self._embedding_requests[job.job_id] = requests
         self._embedding_input_counts[job.job_id] = len(inputs)
         self._embedding_part_counts[job.job_id] = part_counts
@@ -573,7 +581,8 @@ class CostRoutingCoordinator:
             return cached
 
         job = self._require_embedding_job(batch_id)
-        status = self.embedding_batch_backend.poll(job)
+        backend = self._embedding_job_backends.get(batch_id, self.embedding_batch_backend)
+        status = backend.poll(job)
         if not status.get("is_complete"):
             return {
                 "batch_id": batch_id,
@@ -582,7 +591,7 @@ class CostRoutingCoordinator:
                 "embeddings": None,
             }
 
-        items: List[EmbeddingBatchResultItem] = self.embedding_batch_backend.retrieve(job)
+        items: List[EmbeddingBatchResultItem] = backend.retrieve(job)
         requests = self._embedding_requests.get(batch_id, [])
         request_by_custom_id = {request.custom_id: request for request in requests}
         input_count = self._embedding_input_counts.get(batch_id, len(requests))
