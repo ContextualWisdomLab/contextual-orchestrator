@@ -55,7 +55,7 @@ def test_http_responses_rejects_unapplied_seed() -> None:
             port,
             {"model": "mock-planner", "input": "hello seed", "seed": 42},
         )
-        assert status == 400, body
+        assert status == 422, body
         assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()
@@ -97,7 +97,7 @@ def test_http_responses_rejects_unapplied_stop_string_and_array() -> None:
             port,
             {"model": "mock-planner", "input": "hello stop str", "stop": "END"},
         )
-        assert status == 400, body
+        assert status == 422, body
         assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
         status, body = _post(
             port,
@@ -107,7 +107,7 @@ def test_http_responses_rejects_unapplied_stop_string_and_array() -> None:
                 "stop": ["END", "STOP"],
             },
         )
-        assert status == 400, body
+        assert status == 422, body
         assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()

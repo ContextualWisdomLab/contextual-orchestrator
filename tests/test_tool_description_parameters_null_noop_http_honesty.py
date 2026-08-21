@@ -52,7 +52,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_chat_accepts_tool_description_null() -> None:
+def test_http_chat_rejects_tool_request_with_null_description() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -79,7 +79,7 @@ def test_http_chat_accepts_tool_description_null() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_tool_parameters_null() -> None:
+def test_http_chat_rejects_tool_request_with_null_parameters() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -105,7 +105,7 @@ def test_http_chat_accepts_tool_parameters_null() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_tool_description_and_parameters_null() -> None:
+def test_http_chat_rejects_tool_request_with_null_description_and_parameters() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -189,9 +189,9 @@ def test_http_chat_rejects_tool_parameters_non_object() -> None:
 
 
 if __name__ == "__main__":
-    test_http_chat_accepts_tool_description_null()
-    test_http_chat_accepts_tool_parameters_null()
-    test_http_chat_accepts_tool_description_and_parameters_null()
+    test_http_chat_rejects_tool_request_with_null_description()
+    test_http_chat_rejects_tool_request_with_null_parameters()
+    test_http_chat_rejects_tool_request_with_null_description_and_parameters()
     test_http_chat_rejects_tool_description_non_string()
     test_http_chat_rejects_tool_parameters_non_object()
     print("ok")

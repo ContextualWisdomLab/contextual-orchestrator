@@ -15,6 +15,8 @@ affected_components:
   - "contextual_orchestrator/server.py"
   - "contextual_orchestrator/api_contract.py"
   - "contextual_orchestrator/batch_routing.py"
+  - "contextual_orchestrator/cost_router.py"
+  - "tests/test_provider_embeddings.py"
   - "tests/test_embeddings_model_pool_http_honesty.py"
 effort: S
 supersedes: null
@@ -22,8 +24,8 @@ superseded-by: null
 related:
   - path: "docs/planning/adrs/0001-fail-closed-model-judgment.md"
     relation: constrains
-  - path: "docs/planning/adrs/0002-explicit-local-mlx-evaluation.md"
-    relation: follows
+  - path: "docs/planning/adrs/0012-gateway-only-provider-contract.md"
+    relation: depends-on
 ---
 
 # ADR 0015: Orchestrator-owned automatic embedding model selection
@@ -53,11 +55,12 @@ guess, or consumer-side fallback.
 4. If no enabled embedding-capable agent exists for an omitted model, the
    gateway returns `503 embedding_unavailable`; it never invents a model or
    produces a heuristic vector as a provider substitute.
-5. The resolved model is carried into internal batch requests, provider JSONL,
-   response metadata, and cost attribution so the selected deployment remains
-   deterministic and auditable. The standalone in-process backend remains a
-   local test/development path; a configured provider path uses its injected
-   embeddings backend and the resolved model.
+5. The provider and resolved model are carried into internal batch requests,
+   provider JSONL, response metadata, and cost attribution so the selected
+   deployment remains deterministic and auditable. Client attribution metadata
+   cannot override either server-resolved identity. The standalone in-process
+   backend remains a local test/development path; a configured provider path
+   uses its injected embeddings backend and the resolved model.
 
 ## Contract and acceptance evidence
 

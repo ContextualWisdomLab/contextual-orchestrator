@@ -278,7 +278,7 @@ def test_http_responses_logprobs_zero_one() -> None:
             },
         )
         # The value is valid OpenAI shape but cannot be applied by conduct.
-        assert status == 400, body
+        assert status == 422, body
         assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()

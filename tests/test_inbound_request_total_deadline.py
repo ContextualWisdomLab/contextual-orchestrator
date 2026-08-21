@@ -3,13 +3,21 @@
 from __future__ import annotations
 
 from email.message import Message
+from pathlib import Path
+import sys
 from types import SimpleNamespace
 
 import pytest
 
-from contextual_orchestrator import ModelAgent, TaskOrchestrator
-from contextual_orchestrator import server as server_module
-from contextual_orchestrator.server import RequestError, SecurityConfig, build_server
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import server as server_module  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    RequestError,
+    SecurityConfig,
+    build_server,
+)
 
 
 class _Clock:
@@ -19,6 +27,17 @@ class _Clock:
         self.now = 0.0
 
     def monotonic(self) -> float:
+        return self.now
+
+
+class _AdvancingClock:
+    """Advance beyond the deadline before the first body read."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        self.now += 0.2
         return self.now
 
 
@@ -68,7 +87,7 @@ def test_slow_progress_cannot_extend_request_past_total_deadline(monkeypatch) ->
         TaskOrchestrator([ModelAgent("general_agent", "mock-generalist")]),
         port=0,
         security=SecurityConfig(
-            auth_token="test_token",
+            auth_token="test_token",  # noqa: S106
             request_read_timeout_seconds=0.1,
         ),
     )
@@ -101,7 +120,7 @@ def test_complete_body_at_total_deadline_is_accepted(monkeypatch) -> None:
         TaskOrchestrator([ModelAgent("general_agent", "mock-generalist")]),
         port=0,
         security=SecurityConfig(
-            auth_token="test_token",
+            auth_token="test_token",  # noqa: S106
             request_read_timeout_seconds=0.1,
         ),
     )
@@ -120,6 +139,34 @@ def test_complete_body_at_total_deadline_is_accepted(monkeypatch) -> None:
         assert handler._read_json() == {}
         assert handler.close_connection is False
         assert handler.connection.timeout is None
+    finally:
+        server.server_close()
+
+
+def test_expired_total_deadline_rejects_before_first_read(monkeypatch) -> None:
+    payload = b"{}"
+    clock = _AdvancingClock()
+    server = build_server(
+        TaskOrchestrator([ModelAgent("general_agent", "mock-generalist")]),
+        port=0,
+        security=SecurityConfig(
+            auth_token="test_token",  # noqa: S106
+            request_read_timeout_seconds=0.1,
+        ),
+    )
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler.headers = _headers(len(payload))
+    handler.rfile = SimpleNamespace(
+        read=lambda _size: (_ for _ in ()).throw(AssertionError("body was read"))
+    )
+    handler.connection = _FakeConnection()
+    handler.close_connection = False
+    monkeypatch.setattr(server_module, "time", SimpleNamespace(monotonic=clock.monotonic))
+
+    try:
+        with pytest.raises(RequestError, match="timed out"):
+            handler._read_json()
+        assert handler.close_connection is True
     finally:
         server.server_close()
 

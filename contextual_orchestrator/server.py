@@ -918,7 +918,7 @@ def _reject_responses_orchestration_controls(body: dict[str, Any]) -> None:
         unsupported.append(field_name)
     if unsupported:
         raise RequestError(
-            400,
+            422,
             "unsupported_responses_orchestration_controls",
             "Responses orchestration cannot apply these provider controls",
             {"fields": unsupported},
@@ -4650,7 +4650,10 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        """Serve the authenticated OpenAI-compatible and administrative routes."""
+
         def do_GET(self) -> None:  # noqa: N802
+            """Return health, discovery, result, and administrative resources."""
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
             query = urllib.parse.parse_qs(parsed.query)
@@ -5000,6 +5003,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_PATCH(self) -> None:  # noqa: N802
+            """Apply an authenticated worker-agent configuration update."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -5023,6 +5027,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_DELETE(self) -> None:  # noqa: N802
+            """Remove an authenticated worker agent from its configured pool."""
             try:
                 self._authorize("admin")
                 path = urllib.parse.urlparse(self.path).path
@@ -5043,6 +5048,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def do_POST(self) -> None:  # noqa: N802
+            """Validate and execute inference or administrative commands."""
             try:
                 path = urllib.parse.urlparse(self.path).path
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
@@ -6014,6 +6020,7 @@ def build_server(
             return _coerce_json(bytes(chunks))
 
         def log_message(self, format: str, *args: object) -> None:
+            """Disable the base server's unaudited stderr access log."""
             return
 
         def _send_error(

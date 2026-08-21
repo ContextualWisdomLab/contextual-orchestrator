@@ -411,6 +411,7 @@ class EmbeddingBatchRequest:
 
     input_text: str
     model: str = "contextual-orchestrator"
+    provider_name: str = "unknown"
     custom_id: str = field(default_factory=lambda: f"emb_{uuid.uuid4().hex}")
     attribution: Dict[str, Any] = field(default_factory=dict)
     source_index: int = 0
@@ -437,6 +438,7 @@ class EmbeddingBatchResultItem:
     embedding: List[float]
     prompt_tokens: int = 0
     model: str = "contextual-orchestrator"
+    provider_name: str = "unknown"
 
 
 class EmbeddingBatchBackend(Protocol):
@@ -529,6 +531,7 @@ class LocalEmbeddingBatchBackend:
                     embedding=list(vectors[index]),
                     prompt_tokens=self._count_tokens(request.input_text, request.model),
                     model=request.model,
+                    provider_name=request.provider_name,
                 )
             )
         self._results[job_id] = items
@@ -648,6 +651,9 @@ class PgLlmBatchEmbeddingBackend:
                     embedding=embedding,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     model=tracked_request.model if tracked_request else "contextual-orchestrator",
+                    provider_name=(
+                        tracked_request.provider_name if tracked_request else "unknown"
+                    ),
                 )
             )
         items.sort(key=lambda item: item.index)
