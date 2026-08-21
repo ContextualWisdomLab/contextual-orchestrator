@@ -73,6 +73,21 @@ def session_id_from_metadata(metadata: Mapping[str, Any] | None) -> str | None:
     )
 
 
+def session_id_from_request(
+    headers: Mapping[str, str],
+    *metadata_values: Mapping[str, Any] | None,
+) -> str | None:
+    """Choose the canonical header session before compatible metadata values."""
+    header_session = session_id_from_headers(headers)
+    if header_session is not None:
+        return header_session
+    for metadata in metadata_values:
+        metadata_session = session_id_from_metadata(metadata)
+        if metadata_session is not None:
+            return metadata_session
+    return None
+
+
 def current_session_id() -> str | None:
     """Return the request-scoped correlation value, if one is bound."""
     return _CURRENT_SESSION.get()

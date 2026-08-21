@@ -16,6 +16,7 @@ from contextual_orchestrator.telemetry import (
     reset_session_id,
     session_id_from_headers,
     session_id_from_metadata,
+    session_id_from_request,
     set_session_id,
     traced,
 )
@@ -31,6 +32,11 @@ def test_session_id_accepts_lineageweave_header_and_metadata():
         session_id_from_metadata({"lineageweave_post_session_id": "session-1"})
         == "session-1"
     )
+    assert session_id_from_request(
+        {"x-lineageweave-session-id": "header-session"},
+        {"session_id": "metadata-session"},
+    ) == "header-session"
+    assert session_id_from_request({}, {"session_id": "metadata-session"}) == "metadata-session"
 
 
 def test_session_and_attribute_boundaries_reject_unsafe_values():
@@ -254,6 +260,33 @@ def test_provider_calls_use_current_genai_semantic_convention(monkeypatch):
             },
         },
     ]
+
+
+def test_stream_and_passthrough_provider_calls_create_client_spans(monkeypatch):
+    """Every non-mock provider transport is represented in the trace."""
+    captured: list[str] = []
+
+    @contextmanager
+    def capture(name, _attributes):
+        captured.append(name)
+        yield None
+
+    client = ModelClient()
+    agent = ModelAgent(
+        "provider_agent",
+        "model-x",
+        base_url="https://provider.example/v1",
+        credential_key="",
+        provider_name="openai",
+    )
+    monkeypatch.setattr(orchestrator_module, "traced", capture)
+    monkeypatch.setattr(client, "_validate_provider", lambda unused_agent: None)
+    monkeypatch.setattr(client, "_stream_send", lambda *_args: iter(("delta",)))
+    monkeypatch.setattr(client, "_send_raw_with_retry", lambda *_args: {"ok": True})
+
+    assert list(client.stream_chat(agent, [{"role": "user", "content": "x"}])) == ["delta"]
+    assert client.proxy_send(agent, "responses", {"input": "x"}) == {"ok": True}
+    assert captured == ["stream_chat model-x", "passthrough responses model-x"]
 
 
 def test_traced_starts_client_span_with_attributes_and_error_type(monkeypatch):

@@ -38,7 +38,7 @@ from .telemetry import (
     detach_trace_context,
     reset_session_id,
     session_id_from_headers,
-    session_id_from_metadata,
+    session_id_from_request,
     set_session_id,
 )
 
@@ -4867,10 +4867,14 @@ def build_server(
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
                 self._authorize(scope)
                 body = self._read_json()
+                metadata_values: list[dict[str, Any]] = []
                 for metadata_key in ("metadata", "client_metadata"):
                     metadata = body.get(metadata_key)
                     if isinstance(metadata, dict):
-                        self._bind_session(session_id_from_metadata(metadata))
+                        metadata_values.append(metadata)
+                request_session_id = session_id_from_request(self.headers, *metadata_values)
+                if request_session_id != current_session_id():
+                    self._bind_session(request_session_id)
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]

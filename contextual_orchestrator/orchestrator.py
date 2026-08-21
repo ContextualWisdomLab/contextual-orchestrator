@@ -1102,8 +1102,22 @@ class ModelClient:
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
-        with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            yield from self._stream_send(agent, payload, destination)  # pragma: no cover
+        parsed_provider = urlparse(agent.base_url)
+        with (
+            traced(
+                f"stream_chat {agent.model}",
+                {
+                    "gen_ai.operation.name": "stream_chat",
+                    "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                    "gen_ai.request.model": agent.model,
+                    "contextual_orchestrator.agent_id": agent.id,
+                    "server.address": parsed_provider.hostname or "",
+                    "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+                },
+            ),
+            _local_provider_slot(agent, self.local_concurrency, self.timeout),
+        ):  # pragma: no cover
+            yield from self._stream_send(agent, payload, destination)
 
     def _stream_send(
         self, agent: ModelAgent, payload: dict[str, Any], destination: ProviderDestination | None = None
@@ -1149,18 +1163,30 @@ class ModelClient:
         if agent.base_url.startswith("mock://"):
             return self._mock_raw(agent, endpoint, payload)
         destination = self._validate_provider(agent)  # pragma: no cover
-        if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
-            chat_payload = _responses_to_chat_payload(payload)
-            chat_payload.setdefault("max_tokens", self.max_output_tokens)
-            if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
-                chat_payload["chat_template_kwargs"] = self.chat_template_args
-            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-                chat_response = self._send_raw_with_retry(
-                    agent, "chat/completions", chat_payload, destination
-                )
-            return _chat_to_responses_payload(chat_response, payload)
-        with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
-            return self._send_raw_with_retry(agent, endpoint, payload, destination)
+        parsed_provider = urlparse(agent.base_url)
+        with traced(
+            f"passthrough {endpoint.strip('/')} {agent.model}",
+            {
+                "gen_ai.operation.name": "passthrough",
+                "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                "gen_ai.request.model": agent.model,
+                "contextual_orchestrator.agent_id": agent.id,
+                "server.address": parsed_provider.hostname or "",
+                "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+            },
+        ):
+            if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
+                chat_payload = _responses_to_chat_payload(payload)
+                chat_payload.setdefault("max_tokens", self.max_output_tokens)
+                if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
+                    chat_payload["chat_template_kwargs"] = self.chat_template_args
+                with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                    chat_response = self._send_raw_with_retry(
+                        agent, "chat/completions", chat_payload, destination
+                    )
+                return _chat_to_responses_payload(chat_response, payload)
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
+                return self._send_raw_with_retry(agent, endpoint, payload, destination)
 
     def _send_raw_with_retry(
         self,
