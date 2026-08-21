@@ -32,3 +32,20 @@ def test_attach_trace_context_normalizes_headers_and_detaches(monkeypatch):
         "context": context,
         "token": token,
     }
+
+
+def test_inject_trace_context_delegates_to_w3c_propagator(monkeypatch):
+    """Provider transport headers receive only the active W3C propagation fields."""
+    carrier = {"content-type": "application/json"}
+    monkeypatch.setattr(
+        telemetry_module,
+        "_otel_inject",
+        lambda value: value.__setitem__("traceparent", "00-trace-span-01"),
+    )
+
+    telemetry_module.inject_trace_context(carrier)
+
+    assert carrier == {
+        "content-type": "application/json",
+        "traceparent": "00-trace-span-01",
+    }
