@@ -1392,10 +1392,22 @@ class ModelClient:
             chat_payload = _responses_to_chat_payload(payload)
             chat_payload.setdefault("max_tokens", self.max_output_tokens)
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-                chat_response = self._send_raw(agent, "chat/completions", chat_payload, destination)
+                chat_response = self._send_raw_with_retry(
+                    agent,
+                    "chat/completions",
+                    chat_payload,
+                    destination,
+                    allow_transient_retries=False,
+                )
             return _chat_to_responses_payload(chat_response, payload)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-            return self._send_raw(agent, normalized_endpoint, payload, destination)
+            return self._send_raw_with_retry(
+                agent,
+                normalized_endpoint,
+                payload,
+                destination,
+                allow_transient_retries=False,
+            )
 
     def proxy_send(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
@@ -1431,10 +1443,12 @@ class ModelClient:
         endpoint: str,
         payload: dict[str, Any],
         destination: ProviderDestination | None = None,
+        *,
+        allow_transient_retries: bool = True,
     ) -> dict[str, Any]:  # pragma: no cover
-        """Passthrough transport with the same transient-failure retry policy as _send."""
+        """Negotiate optional temperature and optionally retry transient failures."""
         last_error: Exception | None = None
-        retry_limit = self._retry_limit(agent)
+        retry_limit = self._retry_limit(agent) if allow_transient_retries else 0
         active_payload = payload
         temperature_negotiated = False
         for attempt in range(retry_limit + 1):
@@ -1459,6 +1473,8 @@ class ModelClient:
             if attempt >= retry_limit or not is_transient_error(last_error):
                 break
             self._sleep(self._backoff_delay(attempt))
+        if not allow_transient_retries and last_error is not None:
+            raise last_error
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
 
     def _send_raw(

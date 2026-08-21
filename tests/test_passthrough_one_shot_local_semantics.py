@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from contextlib import contextmanager
 from copy import deepcopy
+import io
 import socket
 from unittest.mock import patch
 import urllib.error
@@ -180,7 +181,6 @@ def test_one_shot_remote_passthrough_never_enters_same_agent_retry_wrapper() -> 
             return_value=(socket.AF_INET, ("93.184.216.34", 443)),
         ),
         patch.object(client, "_send_raw", side_effect=rate_limit) as send_raw,
-        patch.object(client, "_send_raw_with_retry") as retry_wrapper,
     ):
         with pytest.raises(urllib.error.HTTPError) as caught:
             client.proxy_send_once(
@@ -195,4 +195,58 @@ def test_one_shot_remote_passthrough_never_enters_same_agent_retry_wrapper() -> 
 
     assert caught.value is rate_limit
     send_raw.assert_called_once()
-    retry_wrapper.assert_not_called()
+
+
+def test_one_shot_passthrough_keeps_optional_temperature_negotiation() -> None:
+    """Capability negotiation removes only temperature without transient replay."""
+
+    client = ModelClient(max_retries=7)
+    agent = ModelAgent(
+        "remote_provider_agent",
+        "remote-model",
+        base_url="https://provider.example/v1",
+        credential_key="REMOTE_PROVIDER_KEY",
+    )
+    unsupported = urllib.error.HTTPError(
+        "https://provider.example/v1/responses",
+        400,
+        "bad request",
+        None,
+        io.BytesIO(
+            b"Unsupported value: 'temperature' does not support 0.2; only the default is supported"
+        ),
+    )
+    sent: list[dict[str, object]] = []
+
+    def send_raw(
+        _agent: ModelAgent,
+        _endpoint: str,
+        payload: dict[str, object],
+        _destination: object,
+    ) -> dict[str, object]:
+        sent.append(deepcopy(payload))
+        if len(sent) == 1:
+            raise unsupported
+        return _chat_response("negotiated")
+
+    with (
+        patch.object(
+            client,
+            "_validate_provider",
+            return_value=(socket.AF_INET, ("93.184.216.34", 443)),
+        ),
+        patch.object(client, "_send_raw", side_effect=send_raw),
+    ):
+        result = client.proxy_send_once(
+            agent,
+            "responses",
+            {
+                "model": "remote-model",
+                "input": "hello",
+                "temperature": 0.2,
+            },
+        )
+
+    assert result["object"] == "chat.completion"
+    assert sent[0]["temperature"] == 0.2
+    assert "temperature" not in sent[1]
