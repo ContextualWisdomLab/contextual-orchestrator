@@ -792,6 +792,44 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    @contextmanager
+    def request_settings(
+        self,
+        *,
+        max_output_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+    ):
+        """Apply request sampling settings to this thread without shared-state mutation."""
+        settings = {
+            "max_output_tokens": max_output_tokens,
+            "temperature": temperature,
+            "top_p": top_p,
+            "presence_penalty": presence_penalty,
+            "frequency_penalty": frequency_penalty,
+        }
+        previous: dict[str, tuple[bool, Any]] = {}
+        for name, value in settings.items():
+            if value is None:
+                continue
+            attribute = f"request_{name}"
+            previous[attribute] = (hasattr(self._local, attribute), getattr(self._local, attribute, None))
+            setattr(self._local, attribute, value)
+        try:
+            yield
+        finally:
+            for attribute, (present, value) in previous.items():
+                if present:
+                    setattr(self._local, attribute, value)
+                else:
+                    delattr(self._local, attribute)
+
+    def _request_setting(self, name: str, fallback: Any) -> Any:
+        """Return a request-local override or the client default."""
+        return getattr(self._local, f"request_{name}", fallback)
+
     def chat(
         self,
         agent: ModelAgent,
@@ -807,10 +845,14 @@ class ModelClient:
         """
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
-        effective_temperature = self.default_temperature if temperature is None else temperature
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
+        effective_temperature = (
+            self._request_setting("temperature", self.default_temperature)
+            if temperature is None else temperature
+        )
+        effective_top_p = self._request_setting("top_p", self.default_top_p) if top_p is None else top_p
+        effective_presence = self._request_setting("presence_penalty", self.default_presence_penalty)
+        effective_frequency = self._request_setting("frequency_penalty", self.default_frequency_penalty)
+        effective_max_tokens = self._request_setting("max_output_tokens", self.max_output_tokens)
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
@@ -831,7 +873,7 @@ class ModelClient:
             "messages": messages,
             "temperature": effective_temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": effective_max_tokens,
         }
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
@@ -1109,9 +1151,9 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
+            "temperature": self._request_setting("temperature", self.temperature) if temperature is None else temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": self._request_setting("max_output_tokens", self.max_output_tokens),
         }
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
@@ -1163,7 +1205,9 @@ class ModelClient:
         destination = self._validate_provider(agent)  # pragma: no cover
         if endpoint.strip("/") == "responses" and _is_local_provider_url(agent.base_url):
             chat_payload = _responses_to_chat_payload(payload)
-            chat_payload.setdefault("max_tokens", self.max_output_tokens)
+            chat_payload.setdefault(
+                "max_tokens", self._request_setting("max_output_tokens", self.max_output_tokens)
+            )
             if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                 chat_payload["chat_template_kwargs"] = self.chat_template_args
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
@@ -1173,7 +1217,9 @@ class ModelClient:
             return _chat_to_responses_payload(chat_response, payload)
         if _is_local_provider_url(agent.base_url) and endpoint.strip("/") == "chat/completions":
             local_payload = dict(payload)
-            local_payload.setdefault("max_tokens", self.max_output_tokens)
+            local_payload.setdefault(
+                "max_tokens", self._request_setting("max_output_tokens", self.max_output_tokens)
+            )
             if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
                 local_payload.setdefault("chat_template_kwargs", self.chat_template_args)
             with _local_provider_slot(agent, self.local_concurrency, self.timeout):
@@ -1401,8 +1447,9 @@ class ModelClient:
                 "body": {
                     "model": agent.model,
                     "messages": messages,
-                    "temperature": self.temperature if temperature is None else temperature,
-                    "max_tokens": self.max_output_tokens,
+                    "temperature": self._request_setting("temperature", self.temperature)
+                    if temperature is None else temperature,
+                    "max_tokens": self._request_setting("max_output_tokens", self.max_output_tokens),
                 },
             }, ensure_ascii=False)
             for custom_id, messages in requests.items()
@@ -1916,7 +1963,8 @@ class TaskOrchestrator:
         if final_agent is None:
             final_agent = self._select_agent(task, "synthesizer")
         if final_agent.disabled:
-            raise RuntimeError(f"requested model {requested_model!r} is disabled")
+            disabled_model = requested_model if requested_model is not None else final_agent.model
+            raise RuntimeError(f"requested model {disabled_model!r} is disabled")
 
         workflow = self.conduct(messages, preserve_messages=True, judge=False)
         evidence = "\n\n".join(
