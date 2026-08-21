@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import base64
 import binascii
+import hashlib
 import json
 import os
 from collections.abc import Iterable
@@ -20,6 +21,7 @@ ENCRYPTED_FIELDS_KEY = "__encrypted_fields__"
 ENCRYPTED_FIELDS_VERSION = 1
 ENCRYPTED_FIELDS_ALGORITHM = "AES-256-GCM"
 DEFAULT_PII_KEY_NAME = "CONTEXTUAL_ORCHESTRATOR_PII_ENCRYPTION_KEY"
+PASSPHRASE_PREFIX = "passphrase:"
 PURPOSES_BY_SCOPE = {
     "inference": frozenset({"message_delivery"}),
     "admin": frozenset({"operator_read", "audit_replay"}),
@@ -34,10 +36,31 @@ class PiiProtectionError(ValueError):
     """Raised when marked PII cannot be safely protected or restored."""
 
 
-def _decode_secret(secret: str) -> bytes:
-    """Decode a 256-bit key supplied as base64, hex, or exactly 32 bytes."""
+def _decode_secret(secret: str, *, key_name: str = "") -> bytes:
+    """Decode an explicit key encoding or derive a key from a marked passphrase.
+
+    Raw unprefixed 32-byte strings are rejected because a human passphrase can
+    otherwise be mistaken for a uniformly random AES key. Operators may use
+    ``base64:`` or ``hex:`` for generated key bytes, or ``passphrase:`` for a
+    password-derived key.
+    """
     if not isinstance(secret, str) or not secret:
         raise PiiProtectionError("PII encryption key is empty")
+    if secret.startswith(PASSPHRASE_PREFIX):
+        passphrase = secret[len(PASSPHRASE_PREFIX) :]
+        if not passphrase:
+            raise PiiProtectionError("PII encryption passphrase is empty")
+        try:
+            return hashlib.scrypt(
+                passphrase.encode("utf-8"),
+                salt=f"contextual-orchestrator:pii-key:{key_name}".encode("utf-8"),
+                n=2**14,
+                r=8,
+                p=1,
+                dklen=32,
+            )
+        except (TypeError, ValueError):
+            raise PiiProtectionError("PII encryption passphrase could not be derived") from None
     if secret.startswith("hex:"):
         try:
             decoded = bytes.fromhex(secret[4:])
@@ -55,6 +78,10 @@ def _decode_secret(secret: str) -> bytes:
                 decoded = base64.urlsafe_b64decode(secret + "=" * (-len(secret) % 4))
             except (binascii.Error, ValueError):
                 decoded = b""
+        else:
+            raise PiiProtectionError(
+                "PII encryption key must use base64:, hex:, or passphrase:"
+            )
     if len(decoded) != 32:
         raise PiiProtectionError("PII encryption key must decode to 32 bytes")
     return decoded
@@ -98,7 +125,7 @@ class PiiFieldEncryptor:
         """Build an encryptor from a KV secret without retaining its text form."""
         if not key_name:
             raise PiiProtectionError("PII encryption key name is empty")
-        return cls(key_name, _decode_secret(secret))
+        return cls(key_name, _decode_secret(secret, key_name=key_name))
 
     def encrypt_fields(self, detail: dict[str, Any], fields: Iterable[str]) -> dict[str, Any]:
         """Return a copy with declared top-level fields replaced by AES-GCM envelopes."""

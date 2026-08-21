@@ -126,7 +126,8 @@ def test_durable_authorization_retention_is_bounded() -> None:
 def test_durable_analytics_retention_is_bounded() -> None:
     with tempfile.TemporaryDirectory() as directory:
         store = _StateStore(os.path.join(directory, "s.db"))
-        limit = store._STREAM_LIMITS["analytics"]
+        assert store._STREAM_LIMITS["analytics"] == 256
+        limit = 256
         for index in range(limit + 3):
             store.save("analytics", None, {"index": index})
 
@@ -157,6 +158,7 @@ def test_stream_reload_respects_deque_maxlen() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "state.db")
         first = _orch(db)
+        assert first._analytics_events.maxlen == 256
         maxlen = first._analytics_events.maxlen
         # Drive more analytics events than the deque can hold.
         for i in range(maxlen + 25):

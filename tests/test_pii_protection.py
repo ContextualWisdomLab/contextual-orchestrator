@@ -45,7 +45,10 @@ def test_field_encryption_round_trip_and_key_formats() -> None:
     assert "alice@example.com" not in json.dumps(protected)
     assert encryptor.decrypt_fields(protected) == detail
     assert PiiFieldEncryptor.from_secret("k", "hex:" + KEY_BYTES.hex()).key == KEY_BYTES
-    assert PiiFieldEncryptor.from_secret("k", KEY_BYTES.decode("ascii")).key == KEY_BYTES
+    passphrase_key = PiiFieldEncryptor.from_secret("k", "passphrase:human-readable-secret")
+    assert len(passphrase_key.key) == 32
+    assert passphrase_key.key != b"human-readable-secret"
+    assert PiiFieldEncryptor.from_secret("k", "passphrase:human-readable-secret").key == passphrase_key.key
     assert is_encrypted_detail(protected)
     assert not is_encrypted_detail(detail)
 
@@ -55,7 +58,7 @@ def test_encryptor_repr_does_not_expose_key() -> None:
 
 
 def test_empty_field_set_and_plain_decrypt_are_copy_operations() -> None:
-    encryptor = PiiFieldEncryptor.from_secret("k", KEY_BYTES.decode("ascii"))
+    encryptor = PiiFieldEncryptor.from_secret("k", KEY_BASE64)
     detail = {"email": "alice@example.com"}
     assert encryptor.encrypt_fields(detail, ()) == detail
     assert encryptor.encrypt_fields(detail, ()) is not detail
@@ -65,7 +68,14 @@ def test_empty_field_set_and_plain_decrypt_are_copy_operations() -> None:
 
 @pytest.mark.parametrize(
     "secret",
-    ["", "hex:bad", "base64:not@@base64", "not-a-32-byte-key"],
+    [
+        "",
+        "hex:bad",
+        "base64:not@@base64",
+        "passphrase:",
+        "0123456789abcdef0123456789abcdef",
+        "not-a-32-byte-key",
+    ],
 )
 def test_invalid_keys_fail_closed(secret: str) -> None:
     with pytest.raises(PiiProtectionError):

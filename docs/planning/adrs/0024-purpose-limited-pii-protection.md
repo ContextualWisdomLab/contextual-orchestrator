@@ -50,7 +50,11 @@ in request data. Invalid role-purpose combinations fail closed.
 Callers that place personal data in audit or analytics details must declare the
 top-level fields through `pii_fields`. Those fields are encrypted with
 AES-256-GCM using a 32-byte key resolved from the existing KV credential
-registry (`CONTEXTUAL_ORCHESTRATOR_PII_ENCRYPTION_KEY` by default). Ciphertext,
+registry (`CONTEXTUAL_ORCHESTRATOR_PII_ENCRYPTION_KEY` by default). Generated
+key bytes must use an explicit `base64:` or `hex:` encoding; an operator
+passphrase must use `passphrase:` and is derived with memory-hard scrypt.
+Unprefixed raw 32-byte strings are rejected so a human passphrase cannot be
+mistaken for uniformly random key material. Ciphertext,
 nonce, algorithm, version, and key name are stored; the plaintext field is not.
 Missing/invalid keys, malformed envelopes, missing fields, and authentication
 failures raise an error rather than storing or returning plaintext. Unmarked
@@ -67,6 +71,9 @@ usable content.
   reads see the ciphertext envelope.
 * Key rotation is represented by the stored key name; old keys must remain in
   the KV registry until their protected records expire or are re-encrypted.
+* Passphrase-derived keys use a stable key-name salt, so changing the key name
+  remains the deliberate rotation boundary and old records require the old KV
+  key name during replay.
 
 ## Evidence
 
@@ -75,6 +82,8 @@ usable content.
 * Barker, E. (2020). *Recommendation for key management: Part 1—General*
   (NIST SP 800-57 Pt. 1 Rev. 5). National Institute of Standards and
   Technology. https://doi.org/10.6028/NIST.SP.800-57pt1r5
+* Percival, C., & Josefsson, S. (2016). *The scrypt password-based key
+  derivation function* (RFC 7914). RFC Editor. https://www.rfc-editor.org/rfc/rfc7914
 * Wolf, K., Pallas, F., & Tai, S. (2021). Messaging with purpose limitation—
   Privacy-compliant publish-subscribe systems. arXiv. https://arxiv.org/abs/2110.15150
 

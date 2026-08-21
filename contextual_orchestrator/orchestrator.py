@@ -1557,7 +1557,7 @@ class _StateStore:
     """
 
     _KEYED = {"workflow_run", "evaluation_run"}
-    _STREAM_LIMITS = {"audit": 256, "authorization": 256, "analytics": 512}
+    _STREAM_LIMITS = {"audit": 256, "authorization": 256, "analytics": 256}
     _CREATE_RECORDS_SQL = (
         "CREATE TABLE IF NOT EXISTS records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
@@ -1704,7 +1704,7 @@ class TaskOrchestrator:
         self.budget_max_cost_usd = budget_max_cost_usd
         self._workflow_runs: dict[str, dict[str, Any]] = {}
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
-        self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
+        self._analytics_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._authorization_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
