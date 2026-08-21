@@ -345,6 +345,53 @@ def test_sql_ledger_enables_foreign_keys_and_cascades_attribution_rows() -> None
     ).fetchone() == (0,)
 
 
+def test_sql_ledger_rolls_back_failed_append_before_next_write() -> None:
+    """A failed multi-row append must not leak into the next committed write."""
+    connection = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(connection, paramstyle="qmark")
+    ledger = _priced_ledger(store=store)
+    original = SqlLedgerStore._insert_normalized_attribution
+    calls = 0
+
+    def fail_after_first_append(store_instance, cursor, row) -> None:
+        """Inject one failure after the first record's normalized writes."""
+        nonlocal calls
+        calls += 1
+        original(store_instance, cursor, row)
+        if calls == 1:
+            raise RuntimeError("simulated attribution write failure")
+
+    with pytest.MonkeyPatch.context() as patch:
+        patch.setattr(SqlLedgerStore, "_insert_normalized_attribution", fail_after_first_append)
+        failed = ledger.record_usage(
+            provider="openai",
+            model="gpt-x",
+            prompt_tokens=10,
+            completion_tokens=5,
+            attribution={"team": "failed-team"},
+        )
+
+    assert connection.execute(
+        "SELECT COUNT(*) FROM llm_usage_records WHERE usage_record_id = ?",
+        (failed.usage_record_id,),
+    ).fetchone() == (0,)
+    assert connection.execute(
+        "SELECT COUNT(*) FROM usage_record_attributions WHERE usage_record_id = ?",
+        (failed.usage_record_id,),
+    ).fetchone() == (0,)
+
+    successful = ledger.record_usage(
+        provider="openai",
+        model="gpt-x",
+        prompt_tokens=20,
+        completion_tokens=5,
+        attribution={"team": "successful-team"},
+    )
+    rows = store.query()
+    assert [row["usage_record_id"] for row in rows] == [successful.usage_record_id]
+    assert rows[0]["team_name"] == "successful-team"
+
+
 def test_sql_ledger_migrates_flattened_usage_rows() -> None:
     """Migrate legacy fact rows without changing the query contract."""
     connection = sqlite3.connect(":memory:")

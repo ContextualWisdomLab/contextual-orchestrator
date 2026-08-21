@@ -824,12 +824,18 @@ class SqlLedgerStore:
         """Insert a usage record row."""
         row = record.as_dict()
         cur = self._conn.cursor()
-        cur.execute(
-            _CORE_USAGE_INSERT_SQL[self._paramstyle],
-            tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
-        )
-        self._insert_normalized_attribution(cur, row)
-        self._conn.commit()
+        try:
+            cur.execute(
+                _CORE_USAGE_INSERT_SQL[self._paramstyle],
+                tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
+            )
+            self._insert_normalized_attribution(cur, row)
+            self._conn.commit()
+        except Exception:
+            rollback = getattr(self._conn, "rollback", None)
+            if callable(rollback):
+                rollback()
+            raise
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return record rows in the optional half-open window."""
