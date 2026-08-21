@@ -608,6 +608,28 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     return payload
 
 
+def _responses_text_format_to_chat_response_format(
+    text: Any,
+) -> dict[str, Any] | None:
+    """Translate Responses ``text.format`` to Chat ``response_format``."""
+    if not isinstance(text, dict):
+        return None
+    fmt = text.get("format")
+    if not isinstance(fmt, dict):
+        return None
+    fmt_type = fmt.get("type")
+    if fmt_type in {"text", "json_object"}:
+        return {"type": fmt_type}
+    if fmt_type != "json_schema":
+        return None
+    schema = {
+        key: fmt[key]
+        for key in ("name", "schema", "description", "strict")
+        if key in fmt
+    }
+    return {"type": "json_schema", "json_schema": schema}
+
+
 def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message") if isinstance(choice, dict) else {}
@@ -1121,10 +1143,10 @@ class ModelClient:
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
-    # (response_format / tools / the Responses API) are proxied to a single agent
-    # so the full provider response shape (tool_calls, parsed structured output,
-    # Responses output items) survives verbatim. Agent selection lives on the
-    # orchestrator; this is the agent-level transport.
+    # (response_format / tools / the Responses API) are sent to the final provider
+    # after the multi-agent workflow so the full provider response shape
+    # (tool_calls, parsed structured output, Responses output items) survives.
+    # Agent selection lives on the orchestrator; this is the agent-level transport.
     def proxy_send(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1786,13 +1808,19 @@ class TaskOrchestrator:
     def proxy_completion(
         self, body: dict[str, Any], *, endpoint: str = "chat/completions"
     ) -> dict[str, Any]:
-        """Passthrough a full OpenAI request to the primary agent, returning its raw response.
+        """Serve provider-shaped requests through a conducted workflow.
 
-        Requests carrying provider features the multi-agent verifier cannot merge
-        (``response_format``, ``tools``, or the Responses API) are handled by a
-        single selected agent so the full provider response shape survives; the
-        orchestration path stays reserved for plain-text routing/verification.
+        Structured output, tools, and Responses requests cannot be merged by
+        string concatenation. They therefore run the same multi-agent workflow
+        as ordinary orchestration, then use the selected synthesizer once to
+        produce the requested provider shape. This preserves provider features
+        without silently downgrading the request to a single-agent workflow.
         """
+        if endpoint.strip("/") == "responses" or any(
+            key in body and body.get(key) is not None
+            for key in ("response_format", "tools", "tool_choice", "functions", "function_call")
+        ):
+            return self._orchestrated_provider_completion(body, endpoint=endpoint)
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)
@@ -1820,6 +1848,71 @@ class TaskOrchestrator:
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
         return self.client.proxy_send(agent, endpoint, upstream)
+
+    def _orchestrated_provider_completion(
+        self, body: dict[str, Any], *, endpoint: str
+    ) -> dict[str, Any]:
+        """Conduct a workflow, then synthesize one OpenAI-compatible response."""
+        response_request = endpoint.strip("/") == "responses"
+        chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
+        messages = chat_body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("structured completion requires non-empty messages")
+        task = self._latest_user_text(messages)
+        requested_model = body.get("model")
+        final_agent = self._requested_agent(requested_model)
+        if final_agent is None:
+            final_agent = self._select_agent(task, "synthesizer")
+        if final_agent.disabled:
+            raise RuntimeError(f"requested model {requested_model!r} is disabled")
+
+        workflow = self.conduct(messages, preserve_messages=True, judge=False)
+        evidence = "\n\n".join(
+            f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
+            for row in workflow["trace"]
+        )
+        synthesis_messages: list[ChatMessage] = [
+            {
+                "role": "system",
+                "content": (
+                    "You are the final synthesizer in a multi-agent workflow. "
+                    "Use the original request and verified workflow evidence. "
+                    "Return only the requested provider response; do not mention "
+                    "the workflow or invent evidence."
+                ),
+            },
+            *messages,
+            {"role": "user", "content": f"Verified workflow evidence:\n{evidence}"},
+        ]
+        upstream = {
+            key: value
+            for key, value in chat_body.items()
+            if key not in self._ORCHESTRATION_ONLY_KEYS and key not in {"model", "messages"}
+        }
+        upstream["model"] = final_agent.model
+        upstream["messages"] = synthesis_messages
+        upstream["stream"] = False
+        if response_request:
+            response_format = body.get("response_format")
+            if response_format is None:
+                response_format = _responses_text_format_to_chat_response_format(body.get("text"))
+            if response_format is not None:
+                upstream["response_format"] = response_format
+        raw = self.client.proxy_send(final_agent, "chat/completions", upstream)
+        orchestration = {
+            "workflow_run_id": f"run_{uuid.uuid4().hex}",
+            "mode": "conduct",
+            "agent_count": len(workflow["trace"]),
+            "plan_source": workflow.get("plan_source"),
+        }
+        if response_request:
+            converted = _chat_to_responses_payload(raw, body)
+            if "echo" in raw:
+                converted["echo"] = raw["echo"]
+            converted["orchestration"] = orchestration
+            return converted
+        raw["orchestration"] = orchestration
+        return raw
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
@@ -2346,8 +2439,14 @@ class TaskOrchestrator:
             "trace": [row],
         }
 
-    def conduct(self, messages: list[ChatMessage]) -> dict[str, Any]:
-        """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
+    def conduct(
+        self,
+        messages: list[ChatMessage],
+        *,
+        preserve_messages: bool = False,
+        judge: bool = True,
+    ) -> dict[str, Any]:
+        """Run a planned workflow with optional multimodal and judge control."""
         task = self._latest_user_text(messages)
         plan_source = "template"
         if self.policy.workflow_planning == "generated":
@@ -2365,7 +2464,7 @@ class TaskOrchestrator:
         for step in steps:
             agent = self._agent(step.agent_id)
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
-            step_messages = [
+            step_messages: list[ChatMessage] = [
                 {
                     "role": "system",
                     "content": (
@@ -2374,11 +2473,15 @@ class TaskOrchestrator:
                         "Return concise, directly useful work."
                     ),
                 },
+            ]
+            if preserve_messages:
+                step_messages.extend(messages)
+            step_messages.append(
                 {
                     "role": "user",
                     "content": f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}",
-                },
-            ]
+                }
+            )
             start = time.perf_counter()
             output, served_id, usage = self._invoke(agent, step_messages, text=task, role=step.role)
             elapsed = (time.perf_counter() - start) * 1000
@@ -2402,14 +2505,14 @@ class TaskOrchestrator:
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
-            if self.policy.verifier_judge == "model":
+            if judge and self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required and last_output("worker"):
                 answer = last_output("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
-            if self.policy.verifier_judge == "model":
+            if judge and self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if not verification["accepted"] and self.policy.verifier_required:

@@ -31,7 +31,7 @@ from .orchestrator import (
     sse_stream_body,
 )
 
-# OpenAI request params forwarded verbatim to the provider on passthrough.
+# OpenAI request params forwarded to the final provider after orchestration.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "temperature", "top_p", "max_tokens", "max_completion_tokens", "n", "stop",
     "seed", "presence_penalty", "frequency_penalty", "logit_bias", "logprobs",
@@ -50,7 +50,7 @@ OPENAI_PASSTHROUGH_PARAM_KEYS = {
     # Assistants-style tool_resources — named unsupported (not unknown_fields).
     "tool_resources",
 }
-# Provider features the multi-agent verifier cannot merge -> single-agent passthrough.
+# Provider features requiring structured finalization after the multi-agent workflow.
 PASSTHROUGH_TRIGGER_KEYS = {"response_format", "tools", "tool_choice", "functions", "function_call"}
 ALLOWED_CHAT_KEYS = {
     "model", "messages", "orchestration", "orchestration_mode", "mode",
@@ -66,7 +66,7 @@ ALLOWED_RESPONSES_KEYS = {
     "max_output_tokens",
     # Tool-loop budget — accepted only for explicit unsupported error (no multi-step tool loop).
     "max_tool_calls",
-    # Gateway cost/routing control plane (stripped before provider passthrough).
+    # Gateway cost/routing control plane (stripped before final provider transport).
     "attribution", "routing",
     # previous_response_id / conversation / truncation / include fail closed
     # with named unsupported errors. Official text.format is validated
@@ -5071,19 +5071,19 @@ def build_server(
                     presence_penalty = sampling["presence_penalty"]
                     frequency_penalty = sampling["frequency_penalty"]
                     # Explicit JSON null on trigger keys is omit-equivalent (SDK optional
-                    # defaults) — do not force single-agent passthrough for null-only keys.
+                    # defaults) — do not force a structured workflow for null-only keys.
                     if any(
                         key in body and body.get(key) is not None
                         for key in PASSTHROUGH_TRIGGER_KEYS
                     ):
-                        # response_format / tools cannot be merged across agents;
-                        # proxy the full request to one agent and return it verbatim.
+                        # response_format / tools are finalized after the conducted
+                        # workflow so the provider response shape remains intact.
                         started_at = time.perf_counter()
                         proxied = self._run(
                             lambda: orchestrator.proxy_completion(body, endpoint="chat/completions")
                         )
                         orchestrator.record_analytics_event(
-                            "chat_completion_passthrough",
+                            "chat_completion_orchestrated_provider",
                             {
                                 "endpoint_path": "/v1/chat/completions",
                                 "actor_scope": "inference",
@@ -5533,7 +5533,7 @@ def build_server(
                             "input must be a non-empty string or non-empty array on /v1/responses",
                         )
                     # stream=false / omit → non-SSE JSON response (honest no-stream path).
-                    # stream=true is not implemented for Responses passthrough.
+                    # stream=true is not implemented for Responses finalization.
                     # String/0-1 forms coerce via shared bool helper (parity with chat).
                     if "stream" in body:
                         stream = _coerce_optional_bool(
@@ -5552,7 +5552,7 @@ def build_server(
                         lambda: orchestrator.proxy_completion(body, endpoint="responses")
                     )
                     orchestrator.record_analytics_event(
-                        "responses_passthrough",
+                        "responses_orchestrated_provider",
                         {
                             "endpoint_path": "/v1/responses",
                             "actor_scope": "inference",

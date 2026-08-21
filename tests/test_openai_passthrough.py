@@ -1,9 +1,4 @@
-"""Full OpenAI passthrough: response_format / tools / the Responses API.
-
-Requests carrying provider features the multi-agent verifier cannot merge are
-proxied to one agent so the full provider response shape survives, while plain
-prompts keep the orchestration (routing/verification) path.
-"""
+"""OpenAI provider features remain inside multi-agent orchestration."""
 
 from __future__ import annotations
 
@@ -55,6 +50,8 @@ def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> N
     assert "mode" not in result["echo"]
     # model overridden to the selected agent's model.
     assert result["model"] in {"mock-planner", "mock-builder", "mock-reviewer"}
+    assert result["orchestration"]["mode"] == "conduct"
+    assert result["orchestration"]["agent_count"] == 4
 
 
 def test_proxy_completion_forwards_tools() -> None:
@@ -64,6 +61,7 @@ def test_proxy_completion_forwards_tools() -> None:
         {"model": "mock-planner", "messages": [{"role": "user", "content": "call a tool"}], "tools": tools}
     )
     assert result["echo"]["tools"] == tools
+    assert result["orchestration"]["agent_count"] == 4
 
 
 def test_proxy_completion_honors_an_enabled_requested_worker_model() -> None:
@@ -113,6 +111,59 @@ def test_proxy_completion_responses_endpoint_returns_response_object() -> None:
     assert result["object"] == "response"
     assert result["output"][0]["role"] == "assistant"
     assert result["echo"]["response_format"] == {"type": "text"}
+
+
+def test_proxy_completion_responses_json_schema_is_orchestrated_and_translated() -> None:
+    result = _build().proxy_completion(
+        {
+            "input": "extract the visible region",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "region_result",
+                    "schema": {"type": "object"},
+                    "strict": True,
+                }
+            },
+        },
+        endpoint="responses",
+    )
+
+    assert result["object"] == "response"
+    assert result["echo"]["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "region_result",
+            "schema": {"type": "object"},
+            "strict": True,
+        },
+    }
+    assert result["orchestration"]["agent_count"] == 4
+
+
+def test_structured_workflow_preserves_multimodal_input_for_final_synthesis() -> None:
+    result = _build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [
+                {
+                    "role": "user",
+                    "content": [
+                        {"type": "text", "text": "describe this"},
+                        {"type": "image_url", "image_url": {"url": "data:image/png;base64,fixture"}},
+                    ],
+                }
+            ],
+            "response_format": {"type": "json_object"},
+        }
+    )
+
+    final_messages = result["echo"]["messages"]
+    assert any(
+        isinstance(message.get("content"), list)
+        and any(part.get("type") == "image_url" for part in message["content"])
+        for message in final_messages
+    )
 
 
 # -- HTTP server -------------------------------------------------------------
@@ -220,5 +271,5 @@ def test_http_plain_prompt_still_uses_orchestration_path() -> None:
         server.shutdown()
     assert status == 200
     assert body["object"] == "chat.completion"
-    assert "echo" not in body  # orchestration path, not passthrough
+    assert "echo" not in body  # ordinary orchestration path
     assert "orchestration" in body
