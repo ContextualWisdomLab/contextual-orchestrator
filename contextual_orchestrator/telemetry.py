@@ -10,9 +10,15 @@ from typing import Any
 
 try:
     from opentelemetry import trace
+    from opentelemetry.context import attach as _otel_attach
+    from opentelemetry.context import detach as _otel_detach
+    from opentelemetry.propagate import extract as _otel_extract
     from opentelemetry.trace import SpanKind, Status, StatusCode
 except ImportError:  # pragma: no cover - dependency is declared by the project
     trace = None  # type: ignore[assignment]
+    _otel_attach = None
+    _otel_detach = None
+    _otel_extract = None
     SpanKind = None  # type: ignore[assignment,misc]
     Status = None  # type: ignore[assignment,misc]
     StatusCode = None  # type: ignore[assignment,misc]
@@ -78,6 +84,20 @@ def set_session_id(value: object) -> Token[str | None]:
 def reset_session_id(token: Token[str | None]) -> None:
     """Restore the context value that preceded a request."""
     _CURRENT_SESSION.reset(token)
+
+
+def attach_trace_context(headers: Mapping[str, str]) -> Any:
+    """Attach an inbound W3C trace context and return its reset token."""
+    if _otel_extract is None or _otel_attach is None:
+        return None
+    carrier = {str(key).lower(): str(value) for key, value in headers.items()}
+    return _otel_attach(_otel_extract(carrier))
+
+
+def detach_trace_context(token: Any) -> None:
+    """Detach an inbound W3C trace context after one HTTP request."""
+    if token is not None and _otel_detach is not None:
+        _otel_detach(token)
 
 
 def _safe_attributes(
