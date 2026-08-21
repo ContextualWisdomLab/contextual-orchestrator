@@ -55,3 +55,40 @@ def test_chat_forwards_an_explicit_temperature() -> None:
         )
 
     assert captured[0]["temperature"] == 0.2
+
+
+def test_chat_uses_request_scoped_temperature_before_constructor_value() -> None:
+    client = ModelClient(temperature=0.4)
+    client.default_temperature = 0.3
+    captured: list[dict] = []
+
+    def send(_agent, payload, _destination):
+        captured.append(payload)
+        return "answer"
+
+    with (
+        patch.object(client, "_validate_provider", return_value=object()),
+        patch("contextual_orchestrator.orchestrator._provider_credential", return_value="secret"),
+        patch.object(client, "_send_with_retry", side_effect=send),
+    ):
+        client.chat(_remote_agent(), [{"role": "user", "content": "hello"}])
+
+    assert captured[0]["temperature"] == 0.3
+
+
+def test_chat_uses_constructor_temperature_when_request_scope_is_unset() -> None:
+    client = ModelClient(temperature=0.4)
+    captured: list[dict] = []
+
+    def send(_agent, payload, _destination):
+        captured.append(payload)
+        return "answer"
+
+    with (
+        patch.object(client, "_validate_provider", return_value=object()),
+        patch("contextual_orchestrator.orchestrator._provider_credential", return_value="secret"),
+        patch.object(client, "_send_with_retry", side_effect=send),
+    ):
+        client.chat(_remote_agent(), [{"role": "user", "content": "hello"}])
+
+    assert captured[0]["temperature"] == 0.4

@@ -164,13 +164,16 @@ class _FastMLSIJudgeAdapter:
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
-        response = self.orchestrator.proxy_completion({
+        payload: dict[str, Any] = {
             "model": agent.model,
             "messages": messages,
-            "temperature": self.orchestrator.client.temperature,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        })
+        }
+        effective_temperature = self.orchestrator.client._effective_temperature()
+        if effective_temperature is not None:
+            payload["temperature"] = effective_temperature
+        response = self.orchestrator.proxy_completion(payload)
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
@@ -765,6 +768,14 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    def _effective_temperature(self, requested: float | None = None) -> float | None:
+        """Resolve request, request-scoped, and constructor sampling values in order."""
+        if requested is not None:
+            return requested
+        if self.default_temperature is not None:
+            return self.default_temperature
+        return self.temperature
+
     def chat(
         self,
         agent: ModelAgent,
@@ -780,7 +791,7 @@ class ModelClient:
         """
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
-        effective_temperature = self.default_temperature if temperature is None else temperature
+        effective_temperature = self._effective_temperature(temperature)
         effective_top_p = self.default_top_p if top_p is None else top_p
         effective_presence = self.default_presence_penalty
         effective_frequency = self.default_frequency_penalty
@@ -1085,7 +1096,7 @@ class ModelClient:
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
-        effective_temperature = self.temperature if temperature is None else temperature
+        effective_temperature = self._effective_temperature(temperature)
         if effective_temperature is not None:  # pragma: no cover
             payload["temperature"] = effective_temperature
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
@@ -1368,7 +1379,7 @@ class ModelClient:
                 "messages": messages,
                 "max_tokens": self.max_output_tokens,
             }
-            effective_temperature = self.temperature if temperature is None else temperature
+            effective_temperature = self._effective_temperature(temperature)
             if effective_temperature is not None:
                 body["temperature"] = effective_temperature
             lines.append(json.dumps({
