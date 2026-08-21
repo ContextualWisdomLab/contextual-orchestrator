@@ -220,6 +220,7 @@ class _FastMLSIJudgeAdapter:
         response = self.orchestrator.client.proxy_send(agent, "chat/completions", payload)
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
+        self.orchestrator._record_in_flight_provider_usage(agent, usage, output)
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
 
     def _completion_payload(
@@ -2018,14 +2019,15 @@ class _AgentPoolStore:
 class _StateStore:
     """Minimal write-through sqlite persistence for orchestrator runtime state.
 
-    ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
+    ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run,
+    budget_meter)
     upsert by key; stream kinds (analytics, audit) append. Stream rows grow unbounded
     on disk while the in-memory deques stay capped — add pruning if db size matters.
     Runtime values (kind, key, payload, limit) are always bound through SQLite
     placeholders so persisted prompts and identifiers cannot become SQL syntax.
     """
 
-    _KEYED = {"workflow_run", "evaluation_run"}
+    _KEYED = {"workflow_run", "evaluation_run", "budget_meter"}
     _CREATE_RECORDS_SQL = (
         "CREATE TABLE IF NOT EXISTS records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
@@ -2169,6 +2171,9 @@ class TaskOrchestrator:
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
         self._workflow_run_lock = threading.Lock()
+        self._budget_spend_lock = threading.Lock()
+        self._budget_spent_output_tokens = 0
+        self._budget_spent_cost_usd = 0.0
         self._archived_spend: dict[str, Any] = {
             "run_count": 0,
             "estimated_prompt_tokens": 0,
@@ -2192,6 +2197,15 @@ class TaskOrchestrator:
         self._commercial_report_cache_local = threading.local()
         if self._store is not None:
             self._reload_state()
+            restored = self.spend_analytics()["totals"]
+            self._budget_spent_output_tokens = max(
+                self._budget_spent_output_tokens,
+                restored["estimated_output_tokens"],
+            )
+            self._budget_spent_cost_usd = max(
+                self._budget_spent_cost_usd,
+                restored["estimated_cost_usd"] or 0.0,
+            )
 
     def close(self) -> None:
         """Release optional durable resources owned by this orchestrator."""
@@ -2248,6 +2262,14 @@ class TaskOrchestrator:
         }
 
     def _reload_state(self) -> None:
+        budget_meter = self._store.load("budget_meter")
+        if budget_meter:
+            self._budget_spent_output_tokens = int(
+                budget_meter[-1].get("spent_output_tokens", 0)
+            )
+            self._budget_spent_cost_usd = float(
+                budget_meter[-1].get("spent_cost_usd", 0.0)
+            )
         for record in self._store.load("workflow_run"):
             self._remember_workflow_run(record)
         for evaluation in self._store.load("evaluation_run"):
@@ -2339,6 +2361,11 @@ class TaskOrchestrator:
                 usage,
                 responses=endpoint.strip("/") == "responses",
             )
+        self._record_in_flight_provider_usage(
+            agent,
+            passthrough_step.get("usage"),
+            passthrough_output,
+        )
         self._persist_workflow_run(
             {
                 "workflow_run_id": f"run_{uuid.uuid4().hex}",
@@ -2386,29 +2413,47 @@ class TaskOrchestrator:
             disabled_model = requested_model if requested_model is not None else final_agent.model
             raise RuntimeError(f"requested model {disabled_model!r} is disabled")
 
+        with self._budget_spend_lock:
+            budget_before = (
+                self._budget_spent_output_tokens,
+                self._budget_spent_cost_usd,
+            )
         workflow = self.conduct(messages, preserve_messages=True, judge=True)
-        in_flight_output_tokens = 0
-        in_flight_cost_usd = 0.0
+        workflow_output_tokens = 0
+        workflow_cost_usd = 0.0
         model_by_agent = {agent.id: agent.model for agent in self.agents}
-        for row in workflow["trace"]:
+        metered_steps = list(workflow["trace"])
+        verification = workflow.get("verification")
+        if isinstance(verification, dict) and isinstance(
+            verification.get("judge_usage"), dict
+        ):
+            metered_steps.append(
+                {
+                    "agent_id": verification.get("judge_agent_id", "unknown"),
+                    "usage": verification["judge_usage"],
+                    "output": "",
+                }
+            )
+        for row in metered_steps:
             output_tokens, _reported = _step_output_token_count(row)
-            in_flight_output_tokens += output_tokens
-            model = model_by_agent.get(row.get("served_agent_id") or row.get("agent_id"))
+            workflow_output_tokens += output_tokens
+            model = model_by_agent.get(
+                row.get("served_agent_id") or row.get("agent_id")
+            )
             price = self.price_per_million.get(model) if model is not None else None
             if price is not None:
-                in_flight_cost_usd += output_tokens / 1_000_000 * price
-        verification = workflow.get("verification")
-        verification_usage = verification.get("judge_usage") if isinstance(verification, dict) else None
-        if isinstance(verification_usage, dict):
-            judge_output_tokens, _reported = _step_output_token_count(
-                {"usage": verification_usage, "output": ""}
+                workflow_cost_usd += output_tokens / 1_000_000 * price
+        with self._budget_spend_lock:
+            recorded_output_tokens = self._budget_spent_output_tokens - budget_before[0]
+            recorded_cost_usd = self._budget_spent_cost_usd - budget_before[1]
+            self._budget_spent_output_tokens += max(
+                0,
+                workflow_output_tokens - recorded_output_tokens,
             )
-            in_flight_output_tokens += judge_output_tokens
-            judge_agent_id = verification.get("judge_agent_id")
-            judge_model = model_by_agent.get(judge_agent_id)
-            judge_price = self.price_per_million.get(judge_model) if judge_model is not None else None
-            if judge_price is not None:
-                in_flight_cost_usd += judge_output_tokens / 1_000_000 * judge_price
+            self._budget_spent_cost_usd += max(
+                0.0,
+                workflow_cost_usd - recorded_cost_usd,
+            )
         evidence = "\n\n".join(
             f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
             for row in workflow["trace"]
@@ -2438,10 +2483,7 @@ class TaskOrchestrator:
             )
             upstream["model"] = final_agent.model
             upstream["stream"] = False
-            self._raise_if_spend_budget_exceeded(
-                additional_output_tokens=in_flight_output_tokens,
-                additional_cost_usd=round(in_flight_cost_usd, 6),
-            )
+            self._raise_if_spend_budget_exceeded()
             synthesis_started = time.perf_counter()
             raw = self.client.proxy_send(final_agent, "responses", upstream)
             synthesis_output = raw.get("output_text")
@@ -2487,10 +2529,7 @@ class TaskOrchestrator:
             upstream["model"] = final_agent.model
             upstream["messages"] = synthesis_messages
             upstream["stream"] = False
-            self._raise_if_spend_budget_exceeded(
-                additional_output_tokens=in_flight_output_tokens,
-                additional_cost_usd=round(in_flight_cost_usd, 6),
-            )
+            self._raise_if_spend_budget_exceeded()
             synthesis_started = time.perf_counter()
             raw = self.client.proxy_send(final_agent, "chat/completions", upstream)
             synthesis_output = ""
@@ -2515,6 +2554,11 @@ class TaskOrchestrator:
                 usage,
                 responses=response_request,
             )
+        self._record_in_flight_provider_usage(
+            final_agent,
+            synthesis_step.get("usage"),
+            synthesis_output,
+        )
         trace = [*workflow["trace"], synthesis_step]
         workflow_run_id = f"run_{uuid.uuid4().hex}"
         record = {
@@ -2599,6 +2643,7 @@ class TaskOrchestrator:
             parts.append(delta)
             yield delta
         answer = "".join(parts)
+        self._record_in_flight_provider_usage(agent, None, answer)
         record = {
             "workflow_run_id": workflow_run_id or f"run_{uuid.uuid4().hex}",
             "created_at": int(time.time()),
@@ -2749,6 +2794,11 @@ class TaskOrchestrator:
             }
             if result.get("usage") is not None:
                 row["usage"] = result["usage"]
+            self._record_in_flight_provider_usage(
+                agent,
+                row.get("usage"),
+                result["content"],
+            )
             record = {
                 "workflow_run_id": f"run_{uuid.uuid4().hex}",
                 "created_at": int(time.time()),
@@ -3235,10 +3285,15 @@ class TaskOrchestrator:
             "verifier step when correctness matters.\n"
             f"Available agents:\n{pool}"
         )
-        raw = self.client.chat(planner, [
-            {"role": "system", "content": system},
-            {"role": "user", "content": task},
-        ])
+        raw, _served_id, _usage = self._invoke(
+            planner,
+            [
+                {"role": "system", "content": system},
+                {"role": "user", "content": task},
+            ],
+            text=task,
+            role="thinker",
+        )
         return self._parse_workflow_plan(raw)
 
     def _parse_workflow_plan(self, raw: str) -> list[WorkflowStep]:
@@ -3363,13 +3418,17 @@ class TaskOrchestrator:
         last_error: Exception | None = None
         for agent in candidates:
             try:
+                self._raise_if_spend_budget_exceeded()
                 output = self.client.chat(agent, messages)
+            except BudgetExceededError:
+                raise
             except Exception as exc:  # noqa: BLE001 - one agent failing routes to the next
                 last_error = exc
                 self._record_failure(agent.id)
                 continue
             self._record_success(agent.id)
             usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
+            self._record_in_flight_provider_usage(agent, usage, output)
             return output, agent.id, usage
         if isinstance(last_error, ProviderResponseError):
             raise last_error
@@ -3772,6 +3831,10 @@ class TaskOrchestrator:
                 "estimated_cost_usd": cost,
             })
 
+        with self._budget_spend_lock:
+            budget_output_tokens = self._budget_spent_output_tokens
+            budget_cost_usd = self._budget_spent_cost_usd
+
         return {
             "measurement_status": "local_runtime_estimate",
             "source_note": (
@@ -3792,7 +3855,10 @@ class TaskOrchestrator:
             },
             "by_model": rows,
             "unpriced_models": unpriced,
-            "budget": self._budget_block(total_output_tokens, round(total_cost, 6) if prices else None),
+            "budget": self._budget_block(
+                budget_output_tokens,
+                round(budget_cost_usd, 6) if prices else None,
+            ),
         }
 
     def _budget_block(self, spent_tokens: int, spent_cost: float | None) -> dict[str, Any]:
@@ -3819,6 +3885,31 @@ class TaskOrchestrator:
     def budget_status(self) -> dict[str, Any]:
         """Current spend-budget state (limits, spent, remaining, exceeded)."""
         return self.spend_analytics()["budget"]
+
+    def _record_in_flight_provider_usage(
+        self,
+        agent: ModelAgent,
+        usage: dict[str, Any] | None,
+        output: str,
+    ) -> None:
+        """Add one completed provider call to the process budget ledger."""
+        output_tokens, _reported = _step_output_token_count(
+            {"usage": usage, "output": output}
+        )
+        price = self.price_per_million.get(agent.model)
+        with self._budget_spend_lock:
+            self._budget_spent_output_tokens += output_tokens
+            if price is not None:
+                self._budget_spent_cost_usd += output_tokens / 1_000_000 * price
+            if self._store is not None:
+                self._store.save(
+                    "budget_meter",
+                    "process_budget",
+                    {
+                        "spent_output_tokens": self._budget_spent_output_tokens,
+                        "spent_cost_usd": self._budget_spent_cost_usd,
+                    },
+                )
 
     def _raise_if_spend_budget_exceeded(
         self,

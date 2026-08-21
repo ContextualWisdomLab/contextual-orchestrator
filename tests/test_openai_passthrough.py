@@ -184,6 +184,26 @@ def test_proxy_completion_blocks_before_structured_workflow_when_budget_is_excee
         )
 
 
+def test_structured_budget_stops_before_the_next_workflow_provider_call() -> None:
+    orchestrator = _build(budget_max_output_tokens=1)
+
+    with (
+        patch.object(orchestrator.client, "chat", wraps=orchestrator.client.chat) as chat,
+        patch.object(orchestrator.client, "proxy_send", wraps=orchestrator.client.proxy_send) as send,
+        pytest.raises(BudgetExceededError, match="spend budget exceeded"),
+    ):
+        orchestrator.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "extract JSON"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    assert chat.call_count == 1
+    send.assert_not_called()
+
+
 def test_model_client_request_settings_are_thread_local() -> None:
     client = _build().client
     previous_temperature = client.default_temperature
