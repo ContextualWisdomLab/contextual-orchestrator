@@ -1355,9 +1355,18 @@ class ModelClient:
             results = self._local_batch_chat(agent, requests, temperature)
         else:
             destination = self._validate_provider(agent)  # pragma: no cover
-            results = self._batch_run(  # pragma: no cover
-                agent, requests, temperature, poll_interval, poll_timeout, destination
-            )
+            batch_error: RuntimeError | None = None
+            try:
+                results = self._batch_run(  # pragma: no cover
+                    agent, requests, temperature, poll_interval, poll_timeout, destination
+                )
+            except Exception:  # noqa: BLE001 - provider batch boundary
+                # Batch upload, polling, and output retrieval all cross the same
+                # public gateway boundary; provider bodies and exception text stay
+                # inside the authorized provider observability system.
+                batch_error = RuntimeError(f"provider {agent.id} batch request failed")
+            if batch_error is not None:
+                raise batch_error
         return _validate_batch_results(requests, results)
 
     def _local_batch_chat(

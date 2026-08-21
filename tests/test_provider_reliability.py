@@ -207,6 +207,38 @@ def test_provider_passthrough_error_does_not_expose_raw_exception_text() -> None
         raise AssertionError("a failed passthrough request must raise")
 
 
+def test_provider_batch_error_does_not_expose_raw_exception_text() -> None:
+    """Batch upload/poll/download failures stay inside the provider boundary."""
+
+    class LeakyBatchClient(ModelClient):
+        def __init__(self) -> None:
+            super().__init__(max_retries=0)
+
+        def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+            return None
+
+        def _batch_upload(self, agent, payload, destination=None):  # type: ignore[override]
+            raise urllib.error.HTTPError(
+                "https://provider.example/files",
+                502,
+                "provider-batch-secret",
+                None,
+                io.BytesIO(b"provider-batch-body-secret"),
+            )
+
+    client = LeakyBatchClient()
+    agent = ModelAgent("worker_agent", "gpt", base_url="https://provider.example/v1", api_key_env="X")
+
+    with pytest.raises(RuntimeError) as raised:
+        client.batch_chat(agent, {"task_0": [{"role": "user", "content": "run batch"}]})
+
+    assert str(raised.value) == "provider worker_agent batch request failed"
+    assert "provider-batch-secret" not in str(raised.value)
+    assert "provider-batch-body-secret" not in str(raised.value)
+    assert raised.value.__cause__ is None
+    assert raised.value.__context__ is None
+
+
 def test_provider_stream_error_does_not_expose_raw_exception_text() -> None:
     """SSE transport failures stay package-owned before a stream reaches callers."""
 
