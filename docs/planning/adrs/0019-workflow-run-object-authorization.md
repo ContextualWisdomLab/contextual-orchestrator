@@ -31,6 +31,10 @@ policy.
   trace or access report.
 - The authenticated spend endpoint aggregates only runs owned by its bearer;
   the local library API may still omit an owner to request process-wide totals.
+- Its process-wide budget and owner totals are derived in one run scan, so the
+  displayed cap state cannot drift from enforcement during a concurrent update.
+- Admin audit events that reference workflow or evaluation runs follow the same
+  resource owner boundary; global agent-configuration events remain visible.
 - The stored digest is an authorization lookup key, not a user identity and is
   never rendered in public payloads.
 - Shared static credentials represent one deployment principal; multi-principal
@@ -44,8 +48,9 @@ policy.
 
 Owner mismatch, list filtering, evaluation ownership, digest stability, and
 response redaction are covered by
-`tests/test_workflow_run_object_authorization.py`. External-bearer spend
-isolation is covered by `tests/test_spend_analytics.py`.
+`tests/test_workflow_run_object_authorization.py`. External-bearer spend and
+audit isolation, shared-budget truthfulness, and single-scan consistency are
+covered by `tests/test_spend_analytics.py`.
 
 ## References
 

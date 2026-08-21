@@ -51,6 +51,33 @@ def test_evaluation_runs_carry_owner_boundary() -> None:
     assert evaluation["results"][0]["workflow_run_id"] in evaluation["workflow_run_ids"]
 
 
+def test_audit_events_follow_workflow_and_evaluation_owners() -> None:
+    """Resource audit identifiers must not cross an external principal boundary."""
+    orchestrator = _orchestrator()
+    owner_a_run = orchestrator.run(
+        [{"role": "user", "content": "owner a run"}], owner_id="owner_a"
+    )
+    owner_b_evaluation = orchestrator.run_evaluation(["owner b evaluation"], owner_id="owner_b")
+    unowned_run = orchestrator.run([{"role": "user", "content": "legacy unowned run"}])
+    orchestrator._audit_events.extend(
+        [
+            "malformed",
+            {"event_detail": []},
+            {"event_detail": {"workflow_run_id": []}},
+            {"event_detail": {"evaluation_run_id": []}},
+        ]
+    )
+
+    owner_a_events = repr(orchestrator.list_recent_audit_events(owner_id="owner_a"))
+    owner_b_events = repr(orchestrator.list_recent_audit_events(owner_id="owner_b"))
+
+    assert owner_a_run["workflow_run_id"] in owner_a_events
+    assert owner_b_evaluation["evaluation_run_id"] not in owner_a_events
+    assert unowned_run["workflow_run_id"] not in owner_a_events
+    assert owner_a_run["workflow_run_id"] not in owner_b_events
+    assert owner_b_evaluation["evaluation_run_id"] in owner_b_events
+
+
 def test_principal_id_is_a_stable_non_secret_token_digest() -> None:
     """Use a token-derived lookup key without returning or storing the token."""
     headers = Message()

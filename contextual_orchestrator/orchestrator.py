@@ -2858,11 +2858,38 @@ class TaskOrchestrator:
             for record in self._workflow_runs.values()
         )
 
-    def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
-        """Return recent audit events in newest-first order."""
+    def list_recent_audit_events(
+        self,
+        page_number: int = 1,
+        page_size: int = 25,
+        owner_id: str | None = None,
+    ) -> list[dict[str, Any]]:
+        """Return newest audit events, hiding another owner's run resources."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
         events = list(self._audit_events)
+        if owner_id is not None:
+            visible_events: list[dict[str, Any]] = []
+            for event in events:
+                if not isinstance(event, dict):
+                    continue
+                detail = event.get("event_detail")
+                if not isinstance(detail, dict):
+                    continue
+                resource_owner = owner_id
+                workflow_run_id = detail.get("workflow_run_id")
+                evaluation_run_id = detail.get("evaluation_run_id")
+                if workflow_run_id is not None:
+                    if not isinstance(workflow_run_id, str):
+                        continue
+                    resource_owner = self._workflow_runs.get(workflow_run_id, {}).get("owner_id")
+                elif evaluation_run_id is not None:
+                    if not isinstance(evaluation_run_id, str):
+                        continue
+                    resource_owner = self._evaluation_runs.get(evaluation_run_id, {}).get("owner_id")
+                if resource_owner == owner_id:
+                    visible_events.append(event)
+            events = visible_events
         start = (page_number - 1) * page_size
         end = start + page_size
         total = len(events)
@@ -2905,14 +2932,15 @@ class TaskOrchestrator:
         total_prompt_tokens = 0
         reported_prompt_tokens = 0
         any_reported_prompt = False
+        run_count = 0
+        global_output_tokens = 0
+        global_output_tokens_by_model: dict[str, int] = {}
 
-        runs = (
-            run
-            for run in self._workflow_runs.values()
-            if owner_id is None or run.get("owner_id") == owner_id
-        )
-        for run in runs:
-            total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
+        for run in self._workflow_runs.values():
+            included = owner_id is None or run.get("owner_id") == owner_id
+            if included:
+                run_count += 1
+                total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
             for step in run["trace"]:
                 model = model_by_agent.get(step.get("agent_id"), "unknown")
                 estimated = estimate_tokens(step.get("output", ""))
@@ -2926,6 +2954,13 @@ class TaskOrchestrator:
                     effective, is_reported = reported, True
                 else:
                     effective, is_reported = estimated, False
+                if owner_id is not None:
+                    global_output_tokens += effective
+                    global_output_tokens_by_model[model] = (
+                        global_output_tokens_by_model.get(model, 0) + effective
+                    )
+                if not included:
+                    continue
                 bucket = by_model.setdefault(
                     model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
                 )
@@ -2968,7 +3003,15 @@ class TaskOrchestrator:
         if owner_id is not None:
             # The cap is shared by the process; do not report a principal-local
             # remainder that disagrees with the enforcement path in run().
-            budget = self.spend_analytics(price_per_million=price_per_million)["budget"]
+            global_total_cost = sum(
+                round(tokens / 1_000_000 * prices[model], 6)
+                for model, tokens in global_output_tokens_by_model.items()
+                if model in prices
+            )
+            budget = self._budget_block(
+                global_output_tokens,
+                round(global_total_cost, 6) if prices else None,
+            )
 
         return {
             "measurement_status": "local_runtime_estimate",
@@ -2978,10 +3021,7 @@ class TaskOrchestrator:
             ),
             "pricing_configured": bool(prices),
             "totals": {
-                "run_count": sum(
-                    owner_id is None or run.get("owner_id") == owner_id
-                    for run in self._workflow_runs.values()
-                ),
+                "run_count": run_count,
                 "estimated_output_tokens": total_output_tokens,
                 "estimated_prompt_tokens": total_prompt_tokens,
                 "reported_prompt_tokens": reported_prompt_tokens,
@@ -9145,7 +9185,7 @@ class TaskOrchestrator:
                     page_size=max(1, len(self._run_order)), owner_id=owner_id
                 )
             ],
-            "recent_audit_events": self.list_recent_audit_events(),
+            "recent_audit_events": self.list_recent_audit_events(owner_id=owner_id),
             "spend": self.spend_analytics(owner_id=owner_id),
         }
 
