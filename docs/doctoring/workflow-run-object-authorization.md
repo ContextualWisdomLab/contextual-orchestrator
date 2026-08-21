@@ -10,8 +10,10 @@ retrieve another principal's run identifier.
 ## Implemented contract
 
 - Each authenticated deployment principal produces a stable SHA-256 owner key;
-  static split admin/inference credentials share one deployment key, and the
-  raw token is never persisted or returned.
+  static split admin/inference credentials share one deployment key, while an
+  external bearer verifier must return verified `iss` and `sub` claims through
+  its `principal` scope. Token rotation therefore preserves one subject's
+  owner key, and the raw token is never persisted or returned.
 - Synchronous, streamed, workflow, and evaluation records carry that owner key.
 - Run lists, run details, access reports, and evaluation details filter by the
   owner key and return the same not-found result for an unauthorized ID.
