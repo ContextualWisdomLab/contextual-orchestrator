@@ -4029,7 +4029,13 @@ class TaskOrchestrator:
 
     def budget_status(self) -> dict[str, Any]:
         """Current spend-budget state (limits, spent, remaining, exceeded)."""
-        return self.spend_analytics()["budget"]
+        with self._budget_spend_lock:
+            spent_tokens = self._budget_spent_output_tokens
+            spent_cost = self._budget_spent_cost_usd
+        return self._budget_block(
+            spent_tokens,
+            round(spent_cost, 6) if self.price_per_million else None,
+        )
 
     def _record_in_flight_provider_usage(
         self,

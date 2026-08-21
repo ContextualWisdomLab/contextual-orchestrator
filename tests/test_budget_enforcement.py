@@ -98,6 +98,24 @@ def test_unpersisted_provider_usage_remains_in_the_budget_ledger() -> None:
     assert orchestrator.budget_status()["spent_cost_usd"] == 1.0
 
 
+def test_per_call_budget_gate_does_not_rescan_workflow_runs(monkeypatch) -> None:
+    """Read the synchronized meter instead of rebuilding buyer spend analytics."""
+    orchestrator = TaskOrchestrator([_agent()], budget_max_output_tokens=1)
+    orchestrator._record_in_flight_provider_usage(
+        _agent(),
+        {"completion_tokens": 1},
+        "",
+    )
+    monkeypatch.setattr(
+        orchestrator,
+        "spend_analytics",
+        lambda: pytest.fail("budget gate must use the incremental meter"),
+    )
+
+    with pytest.raises(BudgetExceededError, match="spend budget exceeded"):
+        orchestrator._raise_if_spend_budget_exceeded()
+
+
 def test_provider_budget_meter_survives_restart() -> None:
     with tempfile.TemporaryDirectory() as directory:
         state_db = str(Path(directory) / "state.db")
