@@ -26,6 +26,10 @@ available through a public gateway error or an exception cause.
 6. Provider diagnostics may be counted by allowlisted type/code in internal
    telemetry, but raw bodies, exception text, credentials, and prompts are not
    persisted or returned.
+7. Direct SSE stream transport failures are converted to a package-owned
+   streaming error without retry or failover. A stream may already have emitted
+   bytes, so replaying it would duplicate output; the provider exception and
+   response body remain inside the gateway.
 
 ## Consequences
 
