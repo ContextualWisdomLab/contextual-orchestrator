@@ -131,16 +131,29 @@ def test_provider_native_structured_output_keeps_cost_and_lineage() -> None:
     coordinator = _coordinator()
     provider_request = {
         "model": "mock-a",
-        "messages": [{"role": "user", "content": "return one JSON object"}],
-        "response_format": {"type": "json_object"},
+        "input": "return one JSON object",
+        "text": {"format": {"type": "json_object"}},
+    }
+    messages = [{"role": "user", "content": "return one JSON object"}]
+    provider_response = {
+        "object": "response",
+        "output_text": "{}",
+        "output": [],
+        "usage": {"input_tokens": 7, "output_tokens": 11, "total_tokens": 18},
     }
 
-    result = coordinator.complete(
-        provider_request["messages"],
-        hints={"channel": "batch"},
-        response_format=provider_request["response_format"],
-        provider_request=provider_request,
-    )
+    with patch.object(
+        coordinator.orchestrator.client,
+        "proxy_send",
+        return_value=provider_response,
+    ):
+        result = coordinator.complete(
+            messages,
+            hints={"channel": "batch"},
+            response_format={"type": "json_object"},
+            provider_request=provider_request,
+            provider_endpoint="responses",
+        )
 
     assert result["channel"] == "sync"
     assert result["answer"] == "{}"
@@ -148,6 +161,9 @@ def test_provider_native_structured_output_keeps_cost_and_lineage() -> None:
     assert result["provider_response"]["orchestration"]["usage_record_id"] == result[
         "usage_record_id"
     ]
+    record = coordinator.ledger.records()[0]
+    assert record["prompt_tokens"] == 7
+    assert record["completion_tokens"] == 11
 
 
 def test_provider_native_completion_rejects_unknown_endpoint() -> None:
