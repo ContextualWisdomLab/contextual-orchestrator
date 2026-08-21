@@ -154,6 +154,9 @@ def test_discover_all_models_continues_after_one_provider_error() -> None:
     assert [m.model_id for m in discovered] == ["meta/llama-3.3"]
     assert len(errors) == 1
     assert errors[0].provider_name == "openai"
+    assert errors[0].error_code == "transport_error"
+    assert str(errors[0]) == "model discovery failed for provider 'openai': transport_error"
+    assert "connection refused" not in str(errors[0])
 
 
 def test_agent_id_for_is_two_word_snake_case() -> None:

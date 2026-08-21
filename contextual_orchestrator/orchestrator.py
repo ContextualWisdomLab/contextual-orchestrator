@@ -81,6 +81,10 @@ class BudgetExceededError(RuntimeError):
         self.detail = detail or {}
 
 
+class ProviderResponseError(RuntimeError):
+    """A package-owned, safe explanation for a structurally invalid provider response."""
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
 
@@ -906,11 +910,12 @@ class ModelClient:
                 )
             except Exception as exc:  # noqa: BLE001 - classify then decide
                 last_error = exc
+                if isinstance(exc, ProviderResponseError):
+                    raise
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        detail = f": {last_error}" if last_error else ""
-        raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
+        raise RuntimeError(f"provider {agent.id} request failed") from None
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -961,11 +966,11 @@ class ModelClient:
         if isinstance(content, str):
             return content
         if isinstance(message, dict) and message.get("reasoning"):
-            raise RuntimeError(
+            raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
                 "for mlx-lm set chat_template_args={\"enable_thinking\": false} or increase max_output_tokens"
             )
-        raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
+        raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
 
     @staticmethod
     def _connect_validated(
@@ -1163,7 +1168,7 @@ class ModelClient:
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
+        raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
 
     def _send_raw(
         self,
