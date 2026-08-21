@@ -91,6 +91,16 @@ def test_main_accepts_explicit_argv_without_mutating_process_arguments() -> None
     assert security.auth_token == "argv-token"
 
 
+def test_main_runs_startup_discovery_once() -> None:
+    with (
+        patch("contextual_orchestrator.__main__._auto_discover_runtime_agents") as discover,
+        patch("contextual_orchestrator.__main__.serve"),
+    ):
+        main(["--serve", "--auth-token", "argv-token", "--auto-discover-model-agents"])
+
+    discover.assert_called_once()
+
+
 def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
     invalid_options = (
         (["--local-concurrency", "0"], "positive integer"),

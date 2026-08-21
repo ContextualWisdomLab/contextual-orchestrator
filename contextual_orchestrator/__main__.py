@@ -358,8 +358,6 @@ def main(argv: list[str] | None = None) -> None:
     )
     if args.auto_discover_model_agents:
         _auto_discover_runtime_agents(orchestrator)
-    if args.auto_discover_model_agents:
-        _auto_discover_runtime_agents(orchestrator)
 
     if args.conduct_hint_threshold is not None or args.route_text_length_threshold is not None:
         overrides: dict[str, int] = {}
