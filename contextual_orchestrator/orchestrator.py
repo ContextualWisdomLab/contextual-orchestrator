@@ -587,7 +587,8 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
         payload["max_tokens"] = request["max_output_tokens"]
 
     tools: list[dict[str, Any]] = []
-    for tool in request.get("tools", []):
+    raw_tools = request.get("tools")
+    for tool in raw_tools if isinstance(raw_tools, list) else []:
         if not isinstance(tool, dict) or tool.get("type") != "function":
             continue
         function = {
@@ -1929,6 +1930,9 @@ class TaskOrchestrator:
                     echo["metadata"] = {
                         key: value for key, value in metadata.items() if value is not None
                     }
+                for key in ("text", "tools"):
+                    if body.get(key) is not None:
+                        echo[key] = body[key]
                 converted["echo"] = echo
             converted["orchestration"] = orchestration
             return converted
