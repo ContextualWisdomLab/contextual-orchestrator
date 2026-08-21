@@ -8,6 +8,7 @@ import urllib.error
 import urllib.request
 from pathlib import Path
 import sys
+from unittest.mock import patch
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -64,6 +65,38 @@ def test_http_responses_accepts_valid_temperature_and_top_p() -> None:
     finally:
         server.shutdown()
         thread.join(timeout=5)
+
+
+def test_http_responses_prefers_native_max_output_tokens() -> None:
+    orch = build()
+    observed: list[int | None] = []
+    original_proxy_send = orch.client.proxy_send
+
+    def observe_proxy_send(agent, endpoint, payload):
+        observed.append(orch.client._request_setting("max_output_tokens", orch.client.max_output_tokens))
+        return original_proxy_send(agent, endpoint, payload)
+
+    with patch.object(orch.client, "proxy_send", side_effect=observe_proxy_send):
+        server = build_server(orch, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
+        thread = threading.Thread(target=server.serve_forever, daemon=True)
+        thread.start()
+        try:
+            status, body = _post(
+                server.server_address[1],
+                {
+                    "model": "mock-planner",
+                    "input": "hello budget",
+                    "max_tokens": 11,
+                    "max_completion_tokens": 13,
+                    "max_output_tokens": 17,
+                },
+            )
+        finally:
+            server.shutdown()
+            thread.join(timeout=5)
+
+    assert status == 200, body
+    assert observed == [17]
 
 
 def test_http_responses_rejects_out_of_range_temperature() -> None:
