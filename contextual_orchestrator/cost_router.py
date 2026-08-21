@@ -211,6 +211,7 @@ class CostRoutingCoordinator:
                 "request_count": job.request_count,
             }
 
+        provider_response: Optional[Dict[str, Any]] = None
         if provider_request is None:
             result = self.orchestrator.run(
                 messages,
@@ -234,6 +235,22 @@ class CostRoutingCoordinator:
                 self.orchestrator.get_workflow_run(orchestration["workflow_run_id"])
             )
             result["provider_response"] = provider_response
+        provider_usage = (
+            provider_response.get("usage")
+            if isinstance(provider_response, dict)
+            and isinstance(provider_response.get("usage"), dict)
+            else {}
+        )
+        prompt_tokens = provider_usage.get(
+            "prompt_tokens", provider_usage.get("input_tokens")
+        )
+        completion_tokens = provider_usage.get(
+            "completion_tokens", provider_usage.get("output_tokens")
+        )
+        if type(prompt_tokens) is not int or prompt_tokens < 0:
+            prompt_tokens = None
+        if type(completion_tokens) is not int or completion_tokens < 0:
+            completion_tokens = None
         record = self._record_completion(
             messages=messages,
             answer=result.get("answer", ""),
@@ -243,6 +260,8 @@ class CostRoutingCoordinator:
             model_name=model_name,
             provider_model=self._served_provider_model(result, model_name),
             workflow_run_id=result.get("workflow_run_id"),
+            prompt_tokens=prompt_tokens,
+            completion_tokens=completion_tokens,
         )
         result["channel"] = "sync"
         result["routing_reason"] = (
