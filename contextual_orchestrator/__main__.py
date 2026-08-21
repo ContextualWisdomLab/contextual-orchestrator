@@ -28,9 +28,9 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     ModelAgent,
     ModelClient,
-    TaskOrchestrator,
     load_agents,
 )
+from .passthrough_failover import TaskOrchestrator
 from .server import SecurityConfig, serve
 
 DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"

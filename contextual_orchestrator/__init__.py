@@ -39,10 +39,10 @@ from .credentials import NotConfigured, get_credential, register_credential
 from .kv_config import InMemoryConfigStore, get_config_store
 from .orchestrator import (
     ModelAgent,
-    TaskOrchestrator,
     WorkflowStep,
     load_agents,
 )
+from .passthrough_failover import TaskOrchestrator
 from .token_counting import HeuristicTokenCounter, build_token_counter
 
 __all__ = [
