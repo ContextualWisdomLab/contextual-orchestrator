@@ -9,6 +9,7 @@ import os
 import pytest
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
+from contextual_orchestrator.chat_capability import is_general_chat_agent_model_id
 from contextual_orchestrator.credentials import (
     InMemoryCredentialBackend,
     get_credential,
@@ -138,6 +139,24 @@ def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
         ("openrouter", "complete-model"),
         ("bytez", "partial-model"),
     ]
+
+
+@pytest.mark.parametrize(
+    ("model_id", "eligible"),
+    [
+        ("dall-e-3", False),
+        ("openai/clip-vit-large", False),
+        ("siglip-base-patch16", False),
+        ("nvidia/guard-model", False),
+        ("provider/audio-chat-model", True),
+        ("openai/gpt-4.1-mini", True),
+    ],
+)
+def test_provider_bootstrap_reuses_shared_chat_capability_policy(model_id, eligible):
+    """Bootstrap and runtime must agree on ordinary chat-model eligibility."""
+    model = _model("openai", "OPENAI_API_KEY", model_id, 1.0)
+    assert provider_bootstrap.is_chat_serving_candidate(model) is eligible
+    assert eligible is is_general_chat_agent_model_id(model_id)
 
 
 def test_provider_bootstrap_collapses_nim_credentials_to_one_outage_domain():

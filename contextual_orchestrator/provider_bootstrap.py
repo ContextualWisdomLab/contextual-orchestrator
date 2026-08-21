@@ -17,9 +17,9 @@ import argparse
 from dataclasses import dataclass, replace
 import json
 import os
-import re
 from typing import Mapping, Sequence
 
+from .chat_capability import is_general_chat_agent_model_id
 from .cost_ledger import PriceBook
 from .credentials import (
     InMemoryCredentialBackend,
@@ -44,37 +44,6 @@ PROVIDER_CREDENTIAL_NAMES: tuple[str, ...] = tuple(
 )
 """Fixed organization credential inventory accepted by the bootstrap boundary."""
 
-_NON_CHAT_EXACT_TOKENS = frozenset(
-    {
-        "audio",
-        "bge",
-        "e5",
-        "embed",
-        "embedding",
-        "embeddings",
-        "guard",
-        "gte",
-        "image",
-        "images",
-        "moderation",
-        "realtime",
-        "rerank",
-        "reranker",
-        "safety",
-        "sora",
-        "speech",
-        "transcribe",
-        "transcription",
-        "tts",
-        "whisper",
-    }
-)
-_NON_CHAT_TOKEN_PREFIXES = (
-    "embed",
-    "moderation",
-    "rerank",
-    "transcrib",
-)
 _GENERIC_SERVING_TAGS = (
     "discovered",
     "chat",
@@ -191,27 +160,14 @@ def register_provider_credentials_atomically(
     return tuple(sorted(normalized))
 
 
-def _model_tokens(model_id: str) -> tuple[str, ...]:
-    """Return conservative tokens used only to exclude obvious non-chat transports."""
-    return tuple(
-        token for token in re.split(r"[^a-z0-9]+", model_id.casefold()) if token
-    )
-
-
 def is_chat_serving_candidate(model: DiscoveredModel) -> bool:
-    """Exclude catalog identifiers that clearly describe non-chat transports.
+    """Apply the shared ordinary-chat eligibility policy to a catalog row.
 
     This is a negative compatibility filter, not positive capability inference.
     Models that survive receive only generic chat-serving tags until an explicit
     provider/catalog capability record or measured evidence is available.
     """
-    tokens = _model_tokens(model.model_id)
-    for token in tokens:
-        if token in _NON_CHAT_EXACT_TOKENS:
-            return False
-        if token.startswith(_NON_CHAT_TOKEN_PREFIXES):
-            return False
-    return bool(tokens)
+    return is_general_chat_agent_model_id(model.model_id)
 
 
 def serving_tags_for_discovered(_model: DiscoveredModel) -> tuple[str, ...]:
