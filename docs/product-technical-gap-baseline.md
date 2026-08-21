@@ -137,7 +137,7 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 completed until the protected-main contract is satisfied.
 
 All links and full commit SHAs in this snapshot reflect the remote state
-observed at 2026-08-21 09:48 Asia/Seoul; they are evidence pointers, not
+observed at 2026-08-21 12:36 Asia/Seoul; they are evidence pointers, not
 standing approval.
 
 ### External central workflow prerequisite
