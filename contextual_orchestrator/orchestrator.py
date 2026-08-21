@@ -68,6 +68,8 @@ def _temperature_capability_rejection(exc: Exception) -> bool:
         return False
     try:
         body = exc.read()
+    except http.client.IncompleteRead as read_error:
+        body = read_error.partial
     except (OSError, ValueError):
         body = b""
     body_bytes = body if isinstance(body, bytes) else str(body).encode("utf-8")
