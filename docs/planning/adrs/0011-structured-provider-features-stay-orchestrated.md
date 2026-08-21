@@ -15,6 +15,7 @@ affected_components:
   - "contextual_orchestrator/orchestrator.py"
   - "contextual_orchestrator/server.py"
   - "tests/test_openai_passthrough.py"
+  - "tests/test_model_judge.py"
 effort: M
 supersedes: null
 superseded-by: null
@@ -27,7 +28,7 @@ related:
     relation: implements
 success_criteria:
   - metric: "structured requests using the multi-agent workflow"
-    target: "100% of non-null response_format, tools, tool_choice, functions, function_call, and Responses requests"
+    target: "100% of client-facing non-null response_format, tools, tool_choice, functions, function_call, and Responses requests"
     measurement_window: "every structured-output regression run"
     source: "tests/test_openai_passthrough.py"
   - metric: "Responses json_schema translation"
@@ -72,6 +73,9 @@ as a plain chat request.
 6. Tool execution loops are not fabricated by this decision. Provider tools are
    preserved for the final synthesized call; an actual execute-observe-replan
    loop requires a separate ADR and contract.
+7. The internal fail-closed LLM-as-a-Judge call remains one bounded,
+   schema-constrained provider request. It uses the orchestrator's existing
+   provider transport but never recursively starts another conducted workflow.
 
 ## Research basis
 
@@ -95,6 +99,8 @@ define the wire-shape translation, not the orchestration policy.
 * Good: JSON object and JSON schema requests share one tested policy instead of
   diverging into transport-specific single-agent paths.
 * Good: the final provider retains the capability fields it must interpret.
+* Good: internal verification does not recursively multiply provider calls or
+  replace the judge verdict with an unrelated synthesized answer.
 * Bad: structured requests consume more provider calls and can take longer than
   a plain routed request.
 * Bad: tool execution remains a follow-up capability rather than being implied
@@ -104,8 +110,9 @@ define the wire-shape translation, not the orchestration policy.
 
 Run the focused structured-output and orchestration tests. Confirm that the
 Responses JSON-schema test preserves the schema, the tools test reports the
-conducted workflow, and the multimodal test retains `image_url` through final
-synthesis. Do not claim provider-side semantic schema validity from HTTP 200.
+conducted workflow, the multimodal test retains `image_url` through final
+synthesis, and the internal structured judge test performs exactly one provider
+call. Do not claim provider-side semantic schema validity from HTTP 200.
 
 ## References
 

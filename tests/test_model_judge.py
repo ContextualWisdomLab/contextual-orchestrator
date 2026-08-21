@@ -276,7 +276,7 @@ def test_fast_mlsirm_adapter_accepts_contextual_judge_mode_keyword() -> None:
     assert completion["mode"] == "conduct"
 
 
-def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> None:
+def test_fast_mlsirm_adapter_keeps_structured_completion_to_one_provider_call() -> None:
     orchestrator, _ = _orch("unused")
     adapter = orchestrator_module._FastMLSIJudgeAdapter(
         orchestrator,
@@ -289,8 +289,8 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
         "json_schema": {"name": "judge", "strict": True, "schema": {"type": "object"}},
     }
     with patch.object(
-        orchestrator,
-        "proxy_completion",
+        orchestrator.client,
+        "proxy_send",
         return_value={
             "choices": [{"message": {"content": '{"meets_threshold":true,"rationale":"ok"}'}}],
             "usage": {"prompt_tokens": 3, "completion_tokens": 2, "total_tokens": 5},
@@ -303,6 +303,8 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
         )
 
     proxy.assert_called_once_with(
+        orchestrator.candidates[0],
+        "chat/completions",
         {
             "model": "model-x",
             "messages": [{"role": "user", "content": "judge"}],
@@ -314,6 +316,28 @@ def test_fast_mlsirm_adapter_routes_structured_completion_through_gateway() -> N
     assert completion["answer"] == '{"meets_threshold":true,"rationale":"ok"}'
     assert completion["mode"] == "conduct"
     assert completion["trace"][0]["usage"]["total_tokens"] == 5
+
+
+def test_fast_mlsirm_structured_adapter_omits_implicit_temperature() -> None:
+    orchestrator, _ = _orch("unused")
+    orchestrator.client.temperature = None
+    adapter = orchestrator_module._FastMLSIJudgeAdapter(
+        orchestrator,
+        "task",
+        "general_agent",
+    )
+
+    with patch.object(
+        orchestrator.client,
+        "proxy_send",
+        return_value={"choices": [{"message": {"content": "{}"}}]},
+    ) as proxy:
+        adapter.complete_structured(
+            [{"role": "user", "content": "judge"}],
+            response_format={"type": "json_object"},
+        )
+
+    assert "temperature" not in proxy.call_args.args[2]
 
 
 def test_fast_mlsirm_judge_contract_does_not_pass_threshold_to_judge_call() -> None:

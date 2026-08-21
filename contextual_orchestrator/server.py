@@ -3044,7 +3044,7 @@ def _validate_responses_store(body: dict[str, Any]) -> bool | None:
     """Responses API ``store`` — strict boolean; ``true`` is not supported.
 
     OpenAI may persist Responses when ``store=true``. This gateway's Responses
-    path is a single-agent passthrough without a persistence plane, so
+    path has no provider-response persistence plane, so
     ``store=true`` fails closed rather than silently dropping a buyer-visible
     storage control. ``store=false`` and omit remain valid.
     """
@@ -5386,8 +5386,8 @@ def build_server(
                     self._send(_response_payload(retrieved, include_trace=True))
                     return
                 if path == "/v1/responses":
-                    # The Responses API has no chat-completions verifier equivalent,
-                    # so every request is proxied to one agent verbatim.
+                    # Every Responses request uses the conducted workflow and
+                    # the selected synthesizer produces the provider shape.
                     _reject_unknown_keys(body, ALLOWED_RESPONSES_KEYS)
                     # Fail-closed shape checks before passthrough so buyers never
                     # get a 200 after shipping invalid OpenAI-shaped metadata/input.

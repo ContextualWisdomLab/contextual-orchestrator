@@ -158,19 +158,21 @@ class _FastMLSIJudgeAdapter:
         *,
         response_format: dict[str, Any],
     ) -> dict[str, Any]:
-        """Route a Judge JSON-schema request through the existing gateway proxy."""
+        """Send one bounded Judge JSON-schema request through the provider transport."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
-        response = self.orchestrator.proxy_completion({
+        payload = {
             "model": agent.model,
             "messages": messages,
-            "temperature": self.orchestrator.client.temperature,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        })
+        }
+        if self.orchestrator.client.temperature is not None:
+            payload["temperature"] = self.orchestrator.client.temperature
+        response = self.orchestrator.client.proxy_send(agent, "chat/completions", payload)
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
