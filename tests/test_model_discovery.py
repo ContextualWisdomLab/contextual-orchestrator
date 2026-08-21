@@ -28,6 +28,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     agent_id_for,
     discover_all_models,
     discover_provider_models,
+    ProviderDiscoveryError,
     refresh_price_book,
     select_cheapest_discovered_agent,
     select_top_n_cheapest_discovered_agents,
@@ -86,6 +87,20 @@ def test_discover_provider_models_skips_when_credential_missing() -> None:
     assert discover_provider_models(OPENAI_SOURCE) == []
 
 
+def test_discovery_rejects_non_https_model_catalog_url() -> None:
+    """Never allow a model catalog source to reach a non-HTTPS URL opener."""
+    register_credential("UNSAFE_CATALOG_KEY", "catalog-secret")
+    unsafe_source = ProviderModelSource(
+        provider_name="unsafe_catalog",
+        credential_name="UNSAFE_CATALOG_KEY",
+        list_url="file:///tmp/models.json",
+        chat_base_url="https://example.invalid/v1",
+    )
+
+    with pytest.raises(ProviderDiscoveryError, match="non-https"):
+        discover_provider_models(unsafe_source)
+
+
 def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     register_credential("OPENROUTER_API_KEY", "sk-router")
     payload = {
@@ -93,6 +108,8 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
             {"id": "meta/llama-3.3", "pricing": {"prompt": "0.0000006", "completion": "0.0000012"}},
             {"id": "no-pricing-model"},
             {"missing": "id-field"},
+            ["not-a-model-row"],
+            {"id": "invalid-pricing-model", "pricing": {"prompt": "unknown", "completion": []}},
         ]
     }
     seen_requests = []
@@ -106,11 +123,17 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
 
     assert seen_requests[0].get_header("Authorization") == "Bearer sk-router"
     assert seen_requests[0].full_url == "https://openrouter.ai/api/v1/models"
-    assert [m.model_id for m in discovered] == ["meta/llama-3.3", "no-pricing-model"]
+    assert [m.model_id for m in discovered] == [
+        "meta/llama-3.3",
+        "no-pricing-model",
+        "invalid-pricing-model",
+    ]
     priced = discovered[0]
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
     assert discovered[1].prompt_price_per_1k is None
+    assert discovered[2].prompt_price_per_1k is None
+    assert discovered[2].completion_price_per_1k is None
 
 
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
@@ -119,6 +142,8 @@ def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:
         "error": None,
         "output": [
             {"modelId": "0-hero/Matter-0.1-Slim-7B-C", "task": "chat", "meterPrice": "0.0006 / sec"},
+            "not-a-model-row",
+            {"modelId": 12345},
         ],
     }
     seen_requests = []
