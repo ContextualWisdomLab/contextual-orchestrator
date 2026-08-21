@@ -356,6 +356,44 @@ def test_structured_provider_completion_persists_final_synthesis_run() -> None:
     assert orch.spend_analytics()["totals"]["run_count"] == 1
 
 
+def test_orchestrated_responses_synthesis_normalizes_provider_usage() -> None:
+    orch = _build()
+    raw = {
+        "object": "response",
+        "output": [{"type": "message", "content": [{"type": "output_text", "text": "{}"}]}],
+        "usage": {"input_tokens": 11, "output_tokens": 7, "total_tokens": 18},
+    }
+    with patch.object(
+        orch,
+        "conduct",
+        return_value={
+            "trace": [{
+                "id": "worker",
+                "agent_id": "worker_agent",
+                "role": "worker",
+                "output": "verified",
+            }]
+        },
+    ), patch.object(orch.client, "proxy_send", return_value=raw):
+        result = orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "input": "extract JSON",
+                "text": {"format": {"type": "json_object"}},
+            },
+            endpoint="responses",
+        )
+
+    run = orch.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    assert run["trace"][-1]["usage"] == {
+        "input_tokens": 11,
+        "output_tokens": 7,
+        "total_tokens": 18,
+        "prompt_tokens": 11,
+        "completion_tokens": 7,
+    }
+
+
 def test_fast_mlsirm_structured_judge_uses_one_direct_provider_call() -> None:
     orch = _build()
     orch.client.temperature = 0.4

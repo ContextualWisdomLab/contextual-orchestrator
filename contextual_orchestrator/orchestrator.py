@@ -664,6 +664,12 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     if "max_output_tokens" in request and "max_tokens" not in payload:
         payload["max_tokens"] = request["max_output_tokens"]
 
+    response_format = _responses_text_format_to_chat_response_format(request.get("text"))
+    if response_format is None and isinstance(request.get("response_format"), dict):
+        response_format = request["response_format"]
+    if response_format is not None:
+        payload["response_format"] = response_format
+
     tools: list[dict[str, Any]] = []
     raw_tools = request.get("tools")
     for tool in raw_tools if isinstance(raw_tools, list) else []:
@@ -2367,7 +2373,16 @@ class TaskOrchestrator:
         }
         usage = raw.get("usage")
         if isinstance(usage, dict):
-            synthesis_step["usage"] = usage
+            persisted_usage = dict(usage)
+            if response_request:
+                for responses_key, chat_key in (
+                    ("input_tokens", "prompt_tokens"),
+                    ("output_tokens", "completion_tokens"),
+                ):
+                    value = persisted_usage.get(responses_key)
+                    if type(value) is int and value >= 0:
+                        persisted_usage.setdefault(chat_key, value)
+            synthesis_step["usage"] = persisted_usage
         trace = [*workflow["trace"], synthesis_step]
         workflow_run_id = f"run_{uuid.uuid4().hex}"
         record = {
