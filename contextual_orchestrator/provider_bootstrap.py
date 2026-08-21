@@ -30,6 +30,7 @@ from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
+    _provider_family,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -223,10 +224,10 @@ def _known_cost_sort_key(
 ) -> tuple[int, float, str, str]:
     """Sort known-price models before unknown-price models without inventing free cost."""
     prices = (model.prompt_price_per_1k, model.completion_price_per_1k)
-    known = [price for price in prices if price is not None]
-    if not known:
+    prompt_price, completion_price = prices
+    if prompt_price is None or completion_price is None:
         return (1, float("inf"), model.provider_name, model.model_id)
-    return (0, sum(known), model.provider_name, model.model_id)
+    return (0, prompt_price + completion_price, model.provider_name, model.model_id)
 
 
 def select_provider_diverse_models(
@@ -244,10 +245,11 @@ def select_provider_diverse_models(
     selected: list[DiscoveredModel] = []
     seen_providers: set[str] = set()
     for model in ordered:
-        if model.provider_name in seen_providers:
+        provider_family = _provider_family(model.provider_name)
+        if provider_family in seen_providers:
             continue
         selected.append(model)
-        seen_providers.add(model.provider_name)
+        seen_providers.add(provider_family)
         if len(selected) >= limit:
             return selected
     selected_keys = {

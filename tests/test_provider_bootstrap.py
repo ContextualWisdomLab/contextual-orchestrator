@@ -122,6 +122,40 @@ def test_diverse_selection_prefers_known_cost_without_treating_unknown_as_free()
     ]
 
 
+def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
+    """A missing prompt or completion price cannot become an invented zero."""
+    partial = replace(
+        _model("bytez", "BYTEZ_API_KEY", "partial-model", None),
+        prompt_price_per_1k=0.001,
+    )
+    complete = _model("openrouter", "OPENROUTER_API_KEY", "complete-model", 1.0)
+
+    selected = provider_bootstrap.select_provider_diverse_models(
+        [partial, complete], limit=2
+    )
+
+    assert [(item.provider_name, item.model_id) for item in selected] == [
+        ("openrouter", "complete-model"),
+        ("bytez", "partial-model"),
+    ]
+
+
+def test_provider_bootstrap_collapses_nim_credentials_to_one_outage_domain():
+    """Primary and secondary NIM credentials cannot displace an independent provider."""
+    nim_primary = _model("nvidia_nim", "NVIDIA_NIM_API_KEY", "primary-model", 0.01)
+    nim_secondary = _model("nvidia_nim_sub", "NVIDIA_NIM_API_KEY_SUB", "secondary-model", 0.02)
+    openrouter = _model("openrouter", "OPENROUTER_API_KEY", "router-model", 0.5)
+
+    selected = provider_bootstrap.select_provider_diverse_models(
+        [nim_secondary, openrouter, nim_primary], limit=2
+    )
+
+    assert [(item.provider_name, item.model_id) for item in selected] == [
+        ("nvidia_nim", "primary-model"),
+        ("openrouter", "router-model"),
+    ]
+
+
 def test_non_chat_catalog_rows_are_never_selected_for_chat_service():
     """Embeddings, rerankers, speech, image, moderation, and realtime rows stay inert."""
     models = [
