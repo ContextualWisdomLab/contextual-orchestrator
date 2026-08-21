@@ -172,6 +172,22 @@ def test_http_create_and_delete_worker_agents() -> None:
     assert {a.id for a in orchestrator.agents} == {"general_agent"}
 
 
+def test_http_worker_agent_read_rejects_wrong_pool_id() -> None:
+    """A worker agent must not be addressable through a different pool id."""
+    token = "pool_token"
+    orchestrator = TaskOrchestrator(_seed())
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        status, body = _call(f"{base}/api/v1/agent_pools/wrong_pool/worker_agents/general_agent", "GET", token)
+        assert status == 404
+        assert body["error"]["code"] == "agent_not_found"
+    finally:
+        server.shutdown()
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

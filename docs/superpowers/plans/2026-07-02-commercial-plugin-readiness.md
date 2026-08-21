@@ -31,7 +31,9 @@ dependencies.
   or package extraction.
 - English and Korean operator review remain in scope.
 - Review process is not a blocker unless it reports a concrete security,
-  contract, or product defect.
+  contract, or product defect; the release-authority result is a separate
+  blocker for protected-head authorization.
+- The release-authority result is a separate blocker.
 
 ---
 

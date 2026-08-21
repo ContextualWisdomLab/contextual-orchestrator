@@ -16,8 +16,11 @@ Conductor into separate products.
 Figma Code Connect is not used for discovery, metadata, code generation, or
 artifact creation.
 
-Review process is not a blocker. Reviewer delay, review bot delay, queued model
-review, and pending checks without concrete failure remain non-blocking.
+Product evidence and release authorization are separate. Reviewer delay, queued
+model review, absent checks, stale checks, synthetic merge evidence, or missing
+required independent approval never authorizes a release. Local product evidence remains
+inspectable for buyer demonstrations while release status stays blocked until a
+fresh protected-main authority snapshot is supplied.
 
 Do not create a separate library, Git submodule, or extracted package now. Keep
 the repository as one deployable product until a second product, independent
@@ -44,13 +47,19 @@ necessary.
 
 - `release_status`: `commercial_release_ready`,
   `commercial_release_ready_with_warnings`, or `commercial_release_blocked`;
+- `product_evidence_status`: local product evidence status independent from
+  release authorization;
+- `release_authorization`: machine-readable status, blocker reasons, exact-head
+  identity, required-check counts, independent-approval counts, and findings
+  inventory state. It contains no credentials, prompts, or reviewer secrets;
 - `measurement_status`: `local_commercial_release_candidate`;
-- `release_summary`: artifact count, blocked count, warning count, and
-  `review_process_is_blocker=false`;
+- `release_summary`: artifact count, release blocker count, product blocker
+  count, warning count, and release-authority blocker count;
 - `release_artifacts`: acceptance check, runtime endpoint chain, repository
   distribution packet, security/package metadata, admin operator surface,
-  verification evidence, Figma artifacts, review-process policy, and packaging
-  decision;
+  verification evidence, Figma artifacts, review-process policy, packaging
+  decision, and the `release_authority_collector` record that binds current
+  checks and reviews to the exact candidate head;
 - `external_release_gaps`: production or buyer-specific evidence that remains
   proposed until the buyer supplies deployment, support, legal, or ROI context;
 - `concrete_blockers`: concrete security, API contract, document, product, or
@@ -63,13 +72,13 @@ necessary.
 
 | Status | Rule |
 |---|---|
-| `commercial_release_ready` | All release artifacts are ready and no external gaps remain. |
-| `commercial_release_ready_with_warnings` | Release artifacts are ready, but production or buyer-specific evidence still needs review. |
-| `commercial_release_blocked` | Any release artifact is blocked or a concrete blocker exists. |
+| `commercial_release_ready` | Product evidence and a fresh protected-main authority snapshot both pass. |
+| `commercial_release_ready_with_warnings` | Release authority passes and only explicitly labeled external evidence remains. |
+| `commercial_release_blocked` | Product evidence or release authority is incomplete, stale, synthetic, failed, or missing. |
 
 ## KRW 2B Commercial Release Candidate
 
-The release candidate is ready for buyer review when:
+The product evidence is inspectable for buyer review when:
 
 - the commercial acceptance check has no concrete blockers;
 - runtime endpoint chain and admin surface are visible;
@@ -77,11 +86,17 @@ The release candidate is ready for buyer review when:
 - focused tests and `pytest -q` are named as verification evidence;
 - Figma artifacts are recorded and editable;
 - Code Connect exclusion is explicit;
-- review-process delay is not counted as a product blocker;
 - library split is deferred until a real extraction trigger exists.
 
 Warnings remain acceptable when they are explicitly labeled as
 `proposed_until_production` or `proposed_until_buyer_specific`.
+
+Release authorization additionally requires the exact protected `main` head,
+terminal-success required checks on that same head, the qualifying independent
+approval count declared by repository policy, and a complete zero-unresolved finding
+inventory covering human, CodeRabbit, GitHub Advanced Security, Dependabot,
+OpenCode, Noema, and Strix evidence. A missing authority snapshot is a blocker,
+not a warning.
 
 ## Plugin Traceability
 
@@ -96,10 +111,15 @@ Warnings remain acceptable when they are explicitly labeled as
 ## Verification
 
 ```bash
-python tests/test_commercial_release_candidate.py
-python tests/test_commercial_acceptance_check.py
-python tests/test_commercial_evidence_export.py
-python tests/test_plugin_driven_artifacts.py
-python tests/test_api_contract.py
+mkdir -p artifacts/release-authority
+python scripts/ci/release_authority_snapshot.py --repo ContextualWisdomLab/contextual-orchestrator --pr <number> --expected-head-sha <sha> --required-check Tests --required-check Security --findings-json <path> > artifacts/release-authority/<sha>.json
+python -m contextual_orchestrator --serve --release-authority-json artifacts/release-authority/<sha>.json
+python -m pytest -q tests/test_commercial_release_candidate.py
+python -m pytest -q tests/test_release_authorization.py
+python -m pytest -q tests/test_release_authority_snapshot.py
+python -m pytest -q tests/test_commercial_acceptance_check.py
+python -m pytest -q tests/test_commercial_evidence_export.py
+python -m pytest -q tests/test_plugin_driven_artifacts.py
+python -m pytest -q tests/test_api_contract.py
 pytest -q
 ```
