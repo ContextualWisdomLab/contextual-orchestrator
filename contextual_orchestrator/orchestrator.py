@@ -2202,9 +2202,7 @@ class TaskOrchestrator:
         """Apply governance updates to an agent and emit an audit event."""
         if not patch:  # pragma: no cover
             raise ValueError("patch request body must contain updates")
-        if agent_pool_id != "default":  # pragma: no cover
-            raise KeyError(agent_pool_id)
-        current = self._agent(worker_agent_id)
+        current = self._agent_in_pool(agent_pool_id, worker_agent_id)
         patched = current
         if "status" in patch:
             status = str(patch["status"]).lower()
@@ -2325,9 +2323,7 @@ class TaskOrchestrator:
 
     def remove_agent(self, agent_pool_id: str, worker_agent_id: str) -> dict[str, Any]:
         """Remove a worker agent from the pool; the pool must keep at least one enabled agent."""
-        if agent_pool_id != "default":  # pragma: no cover
-            raise KeyError(agent_pool_id)
-        target = self._agent(worker_agent_id)
+        target = self._agent_in_pool(agent_pool_id, worker_agent_id)
         remaining_enabled = [agent for agent in self.candidates if agent.id != worker_agent_id and not agent.disabled]
         if not remaining_enabled:
             raise ValueError("cannot remove the last enabled agent")
@@ -2607,6 +2603,18 @@ class TaskOrchestrator:
             if agent.id == agent_id:
                 return agent
         raise KeyError(agent_id)  # pragma: no cover
+
+    def _agent_in_pool(self, agent_pool_id: str, worker_agent_id: str) -> ModelAgent:
+        """Resolve an agent only through the pool boundary it can belong to.
+
+        The current persistence model has one ``default`` pool and stores
+        agents by ID. Keeping the pool check beside the lookup prevents a
+        future multi-pool change from turning separately validated path
+        parameters into an object-authorization bypass.
+        """
+        if agent_pool_id != "default":
+            raise KeyError(agent_pool_id)
+        return self._agent(worker_agent_id)
 
     def _needs_workflow(self, text: str) -> bool:
         lowered = text.lower()

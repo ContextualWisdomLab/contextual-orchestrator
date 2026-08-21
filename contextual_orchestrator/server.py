@@ -4774,7 +4774,9 @@ def build_server(
                             self._send_error(404, "agent_not_found", f"agent {worker_agent_id} not found")
                             return
                         try:
-                            payload = orchestrator._agent_to_admin_payload(orchestrator._agent(worker_agent_id))
+                            payload = orchestrator._agent_to_admin_payload(
+                                orchestrator._agent_in_pool(agent_pool_id, worker_agent_id)
+                            )
                             payload["agent_pool_id"] = agent_pool_id
                             self._send(payload)
                             return
