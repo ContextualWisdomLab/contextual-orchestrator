@@ -10,9 +10,10 @@ from typing import Any
 
 try:
     from opentelemetry import trace
-    from opentelemetry.trace import Status, StatusCode
+    from opentelemetry.trace import SpanKind, Status, StatusCode
 except ImportError:  # pragma: no cover - dependency is declared by the project
     trace = None  # type: ignore[assignment]
+    SpanKind = None  # type: ignore[assignment,misc]
     Status = None  # type: ignore[assignment,misc]
     StatusCode = None  # type: ignore[assignment,misc]
 
@@ -151,20 +152,23 @@ def traced(
     name: str,
     attributes: Mapping[str, Any] | None = None,
 ) -> Iterator[Any]:
-    """Trace one provider or gateway operation and preserve all failures."""
+    """Trace one provider CLIENT operation and preserve all failures."""
     if trace is None:  # pragma: no cover - dependency is declared by the project
         yield None
         return
     tracer = trace.get_tracer("contextual-orchestrator")
-    with tracer.start_as_current_span(name) as span:
-        safe = _safe_attributes(attributes)
-        for key, value in safe.items():
-            span.set_attribute(key, value)
+    safe = _safe_attributes(attributes)
+    with tracer.start_as_current_span(
+        name,
+        kind=SpanKind.CLIENT,
+        attributes=safe,
+    ) as span:
         try:
             yield span
         except Exception as exc:
             if Status is not None and StatusCode is not None:
                 span.record_exception(exc)
+                span.set_attribute("error.type", type(exc).__name__)
                 span.set_status(Status(StatusCode.ERROR))
             _LOGGER.warning(
                 "telemetry.operation_failed operation=%s error_type=%s session_id=%s",

@@ -22,9 +22,13 @@ Telemetry deployment settings may enter the process KV during bootstrap from non
 2. Accept `X-LineageWeave-Session-Id` and compatible metadata fields, bind the
    normalized value to the request context, and reset it when the request
    handler finishes.
-3. Add the bounded session correlation to gateway and provider spans for chat
-   and embedding calls. Record model capability and provider host, but never
-   prompt, answer, request body, API key, or raw provider response.
+3. Add the bounded session correlation to provider spans for chat and embedding
+   calls. Follow the current OpenTelemetry GenAI span convention: emit CLIENT
+   spans named `chat {model}` or `embeddings {model}`, include the required
+   `gen_ai.operation.name` and `gen_ai.provider.name` attributes, and use
+   `server.address` / `server.port` for the transport destination. Record
+   `error.type` on failure, but never prompt, answer, request body, API key, or
+   raw provider response.
 4. Keep structured-output, Responses API, VISION, embedding, and multi-agent
    requests on the same orchestration path. Telemetry observes that path; it
    does not introduce a single-agent fallback or a second credential source.
@@ -44,3 +48,7 @@ https://opentelemetry.io/docs/languages/python/instrumentation/
 
 OpenTelemetry Authors. (n.d.). *Service semantic conventions*. Retrieved
 August 21, 2026, from https://opentelemetry.io/docs/specs/semconv/registry/attributes/service/
+
+OpenTelemetry Authors. (n.d.). *Semantic conventions for generative AI spans*.
+Retrieved August 21, 2026, from
+https://github.com/open-telemetry/semantic-conventions-genai/blob/main/docs/gen-ai/gen-ai-spans.md

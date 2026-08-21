@@ -1,9 +1,14 @@
 """Tests for request session binding and prompt-safe telemetry."""
 
+from contextlib import contextmanager
 from http.server import BaseHTTPRequestHandler
 from types import SimpleNamespace
+from unittest.mock import MagicMock
 
+import contextual_orchestrator.orchestrator as orchestrator_module
+import contextual_orchestrator.telemetry as telemetry_module
 from contextual_orchestrator.__main__ import _bootstrap_telemetry_config
+from contextual_orchestrator.orchestrator import ModelAgent, ModelClient
 from contextual_orchestrator.server import build_server
 from contextual_orchestrator.telemetry import (
     _otlp_trace_endpoint,
@@ -26,6 +31,37 @@ def test_session_id_accepts_lineageweave_header_and_metadata():
         session_id_from_metadata({"lineageweave_post_session_id": "session-1"})
         == "session-1"
     )
+
+
+def test_session_and_attribute_boundaries_reject_unsafe_values():
+    """Correlation and span attributes stay bounded, scalar, and prompt-free."""
+    assert telemetry_module._config_value(None, "missing", "fallback") == "fallback"
+    assert telemetry_module._normalize_session_id(None) is None
+    for value in ("", "x" * 129, "line\nbreak"):
+        assert telemetry_module._normalize_session_id(value) is None
+    assert session_id_from_metadata(None) is None
+
+    token = set_session_id("session-safe")
+    try:
+        assert telemetry_module._safe_attributes(
+            {
+                "": "empty-key",
+                "nested": {"prompt": "excluded"},
+                "long": "x" * 300,
+                "enabled": True,
+                "attempt": 2,
+                "ratio": 0.5,
+                "object": object(),
+            }
+        ) == {
+            "long": "x" * 256,
+            "enabled": True,
+            "attempt": 2,
+            "ratio": 0.5,
+            "contextual_orchestrator.session_id": "session-safe",
+        }
+    finally:
+        reset_session_id(token)
 
 
 def test_session_binding_is_reset():
@@ -64,6 +100,66 @@ def test_telemetry_settings_enter_the_process_kv_at_bootstrap(monkeypatch):
     assert config.get("telemetry", "service_name") == "gateway-test"
 
 
+def test_configure_telemetry_handles_missing_and_disabled_kv(monkeypatch):
+    """Absent configuration is retryable while an explicit disable is final."""
+    monkeypatch.setattr(telemetry_module, "_CONFIGURED", False)
+    telemetry_module.configure_telemetry(config=None)
+    assert telemetry_module._CONFIGURED is False
+
+    disabled = SimpleNamespace(
+        get=lambda category, key, default=None: "true" if key == "sdk_disabled" else default
+    )
+    telemetry_module.configure_telemetry(config=disabled)
+    assert telemetry_module._CONFIGURED is True
+
+
+def test_configure_telemetry_wires_kv_values_to_otlp(monkeypatch):
+    """The exporter receives only normalized values read from the injected KV."""
+    import opentelemetry.exporter.otlp.proto.http.trace_exporter as exporter_module
+    import opentelemetry.sdk.resources as resources_module
+    import opentelemetry.sdk.trace as trace_sdk_module
+    import opentelemetry.sdk.trace.export as trace_export_module
+
+    exporter = MagicMock()
+    processor = MagicMock()
+    resource = MagicMock()
+    resource.create.return_value = {
+        "service.name": "gateway-fallback",
+        "service.namespace": "contextualwisdomlab",
+    }
+    provider_factory = MagicMock()
+    fake_trace = MagicMock()
+    monkeypatch.setattr(exporter_module, "OTLPSpanExporter", exporter)
+    monkeypatch.setattr(resources_module, "Resource", resource)
+    monkeypatch.setattr(trace_sdk_module, "TracerProvider", provider_factory)
+    monkeypatch.setattr(trace_export_module, "BatchSpanProcessor", processor)
+    monkeypatch.setattr(telemetry_module, "trace", fake_trace)
+    monkeypatch.setattr(telemetry_module, "_CONFIGURED", False)
+    values = {
+        "exporter_otlp_endpoint": "http://collector:4318/",
+        "service_name": " ",
+    }
+    config = SimpleNamespace(
+        get=lambda category, key, default=None: values.get(key, default)
+    )
+
+    telemetry_module.configure_telemetry("gateway-fallback", config=config)
+    expected_resource = {
+        "service.name": "gateway-fallback",
+        "service.namespace": "contextualwisdomlab",
+    }
+    exporter.assert_called_once_with(endpoint="http://collector:4318/v1/traces")
+    resource.create.assert_called_once_with(expected_resource)
+    processor.assert_called_once_with(exporter.return_value)
+    provider_factory.assert_called_once_with(resource=expected_resource)
+    provider_factory.return_value.add_span_processor.assert_called_once_with(
+        processor.return_value
+    )
+    fake_trace.set_tracer_provider.assert_called_once_with(provider_factory.return_value)
+    telemetry_module.configure_telemetry(config=config)
+    exporter.assert_called_once()
+
+
 def test_handler_resets_session_after_each_keep_alive_request(monkeypatch):
     """A later request on the same connection cannot inherit the prior session."""
     server = build_server(SimpleNamespace(agents=[], candidates=[]), port=0)
@@ -76,3 +172,83 @@ def test_handler_resets_session_after_each_keep_alive_request(monkeypatch):
         assert current_session_id() is None
     finally:
         server.server_close()
+
+
+def test_provider_calls_use_current_genai_semantic_convention(monkeypatch):
+    """Provider spans expose the required, prompt-free GenAI attributes."""
+    captured = []
+
+    @contextmanager
+    def capture(name, attributes):
+        captured.append({"name": name, "attributes": attributes})
+        yield None
+
+    client = ModelClient()
+    agent = ModelAgent(
+        "provider_agent",
+        "model-x",
+        base_url="https://provider.example/v1",
+        credential_key="",
+        provider_name="openai",
+    )
+    monkeypatch.setattr(orchestrator_module, "traced", capture)
+    monkeypatch.setattr(client, "_validate_provider", lambda unused_agent: None)
+    monkeypatch.setattr(
+        client,
+        "_send_with_retry",
+        lambda unused_agent, unused_payload, unused_destination: "ok",
+    )
+    monkeypatch.setattr(
+        client,
+        "_send_embeddings_with_retry",
+        lambda unused_agent, unused_payload, unused_destination: [[1.0]],
+    )
+
+    assert client.chat(agent, [{"role": "user", "content": "not telemetry"}]) == "ok"
+    assert client.embed_many(agent, ["not telemetry"]) == [[1.0]]
+    assert captured == [
+        {
+            "name": "chat model-x",
+            "attributes": {
+                "gen_ai.operation.name": "chat",
+                "gen_ai.provider.name": "openai",
+                "gen_ai.request.model": "model-x",
+                "contextual_orchestrator.agent_id": "provider_agent",
+                "server.address": "provider.example",
+                "server.port": 443,
+            },
+        },
+        {
+            "name": "embeddings model-x",
+            "attributes": {
+                "gen_ai.operation.name": "embeddings",
+                "gen_ai.provider.name": "openai",
+                "gen_ai.request.model": "model-x",
+                "contextual_orchestrator.agent_id": "provider_agent",
+                "server.address": "provider.example",
+                "server.port": 443,
+            },
+        },
+    ]
+
+
+def test_traced_starts_client_span_with_attributes_and_error_type(monkeypatch):
+    """Sampling attributes exist at span creation and failures stay classifiable."""
+    tracer = MagicMock()
+    span = tracer.start_as_current_span.return_value.__enter__.return_value
+    monkeypatch.setattr(telemetry_module.trace, "get_tracer", lambda unused_name: tracer)
+
+    try:
+        with traced("chat model-x", {"gen_ai.operation.name": "chat"}):
+            error = TimeoutError("provider timeout")
+            raise error
+    except TimeoutError as caught:
+        assert caught is error
+
+    tracer.start_as_current_span.assert_called_once_with(
+        "chat model-x",
+        kind=telemetry_module.SpanKind.CLIENT,
+        attributes={"gen_ai.operation.name": "chat"},
+    )
+    span.record_exception.assert_called_once_with(error)
+    span.set_attribute.assert_called_once_with("error.type", "TimeoutError")

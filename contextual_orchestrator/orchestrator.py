@@ -33,7 +33,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
-from .telemetry import current_session_id, traced
+from .telemetry import traced
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -901,17 +901,21 @@ class ModelClient:
         if effective_frequency is not None:  # pragma: no cover
             payload["frequency_penalty"] = effective_frequency
         parsed_provider = urlparse(agent.base_url)
-        with traced(
-            "contextual_orchestrator.provider.chat",
-            {
-                "gen_ai.request.model": agent.model,
-                "contextual_orchestrator.agent_id": agent.id,
-                "service.peer.name": parsed_provider.hostname or "",
-                "contextual_orchestrator.session_id": current_session_id() or "",
-            },
+        with (
+            traced(
+                f"chat {agent.model}",
+                {
+                    "gen_ai.operation.name": "chat",
+                    "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                    "gen_ai.request.model": agent.model,
+                    "contextual_orchestrator.agent_id": agent.id,
+                    "server.address": parsed_provider.hostname or "",
+                    "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+                },
+            ),
+            _local_provider_slot(agent, self.local_concurrency, self.timeout),
         ):
-            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-                return self._send_with_retry(agent, payload, destination)
+            return self._send_with_retry(agent, payload, destination)
 
     def embed_many(self, agent: ModelAgent, inputs: list[str]) -> list[list[float]]:
         """Send one real embeddings request through the configured provider agent."""
@@ -928,17 +932,21 @@ class ModelClient:
             )
         payload = {"model": agent.model, "input": inputs}
         parsed_provider = urlparse(agent.base_url)
-        with traced(
-            "contextual_orchestrator.provider.embedding",
-            {
-                "gen_ai.request.model": agent.model,
-                "contextual_orchestrator.agent_id": agent.id,
-                "service.peer.name": parsed_provider.hostname or "",
-                "contextual_orchestrator.session_id": current_session_id() or "",
-            },
+        with (
+            traced(
+                f"embeddings {agent.model}",
+                {
+                    "gen_ai.operation.name": "embeddings",
+                    "gen_ai.provider.name": agent.provider_name or parsed_provider.hostname or agent.id,
+                    "gen_ai.request.model": agent.model,
+                    "contextual_orchestrator.agent_id": agent.id,
+                    "server.address": parsed_provider.hostname or "",
+                    "server.port": parsed_provider.port or (443 if parsed_provider.scheme == "https" else 80),
+                },
+            ),
+            _local_provider_slot(agent, self.local_concurrency, self.timeout),
         ):
-            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-                return self._send_embeddings_with_retry(agent, payload, destination)
+            return self._send_embeddings_with_retry(agent, payload, destination)
 
     def fetch_json(
         self,

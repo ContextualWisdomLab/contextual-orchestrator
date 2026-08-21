@@ -138,6 +138,7 @@ def test_server_concurrency_is_explicit_and_bounded() -> None:
         patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
         patch("contextual_orchestrator.__main__.ModelClient"),
         patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.CostRoutingCoordinator"),
         patch("contextual_orchestrator.__main__.serve") as serve,
     ):
         main()
@@ -155,6 +156,7 @@ def test_sampling_temperature_uses_descriptive_name_and_legacy_alias() -> None:
             patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
             patch("contextual_orchestrator.__main__.ModelClient") as model_client,
             patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+            patch("contextual_orchestrator.__main__.CostRoutingCoordinator"),
             patch("contextual_orchestrator.__main__.serve"),
         ):
             main()
@@ -173,6 +175,7 @@ def test_sampling_temperature_is_omitted_by_default() -> None:
         patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
         patch("contextual_orchestrator.__main__.ModelClient") as model_client,
         patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.CostRoutingCoordinator"),
         patch("contextual_orchestrator.__main__.serve"),
     ):
         main()
