@@ -19,7 +19,7 @@ _TEST_AUTH_TOKEN = "multimodal_content_parts_shape_http_honesty_token"  # noqa: 
 
 def build() -> TaskOrchestrator:
     return TaskOrchestrator(
-        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing", "vision"))]
     )
 
 

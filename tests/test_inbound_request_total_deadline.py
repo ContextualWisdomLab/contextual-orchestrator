@@ -1,0 +1,175 @@
+"""Regression for a total inbound-body deadline, not only idle-socket timeout."""
+
+from __future__ import annotations
+
+from email.message import Message
+from pathlib import Path
+import sys
+from types import SimpleNamespace
+
+import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
+
+from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
+from contextual_orchestrator import server as server_module  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    RequestError,
+    SecurityConfig,
+    build_server,
+)
+
+
+class _Clock:
+    """Deterministic monotonic clock advanced by the synthetic slow reader."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        return self.now
+
+
+class _AdvancingClock:
+    """Advance beyond the deadline before the first body read."""
+
+    def __init__(self) -> None:
+        self.now = 0.0
+
+    def monotonic(self) -> float:
+        self.now += 0.2
+        return self.now
+
+
+class _SlowProgressReader:
+    """Return progress before every idle timeout while exceeding the total deadline."""
+
+    def __init__(self, payload: bytes, clock: _Clock, step_seconds: float) -> None:
+        self.payload = payload
+        self.clock = clock
+        self.step_seconds = step_seconds
+        self.offset = 0
+
+    def read(self, _size: int) -> bytes:
+        if self.offset >= len(self.payload):
+            return b""
+        self.clock.now += self.step_seconds
+        result = self.payload[self.offset : self.offset + 1]
+        self.offset += 1
+        return result
+
+
+class _FakeConnection:
+    """Expose the socket timeout methods used by the request reader."""
+
+    def __init__(self) -> None:
+        self.timeout: float | None = None
+
+    def gettimeout(self) -> float | None:
+        return self.timeout
+
+    def settimeout(self, value: float | None) -> None:
+        self.timeout = value
+
+
+def _headers(body_size: int) -> Message:
+    headers = Message()
+    headers["content-type"] = "application/json"
+    headers["content-length"] = str(body_size)
+    return headers
+
+
+def test_slow_progress_cannot_extend_request_past_total_deadline(monkeypatch) -> None:
+    """A byte trickle below the idle timeout must still terminate at the deadline."""
+    payload = b'{"x":1}'
+    clock = _Clock()
+    server = build_server(
+        TaskOrchestrator([ModelAgent("general_agent", "mock-generalist")]),
+        port=0,
+        security=SecurityConfig(
+            auth_token="test_token",  # noqa: S106
+            request_read_timeout_seconds=0.1,
+        ),
+    )
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler.headers = _headers(len(payload))
+    handler.rfile = _SlowProgressReader(payload, clock, step_seconds=0.06)
+    handler.connection = _FakeConnection()
+    handler.close_connection = False
+    monkeypatch.setattr(
+        server_module,
+        "time",
+        SimpleNamespace(monotonic=clock.monotonic),
+    )
+
+    try:
+        with pytest.raises(RequestError, match="timed out") as error:
+            handler._read_json()
+        assert error.value.status == 408
+        assert handler.close_connection is True
+        assert handler.connection.timeout is None
+    finally:
+        server.server_close()
+
+
+def test_complete_body_at_total_deadline_is_accepted(monkeypatch) -> None:
+    """Accept the final byte when it completes the body at the deadline."""
+    payload = b"{}"
+    clock = _Clock()
+    server = build_server(
+        TaskOrchestrator([ModelAgent("general_agent", "mock-generalist")]),
+        port=0,
+        security=SecurityConfig(
+            auth_token="test_token",  # noqa: S106
+            request_read_timeout_seconds=0.1,
+        ),
+    )
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler.headers = _headers(len(payload))
+    handler.rfile = _SlowProgressReader(payload, clock, step_seconds=0.05)
+    handler.connection = _FakeConnection()
+    handler.close_connection = False
+    monkeypatch.setattr(
+        server_module,
+        "time",
+        SimpleNamespace(monotonic=clock.monotonic),
+    )
+
+    try:
+        assert handler._read_json() == {}
+        assert handler.close_connection is False
+        assert handler.connection.timeout is None
+    finally:
+        server.server_close()
+
+
+def test_expired_total_deadline_rejects_before_first_read(monkeypatch) -> None:
+    payload = b"{}"
+    clock = _AdvancingClock()
+    server = build_server(
+        TaskOrchestrator([ModelAgent("general_agent", "mock-generalist")]),
+        port=0,
+        security=SecurityConfig(
+            auth_token="test_token",  # noqa: S106
+            request_read_timeout_seconds=0.1,
+        ),
+    )
+    handler = server.RequestHandlerClass.__new__(server.RequestHandlerClass)
+    handler.headers = _headers(len(payload))
+    handler.rfile = SimpleNamespace(
+        read=lambda _size: (_ for _ in ()).throw(AssertionError("body was read"))
+    )
+    handler.connection = _FakeConnection()
+    handler.close_connection = False
+    monkeypatch.setattr(server_module, "time", SimpleNamespace(monotonic=clock.monotonic))
+
+    try:
+        with pytest.raises(RequestError, match="timed out"):
+            handler._read_json()
+        assert handler.close_connection is True
+    finally:
+        server.server_close()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))

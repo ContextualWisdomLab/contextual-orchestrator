@@ -6,6 +6,10 @@
 - Sakana Fugu Technical Report: https://github.com/SakanaAI/fugu/blob/main/Fugu_technical_report.pdf
 - TRINITY: An Evolved LLM Coordinator: https://arxiv.org/abs/2512.04695
 - Learning to Orchestrate Agents in Natural Language with the Conductor: https://arxiv.org/abs/2512.04388
+- Route to Reason: Adaptive Routing for LLM and Reasoning Strategy Selection: https://arxiv.org/abs/2505.19435
+- Route-and-Reason: Scaling Large Language Model Reasoning with Reinforced Model Router: https://arxiv.org/abs/2506.05901
+- Reasoning on a Budget: A Survey of Adaptive and Controllable Test-Time Compute in LLMs: https://arxiv.org/abs/2507.02076
+- Ares: Adaptive Reasoning Effort Selection for Efficient LLM Agents: https://arxiv.org/abs/2603.07915
 
 ## What The Architecture Is
 
@@ -25,12 +29,15 @@ The useful split is quality-latency, not separate products:
 - Deep orchestration: create a multi-step workflow when the task needs decomposition, independent attempts, verification, or synthesis.
 
 Structured provider features do not create a third single-agent path. A
-non-null `response_format`, tools/function declaration, or Responses request
-enters the conducted workflow and reaches one final provider only after the
+non-null `response_format` or Responses request enters the conducted workflow
+and reaches one final provider only after the
 Thinker/Worker/Verifier/Synthesizer evidence has been assembled. The final
 provider call preserves the validated wire feature; it is a transport boundary,
 not a bypass of orchestration. JSON object and JSON schema are both covered by
 [ADR 0011](planning/adrs/0011-structured-provider-features-stay-orchestrated.md).
+The explicit client-owned tool-loop exception remains the single-worker
+contract defined by [ADR 0014](planning/adrs/0014-gateway-owned-model-selection.md);
+ordinary tool declarations without that opt-in fail closed.
 
 TRINITY contributes the compact coordinator idea: a small model representation plus a lightweight head can choose agent and role over multiple turns. Its Thinker, Worker, and Verifier contracts are practical enough to implement directly.
 
@@ -56,10 +63,23 @@ bounded, authenticated recursion protocol; it is not administratively disabled.
 - `Orchestrator.route_once`: the low-latency routing path.
 - `Orchestrator.conduct`: the workflow path with planner, worker, verifier, and synthesizer steps.
 - `WorkflowStep.access`: Conductor-style visibility control.
+- Image-bearing Chat Completions and Responses retain their typed source image
+  blocks in every evidence-bearing workflow step; access lists still constrain
+  prior model outputs. See [ADR 0018](planning/adrs/0018-multimodal-evidence-preserving-orchestration.md).
 - `ModelClient`: OpenAI-compatible HTTP client, with `mock://` for local checks.
 - `contextual_orchestrator.server`: small `/v1/chat/completions` HTTP server.
 
-The deliberate simplification is the policy. The paper systems learn routing and topology from rewards; this lab uses a deterministic capability-hint heuristic only for worker/role routing so the repo runs without training data, GPUs, or vendor credentials. It is never an answer-quality, verification, or accept/reject judgment: verifier decisions must use the structured model judge and fail closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
+The deliberate simplification is the policy. The paper systems learn routing
+and topology from rewards; this lab uses capability evidence and a bounded
+orchestrator policy, with `auto` kept internal rather than sent as a provider
+value. This is never an answer-quality, verification, or accept/reject
+judgment: verifier decisions must use the structured model judge and fail
+closed (see [ADR 0001](planning/adrs/0001-fail-closed-model-judgment.md)).
+
+Model and reasoning changes are governed by [ADR
+0013](planning/adrs/0013-paper-grounded-adaptive-reasoning-policy.md). The
+provider-neutral gateway boundary and direct-MLX prohibition are governed by
+[ADR 0012](planning/adrs/0012-gateway-only-provider-contract.md).
 
 Add learned routing only when there is an evaluation set and logs proving the heuristic policy is the bottleneck.
 
@@ -81,6 +101,9 @@ OpenAI. (n.d.-a). *Create chat completion*. OpenAI Platform. https://platform.op
 
 OpenAI. (n.d.-b). *Create a model response*. OpenAI Platform. https://platform.openai.com/docs/api-reference/responses/create
 
+Tang, Y., et al. (2026). *Sakana Fugu technical report* (arXiv:2606.21228).
+arXiv. https://doi.org/10.48550/arXiv.2606.21228
+
 Sakana AI. (2026, June 22). *Sakana Fugu: One model to command them all*. https://sakana.ai/fugu-release/
 
 Xu, J., Sun, Q., Schwendeman, P., Nielsen, S., Cetin, E., & Tang, Y. (2025). *Trinity: An evolved LLM coordinator* (arXiv:2512.04695). https://doi.org/10.48550/arXiv.2512.04695
@@ -100,4 +123,4 @@ The product is not a Fugu clone. It is a control-plane prototype for the same pu
 See [product_planning.md](product_planning.md) for the product reboot.
 
 
-OpenAI o-series `reasoning_effort` (chat/Completions) and Responses `reasoning.effort` accept known levels `none`/`minimal`/`low`/`medium`/`high` (casefold, strip) as default-effort no-ops when this gateway has no effort plane; unknown levels fail closed with named errors. Locked by `tests/test_reasoning_effort_low_medium_high_noop_http_honesty.py` on tip ≥ #738.
+OpenAI o-series `reasoning_effort` (chat/Completions) and Responses `reasoning.effort` accept provider levels `none`/`minimal`/`low`/`medium`/`high` plus the orchestrator-owned `auto` policy value (casefold, strip). They are default-effort no-ops when this gateway has no effort plane; unknown levels fail closed with named errors. Locked by the reasoning HTTP honesty tests on tip ≥ #738.

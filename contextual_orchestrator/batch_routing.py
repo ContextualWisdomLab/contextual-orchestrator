@@ -411,6 +411,7 @@ class EmbeddingBatchRequest:
 
     input_text: str
     model: str = "contextual-orchestrator"
+    provider_name: str = "unknown"
     custom_id: str = field(default_factory=lambda: f"emb_{uuid.uuid4().hex}")
     attribution: Dict[str, Any] = field(default_factory=dict)
     source_index: int = 0
@@ -437,6 +438,7 @@ class EmbeddingBatchResultItem:
     embedding: List[float]
     prompt_tokens: int = 0
     model: str = "contextual-orchestrator"
+    provider_name: str = "unknown"
 
 
 class EmbeddingBatchBackend(Protocol):
@@ -493,10 +495,12 @@ class LocalEmbeddingBatchBackend:
         self,
         embedder: Optional[Callable[[str], List[float]]] = None,
         *,
+        batch_embedder: Optional[Callable[[List[EmbeddingBatchRequest]], List[List[float]]]] = None,
         token_counter: Any = None,
         dimension: int = _DEFAULT_EMBEDDING_DIMENSION,
     ) -> None:
         self._embedder = embedder or (lambda text: heuristic_embedding(text, dimension))
+        self._batch_embedder = batch_embedder
         self._token_counter = token_counter
         self._results: Dict[str, List[EmbeddingBatchResultItem]] = {}
 
@@ -511,15 +515,23 @@ class LocalEmbeddingBatchBackend:
     ) -> BatchJob:
         """Embed every input in-process and stash the results under a job id."""
         job_id = f"localembed_{uuid.uuid4().hex}"
+        vectors = (
+            self._batch_embedder(requests)
+            if self._batch_embedder is not None
+            else [self._embedder(request.input_text) for request in requests]
+        )
+        if len(vectors) != len(requests):
+            raise RuntimeError("embedding provider returned an incomplete vector batch")
         items: List[EmbeddingBatchResultItem] = []
         for index, request in enumerate(requests):
             items.append(
                 EmbeddingBatchResultItem(
                     custom_id=request.custom_id,
                     index=index,
-                    embedding=list(self._embedder(request.input_text)),
+                    embedding=list(vectors[index]),
                     prompt_tokens=self._count_tokens(request.input_text, request.model),
                     model=request.model,
+                    provider_name=request.provider_name,
                 )
             )
         self._results[job_id] = items
@@ -639,6 +651,9 @@ class PgLlmBatchEmbeddingBackend:
                     embedding=embedding,
                     prompt_tokens=int(usage.get("prompt_tokens", 0)),
                     model=tracked_request.model if tracked_request else "contextual-orchestrator",
+                    provider_name=(
+                        tracked_request.provider_name if tracked_request else "unknown"
+                    ),
                 )
             )
         items.sort(key=lambda item: item.index)

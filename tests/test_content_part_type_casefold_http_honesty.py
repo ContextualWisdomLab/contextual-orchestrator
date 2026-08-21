@@ -19,7 +19,7 @@ _TEST_AUTH_TOKEN = "content_part_type_casefold_http_honesty_token"  # noqa: S105
 
 def build() -> TaskOrchestrator:
     return TaskOrchestrator(
-        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing"))]
+        [ModelAgent("general_agent", "mock-planner", tags=("reasoning", "writing", "vision"))]
     )
 
 

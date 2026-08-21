@@ -277,9 +277,9 @@ def test_http_responses_logprobs_zero_one() -> None:
                 "logprobs": 1,
             },
         )
-        # responses allows logprobs=true shape (boolean); 1 coerces to true and is accepted
-        # unless top_logprobs missing - logprobs true alone is ok for responses
-        assert status == 200, body
+        # The value is valid OpenAI shape but cannot be applied by conduct.
+        assert status == 422, body
+        assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)

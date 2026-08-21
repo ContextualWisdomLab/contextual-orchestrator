@@ -19,14 +19,20 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
     _FastMLSIJudgeAdapter,
+    _responses_to_chat_payload,
+    _responses_text_format_to_chat_response_format,
 )
-from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    build_server,
+    responses_sse_body,
+)
 
 
 def _build(*, budget_max_output_tokens: int | None = None) -> TaskOrchestrator:
     return TaskOrchestrator(
         agents=[
-            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning")),
+            ModelAgent("planner_agent", "mock-planner", tags=("planning", "reasoning", "vision")),
             ModelAgent("disabled_builder_duplicate", "mock-builder", disabled=True),
             ModelAgent("builder_agent", "mock-builder", tags=("coding", "implementation")),
             ModelAgent("reviewer_agent", "mock-reviewer", tags=("verification", "review")),
@@ -37,6 +43,63 @@ def _build(*, budget_max_output_tokens: int | None = None) -> TaskOrchestrator:
 
 
 # -- orchestrator-level ------------------------------------------------------
+
+def test_responses_translation_preserves_input_image_content() -> None:
+    translated = _responses_to_chat_payload(
+        {
+            "model": "mock-planner",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Inspect this image"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,AA==",
+                            "detail": "high",
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert translated["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Inspect this image"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,AA==",
+                        "detail": "high",
+                    },
+                },
+            ],
+        }
+    ]
+
+
+def test_final_synthesis_attaches_private_evidence_to_latest_user_turn() -> None:
+    result = _build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [
+                {"role": "user", "content": "Earlier question"},
+                {"role": "assistant", "content": "Earlier answer"},
+                {"role": "user", "content": "Current task"},
+            ],
+            "response_format": {"type": "json_object"},
+        }
+    )
+
+    messages = result["echo"]["messages"]
+    assert messages[0]["content"] == "Earlier question"
+    assert messages[2]["content"].startswith("Current task")
+    assert "Verified workflow evidence" in messages[2]["content"]
+
 
 def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> None:
     orch = _build()
@@ -122,6 +185,7 @@ def test_proxy_completion_blocks_before_structured_workflow_when_budget_is_excee
 
 def test_model_client_request_settings_are_thread_local() -> None:
     client = _build().client
+    previous_temperature = client.default_temperature
     barrier = threading.Barrier(2)
 
     def read_settings(temperature: float, max_tokens: int) -> tuple[float, int]:
@@ -141,8 +205,13 @@ def test_model_client_request_settings_are_thread_local() -> None:
         ]
         assert {future.result() for future in futures} == {(0.1, 11), (0.9, 29)}
 
-    assert client.default_temperature == 0.2
+    assert client.default_temperature == previous_temperature
     assert client.max_output_tokens == 2048
+
+    with client.request_settings(temperature=0.3):
+        with client.request_settings(temperature=0.4):
+            assert client._request_setting("temperature", None) == 0.4
+        assert client._request_setting("temperature", None) == 0.3
 
 
 def test_plain_proxy_completion_persists_reported_usage_before_next_budget_check() -> None:
@@ -188,6 +257,31 @@ def test_plain_proxy_completion_persists_reported_usage_before_next_budget_check
     assert send.call_count == 1
 
 
+def test_plain_proxy_completion_accounts_a_tool_only_response() -> None:
+    orch = _build()
+    raw = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [{"id": "call_1", "type": "function"}],
+                }
+            }
+        ]
+    }
+
+    with patch.object(orch.client, "proxy_send", return_value=raw):
+        assert orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "call the tool"}],
+            },
+            single_agent=True,
+        ) is raw
+
+    assert next(iter(orch._workflow_runs.values()))["answer"] == ""
+
+
 def test_structured_provider_completion_rechecks_budget_before_final_provider_call() -> None:
     orch = _build()
     orch.budget_max_output_tokens = 1
@@ -229,6 +323,7 @@ def test_structured_provider_completion_persists_final_synthesis_run() -> None:
 
 def test_fast_mlsirm_structured_judge_uses_one_direct_provider_call() -> None:
     orch = _build()
+    orch.client.temperature = 0.4
     adapter = _FastMLSIJudgeAdapter(orch, text="judge", judge="reviewer_agent")
     provider_response = {
         "choices": [{"message": {"role": "assistant", "content": '{"decision":"pass"}'}}],
@@ -246,6 +341,99 @@ def test_fast_mlsirm_structured_judge_uses_one_direct_provider_call() -> None:
     assert result["answer"] == '{"decision":"pass"}'
     assert send.call_args.args[1] == "chat/completions"
     assert send.call_args.args[2]["response_format"] == {"type": "json_object"}
+    assert send.call_args.args[2]["temperature"] == 0.4
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (None, None),
+        ({}, None),
+        ({"format": {"type": "text"}}, {"type": "text"}),
+        ({"format": {"type": "xml"}}, None),
+    ],
+)
+def test_responses_text_format_translation_handles_non_schema_shapes(
+    text: object,
+    expected: dict | None,
+) -> None:
+    assert _responses_text_format_to_chat_response_format(text) == expected
+
+
+def test_structured_provider_completion_rejects_empty_messages_and_disabled_model() -> None:
+    with pytest.raises(ValueError, match="non-empty messages"):
+        _build().proxy_completion(
+            {"messages": [], "response_format": {"type": "json_object"}}
+        )
+    with pytest.raises(RuntimeError, match="disabled"):
+        _build().proxy_completion(
+            {
+                "model": "disabled-model",
+                "messages": [{"role": "user", "content": "extract JSON"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("messages", "first_role"),
+    [
+        ([{"role": "user", "content": None}], "user"),
+        ([{"role": "assistant", "content": "prior"}], "system"),
+    ],
+)
+def test_structured_synthesis_injects_guidance_into_non_string_histories(
+    messages: list[dict],
+    first_role: str,
+) -> None:
+    orch = _build()
+    raw = {"choices": [{"message": {"content": "done"}}]}
+    with patch.object(
+        orch,
+        "conduct",
+        return_value={"trace": [], "verification": {"accepted": True}},
+    ), patch.object(orch.client, "proxy_send", return_value=raw) as send:
+        orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": messages,
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    sent_messages = send.call_args.args[2]["messages"]
+    assert sent_messages[0]["role"] == first_role
+    assert isinstance(sent_messages[0]["content"], str)
+
+
+def test_structured_synthesis_accounts_a_tool_only_response() -> None:
+    orch = _build()
+    raw = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [{"id": "call_1", "type": "function"}],
+                }
+            }
+        ]
+    }
+    with patch.object(
+        orch,
+        "conduct",
+        return_value={"trace": [], "verification": {"accepted": True}},
+    ), patch.object(orch.client, "proxy_send", return_value=raw):
+        result = orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "call the tool"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    assert result["orchestration"]["mode"] == "conduct"
+    run = orch.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    assert run["answer"] == ""
 
 
 def test_structured_synthesis_preserves_tool_call_adjacency() -> None:
@@ -300,11 +488,12 @@ def test_proxy_completion_responses_endpoint_returns_response_object() -> None:
     assert result["echo"]["response_format"] == {"type": "text"}
 
 
-def test_proxy_completion_responses_json_schema_is_orchestrated_and_translated() -> None:
+def test_proxy_completion_responses_json_schema_is_orchestrated_and_native() -> None:
     orch = _build()
     body = {
         "input": "extract the visible region",
-        "instructions": "Use the buyer's requested language.",
+        "instructions": "Keep the result concise.",
+        "metadata": {"tenant": "anonymous", "omitted": None},
         "text": {
             "format": {
                 "type": "json_schema",
@@ -322,6 +511,8 @@ def test_proxy_completion_responses_json_schema_is_orchestrated_and_translated()
     assert result["object"] == "response"
     assert result["echo"]["text"] == body["text"]
     assert "response_format" not in result["echo"]
+    assert result["echo"]["instructions"] == "Keep the result concise."
+    assert result["echo"]["metadata"] == body["metadata"]
     assert result["orchestration"]["agent_count"] == 4
     run = orch.get_workflow_run(result["orchestration"]["workflow_run_id"])
     assert run["mode"] == "conduct"
@@ -395,6 +586,32 @@ def test_structured_workflow_preserves_multimodal_input_for_final_synthesis() ->
     )
 
 
+def test_structured_multimodal_rejects_an_explicit_text_only_model() -> None:
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("text_agent", "text-model", tags=("reasoning",))]
+    )
+
+    with pytest.raises(RuntimeError, match="lacks required tags: vision"):
+        orchestrator.proxy_completion(
+            {
+                "model": "text-model",
+                "messages": [
+                    {
+                        "role": "user",
+                        "content": [
+                            {"type": "text", "text": "describe this"},
+                            {
+                                "type": "image_url",
+                                "image_url": {"url": "data:image/png;base64,fixture"},
+                            },
+                        ],
+                    }
+                ],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+
 # -- HTTP server -------------------------------------------------------------
 
 def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
@@ -412,13 +629,13 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
 
 
 def _serve() -> tuple[object, int, str]:
-    token = "passthrough_token"
+    token = "passthrough_token"  # noqa: S105 - synthetic HTTP fixture credential
     server = build_server(_build(), port=0, security=SecurityConfig(auth_token=token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1], token
 
 
-def test_http_chat_completions_accepts_response_format_and_passes_through() -> None:
+def test_http_chat_completions_orchestrates_json_object_instead_of_passthrough() -> None:
     server, port, token = _serve()
     url = f"http://127.0.0.1:{port}/v1/chat/completions"
     try:
@@ -433,13 +650,32 @@ def test_http_chat_completions_accepts_response_format_and_passes_through() -> N
         )
     finally:
         server.shutdown()
-    assert status == 200  # previously rejected 400 'unknown_fields'
+    assert status == 200
     assert body["object"] == "chat.completion"
-    assert body["echo"]["response_format"] == {"type": "json_object"}
+    assert json.loads(body["choices"][0]["message"]["content"]) == {}
 
 
-def test_http_structured_workflow_applies_sampling_to_intermediate_steps_and_keeps_alias() -> None:
+def test_http_chat_completions_omits_model_for_orchestrator_selection() -> None:
+    server, port, token = _serve()
+    try:
+        status, body = _post(
+            f"http://127.0.0.1:{port}/v1/chat/completions",
+            {
+                "messages": [{"role": "user", "content": "give me JSON"}],
+                "response_format": {"type": "json_object"},
+            },
+            token,
+        )
+    finally:
+        server.shutdown()
+    assert status == 200, body
+    assert body["model"] == "contextual-orchestrator"
+    assert json.loads(body["choices"][0]["message"]["content"]) == {}
+
+
+def test_http_structured_workflow_applies_sampling_and_records_orchestration() -> None:
     orch = _build()
+    previous_temperature = orch.client.default_temperature
     seen_sampling: list[tuple[float, int]] = []
     original_chat = orch.client.chat
 
@@ -452,7 +688,7 @@ def test_http_structured_workflow_applies_sampling_to_intermediate_steps_and_kee
         return original_chat(agent, messages, temperature=temperature)
 
     with patch.object(orch.client, "chat", side_effect=observe_chat):
-        token = "passthrough_sampling_token"
+        token = "passthrough_sampling_token"  # noqa: S105 - synthetic HTTP fixture credential
         server = build_server(orch, port=0, security=SecurityConfig(auth_token=token))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:
@@ -472,10 +708,10 @@ def test_http_structured_workflow_applies_sampling_to_intermediate_steps_and_kee
 
     assert status == 200, body
     assert seen_sampling and all(item == (0.7, 17) for item in seen_sampling)
-    assert orch.client.default_temperature == 0.2
+    assert orch.client.default_temperature == previous_temperature
     event_names = {event["event_name"] for event in orch._analytics_events}
-    assert "chat_completion_orchestrated_provider" in event_names
-    assert "chat_completion_passthrough" in event_names
+    assert "chat_completion_requested" in event_names
+    assert "chat_completion_passthrough" not in event_names
 
 
 def test_http_responses_endpoint_passes_through() -> None:

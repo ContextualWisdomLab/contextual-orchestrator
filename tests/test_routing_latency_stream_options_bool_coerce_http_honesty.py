@@ -171,7 +171,7 @@ def test_http_chat_accepts_response_format_empty_type_as_omit() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_top_logprobs_digit_string_with_logprobs() -> None:
+def test_http_responses_rejects_unapplied_top_logprobs_digit_string() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -184,7 +184,8 @@ def test_http_responses_accepts_top_logprobs_digit_string_with_logprobs() -> Non
                 "top_logprobs": "5",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -197,5 +198,5 @@ if __name__ == "__main__":
     test_http_chat_accepts_stream_options_include_usage_false_string()
     test_http_chat_still_rejects_stream_options_include_usage_true_string_without_stream()
     test_http_chat_accepts_response_format_empty_type_as_omit()
-    test_http_responses_accepts_top_logprobs_digit_string_with_logprobs()
+    test_http_responses_rejects_unapplied_top_logprobs_digit_string()
     print("ok")

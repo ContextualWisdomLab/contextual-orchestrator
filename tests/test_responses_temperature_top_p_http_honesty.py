@@ -49,7 +49,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_accepts_valid_temperature_and_top_p() -> None:
+def test_http_responses_rejects_unapplied_temperature_and_top_p() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -61,7 +61,8 @@ def test_http_responses_accepts_valid_temperature_and_top_p() -> None:
                 "top_p": 0.9,
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "unsupported_responses_orchestration_controls"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -70,13 +71,13 @@ def test_http_responses_accepts_valid_temperature_and_top_p() -> None:
 def test_http_responses_prefers_native_max_output_tokens() -> None:
     orch = build()
     observed: list[int | None] = []
-    original_proxy_send = orch.client.proxy_send
+    original_chat = orch.client.chat
 
-    def observe_proxy_send(agent, endpoint, payload):
+    def observe_chat(agent, messages, temperature=None, top_p=None):
         observed.append(orch.client._request_setting("max_output_tokens", orch.client.max_output_tokens))
-        return original_proxy_send(agent, endpoint, payload)
+        return original_chat(agent, messages, temperature=temperature, top_p=top_p)
 
-    with patch.object(orch.client, "proxy_send", side_effect=observe_proxy_send):
+    with patch.object(orch.client, "chat", side_effect=observe_chat):
         server = build_server(orch, port=0, security=SecurityConfig(auth_token=_TEST_AUTH_TOKEN))
         thread = threading.Thread(target=server.serve_forever, daemon=True)
         thread.start()
@@ -96,7 +97,7 @@ def test_http_responses_prefers_native_max_output_tokens() -> None:
             thread.join(timeout=5)
 
     assert status == 200, body
-    assert observed == [17]
+    assert observed and set(observed) == {17}
 
 
 def test_http_responses_rejects_out_of_range_temperature() -> None:
@@ -156,7 +157,7 @@ def test_http_responses_rejects_boolean_top_p() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_valid_temperature_and_top_p()
+    test_http_responses_rejects_unapplied_temperature_and_top_p()
     test_http_responses_rejects_out_of_range_temperature()
     test_http_responses_rejects_non_numeric_temperature()
     test_http_responses_rejects_out_of_range_top_p()

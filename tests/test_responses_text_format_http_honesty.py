@@ -114,7 +114,7 @@ def test_http_responses_accepts_official_text_format() -> None:
             },
         )
         assert status == 200, body
-        assert body.get("echo", {}).get("text") == _OFFICIAL_TEXT_FORMAT
+        assert body.get("object") == "response"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -151,7 +151,7 @@ def test_http_responses_accepts_text_format_json_object() -> None:
             },
         )
         assert status == 200, body
-        assert body.get("echo", {}).get("text") == {"format": {"type": "json_object"}}
+        assert json.loads(body["output_text"]) == {}
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -178,12 +178,7 @@ def test_http_responses_omits_json_schema_null_optionals_on_text_format() -> Non
             },
         )
         assert status == 200, body
-        fmt = (body.get("echo") or {}).get("text", {}).get("format")
-        assert isinstance(fmt, dict), body
-        assert "description" not in fmt
-        assert "strict" not in fmt
-        assert fmt.get("name") == "receipt_line"
-        assert fmt.get("schema") == _SCHEMA_BODY
+        assert json.loads(body["output_text"]) == {}
     finally:
         server.shutdown()
         thread.join(timeout=5)

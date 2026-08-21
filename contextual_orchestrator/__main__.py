@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import argparse
 import json
+import math
 import os
 import sys
 from dataclasses import replace
@@ -15,6 +16,9 @@ from .model_discovery import (
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
+    discover_provider_models,
+    ProviderDiscoveryError,
+    ProviderModelSource,
     refresh_price_book,
     select_top_n_cheapest_discovered_agents,
 )
@@ -65,14 +69,14 @@ def _local_concurrency(value: str) -> int:
     return parsed
 
 
-def _json_object(value: str) -> dict[str, object]:
-    """Parse a JSON object for an argparse option, rejecting other JSON values."""
+def _request_read_timeout(value: str) -> float:
+    """Parse a finite request-body deadline in the server-supported range."""
     try:
-        parsed = json.loads(value)
-    except json.JSONDecodeError as exc:
-        raise argparse.ArgumentTypeError("valid JSON object required") from exc
-    if not isinstance(parsed, dict):
-        raise argparse.ArgumentTypeError("JSON object required")
+        parsed = float(value)
+    except ValueError as exc:
+        raise argparse.ArgumentTypeError("number in 0.1..120 required") from exc
+    if not math.isfinite(parsed) or not 0.1 <= parsed <= 120.0:
+        raise argparse.ArgumentTypeError("number in 0.1..120 required")
     return parsed
 
 
@@ -249,6 +253,49 @@ def _discover_models_command(argv: list[str]) -> None:
         raise SystemExit(1)
 
 
+def _auto_discover_seed_agents(
+    agents: list[ModelAgent], *, allow_failures: bool
+) -> list[ModelAgent]:
+    """Expand empty-model gateway seeds without selecting a model in the consumer."""
+    expanded: list[ModelAgent] = []
+    for seed in agents:
+        if seed.model:
+            expanded.append(seed)
+            continue
+        source = ProviderModelSource(
+            provider_name=seed.provider_name or seed.id,
+            credential_name=seed.credential_name,
+            list_url=f"{seed.base_url.rstrip('/')}/models",
+            chat_base_url=seed.base_url,
+            auth_scheme=seed.auth_scheme,
+        )
+        try:
+            discovered = discover_provider_models(source)
+        except ProviderDiscoveryError:
+            if not allow_failures:
+                raise
+            expanded.append(replace(seed, disabled=True))
+            continue
+        # OpenAI-compatible registries do not always declare task capabilities;
+        # embedding deployments cannot serve the chat worker pool.
+        chat_models = [model for model in discovered if "embedding" not in model.model_id.casefold()]
+        if not chat_models:
+            expanded.append(replace(seed, disabled=True))
+            continue
+        for model in chat_models:
+            discovered_agent = agent_from_discovered(model, priority=seed.priority)
+            expanded.append(
+                replace(
+                    discovered_agent,
+                    id=f"{seed.id}_{agent_id_for(model)}",
+                    tags=seed.tags,
+                    disabled=seed.disabled,
+                    provider_exclusions=seed.provider_exclusions,
+                )
+            )
+    return expanded
+
+
 def main() -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
     if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
@@ -268,6 +315,16 @@ def main() -> None:
                         help="Optional sqlite path to persist runs/audit/analytics across restarts (default: in-memory).")
     parser.add_argument("--mode", choices=["auto", "route", "conduct"], default="auto")
     parser.add_argument("--serve", action="store_true", help="Run the chat completions HTTP server.")
+    parser.add_argument(
+        "--auto-discover-model-agents",
+        action="store_true",
+        help="Expand empty-model agents from their configured OpenAI-compatible /models endpoint.",
+    )
+    parser.add_argument(
+        "--allow-discovery-failures",
+        action="store_true",
+        help="Keep failed discovery seeds disabled instead of aborting startup.",
+    )
     parser.add_argument("--host", default="127.0.0.1")
     parser.add_argument("--port", type=int, default=8000)
     parser.add_argument("--auth-token", default="", help="Explicit local-development bearer token; prefer a KV token name.")
@@ -295,21 +352,31 @@ def main() -> None:
         "--temperature",
         dest="sampling_temperature",
         type=float,
-        default=0.2,
-        help="Default provider sampling temperature (default: 0.2; --temperature is a compatibility alias).",
+        default=None,
+        help="Optional provider sampling temperature; omitted by default (--temperature is an alias).",
     )
     parser.add_argument("--max-output-tokens", type=int, default=2048,
                         help="Default provider output token cap (default: 2048).")
+    parser.add_argument(
+        "--max-body-bytes",
+        type=_positive_int,
+        default=64 * 1024,
+        help="Maximum JSON request body size in bytes (default: 65536).",
+    )
+    parser.add_argument(
+        "--request-read-timeout-seconds",
+        type=_request_read_timeout,
+        default=10.0,
+        help="Maximum time to read one fixed-length JSON body (default: 10 seconds).",
+    )
     parser.add_argument("--local-concurrency", type=_local_concurrency, default=1,
-                        help=f"Concurrent requests for explicit mlx:// local batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
+                        help=f"Concurrent requests for local gateway batch work (default: 1; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--max-concurrent-runs", type=_local_concurrency, default=8,
                         help=f"Maximum simultaneous HTTP orchestration runs (default: 8; maximum: {MAX_LOCAL_CONCURRENCY}).")
     parser.add_argument("--route-text-length-threshold", type=_positive_int, default=None,
                         help="Auto-mode minimum prompt length that can trigger conduct instead of route.")
     parser.add_argument("--conduct-hint-threshold", type=_positive_int, default=None,
                         help="Auto-mode hint-count minimum that can trigger conduct instead of route.")
-    parser.add_argument("--chat-template-args", type=_json_object, default={},
-                        help="JSON kwargs forwarded to local mlx-lm chat templates, e.g. '{\"enable_thinking\":false}'.")
     parser.add_argument("--budget-max-output-tokens", type=int, default=None,
                         help="Refuse new runs once estimated/reported output tokens reach this cap (default: no cap).")
     parser.add_argument("--budget-max-cost-usd", type=float, default=None,
@@ -325,11 +392,16 @@ def main() -> None:
         temperature=args.sampling_temperature,
         max_output_tokens=args.max_output_tokens,
         local_concurrency=args.local_concurrency,
-        chat_template_args=args.chat_template_args,
         allowed_provider_hosts=args.allowed_provider_hosts,
     )
+    agents = load_agents(args.agents)
+    if args.auto_discover_model_agents:
+        try:
+            agents = _auto_discover_seed_agents(agents, allow_failures=args.allow_discovery_failures)
+        except (ProviderDiscoveryError, ValueError) as exc:
+            parser.error(str(exc))
     orchestrator = TaskOrchestrator(
-        load_agents(args.agents),
+        agents,
         client=client,
         state_db=args.state_db,
         agents_db=args.agents_db,
@@ -396,6 +468,8 @@ def main() -> None:
                 max_concurrent_runs=args.max_concurrent_runs,
                 allow_public_bind=args.allow_public_bind,
                 expose_trace_by_default=args.expose_trace_by_default,
+                max_body_bytes=args.max_body_bytes,
+                request_read_timeout_seconds=args.request_read_timeout_seconds,
             ),
             clearfolio_url=args.clearfolio_url,
         )

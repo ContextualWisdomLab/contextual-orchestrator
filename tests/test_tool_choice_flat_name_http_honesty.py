@@ -52,7 +52,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_accepts_flat_tool_choice_name() -> None:
+def test_http_responses_rejects_flat_tool_choice_name() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -71,13 +71,14 @@ def test_http_responses_accepts_flat_tool_choice_name() -> None:
                 "tool_choice": {"type": "function", "name": "lookup_item"},
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_flat_tool_choice_padded_casefold() -> None:
+def test_http_responses_rejects_flat_tool_choice_padded_casefold() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -96,13 +97,14 @@ def test_http_responses_accepts_flat_tool_choice_padded_casefold() -> None:
                 "tool_choice": {"type": " FUNCTION ", "name": " lookup_item "},
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_flat_tool_choice_with_nested_tools() -> None:
+def test_http_chat_rejects_flat_tool_choice_with_nested_tools() -> None:
     """Chat clients using Responses-flat tool_choice against nested tools."""
     server, thread, port = _server()
     try:
@@ -124,13 +126,14 @@ def test_http_chat_accepts_flat_tool_choice_with_nested_tools() -> None:
                 "tool_choice": {"type": "function", "name": "lookup_item"},
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
 
 
-def test_http_chat_still_accepts_nested_tool_choice() -> None:
+def test_http_chat_rejects_nested_tool_choice() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -154,7 +157,8 @@ def test_http_chat_still_accepts_nested_tool_choice() -> None:
                 },
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -217,10 +221,10 @@ def test_http_flat_tool_choice_unknown_name_fails_closed() -> None:
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_flat_tool_choice_name()
-    test_http_responses_accepts_flat_tool_choice_padded_casefold()
-    test_http_chat_accepts_flat_tool_choice_with_nested_tools()
-    test_http_chat_still_accepts_nested_tool_choice()
+    test_http_responses_rejects_flat_tool_choice_name()
+    test_http_responses_rejects_flat_tool_choice_padded_casefold()
+    test_http_chat_rejects_flat_tool_choice_with_nested_tools()
+    test_http_chat_rejects_nested_tool_choice()
     test_http_tool_choice_rejects_mixed_nested_and_flat()
     test_http_flat_tool_choice_unknown_name_fails_closed()
     print("ok")

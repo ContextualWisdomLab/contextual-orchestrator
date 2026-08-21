@@ -126,7 +126,7 @@ def test_http_chat_rejects_tool_choice_required_with_empty_tools() -> None:
         thread.join(timeout=5)
 
 
-def test_http_chat_accepts_tool_choice_required_with_tools() -> None:
+def test_http_chat_rejects_tool_choice_required_with_tools() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -139,7 +139,8 @@ def test_http_chat_accepts_tool_choice_required_with_tools() -> None:
                 "tool_choice": "required",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -166,7 +167,7 @@ def test_http_responses_rejects_tool_choice_required_without_tools() -> None:
         thread.join(timeout=5)
 
 
-def test_http_responses_accepts_tool_choice_required_with_tools() -> None:
+def test_http_responses_rejects_tool_choice_required_with_tools() -> None:
     server, thread, port = _server()
     try:
         status, body = _post(
@@ -179,7 +180,8 @@ def test_http_responses_accepts_tool_choice_required_with_tools() -> None:
                 "tool_choice": "required",
             },
         )
-        assert status == 200, body
+        assert status == 422, body
+        assert body["error"]["code"] == "multi_agent_tools_unsupported"
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -191,7 +193,7 @@ if __name__ == "__main__":
     test_validate_tool_choice_required_with_tools_ok()
     test_http_chat_rejects_tool_choice_required_without_tools()
     test_http_chat_rejects_tool_choice_required_with_empty_tools()
-    test_http_chat_accepts_tool_choice_required_with_tools()
+    test_http_chat_rejects_tool_choice_required_with_tools()
     test_http_responses_rejects_tool_choice_required_without_tools()
-    test_http_responses_accepts_tool_choice_required_with_tools()
+    test_http_responses_rejects_tool_choice_required_with_tools()
     print("ok")

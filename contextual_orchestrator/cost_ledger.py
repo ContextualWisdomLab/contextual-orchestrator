@@ -330,6 +330,7 @@ class NoopUsageTelemetrySink:
     """Default sink for callers that do not wire telemetry yet."""
 
     def emit_usage(self, event: UsageTelemetryEvent) -> None:
+        """Discard one prompt-safe usage event."""
         return None
 
 
@@ -342,12 +343,14 @@ class InMemoryUsageTelemetrySink:
         self._lock = threading.Lock()
 
     def emit_usage(self, event: UsageTelemetryEvent) -> None:
+        """Append one usage event while retaining only the configured limit."""
         with self._lock:
             self._events.append(event)
             if len(self._events) > self._max_events:
                 del self._events[: len(self._events) - self._max_events]
 
     def events(self) -> List[UsageTelemetryEvent]:
+        """Return a thread-safe snapshot of retained usage events."""
         with self._lock:
             return list(self._events)
 
@@ -363,6 +366,7 @@ class UsageTelemetryHealth:
     last_error_type: Optional[str] = None
 
     def as_dict(self) -> Dict[str, Any]:
+        """Return operator-safe counters as a serializable mapping."""
         return {
             "records_accepted": self.records_accepted,
             "records_stored": self.records_stored,
@@ -442,6 +446,7 @@ class NonBlockingLedgerStore:
         return True
 
     def telemetry_health(self) -> Dict[str, Any]:
+        """Return a thread-safe snapshot of persistence health counters."""
         with self._lock:
             return self._health.as_dict()
 
@@ -669,7 +674,7 @@ class SqlLedgerStore:
             _USAGE_QUERY_SQL[(self._paramstyle, start is not None, end is not None)],
             tuple(params),
         )
-        return [dict(zip(_USAGE_COLUMNS, values)) for values in cur.fetchall()]
+        return [dict(zip(_USAGE_COLUMNS, values, strict=True)) for values in cur.fetchall()]
 
 
 def _within_window(created_at: int, start: Optional[int], end: Optional[int]) -> bool:

@@ -52,7 +52,7 @@ def _server():
     return server, thread, server.server_address[1]
 
 
-def test_http_responses_accepts_logit_bias_padded_digit_keys() -> None:
+def test_http_responses_rejects_unapplied_logit_bias_padded_digit_keys() -> None:
     server, thread, port = _server()
     try:
         for key in ("100", " 100 ", "\t42\t", "  7"):
@@ -65,7 +65,8 @@ def test_http_responses_accepts_logit_bias_padded_digit_keys() -> None:
                     "logit_bias": {key: "-5", "200": 1},
                 },
             )
-            assert status == 200, (key, body)
+            assert status == 422, (key, body)
+            assert "unsupported_responses_orchestration_controls" in json.dumps(body)
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -135,7 +136,7 @@ def test_http_completions_still_typechecks_padded_keys_then_rejects_nonempty() -
 
 
 if __name__ == "__main__":
-    test_http_responses_accepts_logit_bias_padded_digit_keys()
+    test_http_responses_rejects_unapplied_logit_bias_padded_digit_keys()
     test_http_responses_still_rejects_non_digit_logit_bias_keys()
     test_http_chat_still_typechecks_padded_keys_then_rejects_nonempty()
     test_http_completions_still_typechecks_padded_keys_then_rejects_nonempty()
