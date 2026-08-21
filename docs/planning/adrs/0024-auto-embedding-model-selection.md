@@ -1,5 +1,5 @@
 ---
-id: "0012"
+id: "0024"
 title: "Orchestrator-owned automatic embedding model selection"
 status: proposed
 proposed_date: "2026-08-20"
