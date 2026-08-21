@@ -35,6 +35,8 @@ policy.
   displayed cap state cannot drift from enforcement during a concurrent update.
 - Admin audit events that reference workflow or evaluation runs follow the same
   resource owner boundary; global agent-configuration events remain visible.
+- Reported prompt-token totals follow the same owner filter as runs and output
+  tokens, and access-report analytics are emitted only after ownership succeeds.
 - The stored digest is an authorization lookup key, not a user identity and is
   never rendered in public payloads.
 - Shared static credentials represent one deployment principal; multi-principal

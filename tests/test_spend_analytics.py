@@ -97,6 +97,15 @@ def test_http_spend_endpoint_returns_only_authenticated_owner() -> None:
     owner_b_second_run = orchestrator.run(
         [{"role": "user", "content": "owner b second run"}], owner_id=owner_b
     )
+    owner_a_run["trace"][0]["usage"] = {"prompt_tokens": 11, "completion_tokens": 3}
+    owner_b_first_run["trace"][0]["usage"] = {
+        "prompt_tokens": 17,
+        "completion_tokens": 5,
+    }
+    owner_b_second_run["trace"][0]["usage"] = {
+        "prompt_tokens": 23,
+        "completion_tokens": 7,
+    }
     server = build_server(orchestrator, port=0, security=security)
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
@@ -115,6 +124,16 @@ def test_http_spend_endpoint_returns_only_authenticated_owner() -> None:
         owner_b_status, owner_b_body = report("owner-b", "/api/v1/spend_analytics/latest")
         _, owner_a_admin = report("owner-a", "/admin/state")
         _, owner_b_admin = report("owner-b", "/admin/state")
+        try:
+            report(
+                "owner-a",
+                f"/api/v1/access_reports/{owner_b_first_run['workflow_run_id']}",
+            )
+        except urllib.error.HTTPError as error:
+            assert error.code == 404
+        _, owner_a_access_report = report(
+            "owner-a", f"/api/v1/access_reports/{owner_a_run['workflow_run_id']}"
+        )
     finally:
         server.shutdown()
         thread.join(timeout=5)
@@ -123,6 +142,8 @@ def test_http_spend_endpoint_returns_only_authenticated_owner() -> None:
     assert owner_a_body["measurement_status"] == "local_runtime_estimate"
     assert owner_a_body["totals"]["run_count"] == 1
     assert owner_b_body["totals"]["run_count"] == 2
+    assert owner_a_body["totals"]["reported_prompt_tokens"] == 11
+    assert owner_b_body["totals"]["reported_prompt_tokens"] == 40
     assert "owner-a" not in json.dumps(owner_a_body)
     assert "owner-b" not in json.dumps(owner_b_body)
     owner_a_audit = json.dumps(owner_a_admin["recent_audit_events"])
@@ -133,6 +154,15 @@ def test_http_spend_endpoint_returns_only_authenticated_owner() -> None:
     assert owner_a_run["workflow_run_id"] not in owner_b_audit
     assert owner_b_first_run["workflow_run_id"] in owner_b_audit
     assert owner_b_second_run["workflow_run_id"] in owner_b_audit
+    assert owner_a_access_report["workflow_run_id"] == owner_a_run["workflow_run_id"]
+    access_events = [
+        event
+        for event in orchestrator._analytics_events
+        if event["event_name"] == "access_report_viewed"
+    ]
+    assert [event["event_detail"]["workflow_run_id"] for event in access_events] == [
+        owner_a_run["workflow_run_id"]
+    ]
 
 
 def test_owner_spend_report_keeps_process_budget_global() -> None:

@@ -4743,6 +4743,9 @@ def build_server(
                 if path.startswith("/api/v1/access_reports/"):
                     workflow_run_id = path.rsplit("/", 1)[-1]
                     try:
+                        access_report = orchestrator.get_access_report(
+                            workflow_run_id, owner_id=self._principal_id
+                        )
                         orchestrator.record_analytics_event(
                             "access_report_viewed",
                             {
@@ -4752,7 +4755,11 @@ def build_server(
                                 "status_code": 200,
                             },
                         )
-                        self._send(_response_payload(orchestrator.get_access_report(workflow_run_id, owner_id=self._principal_id), security.expose_trace_by_default))
+                        self._send(
+                            _response_payload(
+                                access_report, security.expose_trace_by_default
+                            )
+                        )
                         return
                     except KeyError:
                         self._send_error(404, "workflow_run_not_found", f"workflow_run {workflow_run_id} not found")

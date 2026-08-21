@@ -2946,9 +2946,6 @@ class TaskOrchestrator:
                 estimated = estimate_tokens(step.get("output", ""))
                 usage = step.get("usage")
                 reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
-                if isinstance(reported_prompt, int):
-                    reported_prompt_tokens += reported_prompt
-                    any_reported_prompt = True
                 reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
                 if isinstance(reported, int):
                     effective, is_reported = reported, True
@@ -2961,6 +2958,9 @@ class TaskOrchestrator:
                     )
                 if not included:
                     continue
+                if isinstance(reported_prompt, int):
+                    reported_prompt_tokens += reported_prompt
+                    any_reported_prompt = True
                 bucket = by_model.setdefault(
                     model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
                 )
