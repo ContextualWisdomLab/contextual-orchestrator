@@ -9,15 +9,16 @@ import sys
 from dataclasses import replace
 
 from .cost_ledger import PriceBook
+from .cost_router import CostRoutingCoordinator
 from .credentials import get_credential, register_credential
 from .kv_config import InMemoryConfigStore
 from .model_discovery import (
+    ProviderDiscoveryError,
+    ProviderModelSource,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
     discover_provider_models,
-    ProviderDiscoveryError,
-    ProviderModelSource,
     refresh_price_book,
     select_top_n_cheapest_discovered_agents,
 )
@@ -34,6 +35,20 @@ from .server import SecurityConfig, serve
 DEFAULT_AUTH_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_TOKEN"
 DEFAULT_ADMIN_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_ADMIN_TOKEN"
 DEFAULT_INFERENCE_TOKEN_KEY = "CONTEXTUAL_ORCHESTRATOR_INFERENCE_TOKEN"
+
+
+def _bootstrap_telemetry_config() -> InMemoryConfigStore:
+    """Load non-secret OTEL deployment settings into the process KV at startup."""
+    config = InMemoryConfigStore()
+    for environment_name, key in (
+        ("OTEL_EXPORTER_OTLP_ENDPOINT", "exporter_otlp_endpoint"),
+        ("OTEL_SERVICE_NAME", "service_name"),
+        ("OTEL_SDK_DISABLED", "sdk_disabled"),
+    ):
+        value = os.environ.get(environment_name, "").strip()
+        if value:
+            config.set("telemetry", key, value)
+    return config
 
 
 def _positive_int(value: str) -> int:
@@ -461,6 +476,10 @@ def main(argv: list[str] | None = None) -> None:
                 request_read_timeout_seconds=args.request_read_timeout_seconds,
             ),
             clearfolio_url=args.clearfolio_url,
+            coordinator=CostRoutingCoordinator(
+                orchestrator,
+                config_store=_bootstrap_telemetry_config(),
+            ),
         )
         return
 

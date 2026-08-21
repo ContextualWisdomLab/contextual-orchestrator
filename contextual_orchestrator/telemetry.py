@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import logging
-import os
 from collections.abc import Iterator, Mapping
 from contextlib import contextmanager
 from contextvars import ContextVar, Token
@@ -22,6 +21,21 @@ _CURRENT_SESSION: ContextVar[str | None] = ContextVar(
     "contextual_orchestrator_session_id", default=None
 )
 _CONFIGURED = False
+
+
+def _otlp_trace_endpoint(endpoint: str) -> str:
+    """Turn an OTLP base endpoint into the explicit HTTP traces endpoint."""
+    normalized = endpoint.rstrip("/")
+    if normalized.casefold().endswith("/v1/traces"):
+        return normalized
+    return f"{normalized}/v1/traces"
+
+
+def _config_value(config: Any | None, key: str, default: Any = None) -> Any:
+    """Read one telemetry setting from the injected KV configuration."""
+    if config is None:
+        return default
+    return config.get("telemetry", key, default)
 
 
 def _normalize_session_id(value: object) -> str | None:
@@ -87,13 +101,22 @@ def _safe_attributes(
     return result
 
 
-def configure_telemetry(service_name: str = "contextual-orchestrator") -> None:
-    """Configure OTLP export only when the operator supplies an endpoint."""
+def configure_telemetry(
+    service_name: str = "contextual-orchestrator",
+    *,
+    config: Any | None = None,
+) -> None:
+    """Configure OTLP export from the injected KV configuration only."""
     global _CONFIGURED
-    if _CONFIGURED or os.getenv("OTEL_SDK_DISABLED", "").lower() == "true":
+    if _CONFIGURED:
+        return
+    if config is None:
+        _LOGGER.debug("OpenTelemetry is not configured without a KV store")
         return
     _CONFIGURED = True
-    endpoint = os.getenv("OTEL_EXPORTER_OTLP_ENDPOINT", "").strip()
+    if str(_config_value(config, "sdk_disabled", "")).lower() == "true":
+        return
+    endpoint = str(_config_value(config, "exporter_otlp_endpoint", "")).strip()
     if trace is None or not endpoint:
         return
     try:
@@ -107,12 +130,19 @@ def configure_telemetry(service_name: str = "contextual-orchestrator") -> None:
         _LOGGER.warning("OpenTelemetry SDK/exporter is unavailable")
         return
 
+    configured_service_name = str(
+        _config_value(config, "service_name", service_name)
+    ).strip() or service_name
     resource = Resource.create({
-        "service.name": os.getenv("OTEL_SERVICE_NAME", service_name),
+        "service.name": configured_service_name,
         "service.namespace": "contextualwisdomlab",
     })
     provider = TracerProvider(resource=resource)
-    provider.add_span_processor(BatchSpanProcessor(OTLPSpanExporter(endpoint=endpoint)))
+    provider.add_span_processor(
+        BatchSpanProcessor(
+            OTLPSpanExporter(endpoint=_otlp_trace_endpoint(endpoint))
+        )
+    )
     trace.set_tracer_provider(provider)
 
 

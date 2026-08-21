@@ -15,6 +15,8 @@ becoming a second GRC store.
 
 ## Decision
 
+Telemetry deployment settings may enter the process KV during bootstrap from non-secret OTEL_* transport settings; runtime telemetry reads the injected KV only. A configured OTLP base URL is normalized to the HTTP /v1/traces signal endpoint.
+
 1. Use the OpenTelemetry Python API, SDK, and OTLP HTTP exporter. Export is
    disabled unless `OTEL_EXPORTER_OTLP_ENDPOINT` is explicitly configured.
 2. Accept `X-LineageWeave-Session-Id` and compatible metadata fields, bind the

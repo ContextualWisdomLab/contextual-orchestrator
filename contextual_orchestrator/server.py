@@ -4651,10 +4651,10 @@ def build_server(
     one is built around ``orchestrator`` with an in-memory KV config store, so
     every completion is priced, recorded, and sync/batch routed.
     """
-    configure_telemetry()
     security = security or SecurityConfig()
     security.check_bind(host)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
+    configure_telemetry(config=coordinator.config)
     if clearfolio_url is not None:
         parsed_viewer = urllib.parse.urlparse(clearfolio_url)
         if parsed_viewer.scheme not in {"http", "https"} or not parsed_viewer.netloc:
@@ -4671,15 +4671,26 @@ def build_server(
                 reset_session_id(self._session_token)
             self._session_token = set_session_id(session_id)
 
-        def finish(self) -> None:
-            """Flush the HTTP response and release request session context."""
+        def _reset_session(self) -> None:
+            """Release the request session in the context that bound it."""
             token = self._session_token
             self._session_token = None
+            if token is not None:
+                reset_session_id(token)
+
+        def handle_one_request(self) -> None:
+            """Prevent a keep-alive connection from carrying session state."""
+            try:
+                super().handle_one_request()
+            finally:
+                self._reset_session()
+
+        def finish(self) -> None:
+            """Flush the HTTP response and release request session context."""
             try:
                 super().finish()
             finally:
-                if token is not None:
-                    reset_session_id(token)
+                self._reset_session()
 
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
@@ -6148,8 +6159,16 @@ def serve(
     port: int = 8000,
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
+    coordinator: CostRoutingCoordinator | None = None,
 ) -> None:
     """Serve the admin console and resource-oriented orchestration API."""
-    server = build_server(orchestrator, host=host, port=port, security=security, clearfolio_url=clearfolio_url)
+    server = build_server(
+        orchestrator,
+        host=host,
+        port=port,
+        security=security,
+        clearfolio_url=clearfolio_url,
+        coordinator=coordinator,
+    )
     print(f"listening on http://{host}:{port}")
     server.serve_forever()
