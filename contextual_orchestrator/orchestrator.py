@@ -33,6 +33,7 @@ import urllib.request
 
 from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
+from .telemetry import current_session_id, traced
 
 
 # content is usually str; multimodal vision messages use OpenAI content-parts lists.
@@ -899,8 +900,18 @@ class ModelClient:
             payload["presence_penalty"] = effective_presence
         if effective_frequency is not None:  # pragma: no cover
             payload["frequency_penalty"] = effective_frequency
-        with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-            return self._send_with_retry(agent, payload, destination)
+        parsed_provider = urlparse(agent.base_url)
+        with traced(
+            "contextual_orchestrator.provider.chat",
+            {
+                "gen_ai.request.model": agent.model,
+                "contextual_orchestrator.agent_id": agent.id,
+                "service.peer.name": parsed_provider.hostname or "",
+                "contextual_orchestrator.session_id": current_session_id() or "",
+            },
+        ):
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                return self._send_with_retry(agent, payload, destination)
 
     def embed_many(self, agent: ModelAgent, inputs: list[str]) -> list[list[float]]:
         """Send one real embeddings request through the configured provider agent."""
@@ -916,8 +927,18 @@ class ModelClient:
                 f"{agent.id} requires a resolvable credential '{credential_name}' in the KV"
             )
         payload = {"model": agent.model, "input": inputs}
-        with _local_provider_slot(agent, self.local_concurrency, self.timeout):
-            return self._send_embeddings_with_retry(agent, payload, destination)
+        parsed_provider = urlparse(agent.base_url)
+        with traced(
+            "contextual_orchestrator.provider.embedding",
+            {
+                "gen_ai.request.model": agent.model,
+                "contextual_orchestrator.agent_id": agent.id,
+                "service.peer.name": parsed_provider.hostname or "",
+                "contextual_orchestrator.session_id": current_session_id() or "",
+            },
+        ):
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                return self._send_embeddings_with_retry(agent, payload, destination)
 
     def fetch_json(
         self,

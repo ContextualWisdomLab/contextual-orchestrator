@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import json
+import logging
 import math
 import secrets
 import socket
@@ -34,6 +35,16 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .telemetry import (
+    configure_telemetry,
+    current_session_id,
+    reset_session_id,
+    session_id_from_headers,
+    session_id_from_metadata,
+    set_session_id,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -4640,6 +4651,7 @@ def build_server(
     one is built around ``orchestrator`` with an in-memory KV config store, so
     every completion is priced, recorded, and sync/batch routed.
     """
+    configure_telemetry()
     security = security or SecurityConfig()
     security.check_bind(host)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
@@ -4650,6 +4662,25 @@ def build_server(
         clearfolio_url = clearfolio_url.rstrip("/")
 
     class Handler(BaseHTTPRequestHandler):
+        _session_token = None
+
+        def _bind_session(self, session_id: str | None) -> None:
+            if session_id is None:
+                return
+            if self._session_token is not None:
+                reset_session_id(self._session_token)
+            self._session_token = set_session_id(session_id)
+
+        def finish(self) -> None:
+            """Flush the HTTP response and release request session context."""
+            token = self._session_token
+            self._session_token = None
+            try:
+                super().finish()
+            finally:
+                if token is not None:
+                    reset_session_id(token)
+
         def do_GET(self) -> None:  # noqa: N802
             parsed = urllib.parse.urlparse(self.path)
             path = parsed.path
@@ -5048,6 +5079,10 @@ def build_server(
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
                 self._authorize(scope)
                 body = self._read_json()
+                for metadata_key in ("metadata", "client_metadata"):
+                    metadata = body.get(metadata_key)
+                    if isinstance(metadata, dict):
+                        self._bind_session(session_id_from_metadata(metadata))
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
@@ -5931,6 +5966,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def _authorize(self, scope: str) -> None:
+            self._bind_session(session_id_from_headers(self.headers))
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
 
@@ -6017,6 +6053,13 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
+            _LOGGER.warning(
+                "request_failed status=%s code=%s path=%s session_id=%s",
+                status,
+                code,
+                urllib.parse.urlparse(self.path).path,
+                current_session_id() or "",
+            )
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
         def _send(self, payload: dict[str, Any], status: int = 200) -> None:
