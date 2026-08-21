@@ -21,6 +21,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     _FastMLSIJudgeAdapter,
     _responses_to_chat_payload,
     _responses_text_format_to_chat_response_format,
+    estimate_tokens,
 )
 from contextual_orchestrator.server import (  # noqa: E402
     SecurityConfig,
@@ -392,6 +393,35 @@ def test_orchestrated_responses_synthesis_normalizes_provider_usage() -> None:
         "prompt_tokens": 11,
         "completion_tokens": 7,
     }
+
+
+def test_orchestrated_responses_usage_counts_toward_spend_budget() -> None:
+    orch = _build(budget_max_output_tokens=5)
+    raw = {
+        "object": "response",
+        "output_text": "{}",
+        "output": [],
+        "usage": {"input_tokens": 4, "output_tokens": 5, "total_tokens": 9},
+    }
+
+    with patch.object(orch.client, "proxy_send", return_value=raw):
+        result = orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "input": "extract JSON",
+                "text": {"format": {"type": "json_object"}},
+            },
+            endpoint="responses",
+        )
+
+    run = orch.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    assert run["trace"][-1]["usage"]["prompt_tokens"] == 4
+    assert run["trace"][-1]["usage"]["completion_tokens"] == 5
+    expected_spend = sum(
+        row.get("usage", {}).get("completion_tokens", estimate_tokens(row["output"]))
+        for row in run["trace"]
+    )
+    assert orch.spend_analytics()["budget"]["spent_output_tokens"] == expected_spend
 
 
 def test_fast_mlsirm_structured_judge_uses_one_direct_provider_call() -> None:

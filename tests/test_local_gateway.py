@@ -343,6 +343,13 @@ def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
                     "content": [{"type": "input_text", "text": "ping"}],
                 }],
                 "stream": True,
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "result_shape",
+                        "schema": {"type": "object"},
+                    }
+                },
                 "tools": [{
                     "type": "function",
                     "name": "lookup",
@@ -361,6 +368,13 @@ def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
         "type": "function",
         "function": {"name": "lookup", "parameters": {"type": "object"}},
     }]
+    assert forwarded["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "result_shape",
+            "schema": {"type": "object"},
+        },
+    }
 
 
 def test_local_responses_passthrough_has_no_provider_specific_fields() -> None:
