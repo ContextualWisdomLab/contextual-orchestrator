@@ -5,10 +5,13 @@ from __future__ import annotations
 import builtins
 import sys
 from types import SimpleNamespace
-from typing import Self
+from typing import TYPE_CHECKING
 from unittest.mock import Mock, patch
 
 import pytest
+
+if TYPE_CHECKING:
+    from typing import Self
 
 from contextual_orchestrator import credentials
 from contextual_orchestrator.credentials import (
