@@ -37,6 +37,7 @@ from .pii_protection import (
     DEFAULT_PII_KEY_NAME,
     ENCRYPTED_FIELDS_KEY,
     PiiFieldEncryptor,
+    PiiProtectionError,
     is_encrypted_detail,
     load_pii_encryptor,
 )
@@ -1549,14 +1550,14 @@ class _StateStore:
     """Minimal write-through sqlite persistence for orchestrator runtime state.
 
     ponytail: one generic table, no ORM. Keyed kinds (workflow_run, evaluation_run)
-    upsert by key; stream kinds append. Durable audit rows use the same bounded
-    retention as the in-memory audit deque so denial traffic cannot grow the DB forever.
+    upsert by key; stream kinds append. Durable audit streams use the same bounded
+    retention as their in-memory deques so request traffic cannot grow the DB forever.
     Runtime values (kind, key, payload, limit) are always bound through SQLite
     placeholders so persisted prompts and identifiers cannot become SQL syntax.
     """
 
     _KEYED = {"workflow_run", "evaluation_run"}
-    _STREAM_LIMITS = {"audit": 256}
+    _STREAM_LIMITS = {"audit": 256, "authorization": 256}
     _CREATE_RECORDS_SQL = (
         "CREATE TABLE IF NOT EXISTS records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
@@ -1705,6 +1706,7 @@ class TaskOrchestrator:
         self._evaluation_runs: dict[str, dict[str, Any]] = {}
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
+        self._authorization_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
         # Per-agent circuit breaker: consecutive failures trip an agent "open"
         # so a persistently failing provider is skipped until it cools down.
@@ -1790,6 +1792,8 @@ class TaskOrchestrator:
             self._analytics_events.append(event)
         for event in self._store.load("audit", self._audit_events.maxlen):
             self._audit_events.append(event)
+        for event in self._store.load("authorization", self._authorization_events.maxlen):
+            self._authorization_events.append(event)
 
     # Orchestration-only body keys that must not be forwarded to the provider.
     _ORCHESTRATION_ONLY_KEYS = frozenset(
@@ -2745,15 +2749,18 @@ class TaskOrchestrator:
         detail: dict[str, Any],
         *,
         pii_fields: Iterable[str] = (),
+        stream: str = "audit",
     ) -> None:
+        """Append an event to a bounded audit stream."""
         event = {
             "created_at": int(time.time()),
             "event_type": event_type,
             "event_detail": self._protected_event_detail(detail, pii_fields),
         }
-        self._audit_events.append(event)
+        events = self._authorization_events if stream == "authorization" else self._audit_events
+        events.append(event)
         if self._store is not None:
-            self._store.save("audit", None, event)
+            self._store.save(stream, None, event)
 
     def record_authorization_decision(
         self,
@@ -2772,6 +2779,7 @@ class TaskOrchestrator:
                 "allowed": bool(allowed),
                 "reason": reason,
             },
+            stream="authorization",
         )
 
     def _infer_provider_name(self, base_url: str) -> str:
@@ -2889,15 +2897,35 @@ class TaskOrchestrator:
                 restored.append(event)
                 continue
             restored_event = dict(event)
-            metadata = detail.get(ENCRYPTED_FIELDS_KEY)
-            key_name = metadata.get("key_name") if isinstance(metadata, dict) else self._pii_key_name
-            encryptor = encryptors.get(key_name)
-            if encryptor is None:
-                encryptor = load_pii_encryptor(key_name)
-                encryptors[key_name] = encryptor
-            restored_event["event_detail"] = encryptor.decrypt_fields(detail)
+            try:
+                metadata = detail.get(ENCRYPTED_FIELDS_KEY)
+                key_name = metadata.get("key_name") if isinstance(metadata, dict) else self._pii_key_name
+                if not isinstance(key_name, str) or not key_name:
+                    raise PiiProtectionError("encrypted field metadata has no valid key name")
+                encryptor = encryptors.get(key_name)
+                if encryptor is None:
+                    encryptor = load_pii_encryptor(key_name)
+                    encryptors[key_name] = encryptor
+                restored_event["event_detail"] = encryptor.decrypt_fields(detail)
+            except PiiProtectionError:
+                restored_event["event_detail"] = {
+                    **detail,
+                    "__pii_protection_error__": "unavailable",
+                }
             restored.append(restored_event)
         return restored
+
+    def list_recent_authorization_decisions(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
+        """Return recent secret-free authorization decisions in newest-first order."""
+        if page_number < 1 or page_size < 1:  # pragma: no cover
+            raise ValueError("page_number/page_size must be >= 1")
+        events = list(self._authorization_events)
+        start = (page_number - 1) * page_size
+        end = start + page_size
+        total = len(events)
+        left = max(0, total - end)
+        right = max(0, total - start)
+        return list(reversed(events[left:right]))
 
     def record_analytics_event(
         self,
@@ -9106,6 +9134,7 @@ class TaskOrchestrator:
             },
             "recent_workflow_runs": [self._shorten_run(run) for run in self.list_recent_runs(page_size=max(1, len(self._run_order)))],
             "recent_audit_events": self.list_recent_audit_events(role=role, purpose=purpose),
+            "recent_authorization_decisions": self.list_recent_authorization_decisions(),
             "spend": self.spend_analytics(),
         }
 

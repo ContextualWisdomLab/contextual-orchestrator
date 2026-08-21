@@ -148,6 +148,37 @@ def test_audit_replay_is_the_only_plaintext_read_path(memory_credentials: InMemo
     assert restored[0]["event_detail"]["email"] == "alice@example.com"
 
 
+def test_authorization_decisions_cannot_evict_substantive_audit_events() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("general_agent", "mock")])
+    orchestrator._append_audit_event(
+        "message_received", {"email": "alice@example.com"}, pii_fields=("email",)
+    )
+    for index in range(orchestrator._authorization_events.maxlen + 3):
+        orchestrator.record_authorization_decision(
+            scope="inference", purpose="message_delivery", allowed=False, reason=f"denial_{index}"
+        )
+
+    replay = orchestrator.list_recent_audit_events(role="admin", purpose="audit_replay")
+    assert [event["event_type"] for event in replay] == ["message_received"]
+    assert replay[0]["event_detail"]["email"] == "alice@example.com"
+    assert len(orchestrator.list_recent_authorization_decisions(page_size=orchestrator._authorization_events.maxlen)) == orchestrator._authorization_events.maxlen
+
+
+def test_audit_replay_isolates_undecryptable_event() -> None:
+    orchestrator = TaskOrchestrator([ModelAgent("general_agent", "mock")])
+    orchestrator._append_audit_event(
+        "message_received", {"email": "alice@example.com"}, pii_fields=("email",)
+    )
+    tampered = json.loads(json.dumps(orchestrator._audit_events[-1]))
+    tampered["event_detail"][ENCRYPTED_FIELDS_KEY]["fields"]["email"]["ciphertext"] = "AA"
+    orchestrator._audit_events.append(tampered)
+
+    replay = orchestrator.list_recent_audit_events(role="admin", purpose="audit_replay")
+    assert replay[0]["event_detail"]["__pii_protection_error__"] == "unavailable"
+    assert "alice@example.com" not in json.dumps(replay[0])
+    assert replay[1]["event_detail"]["email"] == "alice@example.com"
+
+
 def test_purpose_policy_is_role_scoped() -> None:
     security = SecurityConfig(auth_token="secret")
     assert security.authorize({"authorization": "Bearer secret"}, "inference", "127.0.0.1") == "message_delivery"

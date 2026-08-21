@@ -33,6 +33,5 @@ Paper role values are deliberate exceptions because they are source terminology:
 
 - Domain code stays in `contextual_orchestrator/orchestrator.py` until a second implementation forces extraction.
 - Delivery adapters live in `server.py`.
-- UI static assets live in `admin.py` only while the product remains dependency-free.
+- UI static assets live in `admin.py` while the stdlib HTTP/admin surface remains sufficient.
 - Do not introduce provider SDKs unless OpenAI-compatible HTTP falls short.
-

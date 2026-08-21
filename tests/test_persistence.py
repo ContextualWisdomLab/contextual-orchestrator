@@ -111,6 +111,24 @@ def test_durable_audit_retention_is_bounded() -> None:
         store.close()
 
 
+def test_authorization_stream_persists_separately_from_audit() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "state.db")
+        first = _orch(db)
+        first._append_audit_event("substantive_event", {"value": "keep"})
+        first.record_authorization_decision(
+            scope="inference", purpose="message_delivery", allowed=False, reason="unauthorized"
+        )
+        first.close()
+
+        second = _orch(db)
+        try:
+            assert [event["event_type"] for event in second._audit_events] == ["substantive_event"]
+            assert [event["event_type"] for event in second._authorization_events] == ["authorization_decision"]
+        finally:
+            second.close()
+
+
 def test_stream_reload_respects_deque_maxlen() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "state.db")
