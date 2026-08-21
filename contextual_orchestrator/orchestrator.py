@@ -2617,7 +2617,6 @@ class TaskOrchestrator:
         """
         candidates = self._failover_candidates(primary, text, role)
         retry_limit = min(self.tool_retry_attempts, MAX_TOOL_RETRY_ATTEMPTS)
-        last_error: Exception | None = None
         for agent in candidates:
             retry_attempt = 0
             while True:
@@ -2626,7 +2625,6 @@ class TaskOrchestrator:
                 except Exception as exc:
                     if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
-                    last_error = exc
                     decision = classify_tool_failure(exc)
                     action = decision.action
                     if (
