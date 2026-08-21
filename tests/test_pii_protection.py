@@ -72,6 +72,7 @@ def test_empty_field_set_and_plain_decrypt_are_copy_operations() -> None:
         "",
         "hex:bad",
         "base64:not@@base64",
+        base64.urlsafe_b64encode(KEY_BYTES).decode("ascii"),
         "passphrase:",
         "0123456789abcdef0123456789abcdef",
         "not-a-32-byte-key",

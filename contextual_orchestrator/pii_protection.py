@@ -72,16 +72,7 @@ def _decode_secret(secret: str, *, key_name: str = "") -> bytes:
         except (binascii.Error, ValueError) as exc:
             raise PiiProtectionError("PII encryption key is not valid base64") from exc
     else:
-        decoded = secret.encode("utf-8")
-        if len(decoded) != 32:
-            try:
-                decoded = base64.urlsafe_b64decode(secret + "=" * (-len(secret) % 4))
-            except (binascii.Error, ValueError):
-                decoded = b""
-        else:
-            raise PiiProtectionError(
-                "PII encryption key must use base64:, hex:, or passphrase:"
-            )
+        raise PiiProtectionError("PII encryption key must use base64:, hex:, or passphrase:")
     if len(decoded) != 32:
         raise PiiProtectionError("PII encryption key must decode to 32 bytes")
     return decoded
