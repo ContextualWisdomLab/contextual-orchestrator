@@ -11,6 +11,8 @@ The evaluator fails closed when any of these is absent or inconsistent:
 - verified ruleset and non-synthetic merge evidence;
 - every required check completed successfully on the exact head;
 - qualifying independent approval on the exact head;
+- a positive independent-approval requirement; a missing or zero-review policy
+  is invalid and remains blocked;
 - complete human, CodeRabbit, GitHub Advanced Security, Dependabot, OpenCode,
   Noema, and Strix finding inventory with zero unresolved findings.
 
@@ -19,6 +21,11 @@ returns tokens, prompts, reviewer credentials, or private reasoning. A missing
 snapshot produces `authority_evidence_unavailable`, so
 `/api/v1/commercial_release_candidates/latest` remains useful for local product
 demonstrations without claiming release authorization.
+
+When an authenticated principal requests `/admin/state`, its spend totals and
+model buckets contain only that principal's workflow runs. Unauthenticated
+internal aggregation remains available through `spend_analytics()` without an
+owner filter.
 
 ## Customer next action
 
