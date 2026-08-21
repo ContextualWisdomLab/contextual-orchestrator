@@ -673,6 +673,8 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
         response_format = request["response_format"]
     if response_format is not None:
         payload["response_format"] = response_format
+    if isinstance(request.get("metadata"), dict):
+        payload["metadata"] = dict(request["metadata"])
 
     tools: list[dict[str, Any]] = []
     raw_tools = request.get("tools")

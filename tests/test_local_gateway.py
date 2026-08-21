@@ -563,6 +563,21 @@ def test_local_responses_adapter_prefers_translated_text_format_contract() -> No
     }
 
 
+def test_local_responses_adapter_preserves_bounded_metadata_for_provider() -> None:
+    payload = _responses_to_chat_payload(
+        {
+            "input": "use the supplied context",
+            "metadata": {"pu": "PU_TEST", "corp_code": "CORP_TEST", "author_id": "AUTHOR_TEST"},
+        }
+    )
+
+    assert payload["metadata"] == {
+        "pu": "PU_TEST",
+        "corp_code": "CORP_TEST",
+        "author_id": "AUTHOR_TEST",
+    }
+
+
 def test_local_responses_adapter_rejects_non_string_input() -> None:
     with pytest.raises(ValueError, match="string or item list"):
         _responses_to_chat_payload({"input": {"unexpected": "mapping"}})
