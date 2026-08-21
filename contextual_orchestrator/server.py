@@ -28,6 +28,7 @@ from .orchestrator import (
     TaskOrchestrator,
     _new_chat_completion_id,
     _chat_to_responses_payload,
+    _responses_usage,
     chat_completion_chunks,
     chat_completion_response,
     _responses_to_chat_payload,
@@ -48,7 +49,7 @@ from .telemetry import (
 
 _LOGGER = logging.getLogger(__name__)
 
-# OpenAI request params forwarded verbatim to the provider on passthrough.
+# OpenAI request params forwarded to the final provider after orchestration.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
     "temperature", "top_p", "max_tokens", "max_completion_tokens", "n", "stop",
     "seed", "presence_penalty", "frequency_penalty", "logit_bias", "logprobs",
@@ -83,7 +84,7 @@ ALLOWED_RESPONSES_KEYS = {
     "max_output_tokens",
     # Tool-loop budget — accepted only for explicit unsupported error (no multi-step tool loop).
     "max_tool_calls",
-    # Gateway cost/routing control plane (stripped before provider passthrough).
+    # Gateway cost/routing control plane (stripped before final provider transport).
     "attribution", "routing",
     # previous_response_id / conversation / truncation / include fail closed
     # with named unsupported errors. Official text.format is validated
@@ -2018,8 +2019,8 @@ def _validate_structured_completion_answer(answer: Any, response_format: dict[st
         raise RequestError(502, "invalid_structured_output", "orchestrator returned no textual JSON")
     try:
         value = json.loads(answer)
-    except json.JSONDecodeError as exc:
-        raise RequestError(502, "invalid_structured_output", "orchestrator returned invalid JSON") from exc
+    except json.JSONDecodeError:
+        raise RequestError(502, "invalid_structured_output", "orchestrator returned invalid JSON") from None
     if response_format.get("type") == "json_object" and not isinstance(value, dict):
         raise RequestError(502, "invalid_structured_output", "json_object output must be an object")
     if response_format.get("type") == "json_schema":
@@ -3267,7 +3268,7 @@ def _validate_responses_store(body: dict[str, Any]) -> bool | None:
     """Responses API ``store`` — strict boolean; ``true`` is not supported.
 
     OpenAI may persist Responses when ``store=true``. This gateway's Responses
-    path is a single-agent passthrough without a persistence plane, so
+    path has no provider-response persistence plane, so
     ``store=true`` fails closed rather than silently dropping a buyer-visible
     storage control. ``store=false`` and omit remain valid.
     """
@@ -5359,7 +5360,9 @@ def build_server(
                                 "tool-loop passthrough requires stream=false",
                             )
                         started_at = time.perf_counter()
-                        raw_response = self._run(lambda: orchestrator.proxy_completion(body))
+                        raw_response = self._run(
+                            lambda: orchestrator.proxy_completion(body, single_agent=True)
+                        )
                         orchestrator.record_analytics_event(
                             "chat_completion_tool_passthrough",
                             {
@@ -5454,6 +5457,9 @@ def build_server(
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             response_format=structured_response_format,
+                            provider_request=(
+                                body if structured_response_format is not None else None
+                            ),
                         ))
                     if structured_response_format is not None and result.get("channel") != "batch":
                         _validate_structured_completion_answer(result.get("answer"), structured_response_format)
@@ -5677,14 +5683,10 @@ def build_server(
                     if "stream_options" in body:
                         _validate_responses_stream_options(body)
                     # Sampling knobs: type/range fail-closed before provider passthrough.
-                    if "temperature" in body:
-                        _validate_completions_temperature(body)
-                    if "top_p" in body:
-                        _validate_completions_top_p(body)
-                    if "presence_penalty" in body:
-                        _validate_completions_presence_penalty(body)
-                    if "frequency_penalty" in body:
-                        _validate_completions_frequency_penalty(body)
+                    _validate_completions_temperature(body)
+                    _validate_completions_top_p(body)
+                    _validate_completions_presence_penalty(body)
+                    _validate_completions_frequency_penalty(body)
                     if "n" in body:
                         _validate_responses_n(body)
                     if "seed" in body:
@@ -5695,12 +5697,9 @@ def build_server(
                         _validate_responses_logit_bias(body)
                     if "logprobs" in body or "top_logprobs" in body:
                         _validate_responses_logprobs(body)
-                    if "max_tokens" in body:
-                        _validate_completions_max_tokens(body)
-                    if "max_completion_tokens" in body:
-                        _validate_chat_max_completion_tokens(body)
-                    if "max_output_tokens" in body:
-                        _validate_responses_max_output_tokens(body)
+                    responses_max_tokens = _validate_completions_max_tokens(body)
+                    responses_max_completion_tokens = _validate_chat_max_completion_tokens(body)
+                    responses_max_output_tokens = _validate_responses_max_output_tokens(body)
                     if "max_tool_calls" in body:
                         _validate_responses_max_tool_calls(body)
                     _validate_openai_sdk_control_fields(body, endpoint_path="/v1/responses")
@@ -5836,7 +5835,11 @@ def build_server(
                         # requested stream or accept a missing input.
                         started_at = time.perf_counter()
                         raw_response = self._run(
-                            lambda: orchestrator.proxy_completion(body, endpoint="responses")
+                            lambda: orchestrator.proxy_completion(
+                                body,
+                                endpoint="responses",
+                                single_agent=True,
+                            )
                         )
                         orchestrator.record_analytics_event(
                             "responses_tool_passthrough",
@@ -5872,30 +5875,37 @@ def build_server(
                             }
                     _reject_responses_orchestration_controls(body)
                     chat_payload = _responses_to_chat_payload(body)
+                    response_max_tokens = (
+                        responses_max_output_tokens
+                        if responses_max_output_tokens is not None
+                        else responses_max_completion_tokens
+                        if responses_max_completion_tokens is not None
+                        else responses_max_tokens
+                    )
                     started_at = time.perf_counter()
                     with orchestrator.client.request_settings(
-                        max_output_tokens=body.get("max_output_tokens")
-                        if isinstance(body.get("max_output_tokens"), int)
-                        else None,
+                        max_output_tokens=response_max_tokens,
                     ):
                         result = self._run(lambda: coordinator.complete(
                             chat_payload["messages"],
                             mode="conduct",
                             attribution=_validate_attribution(body.get("attribution")),
-                            hints=body.get("routing"),
+                            hints=_validate_routing(body.get("routing")),
                             model_name=model_name,
                             workflow_run_id=f"run_{uuid.uuid4().hex}",
                             response_format=response_contract,
+                            provider_request=body,
+                            provider_endpoint="responses",
                         ))
                     if response_contract is not None:
                         _validate_structured_completion_answer(result.get("answer"), response_contract)
-                    chat_response = chat_completion_response(
-                        result,
-                        model=model_name,
-                        include_trace=security.expose_trace_by_default,
-                        usage=result.get("usage"),
-                    )
-                    orchestrated = _chat_to_responses_payload(chat_response, body)
+                    provider_response = result.get("provider_response")
+                    if not isinstance(provider_response, dict):
+                        raise RuntimeError("Responses completion omitted provider response")
+                    orchestrated = dict(provider_response)
+                    orchestrated["model"] = model_name
+                    if "usage" not in orchestrated and isinstance(result.get("usage"), dict):
+                        orchestrated["usage"] = _responses_usage(result["usage"])
                     orchestrator.record_analytics_event(
                         "responses_orchestrated",
                         {

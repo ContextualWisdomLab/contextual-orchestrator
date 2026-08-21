@@ -28,6 +28,17 @@ The useful split is quality-latency, not separate products:
 - Low-latency routing: select one worker for the current query or turn.
 - Deep orchestration: create a multi-step workflow when the task needs decomposition, independent attempts, verification, or synthesis.
 
+Structured provider features do not create a third single-agent path. A
+non-null `response_format` or Responses request enters the conducted workflow
+and reaches one final provider only after the
+Thinker/Worker/Verifier/Synthesizer evidence has been assembled. The final
+provider call preserves the validated wire feature; it is a transport boundary,
+not a bypass of orchestration. JSON object and JSON schema are both covered by
+[ADR 0011](planning/adrs/0011-structured-provider-features-stay-orchestrated.md).
+The explicit client-owned tool-loop exception remains the single-worker
+contract defined by [ADR 0014](planning/adrs/0014-gateway-owned-model-selection.md);
+ordinary tool declarations without that opt-in fail closed.
+
 TRINITY contributes the compact coordinator idea: a small model representation plus a lightweight head can choose agent and role over multiple turns. Its Thinker, Worker, and Verifier contracts are practical enough to implement directly.
 
 Conductor contributes the workflow representation: each step is a natural-language subtask, an assigned worker, and an access list of prior step outputs. This is the key piece for preventing every worker from being dragged into the same transcript while still allowing deliberate collaboration.

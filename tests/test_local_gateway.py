@@ -20,6 +20,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     _chat_to_responses_payload,
     _is_local_provider_url,
     _responses_to_chat_payload,
+    _responses_usage,
 )
 
 
@@ -343,6 +344,13 @@ def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
                     "content": [{"type": "input_text", "text": "ping"}],
                 }],
                 "stream": True,
+                "text": {
+                    "format": {
+                        "type": "json_schema",
+                        "name": "result_shape",
+                        "schema": {"type": "object"},
+                    }
+                },
                 "tools": [{
                     "type": "function",
                     "name": "lookup",
@@ -361,6 +369,13 @@ def test_local_responses_passthrough_adapts_to_chat_transport() -> None:
         "type": "function",
         "function": {"name": "lookup", "parameters": {"type": "object"}},
     }]
+    assert forwarded["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "result_shape",
+            "schema": {"type": "object"},
+        },
+    }
 
 
 def test_local_responses_passthrough_has_no_provider_specific_fields() -> None:
@@ -374,6 +389,60 @@ def test_local_responses_passthrough_has_no_provider_specific_fields() -> None:
         client.proxy_send(agent, "responses", {"input": "ping"})
 
     assert "chat_template_kwargs" not in send.call_args.args[2]
+
+
+def test_local_chat_passthrough_applies_bounded_controls_for_final_synthesis() -> None:
+    agent = ModelAgent(
+        "local_agent",
+        "local-model",
+        base_url="local://127.0.0.1:8080/v1",
+        local_credential_key="LOCAL_GATEWAY_TOKEN",
+    )
+    client = ModelClient(max_output_tokens=321)
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client,
+        "_send_raw_with_retry",
+        return_value={"choices": [{"message": {"content": "OK"}}]},
+    ) as send:
+        client.proxy_send(
+            agent,
+            "chat/completions",
+            {
+                "model": "local-model",
+                "messages": [{"role": "user", "content": "final synthesis"}],
+                "response_format": {"type": "json_object"},
+            },
+        )
+
+    forwarded = send.call_args.args[2]
+    assert forwarded["max_tokens"] == 321
+    assert "chat_template_kwargs" not in forwarded
+
+
+def test_local_chat_passthrough_preserves_explicit_max_tokens() -> None:
+    agent = ModelAgent(
+        "local_agent",
+        "local-model",
+        base_url="local://127.0.0.1:8080/v1",
+        local_credential_key="LOCAL_GATEWAY_TOKEN",
+    )
+    client = ModelClient(max_output_tokens=321)
+    with patch.object(client, "_validate_provider", return_value=None), patch.object(
+        client,
+        "_send_raw_with_retry",
+        return_value={"choices": [{"message": {"content": "OK"}}]},
+    ) as send:
+        client.proxy_send(
+            agent,
+            "chat/completions",
+            {
+                "model": "local-model",
+                "messages": [{"role": "user", "content": "final synthesis"}],
+                "max_tokens": 64,
+            },
+        )
+
+    assert send.call_args.args[2]["max_tokens"] == 64
 
 
 def test_local_responses_adapter_preserves_supported_items_and_controls() -> None:
@@ -441,6 +510,79 @@ def test_local_responses_adapter_preserves_supported_items_and_controls() -> Non
         "function": {"name": "lookup", "parameters": {"type": "object"}},
     }]
     assert payload["tool_choice"] == {"type": "function", "function": {"name": "lookup"}}
+
+
+def test_local_responses_adapter_preserves_json_schema_contract() -> None:
+    payload = _responses_to_chat_payload(
+        {
+            "model": "local-model",
+            "input": "extract the region",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "region_result",
+                    "description": "A bounded region result",
+                    "schema": {"type": "object", "properties": {"label": {"type": "string"}}},
+                    "strict": True,
+                }
+            },
+        }
+    )
+
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "region_result",
+            "description": "A bounded region result",
+            "schema": {"type": "object", "properties": {"label": {"type": "string"}}},
+            "strict": True,
+        },
+    }
+
+
+def test_local_responses_adapter_prefers_translated_text_format_contract() -> None:
+    payload = _responses_to_chat_payload(
+        {
+            "input": "prefer the Responses contract",
+            "text": {
+                "format": {
+                    "type": "json_schema",
+                    "name": "responses_shape",
+                    "schema": {"type": "object"},
+                }
+            },
+            "response_format": {"type": "json_object"},
+        }
+    )
+
+    assert payload["response_format"] == {
+        "type": "json_schema",
+        "json_schema": {
+            "name": "responses_shape",
+            "schema": {"type": "object"},
+        },
+    }
+
+
+def test_responses_usage_normalizes_chat_aliases() -> None:
+    assert _responses_usage(
+        {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9}
+    ) == {"input_tokens": 4, "output_tokens": 5, "total_tokens": 9}
+
+
+def test_local_responses_adapter_preserves_bounded_metadata_for_provider() -> None:
+    payload = _responses_to_chat_payload(
+        {
+            "input": "use the supplied context",
+            "metadata": {"pu": "PU_TEST", "corp_code": "CORP_TEST", "author_id": "AUTHOR_TEST"},
+        }
+    )
+
+    assert payload["metadata"] == {
+        "pu": "PU_TEST",
+        "corp_code": "CORP_TEST",
+        "author_id": "AUTHOR_TEST",
+    }
 
 
 def test_local_responses_adapter_rejects_non_string_input() -> None:

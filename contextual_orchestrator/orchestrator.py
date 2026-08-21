@@ -109,6 +109,10 @@ class BudgetExceededError(RuntimeError):
         self.detail = detail or {}
 
 
+class ProviderResponseError(RuntimeError):
+    """Raised for a provider response that cannot become a safe completion."""
+
+
 def estimate_tokens(text: str) -> int:
     """Rough token estimate (~4 chars/token). ponytail: heuristic, not a real tokenizer.
 
@@ -116,6 +120,17 @@ def estimate_tokens(text: str) -> int:
     usage when real workers return it.
     """
     return (len(text) + 3) // 4 if text else 0
+
+
+def _step_output_token_count(step: dict[str, Any]) -> tuple[int, bool]:
+    """Return effective output tokens and whether they were provider-reported."""
+    usage = step.get("usage")
+    reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
+    if type(reported) is not int or reported < 0:
+        reported = usage.get("output_tokens") if isinstance(usage, dict) else None
+    if type(reported) is int and reported >= 0:
+        return reported, True
+    return estimate_tokens(step.get("output", "")), False
 
 
 _COMMERCIAL_REPORT_CACHE: ContextVar[dict[tuple[Any, Any, Any], dict[str, Any]] | None] = ContextVar(
@@ -186,18 +201,23 @@ class _FastMLSIJudgeAdapter:
         *,
         response_format: dict[str, Any],
     ) -> dict[str, Any]:
-        """Route a Judge JSON-schema request through the existing gateway proxy."""
+        """Send one bounded Judge JSON-schema request through the provider transport."""
         if mode is not None and (type(mode) is not str or mode not in {"auto", "route", "conduct"}):
             raise ValueError("mode must be auto, route, or conduct")
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
-        response = self.orchestrator.proxy_completion({
+        self.orchestrator._raise_if_spend_budget_exceeded()
+        payload = {
             "model": agent.model,
             "messages": messages,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        })
+            "stream": False,
+        }
+        if self.orchestrator.client.temperature is not None:
+            payload["temperature"] = self.orchestrator.client.temperature
+        response = self.orchestrator.client.proxy_send(agent, "chat/completions", payload)
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
@@ -247,8 +267,8 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
 
     try:
         decision = json.loads(reply.strip(), object_pairs_hook=reject_duplicate_keys)
-    except (json.JSONDecodeError, RecursionError, TypeError) as exc:
-        raise ValueError("judge response is not valid JSON") from exc
+    except (json.JSONDecodeError, RecursionError, TypeError):
+        raise ValueError("judge response is not valid JSON") from None
     if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
         raise ValueError("judge response must match the exact verdict schema")
     decision_value = decision["decision"]
@@ -660,8 +680,17 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
     if "max_output_tokens" in request and "max_tokens" not in payload:
         payload["max_tokens"] = request["max_output_tokens"]
 
+    response_format = _responses_text_format_to_chat_response_format(request.get("text"))
+    if response_format is None and isinstance(request.get("response_format"), dict):
+        response_format = request["response_format"]
+    if response_format is not None:
+        payload["response_format"] = response_format
+    if isinstance(request.get("metadata"), dict):
+        payload["metadata"] = dict(request["metadata"])
+
     tools: list[dict[str, Any]] = []
-    for tool in request.get("tools") or []:
+    raw_tools = request.get("tools")
+    for tool in raw_tools if isinstance(raw_tools, list) else []:
         if not isinstance(tool, dict) or tool.get("type") != "function":
             continue
         function = {
@@ -680,6 +709,55 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
             "function": {"name": tool_choice.get("name", "")},
         }
     return payload
+
+
+def _responses_text_format_to_chat_response_format(
+    text: Any,
+) -> dict[str, Any] | None:
+    """Translate Responses ``text.format`` to Chat ``response_format``."""
+    if not isinstance(text, dict):
+        return None
+    fmt = text.get("format")
+    if not isinstance(fmt, dict):
+        return None
+    fmt_type = fmt.get("type")
+    if fmt_type in {"text", "json_object"}:
+        return {"type": fmt_type}
+    if fmt_type != "json_schema":
+        return None
+    schema = {
+        key: fmt[key]
+        for key in ("name", "schema", "description", "strict")
+        if key in fmt
+    }
+    return {"type": "json_schema", "json_schema": schema}
+
+
+def _canonical_provider_usage(
+    usage: dict[str, Any], *, responses: bool
+) -> dict[str, Any]:
+    """Copy provider usage with canonical aliases used by spend accounting."""
+    canonical = dict(usage)
+    if responses:
+        for responses_key, chat_key in (
+            ("input_tokens", "prompt_tokens"),
+            ("output_tokens", "completion_tokens"),
+        ):
+            value = canonical.get(responses_key)
+            if type(value) is int and value >= 0:
+                canonical.setdefault(chat_key, value)
+    return canonical
+
+
+def _responses_usage(usage: dict[str, Any]) -> dict[str, int]:
+    """Return usage with the Responses API's native token field names."""
+    input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
+    output_tokens = int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
+    }
 
 
 def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
@@ -713,8 +791,6 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
         })
 
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    input_tokens = int(usage.get("prompt_tokens", 0) or 0)
-    output_tokens = int(usage.get("completion_tokens", 0) or 0)
     response: dict[str, Any] = {
         "id": f"resp_{data.get('id', uuid.uuid4().hex)}",
         "object": "response",
@@ -723,11 +799,7 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
         "output": output,
         "output_text": content,
         "status": "completed" if choice.get("finish_reason") != "length" else "incomplete",
-        "usage": {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
-        },
+        "usage": _responses_usage(usage),
     }
     if isinstance(request.get("metadata"), dict):
         response["metadata"] = request["metadata"]
@@ -1158,8 +1230,9 @@ class ModelClient:
             if attempt >= retry_limit or not is_transient_error(last_error):
                 break
             self._sleep(self._backoff_delay(attempt))
-        detail = f": {last_error}" if last_error else ""
-        raise RuntimeError(f"provider {agent.id} request failed{detail}") from last_error
+        if isinstance(last_error, ProviderResponseError):
+            raise last_error
+        raise RuntimeError(f"provider {agent.id} request failed") from None
 
     def _send_embeddings_with_retry(
         self,
@@ -1178,8 +1251,7 @@ class ModelClient:
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
-        detail = f": {last_error}" if last_error else ""
-        raise RuntimeError(f"provider {agent.id} embeddings request failed{detail}") from last_error
+        raise RuntimeError(f"provider {agent.id} embeddings request failed") from None
 
     def _retry_limit(self, agent: ModelAgent) -> int:
         """Return a retry budget without multiplying an expensive local queue by default."""
@@ -1273,11 +1345,11 @@ class ModelClient:
         if isinstance(content, str):
             return content
         if isinstance(message, dict) and message.get("reasoning"):
-            raise RuntimeError(
+            raise ProviderResponseError(
                 f"provider {agent.id} returned reasoning without content; "
                 "configure the provider to return assistant content or increase max_output_tokens"
             )
-        raise RuntimeError(f"provider {agent.id} response did not contain assistant content")
+        raise ProviderResponseError(f"provider {agent.id} response did not contain assistant content")
 
     @staticmethod
     def _connect_validated(
@@ -1440,10 +1512,10 @@ class ModelClient:
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
-    # (response_format / tools / the Responses API) are proxied to a single agent
-    # so the full provider response shape (tool_calls, parsed structured output,
-    # Responses output items) survives verbatim. Agent selection lives on the
-    # orchestrator; this is the agent-level transport.
+    # (response_format / tools / the Responses API) are sent to the final provider
+    # after the multi-agent workflow so the full provider response shape
+    # (tool_calls, parsed structured output, Responses output items) survives.
+    # Agent selection lives on the orchestrator; this is the agent-level transport.
     def proxy_send(
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
@@ -1462,6 +1534,13 @@ class ModelClient:
                     agent, "chat/completions", chat_payload, destination
                 )
             return _chat_to_responses_payload(chat_response, payload)
+        if _is_local_provider_url(agent.base_url) and endpoint.strip("/") == "chat/completions":
+            local_payload = dict(payload)
+            local_payload.setdefault(
+                "max_tokens", self._request_setting("max_output_tokens", self.max_output_tokens)
+            )
+            with _local_provider_slot(agent, self.local_concurrency, self.timeout):
+                return self._send_raw_with_retry(agent, endpoint, local_payload, destination)
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
             return self._send_raw_with_retry(agent, endpoint, payload, destination)
 
@@ -1499,7 +1578,7 @@ class ModelClient:
             if attempt >= retry_limit or not is_transient_error(last_error):
                 break
             self._sleep(self._backoff_delay(attempt))
-        raise RuntimeError(f"provider {agent.id} passthrough request failed") from last_error
+        raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
 
     def _send_raw(
         self,
@@ -1527,6 +1606,17 @@ class ModelClient:
         self, agent: ModelAgent, endpoint: str, payload: dict[str, Any]
     ) -> dict[str, Any]:
         """Mock full provider response for tests; echoes forwarded params so passthrough is assertable."""
+        response_format = payload.get("response_format")
+        text_config = payload.get("text")
+        text_format = text_config.get("format") if isinstance(text_config, dict) else None
+        structured_json = (
+            isinstance(response_format, dict)
+            and response_format.get("type") in {"json_object", "json_schema"}
+        ) or (
+            isinstance(text_format, dict)
+            and text_format.get("type") in {"json_object", "json_schema"}
+        )
+        mock_text = "{}" if structured_json else f"[{agent.id}] responses-mock"
         echoed = {
             key: payload[key]
             for key in (
@@ -1539,6 +1629,7 @@ class ModelClient:
                 "max_tokens",
                 "instructions",
                 "metadata",
+                "input",
                 "messages",
                 "top_logprobs",
                 "text",
@@ -1546,6 +1637,17 @@ class ModelClient:
             if key in payload
         }
         if endpoint.strip("/") == "responses":
+            instructions = echoed.get("instructions")
+            guidance_prefix = "You are the final synthesizer in a multi-agent workflow."
+            marker = "\n\nYou are the final synthesizer in a multi-agent workflow."
+            if isinstance(instructions, str) and instructions.startswith(guidance_prefix):
+                echoed.pop("instructions", None)
+            elif isinstance(instructions, str) and marker in instructions:
+                original_instructions = instructions.split(marker, 1)[0]
+                if original_instructions.strip():
+                    echoed["instructions"] = original_instructions
+                else:
+                    echoed.pop("instructions", None)
             return {
                 "id": f"resp_mock_{agent.id}",
                 "object": "response",
@@ -1554,7 +1656,7 @@ class ModelClient:
                     {
                         "type": "message",
                         "role": "assistant",
-                        "content": [{"type": "output_text", "text": f"[{agent.id}] responses-mock"}],
+                        "content": [{"type": "output_text", "text": mock_text}],
                     }
                 ],
                 "echo": echoed,
@@ -1566,7 +1668,10 @@ class ModelClient:
             "choices": [
                 {
                     "index": 0,
-                    "message": {"role": "assistant", "content": f"[{agent.id}] chat-mock"},
+                    "message": {
+                        "role": "assistant",
+                        "content": "{}" if structured_json else f"[{agent.id}] chat-mock",
+                    },
                     "finish_reason": "stop",
                 }
             ],
@@ -2063,6 +2168,15 @@ class TaskOrchestrator:
         self._analytics_events: deque[dict[str, Any]] = deque(maxlen=512)
         self._audit_events: deque[dict[str, Any]] = deque(maxlen=256)
         self._run_order: deque[str] = deque(maxlen=128)
+        self._workflow_run_lock = threading.Lock()
+        self._archived_spend: dict[str, Any] = {
+            "run_count": 0,
+            "estimated_prompt_tokens": 0,
+            "reported_prompt_tokens": 0,
+            "any_reported_prompt": False,
+            "total_output_tokens": 0,
+            "by_model": {},
+        }
         # Per-agent circuit breaker: consecutive failures trip an agent "open"
         # so a persistently failing provider is skipped until it cools down.
         self._circuit: dict[str, dict[str, float]] = {}
@@ -2135,8 +2249,7 @@ class TaskOrchestrator:
 
     def _reload_state(self) -> None:
         for record in self._store.load("workflow_run"):
-            self._workflow_runs[record["workflow_run_id"]] = record
-            self._run_order.appendleft(record["workflow_run_id"])
+            self._remember_workflow_run(record)
         for evaluation in self._store.load("evaluation_run"):
             self._evaluation_runs[evaluation["evaluation_run_id"]] = evaluation
         for event in self._store.load("analytics", self._analytics_events.maxlen):
@@ -2157,15 +2270,26 @@ class TaskOrchestrator:
     )
 
     def proxy_completion(
-        self, body: dict[str, Any], *, endpoint: str = "chat/completions"
+        self,
+        body: dict[str, Any],
+        *,
+        endpoint: str = "chat/completions",
+        single_agent: bool = False,
     ) -> dict[str, Any]:
-        """Passthrough a full OpenAI request to the primary agent, returning its raw response.
+        """Serve provider-shaped requests through a conducted workflow.
 
-        Requests carrying provider features the multi-agent verifier cannot merge
-        (``response_format``, ``tools``, or the Responses API) are handled by a
-        single selected agent so the full provider response shape survives; the
-        orchestration path stays reserved for plain-text routing/verification.
+        Structured output, tools, and Responses requests cannot be merged by
+        string concatenation. They therefore run the same multi-agent workflow
+        as ordinary orchestration, then use the selected synthesizer once to
+        produce the requested provider shape. This preserves provider features
+        without silently downgrading the request to a single-agent workflow.
         """
+        self._raise_if_spend_budget_exceeded()
+        if not single_agent and (endpoint.strip("/") == "responses" or any(
+            key in body and body.get(key) is not None
+            for key in ("response_format", "tools", "tool_choice", "functions", "function_call")
+        )):
+            return self._orchestrated_provider_completion(body, endpoint=endpoint)
         messages = body.get("messages")
         if isinstance(messages, list):
             text = self._latest_user_text(messages)
@@ -2192,7 +2316,227 @@ class TaskOrchestrator:
         # v1 passthrough returns the full JSON body; SSE stream passthrough is a
         # follow-up, so force a non-streamed upstream response here.
         upstream["stream"] = False
-        return self.client.proxy_send(agent, endpoint, upstream)
+        passthrough_started = time.perf_counter()
+        raw = self.client.proxy_send(agent, endpoint, upstream)
+        passthrough_output = ""
+        try:
+            passthrough_output = ModelClient._response_content(agent, raw)
+        except RuntimeError:
+            # Tool-call-only responses are billable even without assistant text.
+            pass
+        passthrough_step = {
+            "id": 0,
+            "role": "worker",
+            "agent_id": agent.id,
+            "subtask": "Provider passthrough",
+            "access": [],
+            "latency_ms": round((time.perf_counter() - passthrough_started) * 1000, 2),
+            "output": passthrough_output,
+        }
+        usage = raw.get("usage")
+        if isinstance(usage, dict):
+            passthrough_step["usage"] = _canonical_provider_usage(
+                usage,
+                responses=endpoint.strip("/") == "responses",
+            )
+        self._persist_workflow_run(
+            {
+                "workflow_run_id": f"run_{uuid.uuid4().hex}",
+                "created_at": int(time.time()),
+                "mode": "route",
+                "policy_mode": "route",
+                "prompt_text": text,
+                "answer": passthrough_output,
+                "trace": [passthrough_step],
+                "policy_snapshot": self.policy.as_dict(),
+                "verification": {
+                    "accepted": True,
+                    "reason": "single provider passthrough",
+                    "verifier_output": "",
+                },
+            }
+        )
+        return raw
+
+    def _orchestrated_provider_completion(
+        self, body: dict[str, Any], *, endpoint: str
+    ) -> dict[str, Any]:
+        """Conduct a workflow, then synthesize one OpenAI-compatible response."""
+        response_request = endpoint.strip("/") == "responses"
+        chat_body = _responses_to_chat_payload(body) if response_request else dict(body)
+        messages = chat_body.get("messages")
+        if not isinstance(messages, list) or not messages:
+            raise ValueError("structured completion requires non-empty messages")
+        task = self._latest_user_text(messages)
+        required_tags = ("vision",) if self._source_image_parts(messages) else ()
+        requested_model = body.get("model")
+        final_agent = self._requested_agent(requested_model)
+        if final_agent is None:
+            final_agent = self._select_agent(
+                task,
+                "synthesizer",
+                required_tags=required_tags,
+            )
+        elif any(tag not in final_agent.tags for tag in required_tags):
+            required = ", ".join(required_tags)
+            raise RuntimeError(
+                f"requested model {requested_model!r} lacks required tags: {required}"
+            )
+        if final_agent.disabled:
+            disabled_model = requested_model if requested_model is not None else final_agent.model
+            raise RuntimeError(f"requested model {disabled_model!r} is disabled")
+
+        workflow = self.conduct(messages, preserve_messages=True, judge=True)
+        in_flight_output_tokens = 0
+        in_flight_cost_usd = 0.0
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        for row in workflow["trace"]:
+            output_tokens, _reported = _step_output_token_count(row)
+            in_flight_output_tokens += output_tokens
+            model = model_by_agent.get(row.get("served_agent_id") or row.get("agent_id"))
+            price = self.price_per_million.get(model) if model is not None else None
+            if price is not None:
+                in_flight_cost_usd += output_tokens / 1_000_000 * price
+        verification = workflow.get("verification")
+        verification_usage = verification.get("judge_usage") if isinstance(verification, dict) else None
+        if isinstance(verification_usage, dict):
+            judge_output_tokens, _reported = _step_output_token_count(
+                {"usage": verification_usage, "output": ""}
+            )
+            in_flight_output_tokens += judge_output_tokens
+            judge_agent_id = verification.get("judge_agent_id")
+            judge_model = model_by_agent.get(judge_agent_id)
+            judge_price = self.price_per_million.get(judge_model) if judge_model is not None else None
+            if judge_price is not None:
+                in_flight_cost_usd += judge_output_tokens / 1_000_000 * judge_price
+        evidence = "\n\n".join(
+            f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
+            for row in workflow["trace"]
+        )
+        guidance = (
+            "You are the final synthesizer in a multi-agent workflow. "
+            "Use the original request and verified workflow evidence. "
+            "Return only the requested provider response; do not mention "
+            "the workflow or invent evidence.\n\n"
+            f"Verified workflow evidence:\n{evidence}"
+        )
+        if response_request:
+            # Preserve the Responses contract for remote providers. Local-only
+            # providers may translate this at ModelClient.proxy_send.
+            upstream = {
+                key: value
+                for key, value in body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS and key != "model"
+            }
+            upstream.pop("max_tokens", None)
+            upstream.pop("max_completion_tokens", None)
+            original_instructions = _responses_text(body.get("instructions")).strip()
+            upstream["instructions"] = (
+                f"{original_instructions}\n\n{guidance}"
+                if original_instructions
+                else guidance
+            )
+            upstream["model"] = final_agent.model
+            upstream["stream"] = False
+            self._raise_if_spend_budget_exceeded(
+                additional_output_tokens=in_flight_output_tokens,
+                additional_cost_usd=round(in_flight_cost_usd, 6),
+            )
+            synthesis_started = time.perf_counter()
+            raw = self.client.proxy_send(final_agent, "responses", upstream)
+            synthesis_output = raw.get("output_text")
+            if not isinstance(synthesis_output, str):
+                output_parts = [
+                    _responses_text(item.get("content"))
+                    for item in raw.get("output", [])
+                    if isinstance(item, dict) and item.get("type") == "message"
+                ]
+                synthesis_output = "".join(part for part in output_parts if part)
+            raw.setdefault("output_text", synthesis_output)
+        else:
+            # Keep the caller's complete message sequence and first-message position
+            # unchanged. Add guidance to an existing system/user turn so no system
+            # or evidence message is inserted after an assistant tool call.
+            synthesis_messages = copy.deepcopy(messages)
+            guidance_index = next(
+                (
+                    index
+                    for index in range(len(synthesis_messages) - 1, -1, -1)
+                    if synthesis_messages[index].get("role") == "user"
+                ),
+                0 if synthesis_messages and synthesis_messages[0].get("role") == "system" else None,
+            )
+            if guidance_index is not None:
+                original_content = synthesis_messages[guidance_index].get("content")
+                if isinstance(original_content, str):
+                    synthesis_messages[guidance_index]["content"] = f"{original_content}\n\n{guidance}"
+                elif isinstance(original_content, list):
+                    synthesis_messages[guidance_index]["content"] = [
+                        *original_content,
+                        {"type": "text", "text": guidance},
+                    ]
+                else:
+                    synthesis_messages[guidance_index]["content"] = guidance
+            else:
+                synthesis_messages.insert(0, {"role": "system", "content": guidance})
+            upstream = {
+                key: value
+                for key, value in chat_body.items()
+                if key not in self._ORCHESTRATION_ONLY_KEYS and key not in {"model", "messages"}
+            }
+            upstream["model"] = final_agent.model
+            upstream["messages"] = synthesis_messages
+            upstream["stream"] = False
+            self._raise_if_spend_budget_exceeded(
+                additional_output_tokens=in_flight_output_tokens,
+                additional_cost_usd=round(in_flight_cost_usd, 6),
+            )
+            synthesis_started = time.perf_counter()
+            raw = self.client.proxy_send(final_agent, "chat/completions", upstream)
+            synthesis_output = ""
+            try:
+                synthesis_output = ModelClient._response_content(final_agent, raw)
+            except RuntimeError:
+                # Tool-call-only provider responses are valid structured output but
+                # have no assistant text to use as the workflow answer.
+                pass
+        synthesis_step = {
+            "id": len(workflow["trace"]),
+            "role": "synthesizer",
+            "agent_id": final_agent.id,
+            "subtask": "Provider-facing structured synthesis",
+            "access": [step["id"] for step in workflow["trace"]],
+            "latency_ms": round((time.perf_counter() - synthesis_started) * 1000, 2),
+            "output": synthesis_output,
+        }
+        usage = raw.get("usage")
+        if isinstance(usage, dict):
+            synthesis_step["usage"] = _canonical_provider_usage(
+                usage,
+                responses=response_request,
+            )
+        trace = [*workflow["trace"], synthesis_step]
+        workflow_run_id = f"run_{uuid.uuid4().hex}"
+        record = {
+            "workflow_run_id": workflow_run_id,
+            "created_at": int(time.time()),
+            "mode": "conduct",
+            "policy_mode": "conduct",
+            "prompt_text": task,
+            "answer": synthesis_output,
+            "trace": trace,
+            "policy_snapshot": self.policy.as_dict(),
+            "verification": workflow.get("verification"),
+        }
+        self._persist_workflow_run(record)
+        orchestration = {
+            "workflow_run_id": workflow_run_id,
+            "mode": "conduct",
+            "agent_count": len(workflow["trace"]),
+            "plan_source": workflow.get("plan_source"),
+        }
+        raw["orchestration"] = orchestration
+        return raw
 
     def _requested_agent(self, requested_model: Any) -> ModelAgent | None:
         """Resolve an explicit model without silently serving a different model."""
@@ -2269,17 +2613,7 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": {"accepted": True, "reason": "single route path", "verifier_output": ""},
         }
-        self._workflow_runs[record["workflow_run_id"]] = record
-        self._run_order.appendleft(record["workflow_run_id"])
-        self._append_audit_event(
-            "workflow_run_created",
-            {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
-        )
-        self.record_analytics_event(
-            "workflow_run_created",
-            {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
-             "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
-        )
+        self._persist_workflow_run(record)
 
     def _cache_key(
         self,
@@ -2304,10 +2638,7 @@ class TaskOrchestrator:
         output_contract: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Execute completion and persist a workflow run with trace and policy evidence."""
-        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-            budget = self.budget_status()
-            if budget["exceeded"]:
-                raise BudgetExceededError("spend budget exceeded", detail=budget)
+        self._raise_if_spend_budget_exceeded()
         result = self.complete(messages, mode=mode, output_contract=output_contract)
         prompt = self._latest_user_text(messages)
         record = {
@@ -2321,8 +2652,12 @@ class TaskOrchestrator:
             "policy_snapshot": self.policy.as_dict(),
             "verification": result.get("verification"),
         }
-        self._workflow_runs[record["workflow_run_id"]] = record
-        self._run_order.appendleft(record["workflow_run_id"])
+        self._persist_workflow_run(record)
+        return record
+
+    def _persist_workflow_run(self, record: dict[str, Any]) -> None:
+        """Persist one completed workflow and its compact audit/analytics evidence."""
+        self._remember_workflow_run(record)
         if self._store is not None:
             self._store.save("workflow_run", record["workflow_run_id"], record)
         self._append_audit_event(
@@ -2355,7 +2690,22 @@ class TaskOrchestrator:
                     "duration_ms": step.get("latency_ms"),
                 },
             )
-        return record
+
+    def _remember_workflow_run(self, record: dict[str, Any]) -> None:
+        """Retain recent raw evidence and compact spend for evicted runs."""
+        run_id = record["workflow_run_id"]
+        with self._workflow_run_lock:
+            if run_id in self._workflow_runs:
+                try:
+                    self._run_order.remove(run_id)
+                except ValueError:  # pragma: no cover - defensive state repair
+                    pass
+            elif self._run_order.maxlen and len(self._run_order) >= self._run_order.maxlen:
+                evicted_id = self._run_order[-1]
+                evicted = self._workflow_runs.pop(evicted_id)
+                self._accumulate_run_spend(self._archived_spend, evicted)
+            self._workflow_runs[run_id] = record
+            self._run_order.appendleft(run_id)
 
     def batch_route(self, prompts: list[str]) -> list[dict[str, Any]]:
         """Route many prompts through the provider's Batch API and persist each run.
@@ -2365,10 +2715,7 @@ class TaskOrchestrator:
         ``route_once``; results are persisted as normal route runs (with provider usage
         when reported) so spend analytics and the admin console see them unchanged.
         """
-        if self.budget_max_output_tokens is not None or self.budget_max_cost_usd is not None:
-            budget = self.budget_status()
-            if budget["exceeded"]:
-                raise BudgetExceededError("spend budget exceeded", detail=budget)
+        self._raise_if_spend_budget_exceeded()
         selected = [(prompt, self._select_agent(prompt, "worker")) for prompt in prompts]
         agents_by_id = {agent.id: agent for _, agent in selected}
         requests_by_agent: dict[str, dict[str, list[ChatMessage]]] = {}
@@ -2385,8 +2732,8 @@ class TaskOrchestrator:
                 try:
                     prefix, suffix = custom_id.rsplit("_", 1)
                     index = int(suffix)
-                except (AttributeError, ValueError) as exc:
-                    raise RuntimeError("batch provider returned an invalid request identifier") from exc
+                except (AttributeError, ValueError):
+                    raise RuntimeError("batch provider returned an invalid request identifier") from None
                 if prefix != "task" or custom_id != f"task_{index}" or not 0 <= index < len(selected):
                     raise RuntimeError("batch provider returned an invalid request identifier")
                 if index in answers:
@@ -2413,19 +2760,7 @@ class TaskOrchestrator:
                 "policy_snapshot": self.policy.as_dict(),
                 "verification": {"accepted": True, "reason": "single route path (batched)", "verifier_output": ""},
             }
-            self._workflow_runs[record["workflow_run_id"]] = record
-            self._run_order.appendleft(record["workflow_run_id"])
-            if self._store is not None:
-                self._store.save("workflow_run", record["workflow_run_id"], record)
-            self._append_audit_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "mode": "route", "agent_count": 1},
-            )
-            self.record_analytics_event(
-                "workflow_run_created",
-                {"workflow_run_id": record["workflow_run_id"], "run_mode": "route", "policy_mode": "route",
-                 "trace_step_count": 1, "trace_complete": self._is_trace_complete(record)},
-            )
+            self._persist_workflow_run(record)
             records.append(record)
         return records
 
@@ -2548,9 +2883,10 @@ class TaskOrchestrator:
 
     def get_workflow_run(self, workflow_run_id: str) -> dict[str, Any]:
         """Return a persisted workflow run by identifier."""
-        if workflow_run_id not in self._workflow_runs:  # pragma: no cover
-            raise KeyError(workflow_run_id)
-        return self._workflow_runs[workflow_run_id]
+        with self._workflow_run_lock:
+            if workflow_run_id not in self._workflow_runs:  # pragma: no cover
+                raise KeyError(workflow_run_id)
+            return self._workflow_runs[workflow_run_id]
 
     def get_access_report(self, workflow_run_id: str) -> dict[str, Any]:
         """Return per-step visibility and accessed output evidence for a run."""
@@ -2757,9 +3093,11 @@ class TaskOrchestrator:
         self,
         messages: list[ChatMessage],
         *,
+        preserve_messages: bool = False,
+        judge: bool = True,
         output_contract: dict[str, Any] | None = None,
     ) -> dict[str, Any]:
-        """Run a planned workflow: fixed template, or a Conductor-style generated plan."""
+        """Run a planned workflow with optional context, judge, and output contract."""
         task = self._latest_user_text(messages)
         source_images = self._source_image_parts(messages)
         required_tags = ("vision",) if source_images else ()
@@ -2785,12 +3123,12 @@ class TaskOrchestrator:
             prior = "\n\n".join(f"Step {i}: {outputs[i]}" for i in step.access)
             instruction = f"Original task:\n{task}\n\nAccessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
             user_content: str | list[dict[str, Any]] = instruction
-            if source_images:
+            if source_images and not preserve_messages:
                 user_content = [
                     {"type": "text", "text": instruction},
                     *copy.deepcopy(source_images),
                 ]
-            step_messages = [
+            step_messages: list[ChatMessage] = [
                 {
                     "role": "system",
                     "content": (
@@ -2799,11 +3137,22 @@ class TaskOrchestrator:
                         "Return concise, directly useful work."
                     ),
                 },
-                {
-                    "role": "user",
-                    "content": user_content,
-                },
             ]
+            if preserve_messages:
+                step_messages[0]["content"] += (
+                    f"\n\nOriginal task:\n{task}\n\n"
+                    f"Accessed prior work:\n{prior}\n\nSubtask:\n{step.subtask}"
+                )
+                # Preserve the caller's tool-call history byte-for-byte after
+                # the workflow instruction; do not insert a user turn into it.
+                step_messages.extend(copy.deepcopy(messages))
+            else:
+                step_messages.append(
+                    {
+                        "role": "user",
+                        "content": user_content,
+                    }
+                )
             if output_contract is not None and step.id == steps[-1].id:
                 step_messages[0]["content"] += (
                     "\nThe final answer must contain only one JSON value. "
@@ -2839,7 +3188,7 @@ class TaskOrchestrator:
             # Generated plans may omit a thinker; the first step's output is the upstream evidence.
             upstream = last_output("thinker") or outputs.get(steps[0].id, "")
             verification = self._judge_verifier_output(last_output("verifier"), upstream, last_output("worker"))
-            if self.policy.verifier_judge == "model":
+            if judge and self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[-1].id]
             if (
@@ -2851,7 +3200,7 @@ class TaskOrchestrator:
                 answer = last_output("worker")
         else:
             verification = self._judge_verifier_output(outputs.get(2, ""), outputs.get(0, ""), outputs.get(1, ""))
-            if self.policy.verifier_judge == "model":
+            if judge and self.policy.verifier_judge == "model":
                 verification = self._model_judge_verification(task, verification)
             answer = outputs[steps[2].id] if not self.policy.verifier_required else outputs[steps[-1].id]
             if output_contract is None and not verification["accepted"] and self.policy.verifier_required:
@@ -3022,7 +3371,9 @@ class TaskOrchestrator:
             self._record_success(agent.id)
             usage = self.client.take_usage() if hasattr(self.client, "take_usage") else None
             return output, agent.id, usage
-        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from last_error
+        if isinstance(last_error, ProviderResponseError):
+            raise last_error
+        raise RuntimeError(f"all {len(candidates)} candidate agents failed for role={role}") from None
 
     def _failover_candidates(
         self,
@@ -3154,8 +3505,7 @@ class TaskOrchestrator:
                 "verifier_output": verifier_output,
                 "judge": "model",
             }
-            if judge_adapter.served_agent_id is not None and judge_adapter.served_agent_id != judge.id:
-                verification["judge_agent_id"] = judge_adapter.served_agent_id
+            verification["judge_agent_id"] = judge_adapter.served_agent_id or judge.id
             if result.usage:
                 verification["judge_usage"] = result.usage
             verification["judge_orchestration_mode"] = result.orchestration_mode
@@ -3216,7 +3566,8 @@ class TaskOrchestrator:
             "event_type": event_type,
             "event_detail": detail,
         }
-        self._audit_events.append(event)
+        with self._workflow_run_lock:
+            self._audit_events.append(event)
         if self._store is not None:
             self._store.save("audit", None, event)
 
@@ -3304,14 +3655,16 @@ class TaskOrchestrator:
             raise ValueError("page_number/page_size must be >= 1")
         start = (page_number - 1) * page_size
         end = start + page_size
-        run_ids = list(self._run_order)[start:end]
-        return [self._workflow_runs[run_id] for run_id in run_ids]
+        with self._workflow_run_lock:
+            run_ids = list(self._run_order)[start:end]
+            return [self._workflow_runs[run_id] for run_id in run_ids]
 
     def list_recent_audit_events(self, page_number: int = 1, page_size: int = 25) -> list[dict[str, Any]]:
         """Return recent audit events in newest-first order."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
-        events = list(self._audit_events)
+        with self._workflow_run_lock:
+            events = list(self._audit_events)
         start = (page_number - 1) * page_size
         end = start + page_size
         total = len(events)
@@ -3327,49 +3680,71 @@ class TaskOrchestrator:
             "event_name": event_name,
             "event_detail": redact_value(detail),
         }
-        self._analytics_events.append(event)
+        with self._workflow_run_lock:
+            self._analytics_events.append(event)
         if self._store is not None:
             self._store.save("analytics", None, event)
 
-    def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
-        """Estimated token and cost spend per model, aggregated from workflow runs.
+    def _accumulate_run_spend(self, stats: dict[str, Any], run: dict[str, Any]) -> None:
+        """Add one run to compact, provider-aware spend statistics."""
+        stats["run_count"] += 1
+        stats["estimated_prompt_tokens"] += estimate_tokens(run.get("prompt_text", ""))
+        model_by_agent = {agent.id: agent.model for agent in self.agents}
+        metered_steps = list(run["trace"])
+        verification = run.get("verification")
+        if isinstance(verification, dict) and isinstance(verification.get("judge_usage"), dict):
+            metered_steps.append({
+                "agent_id": verification.get("judge_agent_id", "unknown"),
+                "output": "",
+                "usage": verification["judge_usage"],
+            })
+        for step in metered_steps:
+            model = model_by_agent.get(
+                step.get("served_agent_id") or step.get("agent_id"), "unknown"
+            )
+            estimated = estimate_tokens(step.get("output", ""))
+            usage = step.get("usage")
+            reported_prompt = (
+                usage.get("prompt_tokens", usage.get("input_tokens"))
+                if isinstance(usage, dict)
+                else None
+            )
+            if type(reported_prompt) is int and reported_prompt >= 0:
+                stats["reported_prompt_tokens"] += reported_prompt
+                stats["any_reported_prompt"] = True
+            effective, is_reported = _step_output_token_count(step)
+            bucket = stats["by_model"].setdefault(
+                model,
+                {
+                    "estimated_output_tokens": 0,
+                    "output_tokens": 0,
+                    "step_count": 0,
+                    "reported_steps": 0,
+                },
+            )
+            bucket["estimated_output_tokens"] += estimated
+            bucket["output_tokens"] += effective
+            bucket["step_count"] += 1
+            bucket["reported_steps"] += int(is_reported)
+            stats["total_output_tokens"] += effective
 
-        Tokens are ESTIMATED from runtime output text (~4 chars/token), not provider-reported
-        usage. Cost is computed only for models with an operator-supplied price; models without
-        one are reported under ``unpriced_models`` with a null cost. This is the honest local
-        floor for spend observability, not a billing system.
+    def spend_analytics(self, price_per_million: dict[str, float] | None = None) -> dict[str, Any]:
+        """Token and cost spend per model, aggregated from workflow runs.
+
+        Provider-reported usage is preferred; runtime output text provides a
+        deterministic estimate only when usage is unavailable. Cost is computed
+        only for models with an operator-supplied price, and unpriced models are
+        reported explicitly. This is the honest local floor for spend
+        observability, not a billing system.
         """
         prices = {**self.price_per_million, **(price_per_million or {})}
-        model_by_agent = {agent.id: agent.model for agent in self.agents}
-        by_model: dict[str, dict[str, Any]] = {}
-        total_output_tokens = 0
-        total_prompt_tokens = 0
-        reported_prompt_tokens = 0
-        any_reported_prompt = False
-
-        for run in self._workflow_runs.values():
-            total_prompt_tokens += estimate_tokens(run.get("prompt_text", ""))
-            for step in run["trace"]:
-                model = model_by_agent.get(step.get("agent_id"), "unknown")
-                estimated = estimate_tokens(step.get("output", ""))
-                usage = step.get("usage")
-                reported_prompt = usage.get("prompt_tokens") if isinstance(usage, dict) else None
-                if isinstance(reported_prompt, int):
-                    reported_prompt_tokens += reported_prompt
-                    any_reported_prompt = True
-                reported = usage.get("completion_tokens") if isinstance(usage, dict) else None
-                if isinstance(reported, int):
-                    effective, is_reported = reported, True
-                else:
-                    effective, is_reported = estimated, False
-                bucket = by_model.setdefault(
-                    model, {"estimated_output_tokens": 0, "output_tokens": 0, "step_count": 0, "reported_steps": 0}
-                )
-                bucket["estimated_output_tokens"] += estimated
-                bucket["output_tokens"] += effective
-                bucket["step_count"] += 1
-                bucket["reported_steps"] += 1 if is_reported else 0
-                total_output_tokens += effective
+        with self._workflow_run_lock:
+            stats = copy.deepcopy(self._archived_spend)
+            recent_runs = list(self._workflow_runs.values())
+        for run in recent_runs:
+            self._accumulate_run_spend(stats, run)
+        by_model = stats["by_model"]
+        total_output_tokens = stats["total_output_tokens"]
 
         rows: list[dict[str, Any]] = []
         unpriced: list[str] = []
@@ -3405,11 +3780,13 @@ class TaskOrchestrator:
             ),
             "pricing_configured": bool(prices),
             "totals": {
-                "run_count": len(self._workflow_runs),
+                "run_count": stats["run_count"],
                 "estimated_output_tokens": total_output_tokens,
-                "estimated_prompt_tokens": total_prompt_tokens,
-                "reported_prompt_tokens": reported_prompt_tokens,
-                "prompt_tokens_source": "reported" if any_reported_prompt else "estimated",
+                "estimated_prompt_tokens": stats["estimated_prompt_tokens"],
+                "reported_prompt_tokens": stats["reported_prompt_tokens"],
+                "prompt_tokens_source": (
+                    "reported" if stats["any_reported_prompt"] else "estimated"
+                ),
                 "estimated_cost_usd": round(total_cost, 6) if prices else None,
                 "currency": "USD",
             },
@@ -3443,16 +3820,48 @@ class TaskOrchestrator:
         """Current spend-budget state (limits, spent, remaining, exceeded)."""
         return self.spend_analytics()["budget"]
 
+    def _raise_if_spend_budget_exceeded(
+        self,
+        *,
+        additional_output_tokens: int = 0,
+        additional_cost_usd: float = 0.0,
+    ) -> None:
+        """Stop a provider call when persisted plus in-flight spend reaches a cap."""
+        if type(additional_output_tokens) is not int or additional_output_tokens < 0:
+            raise ValueError("additional_output_tokens must be a non-negative integer")
+        if (
+            isinstance(additional_cost_usd, bool)
+            or not isinstance(additional_cost_usd, (int, float))
+            or not math.isfinite(float(additional_cost_usd))
+            or additional_cost_usd < 0
+        ):
+            raise ValueError("additional_cost_usd must be a non-negative finite number")
+        if self.budget_max_output_tokens is None and self.budget_max_cost_usd is None:
+            return
+        budget = self.budget_status()
+        if additional_output_tokens or additional_cost_usd:
+            spent_cost = budget["spent_cost_usd"]
+            if spent_cost is not None:
+                spent_cost = round(spent_cost + additional_cost_usd, 6)
+            budget = self._budget_block(
+                budget["spent_output_tokens"] + additional_output_tokens,
+                spent_cost,
+            )
+        if budget["exceeded"]:
+            raise BudgetExceededError("spend budget exceeded", detail=budget)
+
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
-        runs = list(self._workflow_runs.values())
+        with self._workflow_run_lock:
+            runs = list(self._workflow_runs.values())
+            analytics_events = list(self._analytics_events)
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         policy_safe_count = sum(1 for run in runs if self._is_policy_safe_run(run))
-        event_counts = Counter(event["event_name"] for event in self._analytics_events)
+        event_counts = Counter(event["event_name"] for event in analytics_events)
         successful_chat_requests = sum(
             1
-            for event in self._analytics_events
+            for event in analytics_events
             if event["event_name"] == "chat_completion_requested"
             and event["event_detail"].get("status_code") == 200
         )
@@ -3543,7 +3952,8 @@ class TaskOrchestrator:
         """Return a local, evidence-backed sales-readiness gate for enterprise pilots."""
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
-        runs = list(self._workflow_runs.values())
+        with self._workflow_run_lock:
+            runs = list(self._workflow_runs.values())
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         event_counts = analytics["event_counts"]
@@ -9932,7 +10342,10 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
     """Mean quality of one config over the task set; route configs may evaluate via Batch."""
     if use_batch and mode == "route":
         records = orchestrator.batch_route([task["prompt"] for task in tasks])
-        scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
+        scores = [
+            float(quality_fn(task, record["answer"] or ""))
+            for task, record in zip(tasks, records, strict=True)
+        ]
     else:
         scores = [
             float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
