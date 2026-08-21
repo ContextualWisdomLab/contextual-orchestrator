@@ -2269,7 +2269,11 @@ class TaskOrchestrator:
         # or evidence message is inserted after an assistant tool call.
         synthesis_messages = copy.deepcopy(messages)
         guidance_index = next(
-            (index for index, message in enumerate(synthesis_messages) if message.get("role") == "user"),
+            (
+                index
+                for index in range(len(synthesis_messages) - 1, -1, -1)
+                if synthesis_messages[index].get("role") == "user"
+            ),
             0 if synthesis_messages and synthesis_messages[0].get("role") == "system" else None,
         )
         if guidance_index is not None:

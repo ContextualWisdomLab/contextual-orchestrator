@@ -19,6 +19,7 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
     _FastMLSIJudgeAdapter,
+    _responses_to_chat_payload,
     _responses_text_format_to_chat_response_format,
 )
 from contextual_orchestrator.server import (  # noqa: E402
@@ -42,6 +43,63 @@ def _build(*, budget_max_output_tokens: int | None = None) -> TaskOrchestrator:
 
 
 # -- orchestrator-level ------------------------------------------------------
+
+def test_responses_translation_preserves_input_image_content() -> None:
+    translated = _responses_to_chat_payload(
+        {
+            "model": "mock-planner",
+            "input": [
+                {
+                    "type": "message",
+                    "role": "user",
+                    "content": [
+                        {"type": "input_text", "text": "Inspect this image"},
+                        {
+                            "type": "input_image",
+                            "image_url": "data:image/png;base64,AA==",
+                            "detail": "high",
+                        },
+                    ],
+                }
+            ],
+        }
+    )
+
+    assert translated["messages"] == [
+        {
+            "role": "user",
+            "content": [
+                {"type": "text", "text": "Inspect this image"},
+                {
+                    "type": "image_url",
+                    "image_url": {
+                        "url": "data:image/png;base64,AA==",
+                        "detail": "high",
+                    },
+                },
+            ],
+        }
+    ]
+
+
+def test_final_synthesis_attaches_private_evidence_to_latest_user_turn() -> None:
+    result = _build().proxy_completion(
+        {
+            "model": "mock-planner",
+            "messages": [
+                {"role": "user", "content": "Earlier question"},
+                {"role": "assistant", "content": "Earlier answer"},
+                {"role": "user", "content": "Current task"},
+            ],
+            "response_format": {"type": "json_object"},
+        }
+    )
+
+    messages = result["echo"]["messages"]
+    assert messages[0]["content"] == "Earlier question"
+    assert messages[2]["content"].startswith("Current task")
+    assert "Verified workflow evidence" in messages[2]["content"]
+
 
 def test_proxy_completion_forwards_response_format_and_returns_full_shape() -> None:
     orch = _build()
