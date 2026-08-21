@@ -257,6 +257,41 @@ def test_plain_proxy_completion_persists_reported_usage_before_next_budget_check
     assert send.call_count == 1
 
 
+def test_responses_tool_loop_usage_counts_toward_the_next_budget_check() -> None:
+    orch = _build(budget_max_output_tokens=3)
+    raw = {
+        "id": "resp_accounted",
+        "object": "response",
+        "model": "mock-planner",
+        "output": [
+            {
+                "type": "function_call",
+                "call_id": "call_1",
+                "name": "lookup",
+                "arguments": "{}",
+            }
+        ],
+        "usage": {"input_tokens": 2, "output_tokens": 3},
+    }
+    body = {
+        "model": "mock-planner",
+        "input": "call the tool",
+        "tools": [{"type": "function", "name": "lookup"}],
+    }
+
+    with patch.object(orch.client, "proxy_send", return_value=raw) as send:
+        assert orch.proxy_completion(body, endpoint="responses", single_agent=True) is raw
+        assert raw["usage"] == {"input_tokens": 2, "output_tokens": 3}
+        analytics = orch.spend_analytics()
+        assert analytics["totals"]["reported_prompt_tokens"] == 2
+        assert analytics["budget"]["spent_output_tokens"] == 3
+        assert analytics["by_model"][0]["usage_source"] == "reported"
+        with pytest.raises(BudgetExceededError, match="spend budget exceeded"):
+            orch.proxy_completion(body, endpoint="responses", single_agent=True)
+
+    assert send.call_count == 1
+
+
 def test_plain_proxy_completion_accounts_a_tool_only_response() -> None:
     orch = _build()
     raw = {
