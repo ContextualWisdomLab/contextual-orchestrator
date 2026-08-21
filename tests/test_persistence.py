@@ -111,6 +111,18 @@ def test_durable_audit_retention_is_bounded() -> None:
         store.close()
 
 
+def test_durable_analytics_retention_is_bounded() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        limit = store._STREAM_LIMITS["analytics"]
+        for index in range(limit + 3):
+            store.save("analytics", None, {"index": index})
+
+        assert len(store.load("analytics")) == limit
+        assert store.load("analytics", 1) == [{"index": limit + 2}]
+        store.close()
+
+
 def test_authorization_stream_persists_separately_from_audit() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "state.db")

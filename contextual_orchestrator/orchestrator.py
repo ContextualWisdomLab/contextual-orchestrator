@@ -1557,7 +1557,7 @@ class _StateStore:
     """
 
     _KEYED = {"workflow_run", "evaluation_run"}
-    _STREAM_LIMITS = {"audit": 256, "authorization": 256}
+    _STREAM_LIMITS = {"audit": 256, "authorization": 256, "analytics": 512}
     _CREATE_RECORDS_SQL = (
         "CREATE TABLE IF NOT EXISTS records ("
         "seq INTEGER PRIMARY KEY AUTOINCREMENT, kind TEXT NOT NULL, key TEXT, payload TEXT NOT NULL)"
