@@ -52,7 +52,23 @@ def test_openapi_documents_compatibility_front_door() -> None:
     ]
 
 
+def test_openapi_documents_orchestrator_owned_embedding_model_selection() -> None:
+    embeddings_schema = OPENAPI_SPEC["paths"]["/v1/embeddings"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+    batch_schema = OPENAPI_SPEC["paths"]["/v1/batch/embeddings"]["post"]["requestBody"]["content"][
+        "application/json"
+    ]["schema"]
+
+    assert embeddings_schema["required"] == ["input"]
+    assert "model" not in batch_schema.get("required", [])
+    assert "Optional enabled embedding-capable pool model" in embeddings_schema["properties"]["model"][
+        "description"
+    ]
+
+
 if __name__ == "__main__":  # pragma: no cover
     test_rest_resource_paths_use_two_word_snake_case()
     test_openapi_uses_resource_oriented_operation_ids()
+    test_openapi_documents_orchestrator_owned_embedding_model_selection()
     print("ok")
