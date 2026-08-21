@@ -35,9 +35,11 @@ from .conventions import require_object_name
 from .credentials import NotConfigured, get_credential
 from .tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
+    ToolExecutionError,
+    ToolFailureDecision,
+    ToolFailureKind,
     ToolFallbackAction,
     ToolFallbackStoppedError,
-    ToolFailureDecision,
     classify_tool_failure,
     downgrade_to_failover,
 )
@@ -421,14 +423,34 @@ LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
     """Return whether an HTTP error carries the terminal tool-stop contract."""
+    cached = getattr(error, "_contextual_tool_execution_stopped", None)
+    if isinstance(cached, bool):
+        return cached
     try:
         payload = json.loads(error.read(65536).decode("utf-8"))
     except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
-        return False
-    if not isinstance(payload, dict):
-        return False
-    details = payload.get("error")
-    return isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
+        result = False
+    else:
+        details = payload.get("error") if isinstance(payload, dict) else None
+        result = isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
+    try:
+        error._contextual_tool_execution_stopped = result
+    except AttributeError:  # pragma: no cover - HTTPError permits attributes
+        pass
+    return result
+
+
+def _provider_tool_execution_stopped(agent_id: str) -> ToolFallbackStoppedError:
+    """Convert the provider's terminal tool-stop response to the safe gateway contract."""
+    decision = classify_tool_failure(
+        ToolExecutionError(
+            "provider reported tool_execution_stopped",
+            tool_name="provider",
+            kind=ToolFailureKind.TRANSPORT_ERROR,
+            outcome_unknown=True,
+        )
+    )
+    return ToolFallbackStoppedError(agent_id, decision)
 
 
 def _is_local_provider_url(base_url: str) -> bool:
@@ -935,6 +957,8 @@ class ModelClient:
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
+        if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
+            raise _provider_tool_execution_stopped(agent.id) from None
         if isinstance(last_error, ProviderResponseError):
             raise last_error
         raise RuntimeError(f"provider {agent.id} request failed") from None
@@ -1190,6 +1214,8 @@ class ModelClient:
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
+        if isinstance(last_error, urllib.error.HTTPError) and _is_tool_execution_stopped(last_error):
+            raise _provider_tool_execution_stopped(agent.id) from None
         raise RuntimeError(f"provider {agent.id} passthrough request failed") from None
 
     def _send_raw(
@@ -2592,7 +2618,7 @@ class TaskOrchestrator:
                 try:
                     output = self.client.chat(agent, messages)
                 except Exception as exc:  # noqa: BLE001 - classify before fallback
-                    if isinstance(exc, ProviderResponseError):
+                    if isinstance(exc, (ProviderResponseError, ToolFallbackStoppedError)):
                         raise
                     last_error = exc
                     decision = classify_tool_failure(exc)

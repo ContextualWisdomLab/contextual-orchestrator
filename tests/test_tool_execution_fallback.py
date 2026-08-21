@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
-from pathlib import Path
 import socket
 import sys
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -682,6 +683,63 @@ def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
     assert "must-not-leak" not in json.dumps(body)
 
 
+class _ProviderStoppedClient(ModelClient):
+    """Expose a provider's terminal 409 without making a network request."""
+
+    def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+        del agent
+        return
+
+    def _send(self, agent, payload, destination=None, *, timeout=None):  # type: ignore[override]
+        del agent, payload, destination, timeout
+        raise urllib.error.HTTPError(
+            "https://provider.example/chat/completions",
+            409,
+            "tool stopped",
+            None,
+            io.BytesIO(b'{"error":{"code":"tool_execution_stopped"}}'),
+        )
+
+
+def test_provider_tool_stop_preserves_http_contract() -> None:
+    orchestrator = TaskOrchestrator(
+        [
+            ModelAgent(
+                "provider_worker",
+                "provider-model",
+                base_url="https://provider.example/v1",
+                api_key_env="",
+                credential_key="",
+            )
+        ],
+        client=_ProviderStoppedClient(max_retries=2, retry_backoff=0.0),
+    )
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(auth_token="secret_token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post_fallback_json(
+            server.server_address[1],
+            {
+                "model": "provider-model",
+                "mode": "route",
+                "messages": [{"role": "user", "content": "send this message"}],
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 409
+    assert body["error"]["code"] == "tool_execution_stopped"
+    assert body["error"]["detail"]["failure_kind"] == "ambiguous_outcome"
+    assert "provider.example" not in json.dumps(body)
+
+
 class _StoppedStreamingClient(ModelClient):
     """Raise a structured fail-closed decision from the live stream path."""
 
@@ -755,11 +813,4 @@ def test_stream_fail_closed_tool_error_emits_structured_sse() -> None:
 
 
 if __name__ == "__main__":
-    test_wrapped_missing_tool_error_is_classified_from_cause_chain()
-    test_exact_strix_missing_tool_failure_falls_back_to_backup_agent()
-    test_idempotent_timeout_retries_same_agent_before_failover()
-    test_exhausted_safe_retry_then_fails_over_once()
-    test_non_idempotent_ambiguous_failure_stops_without_backup_or_secret_leak()
-    test_http_fail_closed_tool_error_has_dedicated_contract()
-    test_stream_fail_closed_tool_error_emits_structured_sse()
-    print("ok")
+    raise SystemExit(pytest.main([__file__, "-q"]))
