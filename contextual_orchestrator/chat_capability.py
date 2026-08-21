@@ -20,6 +20,7 @@ _TRANSPORT_INCOMPATIBLE_EXACT_TOKENS = frozenset(
         "embed",
         "embedding",
         "embeddings",
+        "gte",
         "image",
         "images",
         "moderation",
