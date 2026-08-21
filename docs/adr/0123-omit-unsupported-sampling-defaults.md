@@ -16,7 +16,10 @@ The orchestrator omits `temperature` and other optional sampling controls when
 the caller did not explicitly provide them. The provider and selected model
 therefore own their documented defaults and capability handling. Explicit
 values remain validated at the public request boundary and are forwarded
-unchanged through chat, streaming, and batch transport paths.
+unchanged through chat, streaming, batch, and structured-output transport
+paths. A client-level explicit value, including the CLI option, applies to
+ordinary chat as well as streaming and batch calls; a request-scoped value
+temporarily overrides it for both streamed and non-streamed requests.
 
 The command-line sampling option is optional and defaults to omission. Health
 probes also omit sampling controls; a probe must test reachability without

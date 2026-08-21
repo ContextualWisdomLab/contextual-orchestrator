@@ -164,13 +164,15 @@ class _FastMLSIJudgeAdapter:
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
-        response = self.orchestrator.proxy_completion({
+        payload = {
             "model": agent.model,
             "messages": messages,
-            "temperature": self.orchestrator.client.temperature,
             "max_tokens": self.orchestrator.client.max_output_tokens,
             "response_format": response_format,
-        })
+        }
+        if self.orchestrator.client.temperature is not None:
+            payload["temperature"] = self.orchestrator.client.temperature
+        response = self.orchestrator.proxy_completion(payload)
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
@@ -699,7 +701,7 @@ class ModelClient:
             raise ValueError("max_retries must be >= 0")
         # Do not invent a sampling parameter for a provider/model that may not
         # support it. Explicit caller values are still forwarded after validation.
-        self.default_temperature: float | None = None
+        self.default_temperature = temperature
         self.default_top_p: float | None = None
         self.default_presence_penalty: float | None = None
         self.default_frequency_penalty: float | None = None
@@ -1085,7 +1087,7 @@ class ModelClient:
             "stream": True,
             "max_tokens": self.max_output_tokens,
         }
-        effective_temperature = self.temperature if temperature is None else temperature
+        effective_temperature = self.default_temperature if temperature is None else temperature
         if effective_temperature is not None:  # pragma: no cover
             payload["temperature"] = effective_temperature
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
