@@ -684,6 +684,13 @@ def _responses_to_chat_payload(request: dict[str, Any]) -> dict[str, Any]:
             "type": "function",
             "function": {"name": tool_choice.get("name", "")},
         }
+    response_format = request.get("response_format")
+    if not isinstance(response_format, dict):
+        response_format = _responses_text_format_to_chat_response_format(
+            request.get("text")
+        )
+    if response_format is not None:
+        payload["response_format"] = response_format
     return payload
 
 
@@ -707,6 +714,22 @@ def _responses_text_format_to_chat_response_format(
         if key in fmt
     }
     return {"type": "json_schema", "json_schema": schema}
+
+
+def _canonical_provider_usage(
+    usage: dict[str, Any], *, responses: bool
+) -> dict[str, Any]:
+    """Copy provider usage with canonical aliases used by spend accounting."""
+    canonical = dict(usage)
+    if responses:
+        for responses_key, chat_key in (
+            ("input_tokens", "prompt_tokens"),
+            ("output_tokens", "completion_tokens"),
+        ):
+            value = canonical.get(responses_key)
+            if type(value) is int and value >= 0:
+                canonical.setdefault(chat_key, value)
+    return canonical
 
 
 def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
@@ -2230,16 +2253,10 @@ class TaskOrchestrator:
         }
         usage = raw.get("usage")
         if isinstance(usage, dict):
-            persisted_usage = dict(usage)
-            if endpoint.strip("/") == "responses":
-                for responses_key, chat_key in (
-                    ("input_tokens", "prompt_tokens"),
-                    ("output_tokens", "completion_tokens"),
-                ):
-                    value = persisted_usage.get(responses_key)
-                    if type(value) is int and value >= 0:
-                        persisted_usage.setdefault(chat_key, value)
-            passthrough_step["usage"] = persisted_usage
+            passthrough_step["usage"] = _canonical_provider_usage(
+                usage,
+                responses=endpoint.strip("/") == "responses",
+            )
         self._persist_workflow_run(
             {
                 "workflow_run_id": f"run_{uuid.uuid4().hex}",
@@ -2382,7 +2399,10 @@ class TaskOrchestrator:
         }
         usage = raw.get("usage")
         if isinstance(usage, dict):
-            synthesis_step["usage"] = usage
+            synthesis_step["usage"] = _canonical_provider_usage(
+                usage,
+                responses=response_request,
+            )
         trace = [*workflow["trace"], synthesis_step]
         workflow_run_id = f"run_{uuid.uuid4().hex}"
         record = {
