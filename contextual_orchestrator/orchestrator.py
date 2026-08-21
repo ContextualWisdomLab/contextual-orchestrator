@@ -2635,6 +2635,8 @@ class TaskOrchestrator:
                     ):
                         retry_attempt += 1
                         self._record_tool_fallback(agent.id, decision, retry_attempt)
+                        if decision.circuit_failure:
+                            self._record_failure(agent.id)
                         if self.tool_retry_backoff_seconds:
                             retry_ceiling = min(
                                 self.tool_retry_backoff_seconds

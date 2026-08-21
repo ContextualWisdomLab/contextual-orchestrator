@@ -296,6 +296,27 @@ def test_exhausted_safe_retry_then_fails_over_once() -> None:
     )
 
 
+def test_same_agent_retries_count_as_circuit_failures() -> None:
+    timeout = ToolExecutionError(
+        "read timed out",
+        tool_name="inspect_repository",
+        kind=ToolFailureKind.TIMEOUT,
+        idempotent=True,
+    )
+    client = _ScriptedToolClient(
+        {
+            "primary_worker": [timeout, timeout, timeout],
+            "backup_worker": ["backup recovered"],
+        }
+    )
+    orchestrator = _orchestrator(client, tool_retry_attempts=2)
+
+    result = orchestrator.route_once([{"role": "user", "content": "inspect repository"}])
+
+    assert result["answer"] == "backup recovered"
+    assert orchestrator._circuit["primary_worker"]["failures"] == 3.0
+
+
 def test_non_idempotent_ambiguous_failure_stops_without_backup_or_secret_leak() -> None:
     client = _ScriptedToolClient(
         {
