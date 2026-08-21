@@ -2592,6 +2592,8 @@ class TaskOrchestrator:
                 try:
                     output = self.client.chat(agent, messages)
                 except Exception as exc:  # noqa: BLE001 - classify before fallback
+                    if isinstance(exc, ProviderResponseError):
+                        raise
                     last_error = exc
                     decision = classify_tool_failure(exc)
                     action = decision.action
