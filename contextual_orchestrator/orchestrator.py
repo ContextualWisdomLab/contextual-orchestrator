@@ -167,7 +167,7 @@ class _FastMLSIJudgeAdapter:
         payload: dict[str, Any] = {
             "model": agent.model,
             "messages": messages,
-            "max_tokens": self.orchestrator.client.max_output_tokens,
+            "max_tokens": self.orchestrator.client._effective_max_output_tokens(),
             "response_format": response_format,
         }
         effective_temperature = self.orchestrator.client._effective_temperature()
@@ -805,6 +805,10 @@ class ModelClient:
             return requested
         return getattr(self._local, "request_temperature", self.default_temperature)
 
+    def _effective_max_output_tokens(self) -> int:
+        """Resolve the request-scoped output limit or the constructor default."""
+        return getattr(self._local, "request_max_output_tokens", self.max_output_tokens)
+
     def chat(
         self,
         agent: ModelAgent,
@@ -851,9 +855,7 @@ class ModelClient:
             "model": agent.model,
             "messages": messages,
             "stream": False,
-            "max_tokens": getattr(
-                self._local, "request_max_output_tokens", self.max_output_tokens
-            ),
+            "max_tokens": self._effective_max_output_tokens(),
         }
         if effective_temperature is not None:  # pragma: no cover
             payload["temperature"] = effective_temperature
@@ -1133,9 +1135,7 @@ class ModelClient:
             "model": agent.model,
             "messages": messages,
             "stream": True,
-            "max_tokens": getattr(
-                self._local, "request_max_output_tokens", self.max_output_tokens
-            ),
+            "max_tokens": self._effective_max_output_tokens(),
         }
         effective_temperature = self._effective_temperature(temperature)
         if effective_temperature is not None:  # pragma: no cover
@@ -1431,7 +1431,7 @@ class ModelClient:
             body: dict[str, Any] = {
                 "model": agent.model,
                 "messages": messages,
-                "max_tokens": self.max_output_tokens,
+                "max_tokens": self._effective_max_output_tokens(),
             }
             effective_temperature = self._effective_temperature(temperature)
             if effective_temperature is not None:

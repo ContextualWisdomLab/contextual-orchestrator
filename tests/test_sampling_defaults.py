@@ -137,10 +137,12 @@ def test_nested_request_options_restore_thread_local_values() -> None:
 
     with client.request_options(temperature=0.4):
         assert client._effective_temperature() == 0.4
-        with client.request_options(temperature=0.2):
+        with client.request_options(max_output_tokens=73, temperature=0.2):
+            assert client._effective_max_output_tokens() == 73
             assert client._effective_temperature() == 0.2
         assert client._effective_temperature() == 0.4
 
+    assert client._effective_max_output_tokens() == client.max_output_tokens
     assert client._effective_temperature() is None
 
 
@@ -160,13 +162,17 @@ def test_structured_completion_omits_an_unset_temperature() -> None:
             "choices": [{"message": {"content": '{"decision":"ACCEPT","reason":"ok"}'}}]
         }
 
-    with patch.object(orchestrator, "proxy_completion", side_effect=proxy):
+    with (
+        orchestrator.client.request_options(max_output_tokens=73),
+        patch.object(orchestrator, "proxy_completion", side_effect=proxy),
+    ):
         result = adapter.complete_structured(
             [{"role": "user", "content": "judge"}],
             response_format={"type": "json_object"},
         )
 
     assert result["answer"].startswith("{")
+    assert captured[0]["max_tokens"] == 73
     assert "temperature" not in captured[0]
 
 
