@@ -114,7 +114,7 @@ def _fetch_json(
     parsed = urlparse(url)
     if parsed.scheme != "https" or not parsed.hostname:
         raise ValueError("model discovery requires an https provider URL")
-    if parsed.username or parsed.password or parsed.fragment:
+    if parsed.username is not None or parsed.password is not None or "#" in url:
         raise ValueError("model discovery URL must not contain credentials or a fragment")
     try:
         port = parsed.port

@@ -938,9 +938,9 @@ class ModelClient:
             target.scheme != provider.scheme
             or target.hostname != provider.hostname
             or target_port != provider_port
-            or target.username
-            or target.password
-            or target.fragment
+            or target.username is not None
+            or target.password is not None
+            or "#" in url
         ):
             raise RuntimeError("provider JSON URL must share the validated agent origin")
         destination = self._validate_provider(agent)

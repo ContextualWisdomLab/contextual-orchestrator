@@ -27,6 +27,7 @@ from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderDiscoveryError,
     ProviderModelSource,
+    _fetch_json,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -183,6 +184,43 @@ def test_fetch_json_rejects_cross_origin_before_provider_transport() -> None:
         pytest.raises(RuntimeError, match="validated agent origin"),
     ):
         client.fetch_json(agent, "https://attacker.example/v1/models")
+    validate_provider.assert_not_called()
+    open_provider.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "url",
+    [
+        "https://@api.openai.com/v1/models",
+        "https://user:@api.openai.com/v1/models",
+        "https://api.openai.com/v1/models#",
+    ],
+)
+def test_model_discovery_rejects_empty_userinfo_and_fragment(url: str) -> None:
+    with pytest.raises(ValueError, match="credentials or a fragment"):
+        _fetch_json(
+            url,
+            auth_scheme="Bearer",
+            timeout=1.0,
+            credential_name="OPENAI_API_KEY",
+        )
+
+
+def test_fetch_json_rejects_empty_userinfo_and_fragment_before_transport() -> None:
+    register_credential("OPENAI_API_KEY", "openai-secret")
+    agent = ModelAgent(
+        "model_discovery_agent",
+        "model_catalog",
+        "https://api.openai.com/v1",
+        credential_key="OPENAI_API_KEY",
+    )
+    client = ModelClient()
+    with (
+        patch.object(client, "_validate_provider") as validate_provider,
+        patch.object(client, "_open_provider") as open_provider,
+        pytest.raises(RuntimeError, match="validated agent origin"),
+    ):
+        client.fetch_json(agent, "https://@api.openai.com/v1/models#")
     validate_provider.assert_not_called()
     open_provider.assert_not_called()
 
