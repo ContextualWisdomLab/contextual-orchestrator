@@ -190,6 +190,22 @@ or predecessor-head evidence does not transfer. Issue [#745](https://github.com/
 [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) and issue [#567](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/567) by [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771). A draft or implementation PR is not treated as
 completed until the protected-main contract is satisfied.
 
+### Live exact-head continuation — 2026-08-22 01:19 KST
+
+This continuation supersedes older rows for the listed PRs. Hosted gate
+evidence and local verification are intentionally kept separate; no predecessor
+head or approval is reused.
+
+| PR | Current exact identity | Live gate evidence and local verification | Decision |
+|---:|---|---|---|
+| [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765) | head `d19e3492192e21e4a040fa3fc13a0793443731bf`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 19 success, 8 skipped, 2 neutral, and 1 queued check-run; approvals `0`. Exact local full suite `1729 passed`, focused suite `78 passed`, aggregate statement/branch coverage `92%`, and interrogate `100%`. Static/security evidence was recorded on the immediately preceding equivalent tree; the current three-file cleanup/assertion delta has no new gate result. | `WAIT_AND_REMEDIATE` |
+| [#804](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/804) | head `71895c7f1f1d63a55e5f67d75dbd8408f8e608f9`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 17 success, 7 skipped, 2 neutral, 1 in progress, and 1 queued check-run; approvals `0`. A normal revert removed the accidental downstream #784 merge, restoring the bounded five-file root tree `a29ae0252f3bf13e70da0a32a38eca116350aad8`; exact local full suite `1436 passed`, focused suite `56 passed`, compile/actionlint/diff/Semgrep/interrogate/pip-audit checks passed. Coverage was not rerun on this exact head. | `WAIT_AND_REMEDIATE` |
+| [#807](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/807) | head `d5122a0a30b4543ac2778a1c71e9ee079cbd699f`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open, non-Draft, mergeable but blocked; 15 success, 7 skipped, 2 neutral, 3 in progress, and 1 queued check-run; approvals `0`. Exact local merge-result tree is `ba261ab39191323f3e116d92103f00d727b10f48` with no conflict; focused suite `117 passed`, full suite `1454 passed`, aggregate statement/branch coverage `90%`, interrogate `95.8%`, Semgrep `0`, pip-audit clean, and actionlint/compileall/diff-check passed. | `WAIT_AND_REMEDIATE` |
+
+The hosted queues and absent approvals are normal protected-path blockers, not
+D1-D5 deadlock evidence. The active ruleset has no bypass actor; no force merge,
+direct protected-branch push, or approval bypass was attempted.
+
 All links and full commit SHAs in the initial snapshot reflect the remote state
 observed at 2026-08-21 15:36 Asia/Seoul; they are evidence pointers, not
 standing approval.
