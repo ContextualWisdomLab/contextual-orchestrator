@@ -280,7 +280,7 @@ The preceding rows are historical snapshots. The latest normal-path evidence is:
 
 | PR | Current exact identity | Live evidence and decision |
 |---:|---|---|
-| [.github#1198](https://github.com/ContextualWisdomLab/.github/pull/1198) | head `dbb3c8a131d708754d2879ec6475d8c45a4ff140`, base `0156282022134484ea9d7541d5ba0730ba14fd96`, merge-result tree `e453d59c5fde8f0bd5fb45356e2c8b2c64e722ce` | Current root includes external-head rejection hardening plus fail-closed CodeQL merge-preview identity verification. Exact local evidence on the identical tree: `1351 passed`, statement/branch coverage `8280/3230, 100%`, interrogate `100%`, compileall, targeted actionlint including `codeql-pr.yml`, exact hash-lock pip-audit, and diff-check clean. Exact hosted required workflow run `32524224916` / job `96902766837` has been queued since `2026-08-21T20:34:16Z` with no runner assignment; other security jobs completed successfully while CodeQL/pip-audit remain queued. Formal approval is absent and unresolved current threads are `0`. Decision: `WAIT_AND_REMEDIATE`; D2 observation window is not yet satisfied. |
+| [.github#1198](https://github.com/ContextualWisdomLab/.github/pull/1198) | head `e5a7ac882559fe6d1ae1f91e27d79bc8e0aa1e77`, base `4c33442021d63b09f35a874c5e7a779dd46ef8f2`, merge-result tree `fd7e18d2c50867bb7438325ba2fa09aaa22e204b` | Current exact stack includes the CodeQL merge-preview identity/authentication repair, trusted LLVM 19 coverage boundary, and normal protected-main restack. Fresh exact-head local evidence: `1362 passed, 1 skipped, 16 subtests`, statement/branch coverage `8394/3264 = 100%`, interrogate `100%`, relevant actionlint, compileall, diff-check, and hash-locked pip-audit clean. Current exact-head hosted OpenCode run `32528443790` / bootstrap job `96915418375` remains queued, CodeQL run `32528443855` remains queued, and Strix run `32528443763` is in progress with runner assignment. Formal approval is absent; predecessor-head evidence is discarded. Decision: `WAIT_AND_REMEDIATE`; D2 observation window is not satisfied. |
 | [.github#1209](https://github.com/ContextualWisdomLab/.github/pull/1209) | head `d3a3f4e6211a56d503b783d8784d1d79a262ca68`, base `0156282022134484ea9d7541d5ba0730ba14fd96`, merge-result tree `961b3d1274f9dde6bb17d85297295794ec646193` | Control-plane repair for cross-fork OSV base/head result isolation. Exact local evidence: `1319 passed`, statement/branch coverage `8168/3162 (100%)`, interrogate `100%`, actionlint for `security-scan.yml`, compileall, exact hash-lock pip-audit, and diff-check clean. Exact hosted required workflow run `32525206063` / job `96905669545` and Security Scan run `32525208137` have been queued since `2026-08-21T20:45:49Z` with no runner assignment. Formal approval is absent and unresolved current threads are `0`. Decision: `WAIT_AND_REMEDIATE`; D2 observation window is not yet satisfied. |
 | [.github#1203](https://github.com/ContextualWisdomLab/.github/pull/1203) | merge commit `4d3d24aa404959f5067735fec0558d5924ade590` from head `c627d4ae7a26222ed3d2ee1ded19e270930aa1f2` into stacked base `94e2b28aee2029d36f272336a7cd4e4ad1516161` | Merged normally into the non-protected #1198 stack, not protected `.github` `main`; it is not protected-main completion evidence. |
 | [.github#1208](https://github.com/ContextualWisdomLab/.github/pull/1208) | closed without merge from head `9f0845517010f2c4695de83dd2bd50385c068a15`, base `fce028b4c3bf8e2e5e4819c1c5622e90cfa6ab39` | Historical successor to closed #1207; its exact local pip-audit evidence reproduced `pip==26.1.2 / PYSEC-2026-3721`, but no protected-main merge occurred. Root #1198 owns the current pip-lock repair. |
@@ -296,13 +296,15 @@ At the current observation, no D1–D5 emergency deadlock is established for the
 
 The queue is progressing, but no terminal merge gate has been fabricated or
 reused. On [.github#1198](https://github.com/ContextualWisdomLab/.github/pull/1198),
-`required-workflow-bootstrap` is successful at run `32524224916` while the
-exact-head `coverage-source-tree` job `96907640903` remains queued; the
-newer `scan-pr-queue` failure shown by the PR rollup is a cancelled
-predecessor run, while the current required scan is successful. On
+the predecessor run `32524224916` was cancelled after its bootstrap and the
+current exact-head OpenCode bootstrap job `96915418375` remains queued; the
+current Strix job `96915480662` has started on a hosted runner. The newer
+`scan-pr-queue` failure shown by the PR rollup is also a cancelled predecessor,
+not a source failure. On
 [.github#1209](https://github.com/ContextualWisdomLab/.github/pull/1209),
 OSV, dependency review, Noema, and the security jobs are successful, but the
-required bootstrap job `96905669545` and CodeQL jobs remain pending. The
+required `coverage-evidence` job remains queued after its exact-head source
+tree completed; this is below D2's threshold. The
 contextual #818 refresh created replacement current-head runs after cancelling
 the prior duplicate event runs; the cancelled `opencode-review` and
 `coverage-evidence` entries have no job steps or source log and are not source
