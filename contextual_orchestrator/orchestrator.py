@@ -3530,7 +3530,8 @@ class TaskOrchestrator:
             "event_type": event_type,
             "event_detail": detail,
         }
-        self._audit_events.append(event)
+        with self._workflow_run_lock:
+            self._audit_events.append(event)
         if self._store is not None:
             self._store.save("audit", None, event)
 
@@ -3626,7 +3627,8 @@ class TaskOrchestrator:
         """Return recent audit events in newest-first order."""
         if page_number < 1 or page_size < 1:  # pragma: no cover
             raise ValueError("page_number/page_size must be >= 1")
-        events = list(self._audit_events)
+        with self._workflow_run_lock:
+            events = list(self._audit_events)
         start = (page_number - 1) * page_size
         end = start + page_size
         total = len(events)
@@ -3642,7 +3644,8 @@ class TaskOrchestrator:
             "event_name": event_name,
             "event_detail": redact_value(detail),
         }
-        self._analytics_events.append(event)
+        with self._workflow_run_lock:
+            self._analytics_events.append(event)
         if self._store is not None:
             self._store.save("analytics", None, event)
 
@@ -3813,14 +3816,16 @@ class TaskOrchestrator:
 
     def analytics_snapshot(self, locale_bundles: dict[str, dict[str, str]] | None = None) -> dict[str, Any]:
         """Return source-backed local KPI definitions from in-memory runtime state."""
-        runs = list(self._workflow_runs.values())
+        with self._workflow_run_lock:
+            runs = list(self._workflow_runs.values())
+            analytics_events = list(self._analytics_events)
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         policy_safe_count = sum(1 for run in runs if self._is_policy_safe_run(run))
-        event_counts = Counter(event["event_name"] for event in self._analytics_events)
+        event_counts = Counter(event["event_name"] for event in analytics_events)
         successful_chat_requests = sum(
             1
-            for event in self._analytics_events
+            for event in analytics_events
             if event["event_name"] == "chat_completion_requested"
             and event["event_detail"].get("status_code") == 200
         )
@@ -3911,7 +3916,8 @@ class TaskOrchestrator:
         """Return a local, evidence-backed sales-readiness gate for enterprise pilots."""
         analytics = self.analytics_snapshot(locale_bundles=locale_bundles)
         admin_state = self.admin_state()
-        runs = list(self._workflow_runs.values())
+        with self._workflow_run_lock:
+            runs = list(self._workflow_runs.values())
         conducted_runs = [run for run in runs if run["mode"] == "conduct"]
         trace_complete_count = sum(1 for run in conducted_runs if self._is_trace_complete(run))
         event_counts = analytics["event_counts"]
