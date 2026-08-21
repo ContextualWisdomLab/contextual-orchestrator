@@ -119,6 +119,21 @@ def test_http_spend_endpoint_returns_only_authenticated_owner() -> None:
     assert "owner-b" not in json.dumps(owner_b_body)
 
 
+def test_owner_spend_report_keeps_process_budget_global() -> None:
+    """Owner filtering must not make a shared budget appear unexhausted."""
+    orchestrator = TaskOrchestrator(
+        [ModelAgent("general_agent", "priced-model", tags=("reasoning",))],
+        budget_max_output_tokens=1000,
+    )
+    orchestrator.run([{"role": "user", "content": "owner a spend"}], owner_id="owner_a")
+    orchestrator.run([{"role": "user", "content": "owner b spend"}], owner_id="owner_b")
+
+    global_budget = orchestrator.spend_analytics()["budget"]
+    owner_budget = orchestrator.spend_analytics(owner_id="owner_a")["budget"]
+
+    assert owner_budget == global_budget
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):

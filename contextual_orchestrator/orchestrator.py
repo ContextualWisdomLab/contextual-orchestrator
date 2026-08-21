@@ -2895,7 +2895,8 @@ class TaskOrchestrator:
         floor for spend observability, not a billing system.
 
         When ``owner_id`` is supplied, only workflow runs owned by that principal contribute
-        to the returned totals, model buckets, and budget view.
+        to the returned totals and model buckets. Budget caps are process-wide and enforced
+        globally, so the budget view remains global even in an owner-scoped report.
         """
         prices = {**self.price_per_million, **(price_per_million or {})}
         model_by_agent = {agent.id: agent.model for agent in self.agents}
@@ -2960,6 +2961,15 @@ class TaskOrchestrator:
                 "estimated_cost_usd": cost,
             })
 
+        budget = self._budget_block(
+            total_output_tokens,
+            round(total_cost, 6) if prices else None,
+        )
+        if owner_id is not None:
+            # The cap is shared by the process; do not report a principal-local
+            # remainder that disagrees with the enforcement path in run().
+            budget = self.spend_analytics(price_per_million=price_per_million)["budget"]
+
         return {
             "measurement_status": "local_runtime_estimate",
             "source_note": (
@@ -2981,7 +2991,7 @@ class TaskOrchestrator:
             },
             "by_model": rows,
             "unpriced_models": unpriced,
-            "budget": self._budget_block(total_output_tokens, round(total_cost, 6) if prices else None),
+            "budget": budget,
         }
 
     def _budget_block(self, spent_tokens: int, spent_cost: float | None) -> dict[str, Any]:
