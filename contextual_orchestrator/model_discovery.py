@@ -292,9 +292,16 @@ def select_top_n_cheapest_discovered_agents(
 
 
 def _discovered_sort_key(model: DiscoveredModel, price_book: "PriceBook") -> tuple[int, float, str, str]:
-    """Sort priced models first and keep unknown-price fallback ordering stable."""
+    """Sort comparable prices first and keep unknown-currency models as fallback.
+
+    The price book has no exchange-rate authority. A non-default currency is
+    therefore not comparable to the gateway's default currency and must never
+    win merely because its numeric amount is smaller.
+    """
     entry = price_book.get_price(model.provider_name, model.model_id)
     if entry is None:
         return (1, 0.0, model.provider_name, model.model_id)
-    cost, _currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
+    cost, currency = price_book.compute_cost(model.provider_name, model.model_id, 1000, 1000)
+    if currency != price_book.default_currency:
+        return (1, 0.0, model.provider_name, model.model_id)
     return (0, cost, model.provider_name, model.model_id)

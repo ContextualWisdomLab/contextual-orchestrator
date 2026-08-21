@@ -310,6 +310,23 @@ def test_unknown_price_is_fallback_after_priced_models() -> None:
     assert select_top_n_cheapest_discovered_agents([unpriced, priced], price_book, 1) == [priced]
 
 
+def test_foreign_currency_is_not_compared_as_default_currency() -> None:
+    """Treat an unconvertible currency as unknown instead of a cheap winner."""
+    from contextual_orchestrator.cost_ledger import PriceEntry
+
+    price_book = PriceBook(InMemoryConfigStore(), default_currency="USD")
+    usd_model = DiscoveredModel("openai", "usd_model", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer")
+    eur_model = DiscoveredModel("european_provider", "eur_model", "EUROPEAN_API_KEY", "https://example.invalid/v1", "Bearer")
+    price_book.set_price(PriceEntry("openai", "usd_model", 0.01, 0.01, "USD"))
+    price_book.set_price(PriceEntry("european_provider", "eur_model", 0.0001, 0.0001, "EUR"))
+
+    assert select_cheapest_discovered_agent([eur_model, usd_model], price_book) is usd_model
+    assert select_top_n_cheapest_discovered_agents([eur_model, usd_model], price_book, 2) == [
+        usd_model,
+        eur_model,
+    ]
+
+
 def test_select_top_n_cheapest_discovered_agents_zero_limit_returns_empty() -> None:
     price_book = PriceBook(InMemoryConfigStore())
     model = DiscoveredModel("openai", "a", "OPENAI_API_KEY", "https://api.openai.com/v1", "Bearer")
