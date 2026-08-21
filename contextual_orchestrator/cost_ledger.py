@@ -22,7 +22,8 @@ Design:
   filtered by an optional ``[start, end)`` time window.
 
 DB object names are two-or-more-word snake_case per the repository convention:
-``llm_usage_records``, ``cost_attribution_dimensions``, ``llm_price_entries``.
+``llm_usage_records``, ``cost_attribution_dimensions``, ``llm_price_entries``,
+``cost_attribution_values``, and ``usage_record_attributions``.
 """
 
 from __future__ import annotations
@@ -221,7 +222,7 @@ class UsageRecord:
     attribution: AttributionDimensions = field(default_factory=AttributionDimensions)
 
     def as_dict(self) -> Dict[str, Any]:
-        """Flatten the record (attribution inlined) for JSON + SQL storage."""
+        """Flatten the record for JSON and backward-compatible report output."""
         # Execution identity is evidence of what ran — never a client-chosen tag.
         # Account/service/team/group/company remain descriptive attribution.
         row = {
@@ -495,7 +496,9 @@ class InMemoryLedgerStore:
         return len(self._rows)
 
 
-# Portable DDL for the three ledger objects. Runs on stdlib sqlite3 and psycopg.
+# Portable DDL for the normalized ledger objects. Runs on stdlib sqlite3 and
+# psycopg. Execution identity stays on the usage row; descriptive attribution
+# values are stored once and linked through a composite key.
 SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS cost_attribution_dimensions (
     dimension_name  TEXT PRIMARY KEY,
@@ -521,20 +524,51 @@ CREATE TABLE IF NOT EXISTS llm_usage_records (
     route_mode        TEXT,
     provider_name     TEXT,
     model_name        TEXT,
-    account_name      TEXT,
-    service_name      TEXT,
-    upstream_api      TEXT,
-    team_name         TEXT,
-    group_name        TEXT,
-    company_name      TEXT,
     prompt_tokens     INTEGER NOT NULL,
     completion_tokens INTEGER NOT NULL,
     total_tokens      INTEGER NOT NULL,
     cost_amount       REAL NOT NULL,
     currency_code     TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS cost_attribution_values (
+    dimension_name  TEXT NOT NULL,
+    dimension_value TEXT NOT NULL,
+    CONSTRAINT cost_attribution_values_primary_key
+        PRIMARY KEY (dimension_name, dimension_value),
+    CONSTRAINT cost_attribution_values_dimension_foreign_key
+        FOREIGN KEY (dimension_name) REFERENCES cost_attribution_dimensions(dimension_name)
+);
+
+CREATE TABLE IF NOT EXISTS usage_record_attributions (
+    usage_record_id TEXT NOT NULL,
+    dimension_name  TEXT NOT NULL,
+    dimension_value TEXT NOT NULL,
+    CONSTRAINT usage_record_attributions_primary_key
+        PRIMARY KEY (usage_record_id, dimension_name),
+    CONSTRAINT usage_record_attributions_record_foreign_key
+        FOREIGN KEY (usage_record_id) REFERENCES llm_usage_records(usage_record_id)
+        ON DELETE CASCADE,
+    CONSTRAINT usage_record_attributions_value_foreign_key
+        FOREIGN KEY (dimension_name, dimension_value)
+        REFERENCES cost_attribution_values(dimension_name, dimension_value)
+);
 """
 
+_CORE_USAGE_COLUMNS = (
+    "usage_record_id",
+    "created_at",
+    "workflow_run_id",
+    "request_channel",
+    "route_mode",
+    "provider_name",
+    "model_name",
+    "prompt_tokens",
+    "completion_tokens",
+    "total_tokens",
+    "cost_amount",
+    "currency_code",
+)
 _USAGE_COLUMNS = (
     "usage_record_id",
     "created_at",
@@ -555,6 +589,27 @@ _USAGE_COLUMNS = (
     "cost_amount",
     "currency_code",
 )
+_RELATIONAL_ATTRIBUTION_COLUMNS = {
+    "account": "account_name",
+    "service": "service_name",
+    "team": "team_name",
+    "group": "group_name",
+    "company": "company_name",
+}
+_LEGACY_ATTRIBUTION_COLUMNS = (
+    "account_name",
+    "service_name",
+    "upstream_api",
+    "team_name",
+    "group_name",
+    "company_name",
+)
+_LEGACY_USAGE_SELECT_SQL = (
+    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, route_mode, "
+    "provider_name, model_name, prompt_tokens, completion_tokens, total_tokens, "
+    "cost_amount, currency_code, account_name, service_name, upstream_api, "
+    "team_name, group_name, company_name FROM llm_usage_records_legacy"
+)
 _DIMENSION_SELECT_SQL = {
     "qmark": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = ?",
     "pyformat": "SELECT 1 FROM cost_attribution_dimensions WHERE dimension_name = %s",
@@ -569,43 +624,67 @@ _DIMENSION_INSERT_SQL = {
         "(dimension_name, dimension_label, dimension_order) VALUES (%s, %s, %s)"
     ),
 }
-_USAGE_INSERT_SQL = {
+_CORE_USAGE_INSERT_SQL = {
     "qmark": (
         "INSERT INTO llm_usage_records "
         "(usage_record_id, created_at, workflow_run_id, request_channel, "
-        "route_mode, provider_name, model_name, account_name, service_name, "
-        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
-        "completion_tokens, total_tokens, cost_amount, currency_code) VALUES "
-        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
+        "route_mode, provider_name, model_name, prompt_tokens, completion_tokens, "
+        "total_tokens, cost_amount, currency_code) VALUES "
+        "(?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)"
     ),
     "pyformat": (
         "INSERT INTO llm_usage_records "
         "(usage_record_id, created_at, workflow_run_id, request_channel, "
-        "route_mode, provider_name, model_name, account_name, service_name, "
-        "upstream_api, team_name, group_name, company_name, prompt_tokens, "
-        "completion_tokens, total_tokens, cost_amount, currency_code) VALUES "
-        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
+        "route_mode, provider_name, model_name, prompt_tokens, completion_tokens, "
+        "total_tokens, cost_amount, currency_code) VALUES "
+        "(%s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s, %s)"
     ),
 }
+_ATTRIBUTION_VALUE_INSERT_SQL = {
+    style: (
+        "INSERT INTO cost_attribution_values (dimension_name, dimension_value) "
+        f"VALUES ({placeholder}, {placeholder}) "
+        "ON CONFLICT (dimension_name, dimension_value) DO NOTHING"
+    )
+    for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
+}
+_RECORD_ATTRIBUTION_INSERT_SQL = {
+    style: (
+        "INSERT INTO usage_record_attributions "
+        "(usage_record_id, dimension_name, dimension_value) "
+        f"VALUES ({placeholder}, {placeholder}, {placeholder}) "
+        "ON CONFLICT (usage_record_id, dimension_name) DO UPDATE SET "
+        "dimension_value = excluded.dimension_value"
+    )
+    for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
+}
 _USAGE_SELECT_SQL = (
-    "SELECT usage_record_id, created_at, workflow_run_id, request_channel, "
-    "route_mode, provider_name, model_name, account_name, service_name, "
-    "upstream_api, team_name, group_name, company_name, prompt_tokens, "
-    "completion_tokens, total_tokens, cost_amount, currency_code "
-    "FROM llm_usage_records"
+    "SELECT u.usage_record_id, u.created_at, u.workflow_run_id, u.request_channel, "
+    "u.route_mode, u.provider_name, u.model_name, "
+    "COALESCE(MAX(CASE WHEN a.dimension_name = 'account' THEN a.dimension_value END), 'unattributed') AS account_name, "
+    "COALESCE(MAX(CASE WHEN a.dimension_name = 'service' THEN a.dimension_value END), 'unattributed') AS service_name, "
+    "u.provider_name AS upstream_api, "
+    "COALESCE(MAX(CASE WHEN a.dimension_name = 'team' THEN a.dimension_value END), 'unattributed') AS team_name, "
+    "COALESCE(MAX(CASE WHEN a.dimension_name = 'group' THEN a.dimension_value END), 'unattributed') AS group_name, "
+    "COALESCE(MAX(CASE WHEN a.dimension_name = 'company' THEN a.dimension_value END), 'unattributed') AS company_name, "
+    "u.prompt_tokens, u.completion_tokens, u.total_tokens, u.cost_amount, u.currency_code "
+    "FROM llm_usage_records AS u "
+    "LEFT JOIN usage_record_attributions AS a ON a.usage_record_id = u.usage_record_id"
+)
+_USAGE_GROUP_ORDER_SQL = (
+    " GROUP BY u.usage_record_id, u.created_at, u.workflow_run_id, u.request_channel, "
+    "u.route_mode, u.provider_name, u.model_name, u.prompt_tokens, "
+    "u.completion_tokens, u.total_tokens, u.cost_amount, u.currency_code "
+    "ORDER BY u.created_at, u.usage_record_id"
 )
 _USAGE_QUERY_SQL = {
-    (style, has_start, has_end): query
+    (style, has_start, has_end): f"{_USAGE_SELECT_SQL}{where}{_USAGE_GROUP_ORDER_SQL}"
     for style, placeholder in (("qmark", "?"), ("pyformat", "%s"))
-    for has_start, has_end, query in (
-        (False, False, _USAGE_SELECT_SQL),
-        (True, False, f"{_USAGE_SELECT_SQL} WHERE created_at >= {placeholder}"),
-        (False, True, f"{_USAGE_SELECT_SQL} WHERE created_at < {placeholder}"),
-        (
-            True,
-            True,
-            f"{_USAGE_SELECT_SQL} WHERE created_at >= {placeholder} AND created_at < {placeholder}",
-        ),
+    for has_start, has_end, where in (
+        (False, False, ""),
+        (True, False, f" WHERE u.created_at >= {placeholder}"),
+        (False, True, f" WHERE u.created_at < {placeholder}"),
+        (True, True, f" WHERE u.created_at >= {placeholder} AND u.created_at < {placeholder}"),
     )
 }
 
@@ -623,18 +702,113 @@ class SqlLedgerStore:
             raise ValueError("paramstyle must be qmark or pyformat")
         self._conn = connection
         self._paramstyle = paramstyle
+        if self._paramstyle == "qmark":
+            # sqlite3 keeps foreign-key enforcement per connection and defaults
+            # it off. Set it before schema work can open a transaction.
+            self._conn.execute("PRAGMA foreign_keys = ON")
         self._create_schema()
         self._seed_dimension_catalog()
 
-    def _create_schema(self) -> None:
+    def _table_columns(self, table_name: str) -> set[str]:
+        """Return table columns while keeping identifier interpolation constant."""
+        cur = self._conn.cursor()
+        if self._paramstyle == "qmark":
+            cur.execute("PRAGMA table_info(llm_usage_records)")
+            return {row[1] for row in cur.fetchall()}
+        # A PostgreSQL error aborts the current transaction, so never probe it
+        # with SQLite syntax and then attempt a fallback on the same connection.
+        cur.execute(
+            "SELECT column_name FROM information_schema.columns "
+            "WHERE table_schema = current_schema() AND table_name = %s",
+            (table_name,),
+        )
+        return {row[0] for row in cur.fetchall()}
+
+    def _execute_schema(self) -> None:
+        """Create the catalog, core ledger, and normalized attribution tables."""
         cur = self._conn.cursor()
         for statement in SCHEMA_SQL.strip().split(";"):
             if statement.strip():
                 cur.execute(statement)
+
+    def _insert_normalized_attribution(self, cur: Any, row: Dict[str, Any]) -> None:
+        """Insert the five descriptive dimensions referenced by one usage row."""
+        for dimension_name, column_name in _RELATIONAL_ATTRIBUTION_COLUMNS.items():
+            dimension_value = row[column_name] or UNATTRIBUTED
+            cur.execute(
+                _ATTRIBUTION_VALUE_INSERT_SQL[self._paramstyle],
+                (dimension_name, dimension_value),
+            )
+            cur.execute(
+                _RECORD_ATTRIBUTION_INSERT_SQL[self._paramstyle],
+                (row["usage_record_id"], dimension_name, dimension_value),
+            )
+
+    def _migrate_legacy_usage_table(self) -> None:
+        """Move flattened legacy rows into the normalized schema transactionally."""
+        cur = self._conn.cursor()
+        try:
+            cur.execute("ALTER TABLE llm_usage_records RENAME TO llm_usage_records_legacy")
+        except Exception as exc:
+            raise RuntimeError("legacy usage-table migration is ambiguous") from exc
+        self._execute_schema()
+        cur.execute(_LEGACY_USAGE_SELECT_SQL)
+        legacy_rows = cur.fetchall()
+        for values in legacy_rows:
+            row = dict(zip((*_CORE_USAGE_COLUMNS, *_LEGACY_ATTRIBUTION_COLUMNS), values))
+            cur.execute(
+                _CORE_USAGE_INSERT_SQL[self._paramstyle],
+                tuple(row[column] for column in _CORE_USAGE_COLUMNS),
+            )
+            self._insert_normalized_attribution(cur, row)
+        cur.execute("DROP TABLE llm_usage_records_legacy")
+
+    def _create_schema(self) -> None:
+        """Create or migrate the ledger and roll back any partial DDL."""
+        try:
+            self._create_schema_in_transaction()
+        except Exception:
+            rollback = getattr(self._conn, "rollback", None)
+            if callable(rollback):
+                rollback()
+            raise
+
+    def _create_schema_in_transaction(self) -> None:
+        """Apply schema creation and migration statements before commit."""
+        statements = [statement for statement in SCHEMA_SQL.strip().split(";") if statement.strip()]
+        cur = self._conn.cursor()
+        # SQLite's legacy transaction mode does not begin a transaction for
+        # DDL. Start one before any catalog DDL so a failed legacy migration
+        # rolls back the rename, schema creation, copied rows, and cleanup as
+        # one unit. PEP-249 connections may already have an active transaction.
+        if not getattr(self._conn, "in_transaction", False):
+            cur.execute("BEGIN")
+        # Create the independent catalog tables first. Deferring the usage and
+        # child tables keeps a legacy-table rename from leaving child FKs aimed
+        # at the temporary legacy name.
+        for statement in statements[:2]:
+            cur.execute(statement)
+        self._seed_dimension_catalog_in_transaction(cur)
+        columns = self._table_columns("llm_usage_records")
+        if not columns:
+            for statement in statements[2:]:
+                cur.execute(statement)
+        elif "account_name" in columns:
+            self._migrate_legacy_usage_table()
+        elif not set(_CORE_USAGE_COLUMNS).issubset(columns):
+            missing = ", ".join(sorted(set(_CORE_USAGE_COLUMNS) - columns))
+            raise RuntimeError(f"unsupported usage ledger schema; missing columns: {missing}")
+        else:
+            for statement in statements[2:]:
+                cur.execute(statement)
         self._conn.commit()
 
     def _seed_dimension_catalog(self) -> None:
-        cur = self._conn.cursor()
+        self._seed_dimension_catalog_in_transaction(self._conn.cursor())
+        self._conn.commit()
+
+    def _seed_dimension_catalog_in_transaction(self, cur: Any) -> None:
+        """Seed dimension parents before child rows without committing an outer transaction."""
         for order, (name, label, _column) in enumerate(ATTRIBUTION_DIMENSION_CATALOG):
             cur.execute(
                 _DIMENSION_SELECT_SQL[self._paramstyle],
@@ -645,17 +819,23 @@ class SqlLedgerStore:
                     _DIMENSION_INSERT_SQL[self._paramstyle],
                     (name, label, order),
                 )
-        self._conn.commit()
 
     def append(self, record: UsageRecord) -> None:
         """Insert a usage record row."""
         row = record.as_dict()
         cur = self._conn.cursor()
-        cur.execute(
-            _USAGE_INSERT_SQL[self._paramstyle],
-            tuple(row.get(column) for column in _USAGE_COLUMNS),
-        )
-        self._conn.commit()
+        try:
+            cur.execute(
+                _CORE_USAGE_INSERT_SQL[self._paramstyle],
+                tuple(row.get(column) for column in _CORE_USAGE_COLUMNS),
+            )
+            self._insert_normalized_attribution(cur, row)
+            self._conn.commit()
+        except Exception:
+            rollback = getattr(self._conn, "rollback", None)
+            if callable(rollback):
+                rollback()
+            raise
 
     def query(self, start: Optional[int] = None, end: Optional[int] = None) -> List[Dict[str, Any]]:
         """Return record rows in the optional half-open window."""
