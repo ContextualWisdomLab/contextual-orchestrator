@@ -192,12 +192,8 @@ class CostRoutingCoordinator:
                 "agent_id": verification.get("judge_agent_id"),
                 "usage": verification["judge_usage"],
             }
-            insert_at = (
-                len(steps) - 1
-                if steps and steps[-1].get("subtask") == "Provider-facing structured synthesis"
-                else len(steps)
-            )
-            steps.insert(insert_at, judge_step)
+            # Provider-facing synthesis is the final persisted trace step.
+            steps.insert(max(0, len(steps) - 1), judge_step)
 
         records: List[UsageRecord] = []
         unmetered_count = 0
