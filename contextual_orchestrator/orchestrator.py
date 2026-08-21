@@ -737,6 +737,17 @@ def _canonical_provider_usage(
     return canonical
 
 
+def _responses_usage(usage: dict[str, Any]) -> dict[str, int]:
+    """Return usage with the Responses API's native token field names."""
+    input_tokens = int(usage.get("input_tokens", usage.get("prompt_tokens", 0)) or 0)
+    output_tokens = int(usage.get("output_tokens", usage.get("completion_tokens", 0)) or 0)
+    return {
+        "input_tokens": input_tokens,
+        "output_tokens": output_tokens,
+        "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
+    }
+
+
 def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) -> dict[str, Any]:
     choice = (data.get("choices") or [{}])[0]
     message = choice.get("message") if isinstance(choice, dict) else {}
@@ -768,8 +779,6 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
         })
 
     usage = data.get("usage") if isinstance(data.get("usage"), dict) else {}
-    input_tokens = int(usage.get("prompt_tokens", 0) or 0)
-    output_tokens = int(usage.get("completion_tokens", 0) or 0)
     response: dict[str, Any] = {
         "id": f"resp_{data.get('id', uuid.uuid4().hex)}",
         "object": "response",
@@ -778,11 +787,7 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
         "output": output,
         "output_text": content,
         "status": "completed" if choice.get("finish_reason") != "length" else "incomplete",
-        "usage": {
-            "input_tokens": input_tokens,
-            "output_tokens": output_tokens,
-            "total_tokens": int(usage.get("total_tokens", input_tokens + output_tokens) or 0),
-        },
+        "usage": _responses_usage(usage),
     }
     if isinstance(request.get("metadata"), dict):
         response["metadata"] = request["metadata"]

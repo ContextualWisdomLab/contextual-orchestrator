@@ -20,6 +20,7 @@ from contextual_orchestrator.orchestrator import (  # noqa: E402
     _chat_to_responses_payload,
     _is_local_provider_url,
     _responses_to_chat_payload,
+    _responses_usage,
 )
 
 
@@ -561,6 +562,12 @@ def test_local_responses_adapter_prefers_translated_text_format_contract() -> No
             "schema": {"type": "object"},
         },
     }
+
+
+def test_responses_usage_normalizes_chat_aliases() -> None:
+    assert _responses_usage(
+        {"prompt_tokens": 4, "completion_tokens": 5, "total_tokens": 9}
+    ) == {"input_tokens": 4, "output_tokens": 5, "total_tokens": 9}
 
 
 def test_local_responses_adapter_preserves_bounded_metadata_for_provider() -> None:
