@@ -1878,7 +1878,11 @@ class TaskOrchestrator:
             f"Workflow step {row['id']} ({row['role']}):\n{row['output']}"
             for row in workflow["trace"]
         )
+        # Preserve the caller's message order for tool and structured-output
+        # contracts.  Synthesis remains multi-agent; its private guidance is
+        # appended rather than prepended over an assistant tool call.
         synthesis_messages: list[ChatMessage] = [
+            *messages,
             {
                 "role": "system",
                 "content": (
@@ -1888,7 +1892,6 @@ class TaskOrchestrator:
                     "the workflow or invent evidence."
                 ),
             },
-            *messages,
             {"role": "user", "content": f"Verified workflow evidence:\n{evidence}"},
         ]
         upstream = {
@@ -1900,6 +1903,8 @@ class TaskOrchestrator:
         upstream["messages"] = synthesis_messages
         upstream["stream"] = False
         if response_request:
+            if isinstance(body.get("metadata"), dict):
+                upstream["metadata"] = body["metadata"]
             response_format = body.get("response_format")
             if response_format is None:
                 response_format = _responses_text_format_to_chat_response_format(body.get("text"))
@@ -1914,8 +1919,17 @@ class TaskOrchestrator:
         }
         if response_request:
             converted = _chat_to_responses_payload(raw, body)
-            if "echo" in raw:
-                converted["echo"] = raw["echo"]
+            if isinstance(raw.get("echo"), dict):
+                echo = dict(raw["echo"])
+                instructions = _responses_text(body.get("instructions"))
+                if instructions:
+                    echo["instructions"] = instructions
+                metadata = body.get("metadata")
+                if isinstance(metadata, dict):
+                    echo["metadata"] = {
+                        key: value for key, value in metadata.items() if value is not None
+                    }
+                converted["echo"] = echo
             converted["orchestration"] = orchestration
             return converted
         raw["orchestration"] = orchestration
