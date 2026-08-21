@@ -223,10 +223,13 @@ def _parse_model_judge_reply(reply: str) -> tuple[str, str]:
             result[key] = value
         return result
 
+    parse_error: ValueError | None = None
     try:
         decision = json.loads(reply.strip(), object_pairs_hook=reject_duplicate_keys)
     except (json.JSONDecodeError, RecursionError, TypeError):
-        raise ValueError("judge response is not valid JSON") from None
+        parse_error = ValueError("judge response is not valid JSON")
+    if parse_error is not None:
+        raise parse_error
     if not isinstance(decision, dict) or set(decision) != {"decision", "reason"}:
         raise ValueError("judge response must match the exact verdict schema")
     decision_value = decision["decision"]
@@ -1989,11 +1992,16 @@ class TaskOrchestrator:
                 self.client.batch_chat(agents_by_id[agent_id], requests),
             )
             for custom_id, result in results.items():
+                identifier_error: RuntimeError | None = None
                 try:
                     prefix, suffix = custom_id.rsplit("_", 1)
                     index = int(suffix)
                 except (AttributeError, ValueError):
-                    raise RuntimeError("batch provider returned an invalid request identifier") from None
+                    identifier_error = RuntimeError(
+                        "batch provider returned an invalid request identifier"
+                    )
+                if identifier_error is not None:
+                    raise identifier_error
                 if prefix != "task" or custom_id != f"task_{index}" or not 0 <= index < len(selected):
                     raise RuntimeError("batch provider returned an invalid request identifier")
                 if index in answers:
