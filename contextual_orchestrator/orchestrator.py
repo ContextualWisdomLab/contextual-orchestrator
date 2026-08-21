@@ -314,6 +314,8 @@ class ModelAgent:
             raise TypeError("local_credential_key must be a string")
         if scheme == "local" and not self.local_credential_key:
             raise ValueError("local:// gateway URLs require local_credential_key")
+        if scheme == "local" and not _is_local_provider_url(self.base_url):
+            raise ValueError("local:// gateway URLs require a well-formed explicit loopback endpoint")
         if self.local_credential_key and scheme != "local":
             raise ValueError("local_credential_key requires a local:// gateway URL")
         if not self.auth_scheme or type(self.auth_scheme) is not str:
@@ -457,7 +459,7 @@ class OrchestrationPolicy:
 # is a caller or configuration error and must not be retried.
 TRANSIENT_HTTP_STATUS = frozenset({408, 409, 425, 429, 500, 502, 503, 504})
 LOCAL_PROVIDER_SCHEMES = frozenset({"local"})
-LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost", "host.docker.internal"})
+LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
 def _is_local_provider_url(base_url: str) -> bool:
