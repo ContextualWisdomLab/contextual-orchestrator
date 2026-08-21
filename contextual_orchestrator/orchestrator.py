@@ -1172,10 +1172,13 @@ class ModelClient:
                     delta = chunk.get("choices", [{}])[0].get("delta", {}).get("content")
                     if delta:
                         yield delta
-        except urllib.error.HTTPError as exc:
-            if _is_tool_execution_stopped(exc):
-                raise _provider_tool_execution_stopped(agent) from None
-            raise
+        except Exception as exc:
+            if isinstance(exc, ToolFallbackStoppedError):
+                raise
+            # A stream may already have emitted bytes, so it cannot be retried or
+            # fail over. Keep the provider body and exception cause inside the
+            # gateway while preserving one stable library error for callers.
+            raise RuntimeError(f"provider {agent.id} streaming request failed") from None
 
     # -- Full OpenAI passthrough (transport) ------------------------------------
     # Requests that carry provider features the multi-agent verifier cannot merge
