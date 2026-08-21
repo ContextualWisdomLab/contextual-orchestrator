@@ -249,15 +249,16 @@ def _discover_models_command(argv: list[str]) -> None:
         raise SystemExit(1)
 
 
-def main() -> None:
+def main(argv: list[str] | None = None) -> None:
     """Parse CLI options and run bootstrap, prompt completion, or the HTTP server."""
-    if len(sys.argv) > 1 and sys.argv[1] == "register-credential":
-        _register_credential_command(sys.argv[2:])
+    arguments = list(sys.argv[1:] if argv is None else argv)
+    if arguments and arguments[0] == "register-credential":
+        _register_credential_command(arguments[1:])
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "discover-models":
-        _discover_models_command(sys.argv[2:])
+    if arguments and arguments[0] == "discover-models":
+        _discover_models_command(arguments[1:])
         return
-    if len(sys.argv) > 1 and sys.argv[1] == "check-fast-mlsirm":
+    if arguments and arguments[0] == "check-fast-mlsirm":
         _check_fast_mlsirm_command()
         return
 
@@ -318,7 +319,7 @@ def main() -> None:
                         help="Seconds to cache identical requests (default 0 = disabled).")
     parser.add_argument("--eval", nargs="+", metavar="PROMPT",
                         help="Measure orchestration vs a single-worker baseline on these prompts and print the report.")
-    args = parser.parse_args()
+    args = parser.parse_args(arguments)
 
     client = ModelClient(
         ca_bundle=args.provider_ca_bundle,
