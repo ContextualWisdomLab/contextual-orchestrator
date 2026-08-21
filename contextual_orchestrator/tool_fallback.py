@@ -209,6 +209,8 @@ def _classify_unstructured(error: BaseException) -> ToolFailureKind:
     """Classify legacy exceptions that identify a tool-runtime failure."""
     text = _exception_text(error)
 
+    if not _looks_tool_related(error, text):
+        return ToolFailureKind.UNKNOWN
     if _contains_any(
         text,
         (
@@ -231,8 +233,6 @@ def _classify_unstructured(error: BaseException) -> ToolFailureKind:
         ),
     ):
         return ToolFailureKind.TOOL_NOT_FOUND
-    if not _looks_tool_related(error, text):
-        return ToolFailureKind.UNKNOWN
     if isinstance(error, PermissionError) or _contains_any(
         text,
         ("permission denied", "access denied", "unauthorized", "forbidden"),

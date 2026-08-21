@@ -3,12 +3,16 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 import socket
+import sys
 import threading
 import urllib.error
 import urllib.request
 
 import pytest
+
+sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import ModelAgent, TaskOrchestrator
 from contextual_orchestrator.orchestrator import ModelClient
@@ -172,6 +176,12 @@ def test_generic_provider_timeout_is_not_misclassified_as_tool_replay() -> None:
     wrapper = RuntimeError("provider request failed")
     wrapper.__cause__ = cause
     decision = classify_tool_failure(wrapper)
+    assert decision.kind is ToolFailureKind.UNKNOWN
+    assert decision.action is ToolFallbackAction.FAILOVER_AGENT
+
+
+def test_generic_provider_marker_is_not_misclassified_as_tool_failure() -> None:
+    decision = classify_tool_failure(RuntimeError("provider request may have completed"))
     assert decision.kind is ToolFailureKind.UNKNOWN
     assert decision.action is ToolFallbackAction.FAILOVER_AGENT
 
@@ -401,7 +411,7 @@ def test_idempotent_rate_limit_retries_same_agent() -> None:
 
 
 def test_unstructured_ambiguous_outcome_fails_closed() -> None:
-    decision = classify_tool_failure(RuntimeError("request may have completed"))
+    decision = classify_tool_failure(RuntimeError("tool request may have completed"))
     assert decision.kind is ToolFailureKind.AMBIGUOUS_OUTCOME
     assert decision.action is ToolFallbackAction.FAIL_CLOSED
 
@@ -742,3 +752,14 @@ def test_stream_fail_closed_tool_error_emits_structured_sse() -> None:
     assert error_body["detail"]["observed_failure_kind"] == "transport_error"
     assert parsed[-1]["choices"][0]["finish_reason"] == "error"
     assert "must-not-leak" not in body
+
+
+if __name__ == "__main__":
+    test_wrapped_missing_tool_error_is_classified_from_cause_chain()
+    test_exact_strix_missing_tool_failure_falls_back_to_backup_agent()
+    test_idempotent_timeout_retries_same_agent_before_failover()
+    test_exhausted_safe_retry_then_fails_over_once()
+    test_non_idempotent_ambiguous_failure_stops_without_backup_or_secret_leak()
+    test_http_fail_closed_tool_error_has_dedicated_contract()
+    test_stream_fail_closed_tool_error_emits_structured_sse()
+    print("ok")

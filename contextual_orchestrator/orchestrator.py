@@ -419,6 +419,18 @@ LOCAL_PROVIDER_SCHEMES = frozenset({"mlx", "local"})
 LOCAL_PROVIDER_HOSTS = frozenset({"127.0.0.1", "::1", "localhost"})
 
 
+def _is_tool_execution_stopped(error: urllib.error.HTTPError) -> bool:
+    """Return whether an HTTP error carries the terminal tool-stop contract."""
+    try:
+        payload = json.loads(error.read(65536).decode("utf-8"))
+    except (AttributeError, OSError, UnicodeDecodeError, json.JSONDecodeError):
+        return False
+    if not isinstance(payload, dict):
+        return False
+    details = payload.get("error")
+    return isinstance(details, dict) and details.get("code") == "tool_execution_stopped"
+
+
 def _is_local_provider_url(base_url: str) -> bool:
     """Return whether a provider uses the explicit loopback-only local scheme."""
     parsed = urlparse(base_url)
@@ -675,6 +687,8 @@ def _chat_to_responses_payload(data: dict[str, Any], request: dict[str, Any]) ->
 def is_transient_error(exc: BaseException) -> bool:
     """Return True when a provider call failure is worth retrying with backoff."""
     if isinstance(exc, urllib.error.HTTPError):
+        if _is_tool_execution_stopped(exc):
+            return False
         return exc.code in TRANSIENT_HTTP_STATUS
     # Network-level failures (DNS, connection reset, read timeout) are transient.
     if isinstance(exc, (urllib.error.URLError, TimeoutError, ConnectionError, socket.timeout)):

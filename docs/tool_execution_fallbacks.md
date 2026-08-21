@@ -55,7 +55,7 @@ Structured `ToolExecutionError` remains the preferred contract. For legacy tool 
 | 429 | rate limited | bounded retry when explicitly idempotent; otherwise fail over |
 | unrecognized status | unknown | preserve legacy sequential failover |
 
-A non-idempotent timeout or transport error is reported as `ambiguous_outcome` and fails closed. A non-idempotent `execution_failed` decision also fails closed with action `fail_closed`, reason code `tool_failure.execution_failed.fail_closed`, and `ToolFallbackStoppedError`; the HTTP surface returns the documented `409 tool_execution_stopped` response. HTTP status inference is compatibility behavior only; adapters should provide structured operation semantics whenever possible.
+A `409` response whose JSON error code is `tool_execution_stopped` is terminal and is never retried by the provider transport, because replaying the request could duplicate a non-idempotent tool operation. Other `409` conflicts retain the transient provider retry policy. A non-idempotent timeout or transport error is reported as `ambiguous_outcome` and fails closed. A non-idempotent `execution_failed` decision also fails closed with action `fail_closed`, reason code `tool_failure.execution_failed.fail_closed`, and `ToolFallbackStoppedError`; the HTTP surface returns the documented `409 tool_execution_stopped` response. HTTP status inference is compatibility behavior only; adapters should provide structured operation semantics whenever possible.
 
 ## Retry bound
 
@@ -65,7 +65,7 @@ When the retry budget is exhausted, an idempotent transient failure moves to the
 
 ## Fail-closed errors
 
-`ToolFallbackStoppedError` is raised for ambiguous outcomes, non-idempotent execution failures, and authorization, policy, or argument failures. Its public message contains a stable reason code and agent id only. The original exception remains available as the Python cause for trusted internal diagnostics, but its text is not copied into audit events.
+`ToolFallbackStoppedError` is raised for ambiguous outcomes, non-idempotent execution failures, and authorization, policy, or argument failures. Its public message contains a stable reason code and agent id only. The original provider or tool exception is intentionally not retained as a public exception cause; trusted diagnostics must use allowlisted internal telemetry rather than a raw cause chain.
 
 ### HTTP and streaming contract
 

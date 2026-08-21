@@ -6,6 +6,8 @@ the capability a model-orchestration gateway is bought for.
 
 from __future__ import annotations
 
+import io
+import json
 import socket
 import ssl
 import sys
@@ -41,6 +43,18 @@ def test_transient_classification_matches_status_and_network_errors() -> None:
     assert is_transient_error(ssl.SSLSyscallError("SSL_ERROR_SYSCALL"))
     assert not is_transient_error(ssl.SSLCertVerificationError("certificate verify failed"))
     assert not is_transient_error(ValueError("bad json"))
+
+
+def test_tool_execution_stopped_409_is_terminal_but_generic_conflict_retries() -> None:
+    stopped = urllib.error.HTTPError(
+        "https://provider.example/chat/completions",
+        409,
+        "Conflict",
+        None,
+        io.BytesIO(json.dumps({"error": {"code": "tool_execution_stopped"}}).encode()),
+    )
+    assert not is_transient_error(stopped)
+    assert is_transient_error(_http_error(409))
 
 
 def test_retry_recovers_from_transient_failures_with_backoff() -> None:
