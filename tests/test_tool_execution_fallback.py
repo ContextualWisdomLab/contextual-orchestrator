@@ -2,13 +2,14 @@
 
 from __future__ import annotations
 
+import io
 import json
-from pathlib import Path
 import socket
 import sys
 import threading
 import urllib.error
 import urllib.request
+from pathlib import Path
 
 import pytest
 
@@ -20,9 +21,9 @@ from contextual_orchestrator.server import SecurityConfig, build_server
 from contextual_orchestrator.tool_fallback import (
     MAX_TOOL_RETRY_ATTEMPTS,
     ToolExecutionError,
+    ToolFailureKind,
     ToolFallbackAction,
     ToolFallbackStoppedError,
-    ToolFailureKind,
     classify_tool_failure,
 )
 
@@ -640,6 +641,46 @@ def _post_fallback_json(
         return error.code, json.loads(error.read().decode("utf-8"))
 
 
+def _provider_tool_stop_http_error() -> urllib.error.HTTPError:
+    """Build the provider-originated terminal 409 without retaining provider text."""
+    return urllib.error.HTTPError(
+        "https://provider.example/chat/completions",
+        409,
+        "Conflict",
+        None,
+        io.BytesIO(json.dumps({"error": {"code": "tool_execution_stopped"}}).encode()),
+    )
+
+
+class _ProviderStoppedChatClient(ModelClient):
+    """Return the provider terminal contract through the real chat transport path."""
+
+    def __init__(self) -> None:
+        super().__init__(max_retries=3, retry_backoff=0.0)
+        self.calls: list[str] = []
+
+    def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+        del agent
+        return None
+
+    def _send(self, agent: ModelAgent, payload: dict, destination=None) -> str:  # type: ignore[override]
+        del payload, destination
+        self.calls.append(agent.id)
+        raise _provider_tool_stop_http_error()
+
+
+class _ProviderStoppedStreamingClient(ModelClient):
+    """Return the provider terminal contract while opening a streaming response."""
+
+    def _validate_provider(self, agent: ModelAgent):  # type: ignore[override]
+        del agent
+        return None
+
+    def _open_provider(self, request, destination=None, *, timeout=None):  # type: ignore[override]
+        del request, destination, timeout
+        raise _provider_tool_stop_http_error()
+
+
 def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
     error = ToolExecutionError(
         "request may have completed token=must-not-leak",
@@ -680,6 +721,93 @@ def test_http_fail_closed_tool_error_has_dedicated_contract() -> None:
     assert error_body["detail"]["failure_kind"] == "ambiguous_outcome"
     assert error_body["detail"]["observed_failure_kind"] == "transport_error"
     assert "must-not-leak" not in json.dumps(body)
+
+
+def test_provider_http_tool_stop_preserves_409_and_does_not_fail_over() -> None:
+    agents = [
+        ModelAgent(
+            "primary_worker",
+            "provider-model",
+            base_url="https://provider.example/v1",
+            credential_key="",
+        ),
+        ModelAgent(
+            "backup_worker",
+            "provider-model",
+            base_url="https://provider.example/v1",
+            credential_key="",
+        ),
+    ]
+    client = _ProviderStoppedChatClient()
+    server = build_server(
+        TaskOrchestrator(agents, client=client),
+        port=0,
+        security=SecurityConfig(auth_token="secret_token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    try:
+        status, body = _post_fallback_json(
+            server.server_address[1],
+            {
+                "model": "provider-model",
+                "mode": "route",
+                "messages": [{"role": "user", "content": "send this message"}],
+            },
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 409
+    assert body["error"]["code"] == "tool_execution_stopped"
+    assert body["error"]["detail"]["failure_kind"] == "ambiguous_outcome"
+    assert client.calls == ["primary_worker"]
+
+
+def test_provider_http_tool_stop_preserves_streaming_sse_contract() -> None:
+    agent = ModelAgent(
+        "primary_worker",
+        "provider-model",
+        base_url="https://provider.example/v1",
+        credential_key="",
+    )
+    server = build_server(
+        TaskOrchestrator([agent], client=_ProviderStoppedStreamingClient(max_retries=0)),
+        port=0,
+        security=SecurityConfig(auth_token="secret_token"),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    request = urllib.request.Request(
+        f"http://127.0.0.1:{server.server_address[1]}/v1/chat/completions",
+        data=json.dumps(
+            {
+                "model": "provider-model",
+                "mode": "route",
+                "stream": True,
+                "messages": [{"role": "user", "content": "send this message"}],
+            }
+        ).encode("utf-8"),
+        headers={
+            "authorization": "Bearer secret_token",
+            "content-type": "application/json",
+            "connection": "close",
+        },
+        method="POST",
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            status = response.status
+            body = response.read().decode("utf-8")
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert status == 200
+    assert '"code": "tool_execution_stopped"' in body
+    assert '"finish_reason": "error"' in body
+    assert body.endswith("data: [DONE]\n\n")
 
 
 class _StoppedStreamingClient(ModelClient):
@@ -755,11 +883,4 @@ def test_stream_fail_closed_tool_error_emits_structured_sse() -> None:
 
 
 if __name__ == "__main__":
-    test_wrapped_missing_tool_error_is_classified_from_cause_chain()
-    test_exact_strix_missing_tool_failure_falls_back_to_backup_agent()
-    test_idempotent_timeout_retries_same_agent_before_failover()
-    test_exhausted_safe_retry_then_fails_over_once()
-    test_non_idempotent_ambiguous_failure_stops_without_backup_or_secret_leak()
-    test_http_fail_closed_tool_error_has_dedicated_contract()
-    test_stream_fail_closed_tool_error_emits_structured_sse()
-    print("ok")
+    raise SystemExit(pytest.main([__file__, "-q"]))
