@@ -2225,11 +2225,6 @@ class TaskOrchestrator:
                     value = persisted_usage.get(responses_key)
                     if type(value) is int and value >= 0:
                         persisted_usage.setdefault(chat_key, value)
-                if "total_tokens" not in persisted_usage:
-                    prompt_tokens = persisted_usage.get("prompt_tokens")
-                    completion_tokens = persisted_usage.get("completion_tokens")
-                    if type(prompt_tokens) is int and type(completion_tokens) is int:
-                        persisted_usage["total_tokens"] = prompt_tokens + completion_tokens
             passthrough_step["usage"] = persisted_usage
         self._persist_workflow_run(
             {

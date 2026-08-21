@@ -271,7 +271,7 @@ def test_responses_tool_loop_usage_counts_toward_the_next_budget_check() -> None
                 "arguments": "{}",
             }
         ],
-        "usage": {"input_tokens": 2, "output_tokens": 3},
+        "usage": {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5},
     }
     body = {
         "model": "mock-planner",
@@ -281,7 +281,7 @@ def test_responses_tool_loop_usage_counts_toward_the_next_budget_check() -> None
 
     with patch.object(orch.client, "proxy_send", return_value=raw) as send:
         assert orch.proxy_completion(body, endpoint="responses", single_agent=True) is raw
-        assert raw["usage"] == {"input_tokens": 2, "output_tokens": 3}
+        assert raw["usage"] == {"input_tokens": 2, "output_tokens": 3, "total_tokens": 5}
         analytics = orch.spend_analytics()
         assert analytics["totals"]["reported_prompt_tokens"] == 2
         assert analytics["budget"]["spent_output_tokens"] == 3
