@@ -4753,7 +4753,9 @@ def build_server(
                         agent_pool_id = segments[3]
                         worker_agent_id = segments[-1]
                         try:
-                            payload = orchestrator._agent_to_admin_payload(orchestrator._agent(worker_agent_id))
+                            payload = orchestrator._agent_to_admin_payload(
+                                orchestrator._agent_in_pool(agent_pool_id, worker_agent_id)
+                            )
                             payload["agent_pool_id"] = agent_pool_id
                             self._send(payload)
                             return
