@@ -288,6 +288,18 @@ The preceding rows are historical snapshots. The latest normal-path evidence is:
 
 No D1–D5 emergency deadlock evidence exists for these central PRs. The active ruleset has no bypass actor, so no guarded force merge, direct protected push, fake status, or approval bypass is authorized.
 
+### Contextual live-head refresh — 2026-08-22
+
+The older contextual PR rows above are historical unless their SHA matches this table:
+
+| PR | Current exact identity | Live state and decision |
+|---:|---|---|
+| [#804](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/804) | head `f74cfc071c73706f93ce0d7d33f7421459b6a11f`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open and mergeable but blocked; all current hosted source/security checks are queued, auto-merge is currently disabled, formal approvals `0`. Prior local evidence does not transfer after this head advanced. Decision: `WAIT_AND_REMEDIATE`. |
+| [#807](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/807) | head `f832e32f99886388188e5b1f0d89c47ce4cfeef8`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open and mergeable but blocked; all current hosted source/security checks are queued, auto-merge enabled, formal approvals `0`. Prior local evidence does not transfer after this head advanced. Decision: `WAIT_AND_REMEDIATE`. |
+| [#818](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/818) | head `23634d56493cd35dfae545799b5501c3d3b67eed`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open and mergeable but blocked; exact-head `osv-scan` failed because the repository workflow used the deprecated OSV output flag and produced no result file. This is a real workflow-contract failure, not merge evidence; formal approvals `0`. Decision: `WAIT_AND_REMEDIATE`. |
+| [#819](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/819) | head `c9ac72c4479e7709949975a2d487f3d4eb582a30`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open and mergeable but blocked; functional/security checks are terminal green or neutral, with OpenCode still queued; auto-merge enabled, formal approvals `0`. Decision: `WAIT_AND_REMEDIATE`. |
+| [#821](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/821) | head `c5de31cf276580fddd4f3bcf863f5a7fcfa5aeb8`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open and mergeable but blocked; functional/security checks are terminal green or neutral, with coverage evidence still queued; auto-merge enabled, formal approvals `0`. Decision: `WAIT_AND_REMEDIATE`. |
+
 ## 5. Open issue and product-gap queue
 
 | Issue | Customer-visible gap | Planned proof / next PR |
