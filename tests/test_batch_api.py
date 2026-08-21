@@ -139,6 +139,16 @@ def test_batch_run_omits_an_unset_temperature() -> None:
 
         assert b'"temperature"' not in provider.uploaded_jsonl
 
+        _client()._batch_run(
+            agent,
+            REQUESTS,
+            temperature=0.2,
+            poll_interval=0.01,
+            poll_timeout=30,
+        )
+
+        assert b'"temperature": 0.2' in provider.uploaded_jsonl
+
 
 def test_batch_terminal_failure_raises() -> None:
     with _FakeBatchProvider(fail_status="failed") as provider:

@@ -1,7 +1,7 @@
 # ADR 0123: Omit Unsupported Sampling Defaults
 
 - Status: Accepted
-- Date: 2026-08-22
+- Date: 2026-08-21
 
 ## Context
 

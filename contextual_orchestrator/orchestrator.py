@@ -1363,7 +1363,7 @@ class ModelClient:
         self,
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
-        temperature: float,
+        temperature: float | None,
         poll_interval: float,
         poll_timeout: float,
         destination: ProviderDestination | None = None,

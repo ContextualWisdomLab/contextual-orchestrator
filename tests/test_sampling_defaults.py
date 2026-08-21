@@ -59,7 +59,6 @@ def test_chat_forwards_an_explicit_temperature() -> None:
 
 def test_chat_uses_request_scoped_temperature_before_constructor_value() -> None:
     client = ModelClient(temperature=0.4)
-    client.default_temperature = 0.3
     captured: list[dict] = []
 
     def send(_agent, payload, _destination):
@@ -71,7 +70,11 @@ def test_chat_uses_request_scoped_temperature_before_constructor_value() -> None
         patch("contextual_orchestrator.orchestrator._provider_credential", return_value="secret"),
         patch.object(client, "_send_with_retry", side_effect=send),
     ):
-        client.chat(_remote_agent(), [{"role": "user", "content": "hello"}])
+        client.chat(
+            _remote_agent(),
+            [{"role": "user", "content": "hello"}],
+            temperature=0.3,
+        )
 
     assert captured[0]["temperature"] == 0.3
 
@@ -94,10 +97,9 @@ def test_chat_uses_constructor_temperature_when_request_scope_is_unset() -> None
     assert captured[0]["temperature"] == 0.4
 
 
-def test_stream_chat_uses_the_request_scoped_default_temperature() -> None:
-    """Forward a server-validated temperature on streamed route completions."""
-    client = ModelClient()
-    client.default_temperature = 0.6
+def test_stream_chat_uses_request_temperature_before_constructor_value() -> None:
+    """Forward a request-scoped temperature on streamed route completions."""
+    client = ModelClient(temperature=0.4)
     captured: list[dict] = []
 
     def stream_send(_agent, payload, _destination):
@@ -109,10 +111,14 @@ def test_stream_chat_uses_the_request_scoped_default_temperature() -> None:
         patch.object(client, "_stream_send", side_effect=stream_send),
     ):
         assert list(
-            client.stream_chat(_remote_agent(), [{"role": "user", "content": "hello"}])
+            client.stream_chat(
+                _remote_agent(),
+                [{"role": "user", "content": "hello"}],
+                temperature=0.3,
+            )
         ) == ["answer"]
 
-    assert captured[0]["temperature"] == 0.6
+    assert captured[0]["temperature"] == 0.3
 
 
 def test_structured_completion_omits_an_unset_temperature() -> None:
