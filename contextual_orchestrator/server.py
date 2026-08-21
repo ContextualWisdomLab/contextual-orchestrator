@@ -160,8 +160,9 @@ class SecurityConfig:
     max_concurrent_runs: int = 8
     # Deployment may inject a real OIDC/JWT verifier (for example a Keyverse
     # relying-party adapter). The core deliberately does not decode JWTs with
-    # an unsafe hand-rolled parser or own Keycloak admin credentials.
-    bearer_verifier: Callable[[str, str], bool] | None = None
+    # an unsafe hand-rolled parser or own Keycloak admin credentials. The
+    # ``principal`` scope returns verified ``iss`` and ``sub`` claims.
+    bearer_verifier: Callable[[str, str], bool | Mapping[str, Any]] | None = None
     _rate_buckets: dict[str, tuple[int, float]] = field(default_factory=dict, init=False, repr=False)
     _rate_lock: threading.Lock = field(default_factory=threading.Lock, init=False, repr=False)
     _run_semaphore: threading.BoundedSemaphore = field(init=False, repr=False)
@@ -218,7 +219,24 @@ class SecurityConfig:
             else:
                 principal_material = f"single:{self.auth_token}"
         else:
-            principal_material = f"bearer:{token}"
+            try:
+                verified_principal = self.bearer_verifier(token, "principal")
+            except Exception:  # noqa: BLE001 - an auth adapter failure is an auth denial
+                raise RequestError(401, "unauthorized", "verified principal is unavailable") from None
+            if not isinstance(verified_principal, Mapping):
+                raise RequestError(401, "unauthorized", "verified principal claims are required")
+            issuer = verified_principal.get("iss")
+            subject = verified_principal.get("sub")
+            if (
+                type(issuer) is not str
+                or not issuer
+                or type(subject) is not str
+                or not subject
+                or len(issuer) > 512
+                or len(subject) > 512
+            ):
+                raise RequestError(401, "unauthorized", "verified principal claims are invalid")
+            principal_material = f"oidc:{issuer}\x00{subject}"
         return hashlib.sha256(principal_material.encode("utf-8")).hexdigest()
 
     def check_rate_limit(self, key: str) -> None:

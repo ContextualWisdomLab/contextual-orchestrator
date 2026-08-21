@@ -82,9 +82,12 @@ def test_spend_empty_when_no_runs() -> None:
 def test_http_spend_endpoint_returns_only_authenticated_owner() -> None:
     """Distinct verified bearers must not see each other's spend aggregates."""
     tokens = {"owner-a", "owner-b"}
-    security = SecurityConfig(
-        bearer_verifier=lambda token, scope: token in tokens and scope == "admin"
-    )
+    def verify(token: str, scope: str) -> bool | dict[str, str]:
+        if scope == "principal":
+            return {"iss": "https://issuer.example", "sub": token} if token in tokens else {}
+        return token in tokens and scope == "admin"
+
+    security = SecurityConfig(bearer_verifier=verify)
     orchestrator = TaskOrchestrator([ModelAgent("general_agent", "priced-model", tags=("reasoning",))])
     owner_a = security.principal_id({"authorization": "Bearer owner-a"})
     owner_b = security.principal_id({"authorization": "Bearer owner-b"})

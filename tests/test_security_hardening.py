@@ -40,6 +40,29 @@ def test_external_bearer_verifier_is_fail_closed_and_scoped() -> None:
     assert security.readiness_profile()["auth_mode"] == "external_bearer_verifier"
 
 
+def test_external_principal_id_uses_verified_issuer_and_subject() -> None:
+    """Token rotation keeps one verified subject bound to one owner key."""
+    claims = {
+        "rotated-token-a": {"iss": "https://issuer.example", "sub": "subject-a"},
+        "rotated-token-b": {"iss": "https://issuer.example", "sub": "subject-a"},
+        "other-subject-token": {"iss": "https://issuer.example", "sub": "subject-b"},
+    }
+
+    def verify(token: str, scope: str) -> bool | dict[str, str]:
+        if scope == "principal":
+            return claims.get(token, {})
+        return token in claims and scope in {"admin", "inference"}
+
+    security = SecurityConfig(bearer_verifier=verify)
+    rotated_a = security.principal_id({"authorization": "Bearer rotated-token-a"})
+    rotated_b = security.principal_id({"authorization": "Bearer rotated-token-b"})
+    other_subject = security.principal_id({"authorization": "Bearer other-subject-token"})
+
+    assert rotated_a == rotated_b
+    assert rotated_a != other_subject
+    assert "rotated-token-a" not in rotated_a
+
+
 def post_json(url: str, payload: dict[str, object], token: str | None = None) -> tuple[int, dict[str, object]]:
     headers = {"content-type": "application/json", "connection": "close"}
     if token:
