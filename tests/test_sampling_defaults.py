@@ -110,15 +110,38 @@ def test_stream_chat_uses_request_temperature_before_constructor_value() -> None
         patch.object(client, "_validate_provider", return_value=object()),
         patch.object(client, "_stream_send", side_effect=stream_send),
     ):
-        assert list(
-            client.stream_chat(
-                _remote_agent(),
-                [{"role": "user", "content": "hello"}],
-                temperature=0.3,
-            )
-        ) == ["answer"]
+        with client.request_options(
+            max_output_tokens=64,
+            top_p=0.9,
+            presence_penalty=0.1,
+            frequency_penalty=0.2,
+        ):
+            assert list(
+                client.stream_chat(
+                    _remote_agent(),
+                    [{"role": "user", "content": "hello"}],
+                    temperature=0.3,
+                )
+            ) == ["answer"]
 
     assert captured[0]["temperature"] == 0.3
+    assert captured[0]["max_tokens"] == 64
+    assert captured[0]["top_p"] == 0.9
+    assert captured[0]["presence_penalty"] == 0.1
+    assert captured[0]["frequency_penalty"] == 0.2
+
+
+def test_nested_request_options_restore_thread_local_values() -> None:
+    """Nested request scopes restore the outer value and then the client default."""
+    client = ModelClient()
+
+    with client.request_options(temperature=0.4):
+        assert client._effective_temperature() == 0.4
+        with client.request_options(temperature=0.2):
+            assert client._effective_temperature() == 0.2
+        assert client._effective_temperature() == 0.4
+
+    assert client._effective_temperature() is None
 
 
 def test_structured_completion_omits_an_unset_temperature() -> None:

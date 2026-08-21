@@ -767,11 +767,43 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    @contextmanager
+    def request_options(
+        self,
+        *,
+        max_output_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+    ):
+        """Apply HTTP request controls without mutating shared client defaults."""
+        missing = object()
+        options = {
+            "request_max_output_tokens": max_output_tokens,
+            "request_temperature": temperature,
+            "request_top_p": top_p,
+            "request_presence_penalty": presence_penalty,
+            "request_frequency_penalty": frequency_penalty,
+        }
+        previous = {name: getattr(self._local, name, missing) for name in options}
+        for name, value in options.items():
+            if value is not None:
+                setattr(self._local, name, value)
+        try:
+            yield
+        finally:
+            for name, value in previous.items():
+                if value is missing:
+                    self._local.__dict__.pop(name, None)
+                else:
+                    setattr(self._local, name, value)
+
     def _effective_temperature(self, requested: float | None = None) -> float | None:
         """Resolve request, request-scoped, and constructor sampling values in order."""
         if requested is not None:
             return requested
-        return self.default_temperature
+        return getattr(self._local, "request_temperature", self.default_temperature)
 
     def chat(
         self,
@@ -789,9 +821,17 @@ class ModelClient:
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
         effective_temperature = self._effective_temperature(temperature)
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
+        effective_top_p = (
+            getattr(self._local, "request_top_p", self.default_top_p)
+            if top_p is None
+            else top_p
+        )
+        effective_presence = getattr(
+            self._local, "request_presence_penalty", self.default_presence_penalty
+        )
+        effective_frequency = getattr(
+            self._local, "request_frequency_penalty", self.default_frequency_penalty
+        )
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
@@ -811,7 +851,9 @@ class ModelClient:
             "model": agent.model,
             "messages": messages,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": getattr(
+                self._local, "request_max_output_tokens", self.max_output_tokens
+            ),
         }
         if effective_temperature is not None:  # pragma: no cover
             payload["temperature"] = effective_temperature
@@ -1091,11 +1133,26 @@ class ModelClient:
             "model": agent.model,
             "messages": messages,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": getattr(
+                self._local, "request_max_output_tokens", self.max_output_tokens
+            ),
         }
         effective_temperature = self._effective_temperature(temperature)
         if effective_temperature is not None:  # pragma: no cover
             payload["temperature"] = effective_temperature
+        effective_top_p = getattr(self._local, "request_top_p", self.default_top_p)
+        if effective_top_p is not None:  # pragma: no cover
+            payload["top_p"] = effective_top_p
+        effective_presence = getattr(
+            self._local, "request_presence_penalty", self.default_presence_penalty
+        )
+        if effective_presence is not None:  # pragma: no cover
+            payload["presence_penalty"] = effective_presence
+        effective_frequency = getattr(
+            self._local, "request_frequency_penalty", self.default_frequency_penalty
+        )
+        if effective_frequency is not None:  # pragma: no cover
+            payload["frequency_penalty"] = effective_frequency
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover

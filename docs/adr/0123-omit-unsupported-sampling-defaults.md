@@ -21,7 +21,9 @@ values remain validated at the public request boundary and are forwarded
 unchanged through chat, streaming, batch, and structured-output transport
 paths. A client-level explicit value, including the CLI option, applies to
 ordinary chat as well as streaming and batch calls; a request-scoped value
-temporarily overrides it for both streamed and non-streamed requests.
+temporarily overrides it for both streamed and non-streamed requests. HTTP
+request overrides are isolated from concurrent requests; the server must not
+mutate shared client defaults while a request is in flight.
 
 The command-line sampling option is optional and defaults to omission. Health
 probes also omit sampling controls; a probe must test reachability without
@@ -37,6 +39,8 @@ model policy ADRs.
   model-name exception.
 - Callers that require a sampling value must state it explicitly and accept the
   selected provider's capability response.
+- One request's explicit controls cannot become another request's implicit
+  defaults.
 - Provider request assertions must distinguish omitted fields from explicit
   values.
 
