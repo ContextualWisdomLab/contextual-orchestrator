@@ -18,8 +18,13 @@ from contextual_orchestrator import ModelAgent, TaskOrchestrator  # noqa: E402
 from contextual_orchestrator.orchestrator import (  # noqa: E402
     BudgetExceededError,
     _FastMLSIJudgeAdapter,
+    _responses_text_format_to_chat_response_format,
 )
-from contextual_orchestrator.server import SecurityConfig, build_server, responses_sse_body  # noqa: E402
+from contextual_orchestrator.server import (  # noqa: E402
+    SecurityConfig,
+    build_server,
+    responses_sse_body,
+)
 
 
 def _build(*, budget_max_output_tokens: int | None = None) -> TaskOrchestrator:
@@ -162,6 +167,31 @@ def test_plain_proxy_completion_persists_reported_usage_before_next_budget_check
     assert send.call_count == 1
 
 
+def test_plain_proxy_completion_accounts_a_tool_only_response() -> None:
+    orch = _build()
+    raw = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [{"id": "call_1", "type": "function"}],
+                }
+            }
+        ]
+    }
+
+    with patch.object(orch.client, "proxy_send", return_value=raw):
+        assert orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "call the tool"}],
+            },
+            single_agent=True,
+        ) is raw
+
+    assert next(iter(orch._workflow_runs.values()))["answer"] == ""
+
+
 def test_structured_provider_completion_rechecks_budget_before_final_provider_call() -> None:
     orch = _build()
     orch.budget_max_output_tokens = 1
@@ -203,6 +233,7 @@ def test_structured_provider_completion_persists_final_synthesis_run() -> None:
 
 def test_fast_mlsirm_structured_judge_uses_one_direct_provider_call() -> None:
     orch = _build()
+    orch.client.temperature = 0.4
     adapter = _FastMLSIJudgeAdapter(orch, text="judge", judge="reviewer_agent")
     provider_response = {
         "choices": [{"message": {"role": "assistant", "content": '{"decision":"pass"}'}}],
@@ -220,6 +251,99 @@ def test_fast_mlsirm_structured_judge_uses_one_direct_provider_call() -> None:
     assert result["answer"] == '{"decision":"pass"}'
     assert send.call_args.args[1] == "chat/completions"
     assert send.call_args.args[2]["response_format"] == {"type": "json_object"}
+    assert send.call_args.args[2]["temperature"] == 0.4
+
+
+@pytest.mark.parametrize(
+    ("text", "expected"),
+    [
+        (None, None),
+        ({}, None),
+        ({"format": {"type": "text"}}, {"type": "text"}),
+        ({"format": {"type": "xml"}}, None),
+    ],
+)
+def test_responses_text_format_translation_handles_non_schema_shapes(
+    text: object,
+    expected: dict | None,
+) -> None:
+    assert _responses_text_format_to_chat_response_format(text) == expected
+
+
+def test_structured_provider_completion_rejects_empty_messages_and_disabled_model() -> None:
+    with pytest.raises(ValueError, match="non-empty messages"):
+        _build().proxy_completion(
+            {"messages": [], "response_format": {"type": "json_object"}}
+        )
+    with pytest.raises(RuntimeError, match="disabled"):
+        _build().proxy_completion(
+            {
+                "model": "disabled-model",
+                "messages": [{"role": "user", "content": "extract JSON"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+
+@pytest.mark.parametrize(
+    ("messages", "first_role"),
+    [
+        ([{"role": "user", "content": None}], "user"),
+        ([{"role": "assistant", "content": "prior"}], "system"),
+    ],
+)
+def test_structured_synthesis_injects_guidance_into_non_string_histories(
+    messages: list[dict],
+    first_role: str,
+) -> None:
+    orch = _build()
+    raw = {"choices": [{"message": {"content": "done"}}]}
+    with patch.object(
+        orch,
+        "conduct",
+        return_value={"trace": [], "verification": {"accepted": True}},
+    ), patch.object(orch.client, "proxy_send", return_value=raw) as send:
+        orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": messages,
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    sent_messages = send.call_args.args[2]["messages"]
+    assert sent_messages[0]["role"] == first_role
+    assert isinstance(sent_messages[0]["content"], str)
+
+
+def test_structured_synthesis_accounts_a_tool_only_response() -> None:
+    orch = _build()
+    raw = {
+        "choices": [
+            {
+                "message": {
+                    "content": None,
+                    "tool_calls": [{"id": "call_1", "type": "function"}],
+                }
+            }
+        ]
+    }
+    with patch.object(
+        orch,
+        "conduct",
+        return_value={"trace": [], "verification": {"accepted": True}},
+    ), patch.object(orch.client, "proxy_send", return_value=raw):
+        result = orch.proxy_completion(
+            {
+                "model": "mock-planner",
+                "messages": [{"role": "user", "content": "call the tool"}],
+                "response_format": {"type": "json_object"},
+            }
+        )
+
+    assert result["orchestration"]["mode"] == "conduct"
+    run = orch.get_workflow_run(result["orchestration"]["workflow_run_id"])
+    assert run["answer"] == ""
 
 
 def test_structured_synthesis_preserves_tool_call_adjacency() -> None:
@@ -278,6 +402,8 @@ def test_proxy_completion_responses_json_schema_is_orchestrated_and_translated()
     result = _build().proxy_completion(
         {
             "input": "extract the visible region",
+            "instructions": "Keep the result concise.",
+            "metadata": {"tenant": "anonymous", "omitted": None},
             "text": {
                 "format": {
                     "type": "json_schema",
@@ -299,6 +425,8 @@ def test_proxy_completion_responses_json_schema_is_orchestrated_and_translated()
             "strict": True,
         },
     }
+    assert result["echo"]["instructions"] == "Keep the result concise."
+    assert result["echo"]["metadata"] == {"tenant": "anonymous"}
     assert result["orchestration"]["agent_count"] == 4
 
 
@@ -370,7 +498,7 @@ def _post(url: str, payload: dict, token: str) -> tuple[int, dict]:
 
 
 def _serve() -> tuple[object, int, str]:
-    token = "passthrough_token"
+    token = "passthrough_token"  # noqa: S105 - synthetic HTTP fixture credential
     server = build_server(_build(), port=0, security=SecurityConfig(auth_token=token))
     threading.Thread(target=server.serve_forever, daemon=True).start()
     return server, server.server_address[1], token
@@ -426,7 +554,7 @@ def test_http_structured_workflow_applies_sampling_and_records_orchestration() -
         return original_chat(agent, messages, temperature=temperature)
 
     with patch.object(orch.client, "chat", side_effect=observe_chat):
-        token = "passthrough_sampling_token"
+        token = "passthrough_sampling_token"  # noqa: S105 - synthetic HTTP fixture credential
         server = build_server(orch, port=0, security=SecurityConfig(auth_token=token))
         threading.Thread(target=server.serve_forever, daemon=True).start()
         try:

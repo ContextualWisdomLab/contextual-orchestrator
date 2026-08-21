@@ -10064,7 +10064,10 @@ def _score_config(orchestrator: Any, tasks: list[dict[str, Any]], quality_fn: An
     """Mean quality of one config over the task set; route configs may evaluate via Batch."""
     if use_batch and mode == "route":
         records = orchestrator.batch_route([task["prompt"] for task in tasks])
-        scores = [float(quality_fn(task, record["answer"] or "")) for task, record in zip(tasks, records)]
+        scores = [
+            float(quality_fn(task, record["answer"] or ""))
+            for task, record in zip(tasks, records, strict=True)
+        ]
     else:
         scores = [
             float(quality_fn(task, orchestrator.run([{"role": "user", "content": task["prompt"]}], mode=mode)["answer"]))
