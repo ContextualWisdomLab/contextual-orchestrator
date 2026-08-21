@@ -809,9 +809,10 @@ def test_responses_structured_request_keeps_native_endpoint_and_input() -> None:
             endpoint="responses",
         )
 
-    assert calls[0][0] == "responses"
-    assert calls[0][1]["input"] == [{"role": "user", "content": "extract the visible region"}]
-    assert "Keep the original input order." in calls[0][1]["instructions"]
+    final_endpoint, final_payload = calls[-1]
+    assert final_endpoint == "responses"
+    assert final_payload["input"] == [{"role": "user", "content": "extract the visible region"}]
+    assert "Keep the original input order." in final_payload["instructions"]
     assert result["orchestration"]["workflow_run_id"]
 
 

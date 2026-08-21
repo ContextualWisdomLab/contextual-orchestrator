@@ -1261,13 +1261,11 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> list[list[float]]:
         """Call the provider embeddings endpoint with the chat retry policy."""
-        last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):
             try:
                 return self._send_embeddings(agent, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))

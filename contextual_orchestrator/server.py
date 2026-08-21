@@ -27,7 +27,6 @@ from .orchestrator import (
     MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
     _new_chat_completion_id,
-    _chat_to_responses_payload,
     _responses_usage,
     chat_completion_chunks,
     chat_completion_response,
