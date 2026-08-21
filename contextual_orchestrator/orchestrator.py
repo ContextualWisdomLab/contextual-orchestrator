@@ -702,7 +702,7 @@ class ModelClient:
             raise ValueError("max_retries must be >= 0")
         # Do not invent a sampling parameter for a provider/model that may not
         # support it. Explicit caller values are still forwarded after validation.
-        self.default_temperature: float | None = None
+        self.default_temperature = temperature
         self.default_top_p: float | None = None
         self.default_presence_penalty: float | None = None
         self.default_frequency_penalty: float | None = None
