@@ -254,6 +254,8 @@ def test_all_agents_failing_raises_after_trying_every_candidate() -> None:
     except RuntimeError as exc:
         raised = True
         assert "candidate agents failed" in str(exc)
+        assert "everything is down" not in str(exc)
+        assert exc.__cause__ is None
     assert raised
 
 
