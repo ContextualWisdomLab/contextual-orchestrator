@@ -83,6 +83,16 @@ def test_key_only_split_tokens_select_split_mode() -> None:
         set_backend(None)
 
 
+def test_main_accepts_explicit_argv_without_mutating_process_arguments() -> None:
+    original_argv = sys.argv[:]
+    with patch("contextual_orchestrator.__main__.serve") as serve:
+        main(["--serve", "--auth-token", "argv-token"])
+
+    assert sys.argv == original_argv
+    security = serve.call_args.kwargs["security"]
+    assert security.auth_token == "argv-token"
+
+
 def test_invalid_local_provider_options_fail_at_parser_boundary() -> None:
     invalid_options = (
         (["--local-concurrency", "0"], "positive integer"),
@@ -154,6 +164,7 @@ def test_server_concurrency_is_explicit_and_bounded() -> None:
         patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
         patch("contextual_orchestrator.__main__.ModelClient"),
         patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.CostRoutingCoordinator"),
         patch("contextual_orchestrator.__main__.serve") as serve,
     ):
         main()
@@ -171,6 +182,7 @@ def test_sampling_temperature_uses_descriptive_name_and_legacy_alias() -> None:
             patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
             patch("contextual_orchestrator.__main__.ModelClient") as model_client,
             patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+            patch("contextual_orchestrator.__main__.CostRoutingCoordinator"),
             patch("contextual_orchestrator.__main__.serve"),
         ):
             main()
@@ -189,6 +201,7 @@ def test_sampling_temperature_is_omitted_by_default() -> None:
         patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
         patch("contextual_orchestrator.__main__.ModelClient") as model_client,
         patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+        patch("contextual_orchestrator.__main__.CostRoutingCoordinator"),
         patch("contextual_orchestrator.__main__.serve"),
     ):
         main()

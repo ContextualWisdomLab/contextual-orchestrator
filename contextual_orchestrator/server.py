@@ -6,6 +6,7 @@ from dataclasses import dataclass, field
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 import base64
 import json
+import logging
 import math
 import secrets
 import socket
@@ -34,6 +35,18 @@ from .orchestrator import (
     redact_value,
     sse_stream_body,
 )
+from .telemetry import (
+    attach_trace_context,
+    configure_telemetry,
+    current_session_id,
+    detach_trace_context,
+    reset_session_id,
+    session_id_from_headers,
+    session_id_from_metadata,
+    set_session_id,
+)
+
+_LOGGER = logging.getLogger(__name__)
 
 # OpenAI request params forwarded verbatim to the provider on passthrough.
 OPENAI_PASSTHROUGH_PARAM_KEYS = {
@@ -4643,6 +4656,7 @@ def build_server(
     security = security or SecurityConfig()
     security.check_bind(host)
     coordinator = coordinator or CostRoutingCoordinator(orchestrator)
+    configure_telemetry(config=coordinator.config)
     if clearfolio_url is not None:
         parsed_viewer = urllib.parse.urlparse(clearfolio_url)
         if parsed_viewer.scheme not in {"http", "https"} or not parsed_viewer.netloc:
@@ -4651,7 +4665,40 @@ def build_server(
 
     class Handler(BaseHTTPRequestHandler):
         """Serve the authenticated OpenAI-compatible and administrative routes."""
+        _session_token = None
+        _trace_token = None
 
+        def _bind_session(self, session_id: str | None) -> None:
+            if session_id is None:
+                return
+            if self._session_token is not None:
+                reset_session_id(self._session_token)
+            self._session_token = set_session_id(session_id)
+
+        def _reset_session(self) -> None:
+            """Release the request session in the context that bound it."""
+            trace_token = self._trace_token
+            self._trace_token = None
+            if trace_token is not None:
+                detach_trace_context(trace_token)
+            token = self._session_token
+            self._session_token = None
+            if token is not None:
+                reset_session_id(token)
+
+        def handle_one_request(self) -> None:
+            """Prevent a keep-alive connection from carrying session state."""
+            try:
+                super().handle_one_request()
+            finally:
+                self._reset_session()
+
+        def finish(self) -> None:
+            """Flush the HTTP response and release request session context."""
+            try:
+                super().finish()
+            finally:
+                self._reset_session()
         def do_GET(self) -> None:  # noqa: N802
             """Return health, discovery, result, and administrative resources."""
             parsed = urllib.parse.urlparse(self.path)
@@ -5054,6 +5101,10 @@ def build_server(
                 scope = "admin" if path == "/admin/simulate" or path.startswith("/api/v1/agent_pools/") else "inference"
                 self._authorize(scope)
                 body = self._read_json()
+                for metadata_key in ("metadata", "client_metadata"):
+                    metadata = body.get(metadata_key)
+                    if isinstance(metadata, dict):
+                        self._bind_session(session_id_from_metadata(metadata))
 
                 if path.startswith("/api/v1/agent_pools/") and path.endswith("/worker_agents"):
                     segments = [part for part in path.split("/") if part]
@@ -5902,6 +5953,8 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def _authorize(self, scope: str) -> None:
+            self._trace_token = attach_trace_context(self.headers)
+            self._bind_session(session_id_from_headers(self.headers))
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
 
@@ -5989,6 +6042,13 @@ def build_server(
             message: str,
             detail: dict[str, Any] | None = None,
         ) -> None:
+            _LOGGER.warning(
+                "request_failed status=%s code=%s path=%s session_id=%s",
+                status,
+                code,
+                urllib.parse.urlparse(self.path).path,
+                current_session_id() or "",
+            )
             self._send(_error_payload(code, message, {"request_id": uuid.uuid4().hex, **(detail or {})}), status)
 
         def _send(self, payload: dict[str, Any], status: int = 200) -> None:
@@ -6077,8 +6137,16 @@ def serve(
     port: int = 8000,
     security: SecurityConfig | None = None,
     clearfolio_url: str | None = None,
+    coordinator: CostRoutingCoordinator | None = None,
 ) -> None:
     """Serve the admin console and resource-oriented orchestration API."""
-    server = build_server(orchestrator, host=host, port=port, security=security, clearfolio_url=clearfolio_url)
+    server = build_server(
+        orchestrator,
+        host=host,
+        port=port,
+        security=security,
+        clearfolio_url=clearfolio_url,
+        coordinator=coordinator,
+    )
     print(f"listening on http://{host}:{port}")
     server.serve_forever()
