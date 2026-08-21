@@ -45,6 +45,7 @@ _SAFE_PROVIDER_PROBE_ERROR_TYPES = frozenset({
     "ConnectionError",
     "HTTPError",
     "OSError",
+    "ProviderResponseError",
     "RuntimeError",
     "SSLError",
     "TimeoutError",
@@ -899,7 +900,6 @@ class ModelClient:
         timeout: float | None = None,
     ) -> str:
         """Call the provider, retrying transient failures with exponential backoff + jitter."""
-        last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):  # pragma: no branch - retry limits are validated non-negative
             try:
@@ -909,7 +909,6 @@ class ModelClient:
                     else self._send(agent, payload, destination, timeout=timeout)
                 )
             except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
                 if isinstance(exc, ProviderResponseError):
                     raise
                 if attempt >= retry_limit or not is_transient_error(exc):
@@ -1158,13 +1157,11 @@ class ModelClient:
         destination: ProviderDestination | None = None,
     ) -> dict[str, Any]:  # pragma: no cover
         """Passthrough transport with the same transient-failure retry policy as _send."""
-        last_error: Exception | None = None
         retry_limit = self._retry_limit(agent)
         for attempt in range(retry_limit + 1):
             try:
                 return self._send_raw(agent, endpoint, payload, destination)
             except Exception as exc:  # noqa: BLE001 - classify then decide
-                last_error = exc
                 if attempt >= retry_limit or not is_transient_error(exc):
                     break
                 self._sleep(self._backoff_delay(attempt))
