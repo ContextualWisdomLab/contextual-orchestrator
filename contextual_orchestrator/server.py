@@ -36,8 +36,10 @@ from .orchestrator import (
     sse_stream_body,
 )
 from .telemetry import (
+    attach_trace_context,
     configure_telemetry,
     current_session_id,
+    detach_trace_context,
     reset_session_id,
     session_id_from_headers,
     session_id_from_metadata,
@@ -4663,6 +4665,7 @@ def build_server(
 
     class Handler(BaseHTTPRequestHandler):
         _session_token = None
+        _trace_token = None
 
         def _bind_session(self, session_id: str | None) -> None:
             if session_id is None:
@@ -4673,6 +4676,10 @@ def build_server(
 
         def _reset_session(self) -> None:
             """Release the request session in the context that bound it."""
+            trace_token = self._trace_token
+            self._trace_token = None
+            if trace_token is not None:
+                detach_trace_context(trace_token)
             token = self._session_token
             self._session_token = None
             if token is not None:
@@ -5977,6 +5984,7 @@ def build_server(
                 self._send_error(500, "internal_error", "internal server error")
 
         def _authorize(self, scope: str) -> None:
+            self._trace_token = attach_trace_context(self.headers)
             self._bind_session(session_id_from_headers(self.headers))
             security.check_rate_limit(self.client_address[0])
             security.authorize(self.headers, scope, self.client_address[0])
