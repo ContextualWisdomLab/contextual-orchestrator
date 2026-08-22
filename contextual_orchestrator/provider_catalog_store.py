@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from datetime import datetime, timezone
 from decimal import Decimal
 import hashlib
+import math
 import re
 import threading
 import uuid
@@ -168,11 +169,14 @@ def _now() -> datetime:
 
 
 def _normalize_price(value: object) -> float | None:
-    """Return one finite non-negative price, or ``None`` when unknown or underflowed.
+    """Return one finite non-negative price, or ``None`` when unknown, underflowed, or overflowed.
 
     Parses through ``Decimal`` first so a nonzero price that underflows to
     ``0.0`` in float (e.g. a stray ``1e-10000``) is rejected as unknown
-    rather than silently accepted as a legitimate free price.
+    rather than silently accepted as a legitimate free price. A ``Decimal``
+    can still be finite while its ``float()`` conversion overflows to
+    ``inf`` (e.g. ``1e10000``), so ``math.isfinite`` is checked separately
+    on the converted value.
     """
     if value is None or isinstance(value, bool):
         return None
@@ -183,6 +187,7 @@ def _normalize_price(value: object) -> float | None:
         return None
     if (
         not decimal_value.is_finite()
+        or not math.isfinite(number)
         or decimal_value < 0
         or (decimal_value != 0 and number == 0)
     ):

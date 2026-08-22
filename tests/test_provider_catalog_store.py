@@ -111,6 +111,16 @@ def test_underflowing_positive_price_is_rejected_not_treated_as_free() -> None:
     assert normalized.completion_price_per_1k is None
 
 
+def test_overflowing_price_is_rejected_not_treated_as_infinite() -> None:
+    """A Decimal-finite price whose float() conversion overflows to inf must stay unknown."""
+    source = _source()
+    normalized = normalize_discovered_model(
+        source, _model(source, "overflow-model", "1e10000")
+    )
+    assert normalized.prompt_price_per_1k is None
+    assert normalized.completion_price_per_1k is None
+
+
 def test_unrecognized_currency_is_preserved_as_unknown_not_coerced_to_usd() -> None:
     """A priced model with an unverifiable currency must not rank as comparable USD."""
     source = _source()

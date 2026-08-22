@@ -31,6 +31,7 @@ import queue
 import threading
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
+import math
 import time
 from typing import Any, Dict, List, Optional, Protocol
 import uuid
@@ -106,11 +107,14 @@ def _price_key(provider: str, model: str) -> str:
 
 
 def _decimal_safe_price(value: object) -> Optional[float]:
-    """Parse one raw price component, or ``None`` when unknown or underflowed.
+    """Parse one raw price component, or ``None`` when unknown, underflowed, or overflowed.
 
     Parses through ``Decimal`` first so a nonzero price that underflows to
     ``0.0`` in float (e.g. a stray ``1e-10000``) is rejected as unknown
-    rather than silently accepted as a legitimate free price.
+    rather than silently accepted as a legitimate free price. A ``Decimal``
+    can still be finite while its ``float()`` conversion overflows to
+    ``inf`` (e.g. ``1e10000``), so ``math.isfinite`` is checked separately
+    on the converted value.
     """
     try:
         decimal_value = Decimal(str(value))
@@ -119,6 +123,7 @@ def _decimal_safe_price(value: object) -> Optional[float]:
         return None
     if (
         not decimal_value.is_finite()
+        or not math.isfinite(price)
         or decimal_value < 0
         or (decimal_value != 0 and price == 0)
     ):
