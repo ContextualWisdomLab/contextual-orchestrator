@@ -1830,10 +1830,13 @@ class _StateStore:
                 "state database contains both legacy and current persistence tables"
             )
         if has_legacy:
-            self._conn.execute(
-                f"ALTER TABLE {self._LEGACY_TABLE_NAME} RENAME TO {self._TABLE_NAME}"
-            )
-            self._conn.execute(f"DROP INDEX IF EXISTS {self._LEGACY_INDEX_NAME}")
+            # _LEGACY_TABLE_NAME/_TABLE_NAME/_LEGACY_INDEX_NAME are fixed
+            # class-level string literals, never derived from request or
+            # database content -- no injection surface despite the f-string shape.
+            rename_sql = f"ALTER TABLE {self._LEGACY_TABLE_NAME} RENAME TO {self._TABLE_NAME}"
+            drop_index_sql = f"DROP INDEX IF EXISTS {self._LEGACY_INDEX_NAME}"
+            self._conn.execute(rename_sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
+            self._conn.execute(drop_index_sql)  # nosemgrep: python.lang.security.audit.formatted-sql-query.formatted-sql-query,python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query
 
     def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
         blob = json.dumps(payload, ensure_ascii=False)
