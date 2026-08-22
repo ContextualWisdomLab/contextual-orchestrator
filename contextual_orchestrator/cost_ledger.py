@@ -799,8 +799,11 @@ class SqlLedgerStore:
         # SQLite's legacy transaction mode does not begin a transaction for
         # DDL. Start one before any catalog DDL so a failed legacy migration
         # rolls back the rename, schema creation, copied rows, and cleanup as
-        # one unit. PEP-249 connections may already have an active transaction.
-        if not getattr(self._conn, "in_transaction", False):
+        # one unit. This is sqlite3-specific: psycopg 3 starts an implicit
+        # transaction on the first statement on its own, and its connections
+        # have no `in_transaction` attribute, so an unconditional BEGIN here
+        # would risk "there is already a transaction in progress" there.
+        if self._paramstyle == "qmark" and not getattr(self._conn, "in_transaction", False):
             cur.execute("BEGIN")
         # Create the independent catalog tables first. Deferring the usage and
         # child tables keeps a legacy-table rename from leaving child FKs aimed

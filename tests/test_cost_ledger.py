@@ -596,6 +596,10 @@ def test_sql_ledger_store_pyformat_binds_all_query_windows() -> None:
     store = SqlLedgerStore(connection, paramstyle="pyformat")
     assert any("information_schema.columns" in call[0] for call in connection.executions)
     assert not any("PRAGMA table_info" in call[0] for call in connection.executions)
+    # An explicit BEGIN is sqlite3-specific; psycopg 3 starts its own implicit
+    # transaction and would warn "there is already a transaction in progress"
+    # if this store issued one too.
+    assert not any(call[0].strip() == "BEGIN" for call in connection.executions)
     ledger = _priced_ledger(store=store)
     ledger.record_usage(provider="openai", model="gpt-x", prompt_tokens=1000,
                         completion_tokens=0, created_at=100)
