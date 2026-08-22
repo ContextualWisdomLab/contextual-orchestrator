@@ -289,6 +289,16 @@ def test_sql_ledger_store_on_sqlite_creates_objects_and_rolls_up() -> None:
     assert by_company["acme"]["cost_amount"] == 15.0  # 6 + 9
 
 
+def test_table_columns_honors_its_argument_on_qmark() -> None:
+    """The qmark branch must inspect the requested table, not a hardcoded one."""
+    conn = sqlite3.connect(":memory:")
+    store = SqlLedgerStore(conn, paramstyle="qmark")
+    columns = store._table_columns("llm_usage_records")
+    assert "cost_amount" in columns
+    with pytest.raises(ValueError, match="llm_price_entries"):
+        store._table_columns("llm_price_entries")
+
+
 def test_sql_ledger_stores_descriptive_attribution_in_normalized_tables() -> None:
     """Keep descriptive values out of the per-request fact row."""
     connection = sqlite3.connect(":memory:")

@@ -689,6 +689,14 @@ _USAGE_QUERY_SQL = {
 }
 
 
+# A fixed, literal PRAGMA per known table -- never built from the ``table_name``
+# argument -- so ``_table_columns`` cannot become a dynamic-identifier SQL
+# interpolation seam even if a future caller passes an unexpected value.
+_QMARK_TABLE_INFO_SQL = {
+    "llm_usage_records": "PRAGMA table_info(llm_usage_records)",
+}
+
+
 class SqlLedgerStore:
     """PEP-249 SQL ledger store (stdlib ``sqlite3`` or ``psycopg``).
 
@@ -713,7 +721,11 @@ class SqlLedgerStore:
         """Return table columns while keeping identifier interpolation constant."""
         cur = self._conn.cursor()
         if self._paramstyle == "qmark":
-            cur.execute("PRAGMA table_info(llm_usage_records)")
+            try:
+                pragma_sql = _QMARK_TABLE_INFO_SQL[table_name]
+            except KeyError:
+                raise ValueError(f"unsupported qmark table for _table_columns: {table_name!r}") from None
+            cur.execute(pragma_sql)
             return {row[1] for row in cur.fetchall()}
         # A PostgreSQL error aborts the current transaction, so never probe it
         # with SQLite syntax and then attempt a fallback on the same connection.
