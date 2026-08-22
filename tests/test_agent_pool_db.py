@@ -138,7 +138,7 @@ def _call(url: str, method: str, token: str, payload: dict | None = None) -> tup
 
 
 def test_http_create_and_delete_worker_agents() -> None:
-    token = "pool_token"
+    token = "pool_token"  # noqa: S105
     orchestrator = TaskOrchestrator(_seed())
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -174,7 +174,7 @@ def test_http_create_and_delete_worker_agents() -> None:
 
 def test_http_worker_agent_read_rejects_wrong_pool_id() -> None:
     """Every worker-agent verb must reject a different pool consistently."""
-    token = "pool_token"
+    token = "pool_token"  # noqa: S105
     orchestrator = TaskOrchestrator(_seed())
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -188,6 +188,8 @@ def test_http_worker_agent_read_rejects_wrong_pool_id() -> None:
             assert body["error"]["code"] == "agent_not_found"
     finally:
         server.shutdown()
+    general_agent = next(a for a in orchestrator.candidates if a.id == "general_agent")
+    assert general_agent.disabled is False
 
 
 if __name__ == "__main__":

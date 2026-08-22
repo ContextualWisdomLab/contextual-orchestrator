@@ -316,6 +316,8 @@ python tests/test_commercial_evidence_export.py
 python tests/test_commercial_acceptance_check.py
 python tests/test_release_authorization.py
 python tests/test_release_authority_snapshot.py
+python tests/test_workflow_run_object_authorization.py
+python tests/test_spend_analytics.py
 python tests/test_commercial_buyer_acceptance_workflow.py
 python tests/test_commercial_release_candidate.py
 python tests/test_commercial_gap_register.py

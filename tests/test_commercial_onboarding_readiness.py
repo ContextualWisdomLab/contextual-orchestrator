@@ -16,6 +16,51 @@ from contextual_orchestrator.server import SecurityConfig, build_server  # noqa:
 
 
 TARGET_CONTRACT_VALUE_KRW = 2_000_000_000
+AUTHORITY_HEAD = "a" * 40
+
+
+def valid_release_authority() -> dict[str, object]:
+    """Return a complete exact-head authority snapshot for the positive path."""
+    return {
+        "authority_source": "github_api",
+        "repository": "ContextualWisdomLab/contextual-orchestrator",
+        "base_branch": "main",
+        "ruleset_verified": True,
+        "head_is_current": True,
+        "synthetic_merge": False,
+        "protected_head_sha": AUTHORITY_HEAD,
+        "contributor_head_sha": AUTHORITY_HEAD,
+        "required_check_names": ["Tests"],
+        "checks": [
+            {
+                "name": "Tests",
+                "status": "completed",
+                "conclusion": "success",
+                "head_sha": AUTHORITY_HEAD,
+                "synthetic_merge": False,
+            }
+        ],
+        "review_policy": {
+            "required_independent_approval_count": 1,
+            "author_login": "author",
+            "head_sha": AUTHORITY_HEAD,
+        },
+        "reviewers": [
+            {
+                "login": "reviewer",
+                "association": "MEMBER",
+                "state": "approved",
+                "head_sha": AUTHORITY_HEAD,
+                "dismissed": False,
+                "is_author": False,
+            }
+        ],
+        "findings_inventory": {
+            "complete": True,
+            "sources": ["human", "coderabbit", "github_advanced_security", "dependabot", "opencode", "noema", "strix"],
+            "unresolved_findings": [],
+        },
+    }
 
 
 def build() -> TaskOrchestrator:
@@ -88,7 +133,9 @@ def test_commercial_onboarding_readiness_report_turns_open_inputs_into_actions()
     assert report["onboarding_summary"]["support_slo_action_count"] == 1
     assert report["onboarding_summary"]["buyer_input_action_count"] == 1
     assert report["onboarding_summary"]["review_process_is_blocker"] is False
+    assert report["onboarding_summary"]["release_authority_blocker_count"] == 1
     assert report["concrete_blockers"] == []
+    assert report["release_authorization"]["blockers"] == ["authority_evidence_unavailable"]
     assert items["buyer_kickoff_packet"]["completion_state"] == "ready"
     assert items["telemetry_capture_plan"]["completion_state"] == "ready"
     assert items["acceptance_exit_criteria"]["completion_state"] == "ready"
@@ -99,6 +146,34 @@ def test_commercial_onboarding_readiness_report_turns_open_inputs_into_actions()
     assert report["related_runtime_reports"]["commercial_contract_status"] == "commercial_contract_ready_with_warnings"
     assert report["library_split_decision"]["decision"] == "keep_single_product"
     assert report["onboarding_links"]["runtime_endpoint"] == "/api/v1/commercial_onboarding_readiness/latest"
+
+
+def test_commercial_onboarding_readiness_report_propagates_release_authority() -> None:
+    """A valid authority snapshot passed to the onboarding report clears its blockers.
+
+    Regression for a gap where commercial_onboarding_readiness_report built its
+    own contract_readiness call without forwarding release_authority, so a
+    caller holding a genuinely valid snapshot could never see that reflected
+    in the onboarding report's own release_authorization/blocker count.
+    """
+    orchestrator = build()
+    exercise_runtime(orchestrator)
+
+    report = orchestrator.commercial_onboarding_readiness_report(
+        target_contract_value_krw=TARGET_CONTRACT_VALUE_KRW,
+        locale_bundles=ADMIN_TRANSLATIONS,
+        security_profile={
+            "auth_mode": "split_token",
+            "allow_public_bind": False,
+            "expose_trace_by_default": False,
+            "rate_limit_requests": 60,
+            "max_concurrent_runs": 8,
+        },
+        release_authority=valid_release_authority(),
+    )
+
+    assert report["onboarding_summary"]["release_authority_blocker_count"] == 0
+    assert report["release_authorization"]["blockers"] == []
 
 
 def test_commercial_onboarding_readiness_endpoint_openapi_admin_and_docs_contract() -> None:

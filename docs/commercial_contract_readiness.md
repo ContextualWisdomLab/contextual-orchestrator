@@ -43,7 +43,8 @@ creates an extraction trigger.
   `commercial_contract_blocked`;
 - `measurement_status`: `local_commercial_contract_readiness`;
 - `contract_summary`: ready, warning, blocked, support/SLO gap, buyer
-  order-form gap, release-authority blocker, and review-process blocker counts;
+  order-form gap, and release-authority blocker counts, plus a
+  `review_process_is_blocker` boolean flag (not a count);
 - `release_authorization`: the upstream fail-closed protected-head result,
   separate from local contract packet status;
 - `contract_items`: term rows for license/commercial rights, security/privacy,
@@ -53,7 +54,8 @@ creates an extraction trigger.
   or Code Connect failures;
 - `contract_status_rules`: stable ready/warning/blocked rules;
 - `related_runtime_reports`: procurement, gap-register, release-candidate, and
-  acceptance context;
+  acceptance context, including `release_authorization_status` propagated
+  from the release-candidate report;
 - `library_split_decision`: current single-product packaging decision;
 - `plugin_traceability`: Figma, Product Design, Superpowers, Ponytail, and Data
   Analytics responsibilities;

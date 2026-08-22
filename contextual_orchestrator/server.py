@@ -4660,6 +4660,7 @@ def build_server(
                     self._send(orchestrator.commercial_onboarding_readiness_report(
                         locale_bundles=ADMIN_TRANSLATIONS,
                         security_profile=security.readiness_profile(),
+                        release_authority=release_authority,
                     ))
                     return
                 if path == "/api/v1/commercial_operations_readiness/latest":

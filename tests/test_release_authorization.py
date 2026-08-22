@@ -5,6 +5,8 @@ from __future__ import annotations
 from pathlib import Path
 import sys
 
+import pytest
+
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from contextual_orchestrator import evaluate_release_authorization  # noqa: E402
@@ -325,22 +327,20 @@ def test_valid_authority_flows_through_commercial_readiness_wrappers() -> None:
         security_profile=security_profile,
         release_authority=authority(),
     )
+    onboarding = orchestrator.commercial_onboarding_readiness_report(
+        locale_bundles=ADMIN_TRANSLATIONS,
+        security_profile=security_profile,
+        release_authority=authority(),
+    )
 
     assert release["release_authorization"]["blockers"] == []
     assert release["release_status"] == "commercial_release_ready_with_warnings"
     assert procurement["release_authorization"]["status"] == "release_authorized"
     assert contract["related_runtime_reports"]["release_authorization_status"] == "release_authorized"
+    assert onboarding["release_authorization"]["blockers"] == []
+    assert onboarding["related_runtime_reports"]["release_authorization_status"] == "release_authorized"
 
 
-if __name__ == "__main__":
-    test_exact_head_checks_and_independent_approval_authorize()
-    test_missing_authority_preserves_fail_closed_boundary()
-    test_queued_stale_and_synthetic_check_evidence_blocks()
-    test_author_only_or_dismissed_approval_blocks()
-    test_latest_review_state_is_counted_once_per_reviewer()
-    test_unresolved_or_incomplete_findings_block()
-    test_invalid_and_duplicate_evidence_is_not_coerced()
-    test_missing_policy_components_and_exact_head_mismatch_block()
-    test_product_evidence_and_release_authority_are_separate()
-    test_valid_authority_flows_through_commercial_readiness_wrappers()
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))
     print("release authorization checks passed")

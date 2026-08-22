@@ -5062,12 +5062,14 @@ class TaskOrchestrator:
         target_contract_value_krw: int = DEFAULT_COMMERCIAL_TARGET_VALUE_KRW,
         locale_bundles: dict[str, dict[str, str]] | None = None,
         security_profile: dict[str, Any] | None = None,
+        release_authority: Mapping[str, Any] | None = None,
     ) -> dict[str, Any]:
         """Return a paid-onboarding readiness gate over contract evidence."""
         contract = self.commercial_contract_readiness_report(
             target_contract_value_krw=target_contract_value_krw,
             locale_bundles=locale_bundles,
             security_profile=security_profile,
+            release_authority=release_authority,
         )
         root = Path(__file__).resolve().parents[1]
 
@@ -5079,6 +5081,7 @@ class TaskOrchestrator:
         buyer_item = contract_by_name["buyer_order_form_input"]
         packaging_item = contract_by_name["packaging_decision"]
         concrete_blockers = contract["concrete_blockers"]
+        release_authorization = contract["release_authorization"]
         support_slo_action_count = 1 if support_item["completion_state"] == "warning" else 0
         buyer_input_action_count = 1 if buyer_item["completion_state"] == "warning" else 0
         onboarding_items = [
@@ -5223,9 +5226,11 @@ class TaskOrchestrator:
                 "support_slo_action_count": support_slo_action_count,
                 "buyer_input_action_count": buyer_input_action_count,
                 "review_process_is_blocker": contract["review_process_policy"]["is_blocker"],
+                "release_authority_blocker_count": len(release_authorization["blockers"]),
             },
             "onboarding_items": onboarding_items,
             "concrete_blockers": concrete_blockers,
+            "release_authorization": release_authorization,
             "onboarding_status_rules": [
                 {
                     "onboarding_status": "commercial_onboarding_ready",

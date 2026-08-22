@@ -712,6 +712,7 @@ def test_commercial_gap_register_defines_external_gap_actions() -> None:
         "KRW 2,000,000,000",
         "Figma Code Connect is not used",
         "release-authority gate is",
+        "fail-closed for missing, stale, queued, synthetic, or predecessor-head",
         "Do not create a separate library, Git submodule, or extracted package now",
         "Gap Inputs",
         "Runtime Shape",

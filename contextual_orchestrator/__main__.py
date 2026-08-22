@@ -361,7 +361,7 @@ def main() -> None:
             try:
                 with open(args.release_authority_json, encoding="utf-8") as authority_file:
                     release_authority = json.load(authority_file)
-            except (OSError, json.JSONDecodeError) as exc:
+            except (OSError, UnicodeError, json.JSONDecodeError) as exc:
                 parser.error(f"release authority snapshot could not be read: {exc}")
             if not isinstance(release_authority, dict):
                 parser.error("release authority snapshot must be a JSON object")
