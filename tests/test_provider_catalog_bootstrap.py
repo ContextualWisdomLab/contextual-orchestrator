@@ -169,3 +169,7 @@ def test_unexpected_discovery_failure_restores_entire_credential_inventory() -> 
         } == previous
     finally:
         set_backend(None)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))

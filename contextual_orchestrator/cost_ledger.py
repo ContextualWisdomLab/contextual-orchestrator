@@ -31,7 +31,6 @@ import queue
 import threading
 from dataclasses import dataclass, field
 from decimal import ROUND_HALF_UP, Decimal
-import math
 import time
 from typing import Any, Dict, List, Optional, Protocol
 import uuid
@@ -106,6 +105,27 @@ def _price_key(provider: str, model: str) -> str:
     return f"{provider}:{model}"
 
 
+def _decimal_safe_price(value: object) -> Optional[float]:
+    """Parse one raw price component, or ``None`` when unknown or underflowed.
+
+    Parses through ``Decimal`` first so a nonzero price that underflows to
+    ``0.0`` in float (e.g. a stray ``1e-10000``) is rejected as unknown
+    rather than silently accepted as a legitimate free price.
+    """
+    try:
+        decimal_value = Decimal(str(value))
+        price = float(decimal_value)
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    if (
+        not decimal_value.is_finite()
+        or decimal_value < 0
+        or (decimal_value != 0 and price == 0)
+    ):
+        return None
+    return price
+
+
 @dataclass
 class PriceEntry:
     """A single price-table row: per-1K-token prices for a provider+model."""
@@ -172,22 +192,11 @@ class PriceBook:
         """Validate one raw KV row into a ``PriceEntry``, or ``None`` if it is unusable."""
         if not isinstance(raw, dict):
             return None
-        try:
-            if (
-                "prompt_price_per_1k" not in raw
-                or "completion_price_per_1k" not in raw
-            ):
-                return None
-            prompt_price = float(raw["prompt_price_per_1k"])
-            completion_price = float(raw["completion_price_per_1k"])
-        except (OverflowError, TypeError, ValueError):
+        if "prompt_price_per_1k" not in raw or "completion_price_per_1k" not in raw:
             return None
-        if (
-            not math.isfinite(prompt_price)
-            or not math.isfinite(completion_price)
-            or prompt_price < 0
-            or completion_price < 0
-        ):
+        prompt_price = _decimal_safe_price(raw["prompt_price_per_1k"])
+        completion_price = _decimal_safe_price(raw["completion_price_per_1k"])
+        if prompt_price is None or completion_price is None:
             return None
         return PriceEntry(
             provider_name=raw.get("provider_name", provider),

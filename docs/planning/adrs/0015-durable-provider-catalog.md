@@ -1,9 +1,9 @@
 ---
 id: "0015"
 title: "Durable provider catalog and last-known-good composition"
-status: proposed
+status: accepted
 proposed_date: "2026-08-20"
-accepted_date: null
+accepted_date: "2026-08-22"
 deciders:
   - "repository maintainer"
 consulted:

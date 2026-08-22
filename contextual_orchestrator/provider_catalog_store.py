@@ -10,8 +10,8 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import datetime, timezone
+from decimal import Decimal
 import hashlib
-import math
 import re
 import threading
 import uuid
@@ -168,24 +168,43 @@ def _now() -> datetime:
 
 
 def _normalize_price(value: object) -> float | None:
-    """Return one finite non-negative price, or ``None`` when unknown."""
+    """Return one finite non-negative price, or ``None`` when unknown or underflowed.
+
+    Parses through ``Decimal`` first so a nonzero price that underflows to
+    ``0.0`` in float (e.g. a stray ``1e-10000``) is rejected as unknown
+    rather than silently accepted as a legitimate free price.
+    """
     if value is None or isinstance(value, bool):
         return None
     try:
-        number = float(value)
-    except (TypeError, ValueError):
+        decimal_value = Decimal(str(value))
+        number = float(decimal_value)
+    except (ArithmeticError, TypeError, ValueError):
         return None
-    if not math.isfinite(number) or number < 0:
+    if (
+        not decimal_value.is_finite()
+        or decimal_value < 0
+        or (decimal_value != 0 and number == 0)
+    ):
         return None
     return number
 
 
+_UNKNOWN_CURRENCY = "UNKNOWN"
+
+
 def _normalize_currency(value: object) -> str:
-    """Return an ISO-style three-letter currency code."""
+    """Return an ISO-style three-letter currency code, or an explicit unknown marker.
+
+    An unrecognized currency must never collapse to ``USD`` by default: doing
+    so would let a priced model with an unverified currency rank as a
+    comparable USD cost. ``_UNKNOWN_CURRENCY`` deliberately fails
+    ``_currency_is_comparable`` against every real default currency.
+    """
     if not isinstance(value, str):
-        return "USD"
+        return _UNKNOWN_CURRENCY
     normalized = value.strip().upper()
-    return normalized if _CURRENCY_RE.fullmatch(normalized) else "USD"
+    return normalized if _CURRENCY_RE.fullmatch(normalized) else _UNKNOWN_CURRENCY
 
 
 def _normalize_error_code(value: object) -> str:
@@ -453,6 +472,12 @@ class PostgresProviderCatalogStore:
                     "WHERE provider_account_id = %s",
                     (account_id,),
                 )
+                cursor.execute(
+                    "DELETE FROM model_serving_tag WHERE provider_model_id IN ("
+                    "SELECT provider_model_id FROM provider_model "
+                    "WHERE provider_account_id = %s)",
+                    (account_id,),
+                )
                 for model_name, model in normalized.items():
                     model_row_id = provider_model_id(source, model_name)
                     cursor.execute(
@@ -481,10 +506,6 @@ class PostgresProviderCatalogStore:
                             started_at,
                             started_at,
                         ),
-                    )
-                    cursor.execute(
-                        "DELETE FROM model_serving_tag WHERE provider_model_id = %s",
-                        (model_row_id,),
                     )
                     if model_name in eligible:
                         for tag in _normalize_tags(serving_tags.get(model_name, ())):

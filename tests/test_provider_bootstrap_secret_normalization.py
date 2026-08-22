@@ -65,3 +65,7 @@ def test_catalog_sync_leak_guard_matches_secret_normalization() -> None:
 
     assert "os.environ[name].rstrip('\\r\\n')" in workflow
     assert "os.environ[name] and os.environ[name] in report" not in workflow
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))

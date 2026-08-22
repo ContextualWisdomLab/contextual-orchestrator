@@ -13,6 +13,7 @@ registering a subset of the five supported keys still works. Stdlib only
 
 from __future__ import annotations
 
+from decimal import Decimal
 import json
 import math
 import re
@@ -134,12 +135,20 @@ def _valid_price_component(value: object) -> bool:
 
 
 def _price_per_1k(value: Any) -> float | None:
-    """Convert a trustworthy per-token USD price to per-1K, else return unknown."""
+    """Convert a trustworthy per-token USD price to per-1K, else return unknown.
+
+    Parses through ``Decimal`` first so a nonzero price that underflows to
+    ``0.0`` in float (e.g. a stray ``1e-10000``) is rejected as unknown
+    rather than silently accepted as a legitimate free price.
+    """
     if value is None or isinstance(value, bool):
         return None
     try:
-        per_1k = float(value) * 1000
-    except (TypeError, ValueError, OverflowError):
+        decimal_per_1k = Decimal(str(value)) * 1000
+        per_1k = float(decimal_per_1k)
+    except (ArithmeticError, TypeError, ValueError):
+        return None
+    if not decimal_per_1k.is_finite() or (decimal_per_1k != 0 and per_1k == 0):
         return None
     return per_1k if _valid_price_component(per_1k) else None
 

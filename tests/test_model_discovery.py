@@ -24,6 +24,7 @@ from contextual_orchestrator.kv_config import InMemoryConfigStore  # noqa: E402
 from contextual_orchestrator.model_discovery import (  # noqa: E402
     DiscoveredModel,
     ProviderModelSource,
+    _price_per_1k,
     agent_from_discovered,
     agent_id_for,
     discover_all_models,
@@ -111,6 +112,13 @@ def test_discover_openai_compatible_parses_models_and_pricing() -> None:
     assert priced.prompt_price_per_1k == pytest.approx(0.0006)
     assert priced.completion_price_per_1k == pytest.approx(0.0012)
     assert discovered[1].prompt_price_per_1k is None
+
+
+def test_price_per_1k_rejects_underflowing_positive_value() -> None:
+    """A nonzero per-token price that underflows to 0.0 in float stays unknown."""
+    assert _price_per_1k("1e-10000") is None
+    assert _price_per_1k(0) == 0.0
+    assert _price_per_1k(0.000001) == pytest.approx(0.001)
 
 
 def test_discover_bytez_parses_models_with_key_auth_scheme() -> None:

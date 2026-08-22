@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from dataclasses import replace
 from decimal import Decimal
 
 import pytest
@@ -9,6 +10,7 @@ import pytest
 from contextual_orchestrator.model_discovery import (
     DiscoveredModel,
     ProviderModelSource,
+    _currency_is_comparable,
 )
 from contextual_orchestrator.provider_catalog_store import (
     InMemoryProviderCatalogStore,
@@ -97,6 +99,28 @@ def test_model_normalization_rejects_cross_account_rows_and_bad_prices() -> None
     assert normalized.prompt_price_per_1k is None
     assert normalized.completion_price_per_1k is None
     assert normalized.currency_code == "USD"
+
+
+def test_underflowing_positive_price_is_rejected_not_treated_as_free() -> None:
+    """A nonzero price that underflows to 0.0 in float must stay unknown."""
+    source = _source()
+    normalized = normalize_discovered_model(
+        source, _model(source, "underflow-model", "1e-10000")
+    )
+    assert normalized.prompt_price_per_1k is None
+    assert normalized.completion_price_per_1k is None
+
+
+def test_unrecognized_currency_is_preserved_as_unknown_not_coerced_to_usd() -> None:
+    """A priced model with an unverifiable currency must not rank as comparable USD."""
+    source = _source()
+    garbage_currency = replace(
+        _model(source, "mystery-currency-model"), currency_code="not a currency"
+    )
+    normalized = normalize_discovered_model(source, garbage_currency)
+    assert normalized.prompt_price_per_1k == 1.0
+    assert normalized.currency_code != "USD"
+    assert not _currency_is_comparable(normalized.currency_code, "USD")
 
 
 def test_success_replaces_current_rows_and_failure_keeps_last_known_good() -> None:
@@ -212,6 +236,35 @@ def test_postgres_success_is_parameterized_and_failure_does_not_disable_lkg() ->
     assert store.refresh_evidence()[-1].error_code == "unknown_error"
 
 
+def test_postgres_success_clears_tags_account_wide_not_per_current_model() -> None:
+    """A model absent from a fresh refresh cannot leave orphaned serving_tag rows."""
+    source = _source()
+    connection = _FakeConnection()
+    store = PostgresProviderCatalogStore(
+        "postgresql://catalog.example/db",
+        connection_factory=lambda: connection,
+    )
+    store.record_success(
+        source,
+        [_model(source, "model-a")],
+        eligible_model_ids={"model-a"},
+        serving_tags={"model-a": ("discovered", "chat")},
+    )
+    statements = [statement for statement, _params in connection.cursor_object.calls]
+    tag_delete_index = next(
+        i for i, s in enumerate(statements) if "DELETE FROM model_serving_tag" in s
+    )
+    tag_insert_index = next(
+        i for i, s in enumerate(statements) if "INSERT INTO model_serving_tag" in s
+    )
+    assert "WHERE provider_model_id IN" in statements[tag_delete_index]
+    assert "WHERE provider_account_id = %s" in statements[tag_delete_index]
+    assert tag_delete_index < tag_insert_index
+    assert statements.count(
+        "DELETE FROM model_serving_tag WHERE provider_model_id = %s"
+    ) == 0
+
+
 def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
     """Read-side rows become normalized DiscoveredModel records."""
     source = _source(provider="openrouter", credential="OPENROUTER_API_KEY")
@@ -247,3 +300,7 @@ def test_postgres_serving_models_reconstructs_account_scoped_rows() -> None:
     assert "JOIN provider_account AS pa" in query
     assert "serving_eligible_flag = true" in query
     assert params == (provider_account_id(source),)
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))

@@ -399,3 +399,7 @@ def test_cli_report_never_contains_secret_values(monkeypatch, capsys):
     assert report["durable_agent_pool"] is False
     for value in environment.values():
         assert value.strip() not in output
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))

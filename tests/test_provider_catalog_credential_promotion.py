@@ -190,3 +190,7 @@ def test_successful_refresh_promotes_the_candidate_credential() -> None:
     assert get_credential(source.credential_name) == "new-working-secret"
     assert report.selected_agent_ids == ("openai_gpt_new_live",)
     assert report.restored_credentials == ()
+
+
+if __name__ == "__main__":  # pragma: no cover
+    raise SystemExit(pytest.main([__file__]))
