@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import sys
+import tempfile
 import types
 from io import StringIO
 from pathlib import Path
@@ -195,10 +196,55 @@ def test_fast_mlsirm_preflight_accepts_the_versioned_contract() -> None:
     assert '"contextual_contract": true' in stdout.getvalue()
 
 
+def test_release_authority_snapshot_read_errors_fail_at_parser_boundary() -> None:
+    """A missing or undecodable snapshot file must exit cleanly, not crash raw."""
+    with tempfile.TemporaryDirectory() as directory:
+        missing_path = Path(directory) / "missing.json"
+        undecodable_path = Path(directory) / "undecodable.json"
+        undecodable_path.write_bytes(b"\xff\xfe\x00\x01")
+
+        cases = (
+            (str(missing_path), "could not be read"),
+            (str(undecodable_path), "could not be read"),
+        )
+        for snapshot_path, expected_message in cases:
+            stderr = StringIO()
+            with (
+                patch.object(
+                    sys,
+                    "argv",
+                    [
+                        "contextual-orchestrator",
+                        "--serve",
+                        "--auth-token",
+                        "token",
+                        "--release-authority-json",
+                        snapshot_path,
+                    ],
+                ),
+                patch.object(sys, "stderr", stderr),
+                patch("contextual_orchestrator.__main__.load_agents", return_value=[]),
+                patch("contextual_orchestrator.__main__.ModelClient"),
+                patch("contextual_orchestrator.__main__.TaskOrchestrator"),
+                patch(
+                    "contextual_orchestrator.__main__.serve",
+                    side_effect=AssertionError("unreadable snapshot reached serve()"),
+                ),
+            ):
+                try:
+                    main()
+                except SystemExit as exc:
+                    assert exc.code == 2
+                    assert expected_message in stderr.getvalue()
+                else:  # pragma: no cover
+                    raise AssertionError("unreadable release authority snapshot was accepted")
+
+
 if __name__ == "__main__":
     test_auth_token_resolution_prefers_explicit_then_kv()
     test_partial_split_tokens_fail_before_kv_lookup()
     test_key_only_split_tokens_select_split_mode()
     test_invalid_local_provider_options_fail_at_parser_boundary()
     test_sampling_temperature_uses_descriptive_name_and_legacy_alias()
+    test_release_authority_snapshot_read_errors_fail_at_parser_boundary()
     print("ok")

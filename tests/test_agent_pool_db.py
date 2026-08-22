@@ -86,6 +86,25 @@ def test_add_agent_validations() -> None:
         assert raised, why
 
 
+def test_agent_pool_boundary_rejects_wrong_pool_without_mutation() -> None:
+    """A worker ID cannot be patched or removed through another pool path."""
+    orchestrator = TaskOrchestrator(_seed())
+    for pool_id in ("other_pool", "default_", "", "DEFAULT"):
+        try:
+            orchestrator.patch_agent(pool_id, "general_agent", {"priority": 5})
+        except KeyError:
+            pass
+        else:
+            raise AssertionError(f"patch_agent accepted pool_id={pool_id!r}")
+        try:
+            orchestrator.remove_agent(pool_id, "general_agent")
+        except KeyError:
+            pass
+        else:
+            raise AssertionError(f"remove_agent accepted pool_id={pool_id!r}")
+    assert orchestrator._agent("general_agent").priority == 0
+
+
 def test_remove_last_enabled_agent_refused() -> None:
     orchestrator = TaskOrchestrator(_seed())
     raised = False
@@ -119,7 +138,7 @@ def _call(url: str, method: str, token: str, payload: dict | None = None) -> tup
 
 
 def test_http_create_and_delete_worker_agents() -> None:
-    token = "pool_token"
+    token = "pool_token"  # noqa: S105
     orchestrator = TaskOrchestrator(_seed())
     server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
     thread = threading.Thread(target=server.serve_forever, daemon=True)
@@ -132,6 +151,14 @@ def test_http_create_and_delete_worker_agents() -> None:
         status, dup = _call(base, "POST", token, NEW_AGENT)
         assert status == 400  # duplicate rejected
 
+        status, wrong_pool = _call(
+            f"http://127.0.0.1:{server.server_address[1]}"
+            "/api/v1/agent_pools/other_pool/worker_agents/general_agent",
+            "GET",
+            token,
+        )
+        assert status == 404 and wrong_pool["error"]["code"] == "agent_not_found"
+
         status, unknown = _call(base, "POST", token, {**NEW_AGENT, "id": "extra_agent", "surprise": 1})
         assert status == 400 and unknown["error"]["code"] == "unknown_fields"
 
@@ -143,6 +170,26 @@ def test_http_create_and_delete_worker_agents() -> None:
     finally:
         server.shutdown()
     assert {a.id for a in orchestrator.agents} == {"general_agent"}
+
+
+def test_http_worker_agent_read_rejects_wrong_pool_id() -> None:
+    """Every worker-agent verb must reject a different pool consistently."""
+    token = "pool_token"  # noqa: S105
+    orchestrator = TaskOrchestrator(_seed())
+    server = build_server(orchestrator, port=0, security=SecurityConfig(auth_token=token))
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    base = f"http://127.0.0.1:{server.server_address[1]}"
+    try:
+        path = f"{base}/api/v1/agent_pools/wrong_pool/worker_agents/general_agent"
+        for method, payload in (("GET", None), ("PATCH", {"status": "disabled"}), ("DELETE", None)):
+            status, body = _call(path, method, token, payload)
+            assert status == 404
+            assert body["error"]["code"] == "agent_not_found"
+    finally:
+        server.shutdown()
+    general_agent = next(a for a in orchestrator.candidates if a.id == "general_agent")
+    assert general_agent.disabled is False
 
 
 if __name__ == "__main__":
