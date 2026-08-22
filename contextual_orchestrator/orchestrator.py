@@ -18,6 +18,7 @@ import json
 import math
 import os
 from pathlib import Path
+import queue
 import random
 import re
 import socket
@@ -1578,8 +1579,30 @@ class _StateStore:
         self._conn.execute(self._CREATE_RECORDS_SQL)
         self._conn.execute(self._CREATE_RECORDS_KIND_SEQ_INDEX_SQL)
         self._conn.commit()
+        # Stream kinds (audit/authorization/analytics) are already bounded and
+        # best-effort by design (see class docstring). Route them through a
+        # background queue so an unauthenticated request flood — e.g. denied
+        # authorizations — cannot force synchronous, lock-serialized disk
+        # commits on the request-handling thread. Keyed kinds (workflow_run,
+        # evaluation_run) need durability and stay synchronous.
+        self._stream_queue: queue.Queue[tuple[str, str | None, dict[str, Any]]] = queue.Queue(maxsize=2048)
+        self._stream_worker = threading.Thread(
+            target=self._drain_stream_queue,
+            name="contextual-orchestrator-state-store",
+            daemon=True,
+        )
+        self._stream_worker.start()
 
     def save(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
+        if kind in self._STREAM_LIMITS:
+            try:
+                self._stream_queue.put_nowait((kind, key, payload))
+            except queue.Full:
+                pass
+            return
+        self._save_sync(kind, key, payload)
+
+    def _save_sync(self, kind: str, key: str | None, payload: dict[str, Any]) -> None:
         blob = json.dumps(payload, ensure_ascii=False)
         with self._lock:
             if kind in self._KEYED:
@@ -1590,7 +1613,16 @@ class _StateStore:
                 self._conn.execute(self._PRUNE_STREAM_SQL, (kind, kind, limit))
             self._conn.commit()
 
+    def _drain_stream_queue(self) -> None:
+        while True:
+            kind, key, payload = self._stream_queue.get()
+            try:
+                self._save_sync(kind, key, payload)
+            finally:
+                self._stream_queue.task_done()
+
     def load(self, kind: str, limit: int | None = None) -> list[dict[str, Any]]:
+        self._stream_queue.join()
         with self._lock:
             if limit is None:
                 rows = self._conn.execute(self._SELECT_ALL_SQL, (kind,)).fetchall()
@@ -1601,6 +1633,7 @@ class _StateStore:
 
     def close(self) -> None:
         """Close the sqlite handle so Windows can release the database file."""
+        self._stream_queue.join()
         with self._lock:
             self._conn.close()
 

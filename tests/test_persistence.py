@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -172,6 +173,30 @@ def test_stream_reload_respects_deque_maxlen() -> None:
             assert second._analytics_events[-1]["event_detail"]["i"] == maxlen + 24  # newest kept
         finally:
             second.close()
+
+
+def test_stream_save_does_not_block_on_a_held_lock() -> None:
+    """Unauthenticated denial recording must not force a synchronous, lock-serialized
+    disk commit on the request thread (the hot path any caller can trigger pre-auth)."""
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        with store._lock:  # simulate a keyed write already holding the store lock
+            started = time.monotonic()
+            store.save("authorization", None, {"denied": True})
+            elapsed = time.monotonic() - started
+        assert elapsed < 0.5  # queued without waiting for the held lock
+        assert store.load("authorization") == [{"denied": True}]
+        store.close()
+
+
+def test_keyed_save_remains_synchronous() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        store.save("workflow_run", "run_1", {"workflow_run_id": "run_1"})
+        # No queue drain needed: readable through the raw connection immediately.
+        rows = store._conn.execute("SELECT kind FROM records WHERE key = ?", ("run_1",)).fetchall()
+        assert rows == [("workflow_run",)]
+        store.close()
 
 
 if __name__ == "__main__":
