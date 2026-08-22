@@ -712,10 +712,17 @@ class SqlLedgerStore:
         self._paramstyle = paramstyle
         if self._paramstyle == "qmark":
             # sqlite3 keeps foreign-key enforcement per connection and defaults
-            # it off. Set it before schema work can open a transaction.
+            # it off. Set it before schema work can open a transaction: sqlite
+            # silently ignores this PRAGMA once a transaction is already open,
+            # so verify it actually took before trusting FK enforcement below.
             self._conn.execute("PRAGMA foreign_keys = ON")
+            enabled = self._conn.execute("PRAGMA foreign_keys").fetchone()
+            if not enabled or not enabled[0]:
+                raise RuntimeError(
+                    "cannot enable sqlite foreign keys; commit the connection "
+                    "before constructing SqlLedgerStore"
+                )
         self._create_schema()
-        self._seed_dimension_catalog()
 
     def _table_columns(self, table_name: str) -> set[str]:
         """Return table columns while keeping identifier interpolation constant."""
@@ -813,10 +820,6 @@ class SqlLedgerStore:
         else:
             for statement in statements[2:]:
                 cur.execute(statement)
-        self._conn.commit()
-
-    def _seed_dimension_catalog(self) -> None:
-        self._seed_dimension_catalog_in_transaction(self._conn.cursor())
         self._conn.commit()
 
     def _seed_dimension_catalog_in_transaction(self, cur: Any) -> None:

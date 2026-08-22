@@ -177,6 +177,12 @@ def test_malformed_legacy_agent_pool_rolls_back_without_losing_source() -> None:
             assert connection.execute(
                 "SELECT payload FROM agent_pool WHERE agent_id = ?", ("broken_agent",)
             ).fetchone() == ("not-json",)
+            legacy_columns = {row[1] for row in connection.execute("PRAGMA table_info(agent_pool)")}
+            assert legacy_columns == {"agent_id", "payload"}
+            for table in ("agent_pool_tags", "agent_pool_provider_exclusions"):
+                assert connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type = 'table' AND name = ?", (table,)
+                ).fetchone() is None
 
 
 def test_add_agent_validations() -> None:
