@@ -180,7 +180,7 @@ def test_provider_probe_verifies_registry_then_uses_one_bounded_completion_witho
 
     payload = json.loads(seen[1][0].data)
     assert payload["max_tokens"] == 1
-    assert payload["temperature"] == 0.0
+    assert "temperature" not in payload
     assert payload["chat_template_kwargs"] == {"enable_thinking": False}
 
 

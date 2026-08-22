@@ -6,8 +6,9 @@ These run entirely on the in-memory backend — no Postgres or KV service needed
 from __future__ import annotations
 
 import os
-from pathlib import Path
+import socket
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -147,8 +148,16 @@ def test_non_bearer_auth_scheme_reaches_the_authorization_header() -> None:
         seen.append(request)
         return _Response()
 
-    with patch.object(client, "_open_provider", side_effect=open_provider):
+    with (
+        patch.object(
+            client,
+            "_resolve_addresses",
+            return_value=[(socket.AF_INET, ("93.184.216.34", 443))],
+        ) as resolve_addresses,
+        patch.object(client, "_open_provider", side_effect=open_provider),
+    ):
         assert client.chat(agent, [{"role": "user", "content": "ping"}]) == "ok"
+    resolve_addresses.assert_called_once_with("api.bytez.com", 443)
     assert seen[0].get_header("Authorization") == "Key bytez-secret"
 
 

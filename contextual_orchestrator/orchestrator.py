@@ -164,13 +164,16 @@ class _FastMLSIJudgeAdapter:
         if not isinstance(response_format, dict):
             raise TypeError("response_format must be a mapping")
         agent = self._agent()
-        response = self.orchestrator.proxy_completion({
+        payload: dict[str, Any] = {
             "model": agent.model,
             "messages": messages,
-            "temperature": self.orchestrator.client.temperature,
-            "max_tokens": self.orchestrator.client.max_output_tokens,
+            "max_tokens": self.orchestrator.client._effective_max_output_tokens(),
             "response_format": response_format,
-        })
+        }
+        effective_temperature = self.orchestrator.client._effective_temperature()
+        if effective_temperature is not None:
+            payload["temperature"] = effective_temperature
+        response = self.orchestrator.proxy_completion(payload)
         output = ModelClient._response_content(agent, response)
         usage = response.get("usage") if isinstance(response.get("usage"), dict) else None
         return self._completion_payload(output, agent.id, usage, self.mode if mode is None else mode)
@@ -686,7 +689,7 @@ class ModelClient:
         local_max_retries: int = 0,
         retry_backoff: float = 0.5,
         retry_backoff_cap: float = 8.0,
-        temperature: float = 0.2,
+        temperature: float | None = None,
         local_concurrency: int = 1,
         chat_template_args: dict[str, Any] | None = None,
         ca_bundle: str | None = None,
@@ -697,7 +700,9 @@ class ModelClient:
         self.max_output_tokens = max_output_tokens
         if isinstance(max_retries, bool) or max_retries < 0:
             raise ValueError("max_retries must be >= 0")
-        self.default_temperature = 0.2
+        # Do not invent a sampling parameter for a provider/model that may not
+        # support it. Explicit caller values are still forwarded after validation.
+        self.default_temperature = temperature
         self.default_top_p: float | None = None
         self.default_presence_penalty: float | None = None
         self.default_frequency_penalty: float | None = None
@@ -707,7 +712,6 @@ class ModelClient:
         self.local_max_retries = int(local_max_retries)
         self.retry_backoff = retry_backoff
         self.retry_backoff_cap = retry_backoff_cap
-        self.temperature = temperature
         if type(local_concurrency) is not int or not 1 <= local_concurrency <= MAX_LOCAL_CONCURRENCY:
             raise ValueError(
                 f"local_concurrency must be an integer in 1..{MAX_LOCAL_CONCURRENCY}"
@@ -763,6 +767,48 @@ class ModelClient:
         self._local.usage = None
         return usage
 
+    @contextmanager
+    def request_options(
+        self,
+        *,
+        max_output_tokens: int | None = None,
+        temperature: float | None = None,
+        top_p: float | None = None,
+        presence_penalty: float | None = None,
+        frequency_penalty: float | None = None,
+    ):
+        """Apply HTTP request controls without mutating shared client defaults."""
+        missing = object()
+        options = {
+            "request_max_output_tokens": max_output_tokens,
+            "request_temperature": temperature,
+            "request_top_p": top_p,
+            "request_presence_penalty": presence_penalty,
+            "request_frequency_penalty": frequency_penalty,
+        }
+        previous = {name: getattr(self._local, name, missing) for name in options}
+        for name, value in options.items():
+            if value is not None:
+                setattr(self._local, name, value)
+        try:
+            yield
+        finally:
+            for name, value in previous.items():
+                if value is missing:
+                    self._local.__dict__.pop(name, None)
+                else:
+                    setattr(self._local, name, value)
+
+    def _effective_temperature(self, requested: float | None = None) -> float | None:
+        """Resolve request, request-scoped, and constructor sampling values in order."""
+        if requested is not None:
+            return requested
+        return getattr(self._local, "request_temperature", self.default_temperature)
+
+    def _effective_max_output_tokens(self) -> int:
+        """Resolve the request-scoped output limit or the constructor default."""
+        return getattr(self._local, "request_max_output_tokens", self.max_output_tokens)
+
     def chat(
         self,
         agent: ModelAgent,
@@ -772,16 +818,24 @@ class ModelClient:
     ) -> str:
         """Send messages to a mock or OpenAI-compatible chat endpoint with retries.
 
-        When ``temperature``/``top_p`` are omitted, ``default_temperature`` and
-        ``default_top_p`` are used so request-scoped Completions sampling can be
-        applied without threading kwargs through every orchestrator hop.
+        When sampling knobs are omitted, they are omitted from the provider
+        request so the selected model's capability contract remains authoritative.
+        Explicit request-scoped values are still forwarded after validation.
         """
         self._local.usage = None
         # Expose the effective sampling knobs for request-path tests / diagnostics.
-        effective_temperature = self.default_temperature if temperature is None else temperature
-        effective_top_p = self.default_top_p if top_p is None else top_p
-        effective_presence = self.default_presence_penalty
-        effective_frequency = self.default_frequency_penalty
+        effective_temperature = self._effective_temperature(temperature)
+        effective_top_p = (
+            getattr(self._local, "request_top_p", self.default_top_p)
+            if top_p is None
+            else top_p
+        )
+        effective_presence = getattr(
+            self._local, "request_presence_penalty", self.default_presence_penalty
+        )
+        effective_frequency = getattr(
+            self._local, "request_frequency_penalty", self.default_frequency_penalty
+        )
         self._local.last_temperature = effective_temperature
         self._local.last_top_p = effective_top_p
         self._local.last_presence_penalty = effective_presence
@@ -800,10 +854,11 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": effective_temperature,
             "stream": False,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": self._effective_max_output_tokens(),
         }
+        if effective_temperature is not None:  # pragma: no cover
+            payload["temperature"] = effective_temperature
         if effective_top_p is not None:  # pragma: no cover
             payload["top_p"] = effective_top_p
         if effective_presence is not None:  # pragma: no cover
@@ -857,7 +912,6 @@ class ModelClient:
                 payload: dict[str, Any] = {
                     "model": agent.model,
                     "messages": [{"role": "user", "content": "Reply with exactly OK."}],
-                    "temperature": 0.0,
                     "stream": False,
                     "max_tokens": 1,
                 }
@@ -1080,10 +1134,25 @@ class ModelClient:
         payload = {  # pragma: no cover
             "model": agent.model,
             "messages": messages,
-            "temperature": self.temperature if temperature is None else temperature,
             "stream": True,
-            "max_tokens": self.max_output_tokens,
+            "max_tokens": self._effective_max_output_tokens(),
         }
+        effective_temperature = self._effective_temperature(temperature)
+        if effective_temperature is not None:  # pragma: no cover
+            payload["temperature"] = effective_temperature
+        effective_top_p = getattr(self._local, "request_top_p", self.default_top_p)
+        if effective_top_p is not None:  # pragma: no cover
+            payload["top_p"] = effective_top_p
+        effective_presence = getattr(
+            self._local, "request_presence_penalty", self.default_presence_penalty
+        )
+        if effective_presence is not None:  # pragma: no cover
+            payload["presence_penalty"] = effective_presence
+        effective_frequency = getattr(
+            self._local, "request_frequency_penalty", self.default_frequency_penalty
+        )
+        if effective_frequency is not None:  # pragma: no cover
+            payload["frequency_penalty"] = effective_frequency
         if _is_direct_mlx_provider_url(agent.base_url) and self.chat_template_args:
             payload["chat_template_kwargs"] = self.chat_template_args
         with _local_provider_slot(agent, self.local_concurrency, self.timeout):  # pragma: no cover
@@ -1351,26 +1420,28 @@ class ModelClient:
         self,
         agent: ModelAgent,
         requests: dict[str, list[ChatMessage]],
-        temperature: float,
+        temperature: float | None,
         poll_interval: float,
         poll_timeout: float,
         destination: ProviderDestination | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Upload, create, poll, and parse one batch (isolated so the flow stays testable)."""
-        lines = [
-            json.dumps({
+        lines = []
+        for custom_id, messages in requests.items():
+            body: dict[str, Any] = {
+                "model": agent.model,
+                "messages": messages,
+                "max_tokens": self._effective_max_output_tokens(),
+            }
+            effective_temperature = self._effective_temperature(temperature)
+            if effective_temperature is not None:
+                body["temperature"] = effective_temperature
+            lines.append(json.dumps({
                 "custom_id": custom_id,
                 "method": "POST",
                 "url": "/v1/chat/completions",
-                "body": {
-                    "model": agent.model,
-                    "messages": messages,
-                    "temperature": self.temperature if temperature is None else temperature,
-                    "max_tokens": self.max_output_tokens,
-                },
-            }, ensure_ascii=False)
-            for custom_id, messages in requests.items()
-        ]
+                "body": body,
+            }, ensure_ascii=False))
         input_file_id = self._batch_upload(agent, "\n".join(lines).encode("utf-8"), destination)
         batch_id = self._batch_json(agent, "POST", "/batches", {
             "input_file_id": input_file_id,
