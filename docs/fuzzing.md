@@ -31,6 +31,8 @@ deserialize request config validate untrusted input"`):
 4. **End-to-end orchestration** — `orchestrator.TaskOrchestrator.run` against
    `mock://` providers (fully offline). Arbitrary prompt text and mode must
    produce a JSON-serialisable record whose SSE framing round-trips.
+5. **PII key boundary** — unprefixed encryption-key text must be rejected;
+   accepted key material must declare `base64:`, `hex:`, or `passphrase:`.
 
 ## Running locally
 
@@ -49,6 +51,7 @@ python fuzz/fuzz_request_body.py  -max_total_time=60 fuzz/corpus/request_body
 python fuzz/fuzz_agent_config.py  -max_total_time=60 fuzz/corpus/agent_config
 python fuzz/fuzz_redaction.py     -max_total_time=60 fuzz/corpus/redaction
 python fuzz/fuzz_orchestration.py -max_total_time=60 fuzz/corpus/orchestration
+python fuzz/fuzz_pii_key.py       -max_total_time=60 fuzz/corpus/pii_key
 ```
 
 Seed corpora live in `fuzz/corpus/<target>/`.

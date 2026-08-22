@@ -1,6 +1,8 @@
 # Library Research
 
-The design researched existing libraries before adding code. The repository keeps the runtime dependency-free for the current lab, but the enterprise implementation target is explicit.
+The design researches existing libraries before adding code. The repository keeps
+the runtime dependency-light for the current lab, while security-critical
+primitives use maintained libraries when the enterprise target requires them.
 
 ## Selected Stack
 
@@ -56,3 +58,17 @@ single-repo product instead of splitting it.
 ## Required For New Designs
 
 Every new subsystem design must update this file before implementation starts. The entry must name the existing libraries researched, the selected library or stdlib alternative, and the custom code that was deliberately skipped.
+
+## Purpose-limited PII protection
+
+| Area | Library/pattern | Decision | Evidence |
+|---|---|---|---|
+| Field encryption | `cryptography.hazmat.primitives.ciphers.aead.AESGCM` | Use the maintained AEAD primitive already available in the Python ecosystem; resolve the 256-bit key from the existing KV credential registry. Generated key bytes use explicit `base64:`/`hex:` encodings; marked passphrases use stdlib scrypt. | [OWASP Cryptographic Storage Cheat Sheet](https://cheatsheetseries.owasp.org/cheatsheets/Cryptographic_Storage_Cheat_Sheet.html) recommends authenticated encryption such as GCM; [RFC 5116](https://datatracker.ietf.org/doc/html/rfc5116) defines the AEAD interface; Percival and Josefsson (2016), [RFC 7914](https://www.rfc-editor.org/rfc/rfc7914), specifies the memory-hard scrypt derivation function. |
+| Key management | Existing `credentials.get_credential` | Reuse the repository's KV seam; no runtime environment lookup and no second secret store. | [NIST SP 800-57 Part 1 Rev. 5](https://csrc.nist.gov/pubs/sp/800/57/pt1/r5/final) covers key protection, inventory, access control, and rotation. |
+| Purpose control | Existing bearer scopes plus fixed route purposes | Map authenticated `inference` and `admin` roles to explicit `message_delivery`, `operator_read`, and `audit_replay` purposes; audit every decision. | Wolf, Pallas, and Tai (2021) describe purpose limitation for data-in-transit and access decisions in event-driven systems ([arXiv:2110.15150](https://arxiv.org/abs/2110.15150)). |
+
+The implementation deliberately skips custom cryptography, automatic PII
+detectors, blanket masking, and a new policy framework. Callers explicitly
+declare the top-level event fields that contain PII; undeclared fields retain
+the existing behavior, while marked fields fail closed when the KV key is
+missing or invalid.

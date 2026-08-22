@@ -12,6 +12,7 @@ from pathlib import Path
 import sqlite3
 import sys
 import tempfile
+import time
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
@@ -99,10 +100,66 @@ def test_store_treats_kind_key_and_limit_as_sql_parameters() -> None:
         store.close()
 
 
+def test_durable_audit_retention_is_bounded() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        limit = store._STREAM_LIMITS["audit"]
+        for index in range(limit + 3):
+            store.save("audit", None, {"index": index})
+
+        assert len(store.load("audit")) == limit
+        assert store.load("audit", 1) == [{"index": limit + 2}]
+        store.close()
+
+
+def test_durable_authorization_retention_is_bounded() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        limit = store._STREAM_LIMITS["authorization"]
+        for index in range(limit + 3):
+            store.save("authorization", None, {"index": index})
+
+        assert len(store.load("authorization")) == limit
+        assert store.load("authorization", 1) == [{"index": limit + 2}]
+        store.close()
+
+
+def test_durable_analytics_retention_is_bounded() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        assert store._STREAM_LIMITS["analytics"] == 256
+        limit = 256
+        for index in range(limit + 3):
+            store.save("analytics", None, {"index": index})
+
+        assert len(store.load("analytics")) == limit
+        assert store.load("analytics", 1) == [{"index": limit + 2}]
+        store.close()
+
+
+def test_authorization_stream_persists_separately_from_audit() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        db = os.path.join(directory, "state.db")
+        first = _orch(db)
+        first._append_audit_event("substantive_event", {"value": "keep"})
+        first.record_authorization_decision(
+            scope="inference", purpose="message_delivery", allowed=False, reason="unauthorized"
+        )
+        first.close()
+
+        second = _orch(db)
+        try:
+            assert [event["event_type"] for event in second._audit_events] == ["substantive_event"]
+            assert [event["event_type"] for event in second._authorization_events] == ["authorization_decision"]
+        finally:
+            second.close()
+
+
 def test_stream_reload_respects_deque_maxlen() -> None:
     with tempfile.TemporaryDirectory() as directory:
         db = os.path.join(directory, "state.db")
         first = _orch(db)
+        assert first._analytics_events.maxlen == 256
         maxlen = first._analytics_events.maxlen
         # Drive more analytics events than the deque can hold.
         for i in range(maxlen + 25):
@@ -116,6 +173,30 @@ def test_stream_reload_respects_deque_maxlen() -> None:
             assert second._analytics_events[-1]["event_detail"]["i"] == maxlen + 24  # newest kept
         finally:
             second.close()
+
+
+def test_stream_save_does_not_block_on_a_held_lock() -> None:
+    """Unauthenticated denial recording must not force a synchronous, lock-serialized
+    disk commit on the request thread (the hot path any caller can trigger pre-auth)."""
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        with store._lock:  # simulate a keyed write already holding the store lock
+            started = time.monotonic()
+            store.save("authorization", None, {"denied": True})
+            elapsed = time.monotonic() - started
+        assert elapsed < 0.5  # queued without waiting for the held lock
+        assert store.load("authorization") == [{"denied": True}]
+        store.close()
+
+
+def test_keyed_save_remains_synchronous() -> None:
+    with tempfile.TemporaryDirectory() as directory:
+        store = _StateStore(os.path.join(directory, "s.db"))
+        store.save("workflow_run", "run_1", {"workflow_run_id": "run_1"})
+        # No queue drain needed: readable through the raw connection immediately.
+        rows = store._conn.execute("SELECT kind FROM records WHERE key = ?", ("run_1",)).fetchall()
+        assert rows == [("workflow_run",)]
+        store.close()
 
 
 if __name__ == "__main__":

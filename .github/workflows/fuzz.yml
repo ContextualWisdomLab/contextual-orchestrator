@@ -87,6 +87,9 @@ jobs:
       - name: Fuzz model-judge response parser
         run: python fuzz/fuzz_model_judge.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/judge
 
+      - name: Fuzz PII encryption key boundary
+        run: python fuzz/fuzz_pii_key.py -max_total_time="${FUZZ_SECONDS}" -artifact_prefix=crash- fuzz/corpus/pii_key
+
       - name: Upload crash artifacts
         if: failure()
         uses: actions/upload-artifact@330a01c490aca151604b8cf639adc76d48f6c5d4 # actions/upload-artifact@v5
