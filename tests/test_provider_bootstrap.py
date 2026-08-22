@@ -141,6 +141,24 @@ def test_partial_price_is_unknown_in_provider_bootstrap_ranking():
     ]
 
 
+def test_non_usd_price_cannot_outrank_a_comparable_usd_price():
+    """A cheap non-USD row must not beat a pricier USD row on face value alone."""
+    cheap_foreign = replace(
+        _model("openrouter", "OPENROUTER_API_KEY", "cheap-foreign", 0.001),
+        currency_code="EUR",
+    )
+    priced_usd = _model("openai", "OPENAI_API_KEY", "priced-usd", 1.0)
+
+    selected = provider_bootstrap.select_provider_diverse_models(
+        [cheap_foreign, priced_usd], limit=2
+    )
+
+    assert [(item.provider_name, item.model_id) for item in selected] == [
+        ("openai", "priced-usd"),
+        ("openrouter", "cheap-foreign"),
+    ]
+
+
 @pytest.mark.parametrize(
     ("model_id", "eligible"),
     [

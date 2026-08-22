@@ -98,6 +98,20 @@ def test_provider_wildcard_price_entry() -> None:
     assert record.cost_amount == 2.0
 
 
+def test_corrupt_specific_row_still_falls_back_to_wildcard_price() -> None:
+    """A malformed provider:model row must not shadow a valid provider:* row."""
+    config = InMemoryConfigStore()
+    price_book = PriceBook(config)
+    price_book.set_price(PriceEntry("openai", "*", prompt_price_per_1k=1.0, completion_price_per_1k=1.0))
+    config.set("llm_price_entries", "openai:broken-model", {"prompt_price_per_1k": "not-a-number"})
+
+    entry = price_book.get_price("openai", "broken-model")
+
+    assert entry is not None
+    assert entry.prompt_price_per_1k == 1.0
+    assert entry.completion_price_per_1k == 1.0
+
+
 def test_writes_carry_full_attribution() -> None:
     ledger = _priced_ledger()
     record = ledger.record_usage(

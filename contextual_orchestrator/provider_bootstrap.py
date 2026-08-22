@@ -30,6 +30,7 @@ from .kv_config import InMemoryConfigStore
 from .model_discovery import (
     DiscoveredModel,
     PROVIDER_MODEL_SOURCES,
+    _currency_is_comparable,
     _provider_family,
     agent_from_discovered,
     agent_id_for,
@@ -178,10 +179,18 @@ def serving_tags_for_discovered(_model: DiscoveredModel) -> tuple[str, ...]:
 def _known_cost_sort_key(
     model: DiscoveredModel,
 ) -> tuple[int, float, str, str]:
-    """Sort known-price models before unknown-price models without inventing free cost."""
+    """Sort known-price, comparable-currency models before unknown/incomparable ones.
+
+    Mirrors ``model_discovery._discovery_price_key``'s currency gate so a
+    cheap non-USD price can never outrank a USD one on face value alone.
+    """
     prices = (model.prompt_price_per_1k, model.completion_price_per_1k)
     prompt_price, completion_price = prices
-    if prompt_price is None or completion_price is None:
+    if (
+        prompt_price is None
+        or completion_price is None
+        or not _currency_is_comparable(model.currency_code, "USD")
+    ):
         return (1, float("inf"), model.provider_name, model.model_id)
     return (0, prompt_price + completion_price, model.provider_name, model.model_id)
 

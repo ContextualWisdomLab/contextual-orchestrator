@@ -156,13 +156,20 @@ class PriceBook:
         """Return the price entry for ``provider``+``model``, if configured.
 
         Falls back to a provider-wildcard entry (``"{provider}:*"``) so a
-        provider can set one default price for all of its models.
+        provider can set one default price for all of its models. A corrupt
+        specific row does not suppress an otherwise-valid wildcard fallback.
         """
-        raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, model), None)
-        if raw is None:
-            raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, "*"), None)
-        if raw is None:
-            return None
+        for candidate_model in (model, "*"):
+            raw = self._config.get(_PRICE_CATEGORY, _price_key(provider, candidate_model), None)
+            entry = self._parse_price_entry(raw, provider, model)
+            if entry is not None:
+                return entry
+        return None
+
+    def _parse_price_entry(
+        self, raw: Any, provider: str, model: str
+    ) -> Optional[PriceEntry]:
+        """Validate one raw KV row into a ``PriceEntry``, or ``None`` if it is unusable."""
         if not isinstance(raw, dict):
             return None
         try:
