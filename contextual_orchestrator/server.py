@@ -23,6 +23,7 @@ from .orchestrator import (
     BudgetExceededError,
     MAX_LOCAL_CONCURRENCY,
     TaskOrchestrator,
+    _is_local_provider_url,
     _new_chat_completion_id,
     chat_completion_chunks,
     chat_completion_response,
@@ -4823,6 +4824,12 @@ def build_server(
                     if len(segments) != 5 or segments[:3] != ["api", "v1", "agent_pools"]:
                         raise RequestError(400, "bad_path", "agent create path must be /api/v1/agent_pools/{pool}/worker_agents")
                     _reject_unknown_keys(body, ALLOWED_AGENT_CREATE_KEYS)
+                    if _is_local_provider_url(str(body.get("base_url", ""))):
+                        raise RequestError(
+                            400,
+                            "local_provider_registration_forbidden",
+                            "Configure local providers at trusted process startup instead.",
+                        )
                     self._send(orchestrator.add_agent(segments[3], body), 201)
                     return
 

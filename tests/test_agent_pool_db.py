@@ -145,6 +145,51 @@ def test_http_create_and_delete_worker_agents() -> None:
     assert {a.id for a in orchestrator.agents} == {"general_agent"}
 
 
+def test_http_agent_registration_cannot_target_loopback_services() -> None:
+    """Keep local providers on the trusted startup boundary, not the HTTP API."""
+    orchestrator = TaskOrchestrator(_seed())
+    server = build_server(
+        orchestrator,
+        port=0,
+        security=SecurityConfig(
+            admin_token="admin_secret",
+            inference_token="inference_secret",
+        ),
+    )
+    thread = threading.Thread(target=server.serve_forever, daemon=True)
+    thread.start()
+    endpoint = (
+        f"http://127.0.0.1:{server.server_address[1]}"
+        "/api/v1/agent_pools/default/worker_agents"
+    )
+    local_agent = {
+        "id": "loopback_worker",
+        "model": "local-model",
+        "base_url": "mlx://127.0.0.1:6379/v1",
+    }
+    try:
+        inference_status, _ = _call(
+            endpoint,
+            "POST",
+            "inference_secret",
+            local_agent,
+        )
+        admin_status, admin_body = _call(
+            endpoint,
+            "POST",
+            "admin_secret",
+            local_agent,
+        )
+    finally:
+        server.shutdown()
+        thread.join(timeout=5)
+
+    assert inference_status == 401
+    assert admin_status == 400
+    assert admin_body["error"]["code"] == "local_provider_registration_forbidden"
+    assert {agent.id for agent in orchestrator.candidates} == {"general_agent"}
+
+
 if __name__ == "__main__":
     for name, fn in sorted(globals().items()):
         if name.startswith("test_") and callable(fn):
