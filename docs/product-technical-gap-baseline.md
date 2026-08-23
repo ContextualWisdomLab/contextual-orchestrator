@@ -327,37 +327,21 @@ The older contextual PR rows above are historical unless their SHA matches this 
 
 ### Backlog convergence and consolidation — 2026-08-23
 
-All prior per-PR "Live ... continuation" rows above are now historical churn:
-this section replaces per-check-run bookkeeping (which is always one `gh pr
-checks`/`gh pr view` call away and goes stale within minutes) with the current
-structural fact, verified directly against all 29 open PRs rather than a
-sample.
+All prior per-PR "Live ... continuation" rows above are historical. A global
+`clean` or `merge-ready` label is deliberately not carried forward: a
+protected-merge claim must be refreshed for the PR's exact current SHA,
+including reviews, unresolved threads, and required checks.
 
-**Every open PR in this repository is clean but blocked from protected merge.** As of this
-observation, all 29 open PRs (`gh pr list --state open`) have zero unresolved
-review threads and `mergeable: MERGEABLE`; a spot-check of five (#822, #809,
-#799, #785, #762) confirmed fully green hosted checks with no failing or
-pending runs. Five of these (#768, #794, #804, #818, #803) were independently
-re-verified end-to-end this session: real Devin/CodeRabbit findings were
-triaged and either fixed with regression tests or resolved with a documented,
-verified rationale (never a blind dismissal — two self-caught process errors
-from earlier rounds are recorded in the repository's session history). The
-clean source, thread, and check observations do not satisfy the protected
-approval gate, so no PR is merge-ready. The shared external blocker is a
-saturated org-wide OpenCode GitHub App installation token (installation ID
-`141441800`, shared 5,000 requests/hour across every repository and scheduled
-workflow the App serves), so the central "Required PR Review
-Merge Scheduler" cannot dispatch the required approving review to any queued
-PR. This is the same root cause the existing P0 delivery-gate row below
-already names; this observation upgrades that row's evidence from "the
-approval gate is absent on the sampled PRs" to "every open PR in the
-repository is blocked by the same external cause, with no exceptions found."
-No workaround exists inside this repository: the fix is either the shared
-token's hourly window rotating, or upstream mitigation in
-`ContextualWisdomLab/.github` (two such mitigations, `.github#1220` and
-`.github#1221`, already merged this session for a narrower, now-resolved
-dispatch-cadence bottleneck — this installation-wide rate limit is a
-different, still-open constraint).
+**Exact protected-gate refresh — 2026-08-23.** REST inventory
+(`GET /pulls?state=open`) returned **30** open PRs, not 29. The current #803
+security repair is `7233f64e`; its replacement exact-head check set has 15
+active runs out of 22. #818 is `a344bb82` with one active check run, while
+#804 (`3828ca42`) and #820 (`9cae444a`) have no failed or active exact-head
+check runs in this refresh. Those terminal results are only partial gate
+evidence: #803 is explicitly `REVIEW_REQUIRED`, and every PR needs its own
+fresh independent approvals, resolved-thread evidence, and required terminal
+workflows before a normal protected merge. No PR is described here as
+merge-ready while any of those facts are missing or unverified.
 
 **Closed technical gap — unauthenticated denial recording on the durable
 persistence hot path (found and fixed in #803).** While triaging #803's
@@ -402,7 +386,7 @@ live work item.
 
 | Priority | Gap | Current evidence | Definition of done |
 |---:|---|---|---|
-| P0 | Protected delivery cannot merge clean PRs without the required protected approvals, and `.github` has a weaker repository-local rule than the organization rule. | Organization ruleset `18156473` requires two approving reviews, an additional approval for unattributed changes, last-push approval, and resolved threads for normal repositories. It excludes `.github`, whose active repository ruleset `17921150` permits zero required approvals and exposes an OrganizationAdmin bypass; the maintainer procedure forbids that bypass and retains the stronger independent-review gate. As of 2026-08-23, all 29 open PRs are clean on the observed thread, mergeability, and hosted-check criteria, but are blocked from normal merge because the shared org-wide OpenCode App installation token (ID `141441800`, 5,000 req/hr) cannot dispatch the required approving review. They are not merge-ready. See "Backlog convergence and consolidation" above. | Align `.github` governance with the organization policy or document an equivalent non-bypass gate; then obtain independent approvals for the exact current SHA, resolve threads, pass hosted required workflows, and complete normal squash/merge. Upstream: raise the shared installation's rate ceiling or shard review-dispatch load off the single token, since per-PR remediation cannot fix a saturated shared credential. |
+| P0 | Protected delivery cannot merge a PR until its exact current SHA has the required approvals, resolved threads, and terminal workflows; `.github` has a weaker repository-local rule than the organization rule. | Organization ruleset `18156473` requires two approving reviews, an additional approval for unattributed changes, last-push approval, and resolved threads for normal repositories. It excludes `.github`, whose active repository ruleset `17921150` permits zero required approvals and exposes an OrganizationAdmin bypass; the maintainer procedure forbids that bypass and retains the stronger independent-review gate. The 2026-08-23 exact refresh found 30 open PRs, including #803 with replacement workflows active after a security fix. This baseline makes no repository-wide clean/ready inference from partial checks; see "Exact protected-gate refresh" above. | Align `.github` governance with the organization policy or document an equivalent non-bypass gate; then obtain independent approvals for the exact current SHA, resolve threads, pass hosted required workflows, and complete normal squash/merge. Upstream: raise the shared installation's rate ceiling or shard review-dispatch load off the single token, since per-PR remediation cannot fix a saturated shared credential. |
 | P0 | Agent-pool resource paths must not let a caller dereference a worker outside its addressed pool. | Strix reported the recurring IDOR on exact PR #784; direct root repair [#804](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/804) is open with the pool-boundary resolver and regression tests. #784 now stacks on #804 for dependency-safe retesting. | Protected #804 merges to main, then affected stacked PRs retain the root base and rerun Strix on their exact current heads. |
 | P0 | Provider boundary is still being assembled across stacked PRs. | [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768), [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765), [#764](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/764), [#770](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/770), and [#763](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/763) are pending integration; #778 and #779 are integrated into #765, including temperature negotiation. Central OpenCode gateway routing is tracked by [.github#1170](https://github.com/ContextualWisdomLab/.github/pull/1170), while the current target caller is carried by [.github#1198](https://github.com/ContextualWisdomLab/.github/pull/1198); neither has protected-main completion evidence. | One current-main stack has capability isolation, secure JSON, bounded framing, multimodal evidence, KV bootstrap, honest catalog, optional-control negotiation, and failover with no duplicate logic; central review execution must use the same current gateway pin after protected integration. |
 | P0 | Operational failure paths are not yet one buyer-verifiable contract. | [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771) and [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) are open. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
