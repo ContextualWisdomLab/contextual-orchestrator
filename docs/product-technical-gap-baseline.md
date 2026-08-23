@@ -346,6 +346,22 @@ own fresh independent approvals, resolved-thread evidence, and required
 terminal workflows before a normal protected merge. No PR is described here as
 merge-ready while any of those facts are missing or unverified.
 
+**Shared Strix repair pending — 2026-08-23.** The current exact heads
+[#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803)
+(`5c6670cb`) and [#824](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/824)
+(`a4219151`) both have a terminal failing `strix` check. Their archived reports
+show a rate-limited primary NVIDIA NIM attempt followed by a zero-finding NIM
+fallback whose exact `MODEL QUALITY WARNING` banner was misclassified as an
+infrastructure failure; this is shared-gate behavior, not zero-finding proof of
+either PR's source correctness. Central repair
+[.github#1254](https://github.com/ContextualWisdomLab/.github/pull/1254) is
+open at `e21c149a`: it preserves fail-closed handling for fatal, denied,
+timeout, and other warning evidence, keeps automatic fallback within NVIDIA
+NIM, and adds this regression. It is not protected-main evidence. Both target
+PRs remain blocked until #1254 is normally protected-merged and fresh Strix
+checks succeed on these exact unchanged heads, alongside the independent
+approval and terminal-check requirements already stated above.
+
 **Closed technical gap — unauthenticated denial recording on the durable
 persistence hot path (found and fixed in #803).** While triaging #803's
 review threads, tracing `server.py`'s `_authorize` into
