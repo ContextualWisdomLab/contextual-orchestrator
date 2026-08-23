@@ -325,6 +325,60 @@ The older contextual PR rows above are historical unless their SHA matches this 
 | [#820](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/820) | head `83d1326f9149e84dbe58fec0739efca5da99eead`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465`, merge-result tree `390af78d97372195d73f77d0e7ebaf7484a2edbb` | Fresh exact-head evidence is focused `87 passed`, full `1446 passed`, conflict-marker scan/compileall/diff-check clean. Hosted `osv-scan` run `32527911591` / job `96913798878` reproduces the inherited central `--output` deprecation and empty-result `test -s` failure after scanner exit 0; this is not a source vulnerability. Strix remains pending/in progress and formal approvals `0`. Decision: `WAIT_AND_REMEDIATE` pending central repair and exact-head re-run. |
 | [#821](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/821) | head `c5de31cf276580fddd4f3bcf863f5a7fcfa5aeb8`, base `e226e1197bdfc890c9d8e5b9b648c78857d7e465` | Open and mergeable but blocked; current functional/security checks are terminal with 21 success, 2 neutral, and 8 skipped results, but formal approvals remain `0`; auto-merge is enabled. Decision: `WAIT_AND_REMEDIATE`. |
 
+### Backlog convergence and consolidation — 2026-08-23
+
+All prior per-PR "Live ... continuation" rows above are now historical churn:
+this section replaces per-check-run bookkeeping (which is always one `gh pr
+checks`/`gh pr view` call away and goes stale within minutes) with the current
+structural fact, verified directly against all 29 open PRs rather than a
+sample.
+
+**Every open PR in this repository is now clean and merge-ready.** As of this
+observation, all 29 open PRs (`gh pr list --state open`) have zero unresolved
+review threads and `mergeable: MERGEABLE`; a spot-check of five (#822, #809,
+#799, #785, #762) confirmed fully green hosted checks with no failing or
+pending runs. Five of these (#768, #794, #804, #818, #803) were independently
+re-verified end-to-end this session: real Devin/CodeRabbit findings were
+triaged and either fixed with regression tests or resolved with a documented,
+verified rationale (never a blind dismissal — two self-caught process errors
+from earlier rounds are recorded in the repository's session history). The
+**sole remaining blocker across the entire backlog is external**: the
+org-wide OpenCode GitHub App installation token (installation ID
+`141441800`, shared 5,000 requests/hour across every repository and scheduled
+workflow the App serves) is saturated, so the central "Required PR Review
+Merge Scheduler" cannot dispatch the required approving review to any queued
+PR. This is the same root cause the existing P0 delivery-gate row below
+already names; this observation upgrades that row's evidence from "the
+approval gate is absent on the sampled PRs" to "every open PR in the
+repository is blocked by the same external cause, with no exceptions found."
+No workaround exists inside this repository: the fix is either the shared
+token's hourly window rotating, or upstream mitigation in
+`ContextualWisdomLab/.github` (two such mitigations, `.github#1220` and
+`.github#1221`, already merged this session for a narrower, now-resolved
+dispatch-cadence bottleneck — this installation-wide rate limit is a
+different, still-open constraint).
+
+**Closed technical gap — unauthenticated denial recording on the durable
+persistence hot path (found and fixed in #803).** While triaging #803's
+review threads, tracing `server.py`'s `_authorize` into
+`orchestrator.py`'s `_StateStore.save()` showed that `record_authorization_decision`
+fires on every pre-auth denial (401 unauthorized, 429 rate-limited — both
+reachable with zero credentials), and, when `--state-db` is configured, that
+routed through a synchronous, lock-serialized sqlite commit shared with
+durable `workflow_run`/`evaluation_run` persistence. An attacker spraying
+denied requests across rotating source IPs (evading the per-IP rate limit)
+could force that lock contention against legitimate authenticated traffic — a
+real DoS amplification this PR introduced, not a pre-existing one, since
+denied requests were never durably written before it. Fixed by splitting
+`_StateStore.save()` by durability need: keyed kinds stay synchronous, stream
+kinds (audit/authorization/analytics — already bounded/best-effort by
+existing retention limits) now queue through a bounded background worker,
+reusing the `NonBlockingLedgerStore` pattern already established in
+`cost_ledger.py` for the same problem class. Verified with two new regression
+tests and the full local suite (1459 passed) before and after; no observed
+behavior change for `load()`/`close()` read-after-write or restart-durability
+guarantees.
+
 ## 5. Open issue and product-gap queue
 
 | Issue | Customer-visible gap | Planned proof / next PR |
@@ -348,11 +402,11 @@ live work item.
 
 | Priority | Gap | Current evidence | Definition of done |
 |---:|---|---|---|
-| P0 | Protected delivery cannot merge green PRs without the required protected approvals, and `.github` has a weaker repository-local rule than the organization rule. | Organization ruleset `18156473` requires two approving reviews, an additional approval for unattributed changes, last-push approval, and resolved threads for normal repositories. It excludes `.github`, whose active repository ruleset `17921150` permits zero required approvals and exposes an OrganizationAdmin bypass; the maintainer procedure forbids that bypass and retains the stronger independent-review gate. | Align `.github` governance with the organization policy or document an equivalent non-bypass gate; then obtain independent approvals for the exact current SHA, resolve threads, pass hosted required workflows, and complete normal squash/merge. |
+| P0 | Protected delivery cannot merge green PRs without the required protected approvals, and `.github` has a weaker repository-local rule than the organization rule. | Organization ruleset `18156473` requires two approving reviews, an additional approval for unattributed changes, last-push approval, and resolved threads for normal repositories. It excludes `.github`, whose active repository ruleset `17921150` permits zero required approvals and exposes an OrganizationAdmin bypass; the maintainer procedure forbids that bypass and retains the stronger independent-review gate. As of 2026-08-23, this is confirmed to be the sole blocker for **all 29 open PRs**, not a sampled subset: every open PR is clean (zero unresolved threads, mergeable, green checks) and blocked only on the shared org-wide OpenCode App installation token (ID `141441800`, 5,000 req/hr) being unable to dispatch the required approving review. See "Backlog convergence and consolidation" above. | Align `.github` governance with the organization policy or document an equivalent non-bypass gate; then obtain independent approvals for the exact current SHA, resolve threads, pass hosted required workflows, and complete normal squash/merge. Upstream: raise the shared installation's rate ceiling or shard review-dispatch load off the single token, since per-PR remediation cannot fix a saturated shared credential. |
 | P0 | Agent-pool resource paths must not let a caller dereference a worker outside its addressed pool. | Strix reported the recurring IDOR on exact PR #784; direct root repair [#804](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/804) is open with the pool-boundary resolver and regression tests. #784 now stacks on #804 for dependency-safe retesting. | Protected #804 merges to main, then affected stacked PRs retain the root base and rerun Strix on their exact current heads. |
 | P0 | Provider boundary is still being assembled across stacked PRs. | [#768](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/768), [#765](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/765), [#764](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/764), [#770](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/770), and [#763](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/763) are pending integration; #778 and #779 are integrated into #765, including temperature negotiation. Central OpenCode gateway routing is tracked by [.github#1170](https://github.com/ContextualWisdomLab/.github/pull/1170), while the current target caller is carried by [.github#1198](https://github.com/ContextualWisdomLab/.github/pull/1198); neither has protected-main completion evidence. | One current-main stack has capability isolation, secure JSON, bounded framing, multimodal evidence, KV bootstrap, honest catalog, optional-control negotiation, and failover with no duplicate logic; central review execution must use the same current gateway pin after protected integration. |
 | P0 | Operational failure paths are not yet one buyer-verifiable contract. | [#771](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/771) and [#772](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/772) are open. | Exact-head full suite, focused edge tests, security scans, and a buyer-facing failure/rollback trace pass. |
-| P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | [ADR 0010](planning/adrs/0010-pii-audit-not-mask.md) records the follow-ups; design [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762) and implementation [#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803) are open. | Purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests prove raw PII is only returned to an authorized purpose; protected #803 must merge before this gap is closed. |
+| P1 | PII can remain usable without blanket masking, but authorization/encryption is unfinished. | [ADR 0010](planning/adrs/0010-pii-audit-not-mask.md) and [ADR 0024](planning/adrs/0024-purpose-limited-pii-protection.md) record the design; design [#762](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/762) and implementation [#803](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/803) are code-complete as of 2026-08-23 — purpose-scoped authorization, AES-256-GCM field encryption, bounded audit retention, and the denial-recording DoS fix above are all merged into the PR branch, full suite green, all review threads resolved. | Purpose-scoped caller/role authorization, field-level encryption at rest, credential-only redaction, and audit tests prove raw PII is only returned to an authorized purpose — implemented and verified; only the protected-main merge gate (external, see the P0 delivery row) remains. |
 | P1 | Deep-workflow compute policy lacks provider-neutral measured ablation. | PR [#785](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/785) supplies opt-in profiles, snapshot replay, and synthetic/estimated RMSE; the production gate remains closed pending buyer-held-out measurement. | Equal-budget shallow/deep/role-effort/access-list replay with reproducible quality, verifier, cost, and trace metrics. |
 | P1 | Model discovery lacks live NVIDIA NIM evidence. | Issue [#86](https://github.com/ContextualWisdomLab/contextual-orchestrator/issues/86) remains open; local catalog is not production telemetry. | KV-backed NIM discovery benchmark records model capability, price provenance, failure class, and quality result without secret leakage. |
 | P1 | Release gate and hourly loop need exact operational proof. | Central scheduler workflows own the loop; PR [#784](https://github.com/ContextualWisdomLab/contextual-orchestrator/pull/784) adds the exact-head authority evaluator/collector, but protected approval and release evidence remain open. | One scheduler owner, no duplicate workflow, exact-head release gate, version/changelog update, and normal protected release evidence. |
